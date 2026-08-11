@@ -18,9 +18,10 @@ catch it being wrong.
 
 **Deterministic simulation.** The distributed layer runs on a single-threaded, event-driven
 simulator with a virtual clock. There are no goroutines, channels, locks, wall-clock reads, or
-network and filesystem calls in `raft/`, `store/`, `kv/`, `router/`, or `balancer/` — a custom vet
-pass (`tools/determinismcheck`) rejects them at build time, including `range` over a map. Same seed,
-same trace, byte for byte.
+network and filesystem calls in `raft/`, `store/`, `kv/`, `router/`, `balancer/`, or `engine/model` —
+a custom vet pass (`tools/determinismcheck`) rejects them at build time, including `range` over a
+map, and prints every use of its escape hatch into the build log. Same seed, same trace, byte for
+byte.
 
 **Faults are the default, not a special mode.** Message drop, delay, duplication, reordering,
 symmetric and asymmetric partitions, crashes, restarts, GC-style pauses, loss of unsynced writes, and
@@ -98,7 +99,7 @@ Unchecked means not built.)*
 make help      # every lane, and which are real vs. still stubs
 make test      # Go unit tests
 make race      # Go unit tests under -race
-make lint      # vet + determinism vet pass
+make lint      # vet, formatting, the determinism pass, tooling-only dependencies
 make smoke     # 500-seed simulator smoke
 ```
 

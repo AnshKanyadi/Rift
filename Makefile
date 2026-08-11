@@ -4,8 +4,9 @@
 # nothing yet and say so loudly. `make lanes` prints the status of every lane.
 # No lane may remain a stub past the phase named against it.
 
-GO      ?= go
-STUB    := ./scripts/lane-stub.sh
+GO           ?= go
+STUB         := ./scripts/lane-stub.sh
+TOOLING_ONLY := ./scripts/tooling-only.sh
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -49,17 +50,21 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 	mv go.mod.bak go.mod; [ -f go.sum.bak ] && mv go.sum.bak go.sum || true; \
 	if [ $$rc -ne 0 ]; then echo "go.mod/go.sum not tidy; run 'go mod tidy'"; exit 1; fi
 
+.PHONY: determinism
+determinism: ## Custom vet pass: no time.Now, no global rand, no map range, mailbox rule
+	$(GO) run ./tools/determinismcheck/cmd/determinismcheck ./...
+
+.PHONY: tooling-only
+tooling-only: ## Assert golang.org/x/tools never enters a shipping binary (DESIGN-A0 Q4)
+	@$(TOOLING_ONLY)
+
 .PHONY: lint
-lint: vet fmt-check determinism ## vet + formatting + the determinism vet pass
+lint: vet fmt-check determinism tooling-only ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
 ci: build lint test race smoke mutants ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
-
-.PHONY: determinism
-determinism: ## [STUB->A0.3] Custom vet pass: no time.Now, no global rand, no map range, ...
-	@$(STUB) determinism A0.3 "tools/determinismcheck (go/analysis pass)"
 
 .PHONY: smoke
 smoke: ## [STUB->A0.10] $(SMOKE_SEEDS)-seed simulator smoke
@@ -101,8 +106,8 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 
 .PHONY: lanes
 lanes: ## Show which lanes are real and which are still stubs
-	@echo "REAL : build test race vet fmt-check tidy-check"
-	@echo "STUB : determinism(A0.3) smoke(A0.10) soak(A0.11) mutants(A0.12)"
+	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
+	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12)"
 	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
 	@echo "       killpoints(B4) differential(B4)"
 	@echo

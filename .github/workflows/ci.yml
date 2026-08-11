@@ -36,7 +36,7 @@ jobs:
       - run: make race
 
   determinism:
-    name: determinism vet pass (stub)
+    name: determinism vet pass
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,13 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
+      # Every use of //rift:allow-nondeterminism is printed to stderr by this
+      # step, and so lands in the build log. That visibility is the only thing
+      # keeping exemptions from accumulating quietly (DESIGN-A0 D10).
       - run: make determinism
+      # golang.org/x/tools is approved for this pass on the condition that it
+      # never reaches a shipping binary (DESIGN-A0 Q4). This is the condition.
+      - run: make tooling-only
 
   smoke:
     name: 500-seed simulator smoke (stub)

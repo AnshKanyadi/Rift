@@ -1,0 +1,227 @@
+package determinismcheck
+
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"strconv"
+	"strings"
+
+	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/go/types/typeutil"
+)
+
+// checkCore enforces the rules that make a core package a pure state machine.
+// Each rule below corresponds to a line in CLAUDE.md's determinism rules or in
+// DESIGN-A0 D10, and each message says what to do instead -- a rule that only
+// says no gets worked around rather than followed.
+func checkCore(r *reporter, insp *inspector.Inspector) {
+	checkImports(r)
+
+	insp.Preorder([]ast.Node{
+		(*ast.CallExpr)(nil),
+		(*ast.ChanType)(nil),
+		(*ast.GoStmt)(nil),
+		(*ast.Ident)(nil),
+		(*ast.MapType)(nil),
+		(*ast.RangeStmt)(nil),
+		(*ast.SelectStmt)(nil),
+		(*ast.SendStmt)(nil),
+		(*ast.UnaryExpr)(nil),
+	}, func(n ast.Node) {
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			checkPointerFormat(r, n)
+		case *ast.ChanType:
+			r.report(n.Pos(), ruleConcurrency,
+				"channel types are not allowed in core packages; every input reaches a node through Handle(Event)")
+		case *ast.GoStmt:
+			r.report(n.Pos(), ruleConcurrency,
+				"go statements are not allowed in core packages; node logic runs single-threaded off the event loop, which is what makes a data race here unrepresentable rather than merely unlikely")
+		case *ast.Ident:
+			checkBannedSymbol(r, n)
+		case *ast.MapType:
+			checkMapKey(r, n)
+		case *ast.RangeStmt:
+			checkRange(r, n)
+		case *ast.SelectStmt:
+			r.report(n.Pos(), ruleConcurrency,
+				"select statements are not allowed in core packages; the runtime randomizes the choice among ready cases and there is no way to override it")
+		case *ast.SendStmt:
+			r.report(n.Pos(), ruleConcurrency,
+				"channel sends are not allowed in core packages; outputs leave a node through the Ready struct")
+		case *ast.UnaryExpr:
+			if n.Op == token.ARROW {
+				r.report(n.Pos(), ruleConcurrency,
+					"channel receives are not allowed in core packages; every input reaches a node through Handle(Event)")
+			}
+		}
+	})
+}
+
+// bannedImport is the I/O and concurrency blocklist. The list is stricter than
+// DESIGN-A0 D10's wording in two places, both noted below, because banning the
+// import is mechanically simpler than chasing every symbol in it and leaves
+// less room for a clever exception.
+func bannedImport(path string) (why string, banned bool) {
+	switch {
+	case path == "os" || strings.HasPrefix(path, "os/"):
+		return "core packages reach the outside world only through injected interfaces (Engine, Transport, Clock)", true
+	case path == "net" || strings.HasPrefix(path, "net/"):
+		return "the network is reached only through the injected Transport", true
+	case path == "path/filepath" || path == "io/ioutil":
+		return "core packages perform no filesystem access; storage is the injected Engine", true
+	case path == "syscall" || strings.HasPrefix(path, "golang.org/x/sys"):
+		return "core packages make no syscalls", true
+
+	// Stricter than D10, which bans package-level math/rand functions: the
+	// import itself is banned, because rand.New(rand.NewSource(seed)) in a core
+	// package is the same bug with a local variable in front of it.
+	case path == "math/rand" || path == "math/rand/v2":
+		return "randomness is the injected rng.Rand, whose stream this project owns so the seed corpus survives Go upgrades (CLAUDE.md Amendment A1)", true
+
+	case path == "sync" || path == "sync/atomic":
+		return "core logic is single-threaded off the event loop, so there is nothing to synchronize; a mutex here means the loop has been bypassed", true
+	case path == "unsafe":
+		return "unsafe leaks pointer identity and layout, neither of which is stable run to run", true
+	case path == "runtime" || strings.HasPrefix(path, "runtime/"):
+		return "runtime exposes goroutine counts, GC timing and scheduler state, none of which are reproducible", true
+
+	// Also stricter than D10, and for the same reason time.Now is: log stamps
+	// wall-clock time and writes to stderr. Core packages take the injected
+	// Logger, whose fields are seed, step, node, term and range.
+	case path == "log" || strings.HasPrefix(path, "log/"):
+		return "logging goes through the injected Logger; log writes wall-clock timestamps to stderr", true
+	}
+	return "", false
+}
+
+func checkImports(r *reporter) {
+	for _, f := range r.pass.Files {
+		for _, spec := range f.Imports {
+			path, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				continue
+			}
+			if why, banned := bannedImport(path); banned {
+				r.report(spec.Pos(), ruleImport, "importing %q is not allowed in core packages: %s", path, why)
+			}
+		}
+	}
+}
+
+// bannedTime is the set of time symbols that read or wait on the wall clock.
+// time.Duration, time.Time and the arithmetic on them are fine and necessary;
+// it is reading now, or sleeping until later, that has to come from the
+// injected Clock. Lookup goes through the type checker, so an aliased or dot
+// import is caught the same as a plain one.
+var bannedTime = map[string]string{
+	"Now":       "read the current time from the injected Clock",
+	"Since":     "subtract two Clock readings",
+	"Until":     "subtract two Clock readings",
+	"Sleep":     "schedule an event; nothing in a core package may block",
+	"After":     "schedule an event; nothing in a core package may block",
+	"AfterFunc": "schedule an event; nothing in a core package may block",
+	"Tick":      "drive time through Tick(), which the event loop calls",
+	"NewTimer":  "drive time through Tick(), which the event loop calls",
+	"NewTicker": "drive time through Tick(), which the event loop calls",
+	"Timer":     "drive time through Tick(), which the event loop calls",
+	"Ticker":    "drive time through Tick(), which the event loop calls",
+}
+
+func checkBannedSymbol(r *reporter, id *ast.Ident) {
+	obj := r.pass.TypesInfo.Uses[id]
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "time" {
+		return
+	}
+	if instead, banned := bannedTime[obj.Name()]; banned {
+		r.report(id.Pos(), ruleTime,
+			"time.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", obj.Name(), instead)
+	}
+}
+
+// checkRange is the important one. Go randomizes map iteration order on
+// purpose, so a loop over a map that decides anything -- which replica to send
+// to first, which lock to resolve -- produces a different history on every run
+// from the same seed. It is silent, it is common, and it is the leak CLAUDE.md
+// singles out.
+func checkRange(r *reporter, rs *ast.RangeStmt) {
+	t := r.pass.TypesInfo.TypeOf(rs.X)
+	if t == nil {
+		return
+	}
+	switch t.Underlying().(type) {
+	case *types.Map:
+		// The advice is deliberately not "collect the keys and sort them":
+		// collecting them means ranging the map, which is this rule. Keep the
+		// order beside the map, or take it from a helper outside the core
+		// packages, which is where the one blessed implementation belongs.
+		r.report(rs.Pos(), ruleMapRange,
+			"range over a map is not allowed in core packages; Go randomizes map iteration order, so anything derived from it differs run to run -- range a sorted slice of keys instead")
+	case *types.Chan:
+		r.report(rs.Pos(), ruleConcurrency,
+			"range over a channel is not allowed in core packages; every input reaches a node through Handle(Event)")
+	}
+}
+
+func checkMapKey(r *reporter, mt *ast.MapType) {
+	t := r.pass.TypesInfo.TypeOf(mt.Key)
+	if t == nil {
+		return
+	}
+	addressKeyed := false
+	switch u := t.Underlying().(type) {
+	case *types.Pointer, *types.Chan:
+		addressKeyed = true
+	case *types.Basic:
+		addressKeyed = u.Kind() == types.UnsafePointer
+	}
+	if addressKeyed {
+		r.report(mt.Key.Pos(), ruleMapKey,
+			"pointer-keyed maps are not allowed in core packages; the key is an address, so both iteration order and equality depend on where the allocator happened to put things")
+	}
+}
+
+// checkPointerFormat catches %p, which prints an address. An address in a log
+// line is noise; an address in anything the trace hash sees is a determinism
+// failure that reproduces as "same seed, different hash" and costs an afternoon
+// before anyone thinks to look at a format string.
+func checkPointerFormat(r *reporter, call *ast.CallExpr) {
+	i := formatArg(r, call)
+	if i < 0 || i >= len(call.Args) {
+		return
+	}
+	lit, ok := call.Args[i].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return
+	}
+	if s, err := strconv.Unquote(lit.Value); err == nil && strings.Contains(s, "%p") {
+		r.report(lit.Pos(), rulePointerFmt,
+			"%%p formats a pointer address, which varies run to run; format a stable identity (node id, range id, index) instead")
+	}
+}
+
+// formatArg returns the index of a call's format string, or -1 if the call is
+// not Printf-style. It decides by signature rather than by name -- a variadic
+// tail preceded by a string parameter -- which covers fmt, the injected Logger,
+// and anything either grows later. Only that one argument is examined, so an
+// ordinary string that happens to contain %p stays legal wherever it appears.
+func formatArg(r *reporter, call *ast.CallExpr) int {
+	obj := typeutil.Callee(r.pass.TypesInfo, call)
+	if obj == nil {
+		return -1
+	}
+	sig, ok := obj.Type().(*types.Signature)
+	if !ok || !sig.Variadic() {
+		return -1
+	}
+	params := sig.Params()
+	if params.Len() < 2 {
+		return -1
+	}
+	format, ok := params.At(params.Len() - 2).Type().Underlying().(*types.Basic)
+	if !ok || format.Kind() != types.String {
+		return -1
+	}
+	return params.Len() - 2
+}
