@@ -11,10 +11,17 @@ package hardrules
 import (
 	//rift:allow-nondeterminism fixture: a hatch may not sanction sync
 	"sync" // want `import: importing "sync".*does not apply`
+
+	//rift:allow-nondeterminism fixture: a hatch may not sanction atomics either
+	"sync/atomic" // want `import: importing "sync/atomic".*does not apply`
 )
 
+// An atomic in a single-threaded core is a concurrency smell with no
+// legitimate use there: whoever reached for it believes two things are running
+// at once, and if they are right the event loop has been bypassed.
 type driver struct {
-	mu sync.Mutex
+	seq atomic.Uint64
+	mu  sync.Mutex
 
 	//rift:allow-nondeterminism fixture: a hatch may not sanction a channel
 	inbox chan int // want `concurrency: channel types.*does not apply`

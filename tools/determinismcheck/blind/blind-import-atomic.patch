@@ -1,0 +1,15 @@
+# id: blind-import-atomic
+# covering-test: TestHatchesCannotSanctionConcurrency
+# expect: killed
+# blinds: the sync/atomic ban, letting atomics into a single-threaded core
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -80,7 +80,7 @@
+ 	case path == "math/rand" || path == "math/rand/v2":
+ 		return "randomness is the injected rng.Rand, whose stream this project owns so the seed corpus survives Go upgrades (CLAUDE.md Amendment A1)", true
+ 
+-	case path == "sync" || path == "sync/atomic":
++	case path == "sync":
+ 		return "core logic is single-threaded off the event loop, so there is nothing to synchronize; a mutex here means the loop has been bypassed", true
+ 
+ 	// The go1.23 iterator hole. slices.Sorted(maps.Keys(m)),

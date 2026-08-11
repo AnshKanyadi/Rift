@@ -1,0 +1,15 @@
+# id: blind-reflect-seq
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: reflect Value.Seq, map iteration with no range syntax and no maps import
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -186,7 +186,7 @@
+ 	"MapRange": true,
+ 	"MapKeys":  true,
+ 	"MapIter":  true,
+-	"Seq":      true,
++
+ 	"Seq2":     true,
+ }
+ 

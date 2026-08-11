@@ -47,8 +47,8 @@ func TestHatchesCannotSanctionConcurrency(t *testing.T) {
 
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "hardrules")
 
-	if n := strings.Count(sink.String(), "REFUSED"); n != 4 {
-		t.Errorf("got %d REFUSED announcements, want 4 (sync, chan, go, select):\n%s", n, sink)
+	if n := strings.Count(sink.String(), "REFUSED"); n != 5 {
+		t.Errorf("got %d REFUSED announcements, want 5 (sync, atomic, chan, go, select):\n%s", n, sink)
 	}
 	if strings.Contains(sink.String(), "ALLOWED") {
 		t.Errorf("a hard rule was excused:\n%s", sink)

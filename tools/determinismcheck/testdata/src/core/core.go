@@ -88,8 +88,28 @@ func (n *node) sortedPeers() []uint64 {
 
 // reflective is the other half of the hole: map iteration reached through
 // method calls, where neither the syntax rule nor an import ban can see it.
+// Seq and Seq2 are the same hole in iterator clothing.
 func (n *node) reflective(v reflect.Value) int {
 	iter := v.MapRange() // want `maprange: reflect.MapRange`
 	_ = iter
+	for range v.Seq() { // want `maprange: reflect.Seq`
+	}
+	for range v.Seq2() { // want `maprange: reflect.Seq2`
+	}
 	return len(v.MapKeys()) // want `maprange: reflect.MapKeys`
+}
+
+// stopwatch reaches past time.Now for the rest of the package's real-time
+// surface. The allowlist is what makes this exhaustive rather than a list
+// somebody remembered to extend.
+func (n *node) stopwatch() {
+	_ = time.After(n.timeout)                             // want `time: time.After`
+	_ = time.Tick(n.timeout)                              // want `time: time.Tick`
+	_ = time.NewTimer(n.timeout)                          // want `time: time.NewTimer`
+	_ = time.AfterFunc(n.timeout, func() {})              // want `time: time.AfterFunc`
+	_ = time.Until(n.deadline)                            // want `time: time.Until`
+	_ = n.deadline.In(time.Local)                         // want `time: time.Local`
+	if loc, err := time.LoadLocation("UTC"); err == nil { // want `time: time.LoadLocation`
+		_ = loc
+	}
 }

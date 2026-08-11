@@ -35,16 +35,20 @@
 //
 // # Core rules
 //
-//   - time.Now, Since, Until, Sleep, After, AfterFunc, Tick, NewTimer,
-//     NewTicker, Timer, Ticker. time.Duration and arithmetic on it are fine;
-//     reading the wall clock is not.
+//   - every symbol in time except an allowlist: value types, constants, their
+//     methods, and the deterministic constructors (Date, Parse, Unix,
+//     FixedZone, UTC). Now, Since, Until, Sleep, After, AfterFunc, Tick,
+//     NewTimer, NewTicker, Timer, Ticker, Local and LoadLocation are all
+//     banned, and so is whatever Go adds next -- the allowlist is the point,
+//     since a blocklist has to be extended by someone who notices.
 //   - imports of os, net, path/filepath, io/ioutil, syscall, runtime, unsafe,
 //     sync, sync/atomic, math/rand, math/rand/v2, maps, log.
 //   - go statements, select statements, channel types, sends and receives.
 //   - range over a map -- the classic Go determinism leak, and the only one
 //     that is both silent and common -- and range over a channel.
-//   - reflect.MapRange, MapKeys and MapIter, which reach map iteration through
-//     method calls where neither the syntax rule nor an import ban can see it.
+//   - reflect.MapRange, MapKeys, MapIter, Seq and Seq2, which reach map
+//     iteration through method calls where neither the syntax rule nor an
+//     import ban can see it.
 //     Together with the maps ban this closes the go1.23 iterator hole:
 //     slices.Sorted(maps.Keys(m)) has no map-range syntax in it and is exactly
 //     the same nondeterminism.

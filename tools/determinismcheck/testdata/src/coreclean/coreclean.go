@@ -46,6 +46,24 @@ func (n *node) expired(deadline int64) bool {
 	return n.now >= deadline+int64(n.timeout)
 }
 
+// legalTime is the guard on the time allowlist. Banning time.Now is easy;
+// banning it without making time.Duration unusable is the part that decides
+// whether anyone can write core code at all. Constants, value types, their
+// methods and the deterministic constructors all stay legal.
+func (n *node) legalTime(lease time.Time) (time.Duration, string) {
+	deadline := lease.Add(3 * time.Second).Add(500 * time.Millisecond)
+	epoch := time.Unix(0, n.now).In(time.UTC)
+	window := deadline.Sub(epoch)
+
+	if d, err := time.ParseDuration("250ms"); err == nil && window > d {
+		window -= d
+	}
+	if deadline.Before(epoch) || deadline.Equal(epoch) {
+		window = 0
+	}
+	return window, deadline.Format(time.RFC3339Nano)
+}
+
 func (n *node) describe(p *peer) string {
 	return fmt.Sprintf("peer %d next=%d timeout=%v", p.id, p.next, n.timeout)
 }

@@ -1,15 +1,15 @@
 # id: blind-time-now
 # covering-test: TestM5WallClock
 # expect: killed
-# blinds: the wall-clock rule for time.Now, which is mutant M5
+# blinds: the wall-clock rule for time.Now, which is mutant M5, by allowlisting it
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go
-@@ -139,7 +139,7 @@
- // injected Clock. Lookup goes through the type checker, so an aliased or dot
- // import is caught the same as a plain one.
- var bannedTime = map[string]string{
--	"Now":       "read the current time from the injected Clock",
-+	"NowNope": "",
- 	"Since":     "subtract two Clock readings",
- 	"Until":     "subtract two Clock readings",
- 	"Sleep":     "schedule an event; nothing in a core package may block",
+@@ -154,7 +154,7 @@
+ 	"Unix": true, "UnixMicro": true, "UnixMilli": true, "FixedZone": true,
+ 
+ 	// A fixed zone. Unlike Local, which is whatever TZ says today.
+-	"UTC": true,
++	"UTC": true, "Now": true,
+ }
+ 
+ // timeAdvice says what to do instead, for the symbols anyone will actually

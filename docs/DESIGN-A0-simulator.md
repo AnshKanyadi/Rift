@@ -776,10 +776,23 @@ test that decides: concurrency is never hatchable (part 4), so a package that ne
 be an exclusion, while a package that needs one `time.Now` takes a hatch. Prefer the hatch. An
 excluded package hides its exceptions; a hatched line lists them.
 
-**3. The go1.23 iterator hole, closed.** `slices.Sorted(maps.Keys(m))`, `slices.Collect(maps.Keys(m))`
+**3. The real-time surface is an allowlist, and the iterator hole is closed.**
+
+`time` is checked by allowlist rather than blocklist, matching the scope polarity: value types,
+constants, their methods, and the deterministic constructors (`Date`, `Parse`, `Unix`, `FixedZone`,
+`UTC`) are legal; **everything else in the package is banned, including whatever Go adds next**. A
+blocklist has to be extended each time the package grows a new way to read a clock, and nobody
+notices that it needs extending. `Timer` and `Ticker` are banned as *type* references despite the
+general rule that types are legal — a `*time.Timer` in core state is real-time machinery, not a
+value. `Local` and `LoadLocation` are banned alongside the clock readers: they depend on the host's
+TZ, which is not a property of the run. `sync/atomic` sits with `sync` on the unhatchable list; an
+atomic in a single-threaded core means someone believes two things are running at once, and if they
+are right the event loop has been bypassed.
+
+The go1.23 iterator hole, closed: `slices.Sorted(maps.Keys(m))`, `slices.Collect(maps.Keys(m))`
 and `for k := range maps.All(m)` contain no map-range syntax and are exactly the same
 nondeterminism, so the rule that catches `for k := range m` sees none of them. Two additions:
-importing `maps` is banned in core scope, and `reflect`'s `MapRange`/`MapKeys`/`MapIter` are flagged,
+importing `maps` is banned in core scope, and `reflect`'s `MapRange`/`MapKeys`/`MapIter`/`Seq`/`Seq2` are flagged,
 since reflection reaches map iteration through method calls where neither syntax nor an import ban
 can see it. **Sorted iteration lives in `internal/sorted` and nowhere else** — one generic helper,
 one hatch, one range statement in the entire repository.

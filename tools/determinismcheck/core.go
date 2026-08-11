@@ -133,33 +133,61 @@ func checkImports(r *reporter) {
 	}
 }
 
-// bannedTime is the set of time symbols that read or wait on the wall clock.
-// time.Duration, time.Time and the arithmetic on them are fine and necessary;
-// it is reading now, or sleeping until later, that has to come from the
-// injected Clock. Lookup goes through the type checker, so an aliased or dot
-// import is caught the same as a plain one.
-var bannedTime = map[string]string{
-	"Now":       "read the current time from the injected Clock",
-	"Since":     "subtract two Clock readings",
-	"Until":     "subtract two Clock readings",
-	"Sleep":     "schedule an event; nothing in a core package may block",
-	"After":     "schedule an event; nothing in a core package may block",
-	"AfterFunc": "schedule an event; nothing in a core package may block",
-	"Tick":      "drive time through Tick(), which the event loop calls",
-	"NewTimer":  "drive time through Tick(), which the event loop calls",
-	"NewTicker": "drive time through Tick(), which the event loop calls",
-	"Timer":     "drive time through Tick(), which the event loop calls",
-	"Ticker":    "drive time through Tick(), which the event loop calls",
+// timeAllowed is an allowlist, not a blocklist, and that polarity is the point:
+// a blocklist has to be extended every time the time package grows a new way to
+// read the clock, and nobody will notice that it needs extending. Anything here
+// is pure value machinery, deterministic given its arguments. Everything else
+// in time is banned by default, including whatever gets added next.
+//
+// Constants are allowed wherever they appear (Nanosecond through Hour, the
+// layout strings, the month and weekday names) -- a constant cannot read a
+// clock. So are methods on time's value types and their struct fields: the
+// types are legal, so Add, Sub, Before and the rest are legal with them.
+var timeAllowed = map[string]bool{
+	// Value types.
+	"Duration": true, "Time": true, "Month": true, "Weekday": true,
+	"Location": true, "ParseError": true,
+
+	// Deterministic constructors and parsers: same arguments, same result,
+	// on any machine at any moment.
+	"Date": true, "Parse": true, "ParseInLocation": true, "ParseDuration": true,
+	"Unix": true, "UnixMicro": true, "UnixMilli": true, "FixedZone": true,
+
+	// A fixed zone. Unlike Local, which is whatever TZ says today.
+	"UTC": true,
+}
+
+// timeAdvice says what to do instead, for the symbols anyone will actually
+// reach for. Everything else falls back to the general rule.
+var timeAdvice = map[string]string{
+	"Now":                    "read the current time from the injected Clock",
+	"Since":                  "subtract two Clock readings",
+	"Until":                  "subtract two Clock readings",
+	"Sleep":                  "schedule an event; nothing in a core package may block",
+	"After":                  "schedule an event; nothing in a core package may block",
+	"AfterFunc":              "schedule an event; nothing in a core package may block",
+	"Tick":                   "drive time through Tick(), which the event loop calls",
+	"NewTimer":               "drive time through Tick(), which the event loop calls",
+	"NewTicker":              "drive time through Tick(), which the event loop calls",
+	"Timer":                  "drive time through Tick(), which the event loop calls",
+	"Ticker":                 "drive time through Tick(), which the event loop calls",
+	"Local":                  "use UTC; Local is whatever the host's TZ says, which is not a property of the run",
+	"LoadLocation":           "use UTC or FixedZone; loading a zone reads the host's tzdata",
+	"LoadLocationFromTZData": "use UTC or FixedZone",
 }
 
 // bannedReflect is the other half of the iterator hole. reflect reaches map
 // iteration through methods rather than syntax or an import that can be banned
 // outright -- core packages have no business in reflect at all, but these are
-// the ones that are silently nondeterministic rather than merely unwise.
+// the ones that are silently nondeterministic rather than merely unwise. Seq
+// and Seq2 are the same hole in iterator clothing: no range syntax, no maps
+// import, and a map underneath.
 var bannedReflect = map[string]bool{
 	"MapRange": true,
 	"MapKeys":  true,
 	"MapIter":  true,
+	"Seq":      true,
+	"Seq2":     true,
 }
 
 func checkBannedSymbol(r *reporter, id *ast.Ident) {
@@ -169,16 +197,38 @@ func checkBannedSymbol(r *reporter, id *ast.Ident) {
 	}
 	switch obj.Pkg().Path() {
 	case "time":
-		if instead, banned := bannedTime[obj.Name()]; banned {
-			r.report(id.Pos(), ruleTime,
-				"time.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", obj.Name(), instead)
-		}
+		checkTimeSymbol(r, id, obj)
 	case "reflect":
 		if bannedReflect[obj.Name()] {
 			r.report(id.Pos(), ruleMapRange,
 				"reflect.%s iterates a map in randomized order, where the map-range rule cannot see it; use internal/sorted", obj.Name())
 		}
 	}
+}
+
+func checkTimeSymbol(r *reporter, id *ast.Ident, obj types.Object) {
+	switch o := obj.(type) {
+	case *types.Const:
+		return // Nanosecond through Hour, the layouts, the month names
+	case *types.Var:
+		if o.IsField() {
+			return // a field of a legal value type
+		}
+	case *types.Func:
+		if sig, ok := o.Type().(*types.Signature); ok && sig.Recv() != nil {
+			return // a method on a legal value type: Add, Sub, Before, Format
+		}
+	}
+	if timeAllowed[obj.Name()] {
+		return
+	}
+
+	instead, known := timeAdvice[obj.Name()]
+	if !known {
+		instead = "core packages take time from the injected Clock; only time's value types, constants and deterministic constructors are allowed here"
+	}
+	r.report(id.Pos(), ruleTime,
+		"time.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", obj.Name(), instead)
 }
 
 // checkRange is the important one. Go randomizes map iteration order on
