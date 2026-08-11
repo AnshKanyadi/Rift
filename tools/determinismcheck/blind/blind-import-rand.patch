@@ -1,0 +1,14 @@
+# id: blind-import-rand
+# must-fail: TestCoreRules
+# blinds: the math/rand import ban
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -77,7 +77,7 @@
+ 	// Stricter than D10, which bans package-level math/rand functions: the
+ 	// import itself is banned, because rand.New(rand.NewSource(seed)) in a core
+ 	// package is the same bug with a local variable in front of it.
+-	case path == "math/rand" || path == "math/rand/v2":
++	case path == "math/rand/never":
+ 		return "randomness is the injected rng.Rand, whose stream this project owns so the seed corpus survives Go upgrades (CLAUDE.md Amendment A1)", true
+ 
+ 	case path == "sync" || path == "sync/atomic":

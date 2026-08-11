@@ -3,6 +3,8 @@ package rng
 import (
 	"strings"
 	"testing"
+
+	"github.com/anshkanyadi/rift/internal/sorted"
 )
 
 // TestPoisonedPanicsOnEverything: every method must be a tripwire. A single
@@ -25,8 +27,9 @@ func TestPoisonedPanicsOnEverything(t *testing.T) {
 
 	// Sorted so failures report in a stable order; ranging a map directly
 	// would make this output nondeterministic, which is the habit this repo
-	// is trying to build.
-	for _, name := range sortedNames(calls) {
+	// is trying to build -- and which the determinism pass now enforces here
+	// too, since internal/rng executes inside every simulated run.
+	for _, name := range sorted.Keys(calls) {
 		func() {
 			defer func() {
 				rec := recover()
@@ -60,17 +63,4 @@ func TestPoisonedIsSubstitutable(t *testing.T) {
 	if r == nil {
 		t.Fatal("Poisoned returned nil")
 	}
-}
-
-func sortedNames(m map[string]func(r Rand)) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
 }

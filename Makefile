@@ -7,6 +7,7 @@
 GO           ?= go
 STUB         := ./scripts/lane-stub.sh
 TOOLING_ONLY := ./scripts/tooling-only.sh
+BLIND        := ./scripts/blind-analyzer.sh
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -58,11 +59,15 @@ determinism: ## Custom vet pass: no time.Now, no global rand, no map range, mail
 tooling-only: ## Assert golang.org/x/tools never enters a shipping binary (DESIGN-A0 Q4)
 	@$(TOOLING_ONLY)
 
+.PHONY: blind
+blind: ## Mutation-test the determinism pass itself; each blinded rule must fail its own test
+	@$(BLIND)
+
 .PHONY: lint
 lint: vet fmt-check determinism tooling-only ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race smoke mutants ## Everything the push lane runs
+ci: build lint test race blind smoke mutants ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 
@@ -106,7 +111,7 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 
 .PHONY: lanes
 lanes: ## Show which lanes are real and which are still stubs
-	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
+	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only blind"
 	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12)"
 	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
 	@echo "       killpoints(B4) differential(B4)"

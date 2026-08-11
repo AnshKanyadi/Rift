@@ -33,10 +33,10 @@ func checkCore(r *reporter, insp *inspector.Inspector) {
 		case *ast.CallExpr:
 			checkPointerFormat(r, n)
 		case *ast.ChanType:
-			r.report(n.Pos(), ruleConcurrency,
+			r.reportHard(n.Pos(), ruleConcurrency,
 				"channel types are not allowed in core packages; every input reaches a node through Handle(Event)")
 		case *ast.GoStmt:
-			r.report(n.Pos(), ruleConcurrency,
+			r.reportHard(n.Pos(), ruleConcurrency,
 				"go statements are not allowed in core packages; node logic runs single-threaded off the event loop, which is what makes a data race here unrepresentable rather than merely unlikely")
 		case *ast.Ident:
 			checkBannedSymbol(r, n)
@@ -45,14 +45,14 @@ func checkCore(r *reporter, insp *inspector.Inspector) {
 		case *ast.RangeStmt:
 			checkRange(r, n)
 		case *ast.SelectStmt:
-			r.report(n.Pos(), ruleConcurrency,
+			r.reportHard(n.Pos(), ruleConcurrency,
 				"select statements are not allowed in core packages; the runtime randomizes the choice among ready cases and there is no way to override it")
 		case *ast.SendStmt:
-			r.report(n.Pos(), ruleConcurrency,
+			r.reportHard(n.Pos(), ruleConcurrency,
 				"channel sends are not allowed in core packages; outputs leave a node through the Ready struct")
 		case *ast.UnaryExpr:
 			if n.Op == token.ARROW {
-				r.report(n.Pos(), ruleConcurrency,
+				r.reportHard(n.Pos(), ruleConcurrency,
 					"channel receives are not allowed in core packages; every input reaches a node through Handle(Event)")
 			}
 		}
@@ -82,6 +82,15 @@ func bannedImport(path string) (why string, banned bool) {
 
 	case path == "sync" || path == "sync/atomic":
 		return "core logic is single-threaded off the event loop, so there is nothing to synchronize; a mutex here means the loop has been bypassed", true
+
+	// The go1.23 iterator hole. slices.Sorted(maps.Keys(m)),
+	// slices.Collect(maps.Keys(m)) and range-over-maps.All contain no
+	// map-range syntax and are exactly the same nondeterminism, so the rule
+	// that catches `for k := range m` sees none of them. Banning the import is
+	// the only place to stand: sorted iteration lives in internal/sorted and
+	// nowhere else.
+	case path == "maps":
+		return "maps.Keys, Values and All iterate in randomized order behind an iterator, where the map-range rule cannot see them; use internal/sorted", true
 	case path == "unsafe":
 		return "unsafe leaks pointer identity and layout, neither of which is stable run to run", true
 	case path == "runtime" || strings.HasPrefix(path, "runtime/"):
@@ -96,6 +105,14 @@ func bannedImport(path string) (why string, banned bool) {
 	return "", false
 }
 
+// hardImport reports whether a banned import is one no hatch may excuse. sync
+// keeps company with go, select and chan for the same reason: a core package
+// that needs to synchronize has already left the event loop, and that is a
+// design problem rather than an annotation problem.
+func hardImport(path string) bool {
+	return path == "sync" || path == "sync/atomic"
+}
+
 func checkImports(r *reporter) {
 	for _, f := range r.pass.Files {
 		for _, spec := range f.Imports {
@@ -103,9 +120,15 @@ func checkImports(r *reporter) {
 			if err != nil {
 				continue
 			}
-			if why, banned := bannedImport(path); banned {
-				r.report(spec.Pos(), ruleImport, "importing %q is not allowed in core packages: %s", path, why)
+			why, banned := bannedImport(path)
+			if !banned {
+				continue
 			}
+			report := r.report
+			if hardImport(path) {
+				report = r.reportHard
+			}
+			report(spec.Pos(), ruleImport, "importing %q is not allowed in core packages: %s", path, why)
 		}
 	}
 }
@@ -129,14 +152,32 @@ var bannedTime = map[string]string{
 	"Ticker":    "drive time through Tick(), which the event loop calls",
 }
 
+// bannedReflect is the other half of the iterator hole. reflect reaches map
+// iteration through methods rather than syntax or an import that can be banned
+// outright -- core packages have no business in reflect at all, but these are
+// the ones that are silently nondeterministic rather than merely unwise.
+var bannedReflect = map[string]bool{
+	"MapRange": true,
+	"MapKeys":  true,
+	"MapIter":  true,
+}
+
 func checkBannedSymbol(r *reporter, id *ast.Ident) {
 	obj := r.pass.TypesInfo.Uses[id]
-	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "time" {
+	if obj == nil || obj.Pkg() == nil {
 		return
 	}
-	if instead, banned := bannedTime[obj.Name()]; banned {
-		r.report(id.Pos(), ruleTime,
-			"time.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", obj.Name(), instead)
+	switch obj.Pkg().Path() {
+	case "time":
+		if instead, banned := bannedTime[obj.Name()]; banned {
+			r.report(id.Pos(), ruleTime,
+				"time.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", obj.Name(), instead)
+		}
+	case "reflect":
+		if bannedReflect[obj.Name()] {
+			r.report(id.Pos(), ruleMapRange,
+				"reflect.%s iterates a map in randomized order, where the map-range rule cannot see it; use internal/sorted", obj.Name())
+		}
 	}
 }
 

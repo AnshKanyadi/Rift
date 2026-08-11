@@ -116,6 +116,13 @@ approximately nothing at 30k lines:
 
 The review checklist gets the item too, but it is the third line of defense, not the first.
 
+**[Amended — Ansh, 2026-08-11] The rule is provisional until `node/` exists.** A0.3 implemented the
+vet layer and proved it against fixtures, which is all that can be proved while the package it
+governs is unwritten. It is marked provisional deliberately: the rule gets end-to-end teeth the
+moment `node/` lands, and **A0's exit criteria do not close until it does**. A rule that has only
+ever been tested against a fixture of itself is a rule with an untested assumption about the shape of
+the code it will meet.
+
 ---
 
 ### D2 — Time model and event ordering
@@ -733,6 +740,75 @@ Cost: about a day. Value: this is the mechanism that makes the *whole* verificat
 under cross-examination, because the answer to "how do you know a `time.Now()` didn't sneak in?" is
 a build failure, not a promise.
 
+#### [Amended — Ansh, 2026-08-11] Scope is a question about *when* code runs; the hatch is a ledger
+
+Ruling on A0.3 as landed. Six parts, of which the first is the one to remember.
+
+**1. The governing principle.**
+
+> **Any code that executes during a simulated run is in scope, no exceptions. Orchestration *around*
+> runs — parallel hunting, real-mode drivers, `cmd/` — is not.**
+
+Scope is therefore not a judgement about how dangerous a package looks. It is a question with a
+factual answer: does this code run inside a run whose trace must be reproducible? A0.3's original
+table was assembled package by package from D10's list and got three of them wrong, all in the same
+direction — leaving out code that runs in-band because it did not *look* like node logic.
+
+| package | scope | why |
+|---|---|---|
+| `raft`, `store`, `kv`, `router`, `balancer` | core | the state machines |
+| `engine`, `engine/model` | core | executes in every sim run, and replay identity is *defined* on the model — precisely what the pass exists to protect |
+| `engine/real`, `engine/pump` | excluded | DR-11's poller: needs goroutines, runs only in real mode |
+| `clock` | core | the sim clock runs in-band; the real implementation takes a per-line hatch on its single `time.Now` |
+| `sim`, `sim/toy` | core | seeded, so it needs nothing the rules ban. Plan and bundle file I/O and the parallel hunter must land in their own subpackages and join the exclusion list as they do; being in scope from today is the forcing function for that split, while the moves are cheap |
+| `internal/rng` | core | needs nothing banned, and the pass is what stops someone importing `math/rand` inside it later — the exact bug D3 exists to kill |
+| `internal/sorted` | core | the only map iteration in the repo, under the only hatch |
+| `node` | mailbox | provisional; see the D1 amendment |
+| `cmd`, `bench`, `chaos`, `soak`, `tools` | off | orchestration |
+
+A subpackage nobody has classified is **in** scope, not out of it. A new package under `engine/`
+arrives checked and is excluded only by someone writing it down, which is the direction the default
+has to fall.
+
+**2. Exclusion versus hatch.** Both exist and they are not interchangeable. A hatch excuses a
+*symbol* on a *line* and is recorded; an exclusion removes a *package* from the rules entirely. The
+test that decides: concurrency is never hatchable (part 4), so a package that needs a goroutine must
+be an exclusion, while a package that needs one `time.Now` takes a hatch. Prefer the hatch. An
+excluded package hides its exceptions; a hatched line lists them.
+
+**3. The go1.23 iterator hole, closed.** `slices.Sorted(maps.Keys(m))`, `slices.Collect(maps.Keys(m))`
+and `for k := range maps.All(m)` contain no map-range syntax and are exactly the same
+nondeterminism, so the rule that catches `for k := range m` sees none of them. Two additions:
+importing `maps` is banned in core scope, and `reflect`'s `MapRange`/`MapKeys`/`MapIter` are flagged,
+since reflection reaches map iteration through method calls where neither syntax nor an import ban
+can see it. **Sorted iteration lives in `internal/sorted` and nowhere else** — one generic helper,
+one hatch, one range statement in the entire repository.
+
+**4. The hatch is a ledger, and one rule has no hatch at all.** Three changes:
+
+- **Unused hatches fail.** Not a warning: warnings rot and nobody reads CI warnings. A hatch that
+  excused nothing is either a rule that has since been fixed, or a hatch that has drifted off the
+  line it was written for — and the second case means something is now unguarded while its author
+  believes it is not.
+- **`HATCHES.txt` is a checked-in golden registry** of every hatch in the repo (`file:line` plus
+  reason), diffed against the tree by `TestHatchRegistry`. Adding a hatch is a conscious edit to a
+  reviewed list, not a comment somebody slips into a diff.
+- **No hatch sanctions `go`, `select`, `chan` or `sync` in core scope.** These are refused outright,
+  with the covering hatch consumed so the author gets the diagnostic that matters rather than that
+  plus a complaint about their annotation. Either the concurrency moves out of core or the design is
+  wrong, and neither is something a comment can fix.
+
+**5. The pass is mutation-tested, permanently.** `tools/determinismcheck/blind/*.patch` each blind
+one rule; `make blind` applies each to a scratch copy and requires the named test to fail. A pass
+that has quietly stopped checking something looks exactly like a pass with nothing to report, and
+this is the difference. It runs on every push, alongside the mutant suite: the two halves of
+Amendment A2, one covering the protocol and one covering the instrument.
+
+**6. Test files are checked under the same rules as their package.** A determinism leak in a test
+helper is still a leak; it just costs a flaky test instead of a flaky database. This is what forced
+`internal/sorted` into existence rather than a private helper per package, and A0.3 landing found
+one such leak already in `internal/rng`'s tests.
+
 ---
 
 ### D11 — Tracing, determinism checking, and structured logs
@@ -926,6 +1002,20 @@ fast. That is a materially stronger artifact than a green test suite, and it is 
 safety violations" mean *"we looked, with instruments of known and monitored sensitivity"* rather
 than *"nothing happened to fall on us."*
 
+#### [Amended — Ansh, 2026-08-11] Mutants are patches, not committed source
+
+Discovered while landing A0.3: `sim/toy` is in the determinism pass's core scope, so M4 (`range` over
+a map) and M5 (wall clock) **cannot exist as committed Go files** — the repo would not build, which
+is the point of them. The mutant suite therefore stores `sim/mutants/*.patch`, applied by the runner
+to a scratch worktree. Each patch header names the mutant ID and the failure class it validates. A
+patch that no longer applies fails the lane, so the nightly mutant run doubles as patch-rot
+detection, and rot is detected on the schedule that matters rather than the next time somebody looks.
+
+The determinism pass gets the same treatment one level down, in
+`tools/determinismcheck/blind/*.patch`: each blinds a single rule, and the named test must fail.
+Together they are the two halves of Amendment A2 — one instrument checking the protocol, one checking
+the instrument.
+
 **Part 3 — determinism gate.** For 200 sampled seeds: in-process rerun, fresh-process rerun, and a
 rerun with `GOGC=1` + `GOMAXPROCS=1` and again with `GOMAXPROCS=8` all produce identical trace
 hashes.
@@ -979,7 +1069,7 @@ Stated up front so no claim is ever broader than the evidence:
 | 2 | `DeleteRange` in the frozen interface | **Overruled; middle path.** Stays in the interface. See D7.1 and DR-13. |
 | 3 | Custom PCG in `internal/rng` | **Approved.** Recorded as Amendment 1 to CLAUDE.md's dependency wording. |
 | 4 | `golang.org/x/tools` dependency | **Approved — tooling only, never linked into a shipping binary.** Enforced by a CI check that the dependency does not appear in any `cmd/` binary's build graph. |
-| 5 | Go version | **Pin current stable with a `toolchain` directive; CI runs exactly that version.** See DR-16 for the wrinkle: 1.22.5 is what is installed locally and is *not* the latest upstream stable. |
+| 5 | Go version | **Pin current stable with a `toolchain` directive; CI runs exactly that version.** ~~1.22.5 is what is installed locally.~~ **[Overruled — Ansh, 2026-08-11]** 1.22 was never the current stable this ruling named, and it is now out of support. Pinned to the 1.26 line (`go 1.26.0`, `toolchain go1.26.5`), `golang.org/x/tools` unpinned to latest. See DR-26. |
 | 6 | `git init` / worktrees | **Yes.** First commit is CLAUDE.md + DESIGN-A0. `main` plus a `track-b` worktree, `.gitignore`, MIT license, CI lane skeleton with lanes stubbed. |
 | 7 | Wire codec fidelity | **Confirmed: fidelity is the default.** Codec stays on in sim. Any future fast path must still deep-copy — nothing ever shares message memory across nodes. Revisit only with measured hunt-throughput data. |
 
@@ -1015,6 +1105,21 @@ rejected and why — including the two places where my recommendation was overru
 | **DR-20** | **Mutant suite promoted to permanent policy (amendment).** Recorded as **Amendment 2** in CLAUDE.md: every BUGS.md root cause answers "which mutant class would have caught this"; if none exists, a new mutant lands **in the same PR as the fix**; CI tracks **kill-time per mutant** and treats regression in kill-time as a harness regression. | Ansh's amendment. The moment a fix lands is the only moment we will ever have a precise description of the blind spot that let the bug through. Kill-time turns harness sensitivity from a belief into a monitored number. | Filing a follow-up issue for the missing mutant: rejected. Follow-ups for test coverage do not get done, and the description degrades within days. |
 | **DR-21** | **Section 7 idealizations approved as written,** and will be linked from README's verification section: instantaneous computation, i.i.d. per-link latency, replay scoped to `engine/model`, no Byzantine faults, bounded linearizability checking. | Approved. Every claim the project makes is bounded by this list, stated before anyone asks. | — |
 | **DR-22** | **Repo: `git init` now.** First commit is CLAUDE.md + DESIGN-A0. `main` plus a `track-b` worktree, `.gitignore`, MIT license, CI lane skeleton with lanes stubbed. Module path `github.com/anshkanyadi/rift`. Go version pinned via a `toolchain` directive; CI runs exactly that version. | Approved. | Note for the record: the locally installed toolchain is **go1.22.5**, which is what A0.1 pins. It is not the newest upstream stable, and bumping later is a two-line change to `go.mod` plus the CI matrix — flagged rather than silently assumed. Separately, `GOPATH` is set to `GOROOT` (`/Users/anshk/go`), which Go warns about on every invocation; unrelated to this design but worth fixing. |
+
+**Rulings of 2026-08-11, on A0.3 as landed.** Approved as landed: the analyzer, the three-valued
+scope, the `make determinism` wiring, `tooling-only.sh`, mutation-testing the analyzer itself, and
+the count-not-presence test idiom (now house style for anything emitting a stream). The corrections
+and additions follow.
+
+| # | Decision | Ruling & rationale | Rejected, and why |
+|---|---|---|---|
+| **DR-23** | **Scope is defined by when code runs.** Any code that executes during a simulated run is in scope, no exceptions; orchestration around runs is not. `engine/model`, `internal/rng`, `clock` and `sim` move in; real-mode adapters are excluded **by name** through a new exclusion list that wins over every other pattern. | Ansh's ruling, correcting three packages A0.3 left out — all in the same direction, all because they did not *look* like node logic. `engine/model` is the case that matters: replay identity is defined on it. An unclassified subpackage defaults **in**, so a new package arrives checked and leaves only by a written decision. | Scope assembled package by package from a list of what looks dangerous: rejected. It has no answer for the next package, so it drifts, and the drift is always toward less coverage. |
+| **DR-24** | **The go1.23 iterator hole is closed.** `maps` is a banned import in core scope and `reflect.MapRange`/`MapKeys`/`MapIter` are flagged. Sorted iteration lives in `internal/sorted` and nowhere else — one helper, one hatch, one `range` statement in the repo. | Ansh's ruling. `slices.Sorted(maps.Keys(m))` contains no map-range syntax and is exactly the same nondeterminism; the syntax rule sees none of it. The hole opened with the toolchain bump, so it was closed in the same change. | Leaving it to review: rejected on the same grounds as D10 itself. Also rejected: putting the sorted-keys helper in each core package, since collecting keys *is* a map range and every copy would need its own hatch. |
+| **DR-25** | **The hatch is a ledger.** Unused hatches **fail**. `HATCHES.txt` is a checked-in golden registry (`file:line` plus reason) diffed against the tree by a test. **No hatch sanctions `go`, `select`, `chan` or `sync` in core scope**; those are refused outright, consuming the hatch so the author gets one diagnostic instead of two. | Ansh's ruling. Warnings rot and nobody reads CI warnings, so a drifted hatch — the dangerous case, where something is unguarded and its author believes otherwise — has to fail. The registry makes adding an exemption a conscious edit to a reviewed list. The hard rule needs no annotation because concurrency in core is a design error, not an exception. | A stderr warning for unused hatches (as originally landed): rejected. Per-file hatches as the only form: kept, but they are the blunt instrument; the per-line form is the one to reach for. |
+| **DR-26** | **Toolchain: the 1.26 line** (`go 1.26.0`, `toolchain go1.26.5`), `golang.org/x/tools` unpinned to latest. | **Ansh's earlier ruling (Q5/DR-22) overruled by Ansh.** 1.22 was never the current stable that ruling named, and it is out of support. Landed together with DR-24 because the iterator hole goes live with the bump; every lane, plus the blinded-analyzer suite, reran green on it. | Staying on the locally installed toolchain: rejected. An out-of-support toolchain is a security and compatibility debt that only grows, and the pin exists to make the version a decision rather than an accident. |
+| **DR-27** | **Mutants are patches applied to a scratch worktree**, `sim/mutants/*.patch`, each header naming the mutant ID and the failure class it validates. The nightly mutant lane doubles as patch-rot detection. The same applies one level down for the determinism pass, in `tools/determinismcheck/blind/*.patch`. | Ansh's ruling, on a forward dependency found while landing A0.3: `sim/toy` is in core scope, so M4 and M5 **cannot** exist as committed Go files — the repo would not build, which is exactly what those mutants mean. | Committed mutant source behind build tags: rejected. Tagged code that must not compile is a contradiction, and tagged code that does compile is not the mutant. |
+| **DR-28** | **The mailbox rule is provisional** until `node/` exists. A0 does not exit until it does and the rule has end-to-end teeth. | Ansh's ruling. A rule proven only against a fixture of itself carries an untested assumption about the shape of the code it will meet. | Deleting it until `node/` lands: rejected. Written now, it is in force the day the package appears rather than retrofitted onto code that has grown around its absence. |
+| **DR-29** | **BUGS.md is for bugs the verification machinery caught in the system under test.** Tooling bugs — like the announcement-writer race A0.3's own test caught — stay out; the commit message is their record. | Ansh's ruling. BUGS.md is the evidence behind the verification claim, and diluting it with tooling defects weakens exactly what it is meant to prove. | Logging every bug found anywhere: rejected as claim dilution. |
 
 **Amendments propagated to CLAUDE.md:** Amendment 1 (`internal/rng`, dependency wording),
 Amendment 2 (mutant policy in BUGS.md), Amendment 3 (Track B `DeleteRange` staging in B2/B3),

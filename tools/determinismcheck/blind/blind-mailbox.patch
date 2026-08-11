@@ -1,0 +1,14 @@
+# id: blind-mailbox
+# must-fail: TestMailboxRule
+# blinds: the mailbox rule: any core method becomes callable from a driver
+--- a/tools/determinismcheck/mailbox.go
++++ b/tools/determinismcheck/mailbox.go
+@@ -49,7 +49,7 @@
+ 		if obj.Pkg() == nil || !isCorePkg(obj.Pkg().Path()) {
+ 			return
+ 		}
+-		if slices.Contains(allowed, obj.Name()) {
++		if true {
+ 			return
+ 		}
+ 		r.report(sel.Sel.Pos(), ruleMailbox,

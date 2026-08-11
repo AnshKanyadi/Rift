@@ -37,6 +37,24 @@ func TestM5WallClock(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "m5wallclock")
 }
 
+// TestHatchesCannotSanctionConcurrency covers the one line the escape hatch
+// does not cross. Every hatch in the fixture is well-formed and carries a
+// reason; every one is refused, and refusing consumes the hatch so the author
+// is not also told their annotation excused nothing.
+func TestHatchesCannotSanctionConcurrency(t *testing.T) {
+	sink := captureAllowances(t)
+	setFlags(t, map[string]string{"core": "hardrules"})
+
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "hardrules")
+
+	if n := strings.Count(sink.String(), "REFUSED"); n != 4 {
+		t.Errorf("got %d REFUSED announcements, want 4 (sync, chan, go, select):\n%s", n, sink)
+	}
+	if strings.Contains(sink.String(), "ALLOWED") {
+		t.Errorf("a hard rule was excused:\n%s", sink)
+	}
+}
+
 // TestMailboxRule covers DESIGN-A0 DR-2's second layer. The first is that core
 // state is unexported in another package; this is what catches the calls the
 // compiler still permits.
@@ -65,7 +83,6 @@ func TestEscapeHatch(t *testing.T) {
 	for _, want := range []string{
 		"ALLOWED (file)", "exercises the file-level escape hatch",
 		"ALLOWED (line)", "hatch on the line above", "trailing hatch",
-		"UNUSED (line)", "too far from the call below",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("announcement missing %q; got:\n%s", want, out)
@@ -73,6 +90,12 @@ func TestEscapeHatch(t *testing.T) {
 	}
 	if n := strings.Count(out, "ALLOWED"); n != 4 {
 		t.Errorf("got %d ALLOWED announcements, want 4 (two in allowfile, two in allowline):\n%s", n, out)
+	}
+	// One HATCH line per declared hatch, used or not: that stream is what
+	// HATCHES.txt is diffed against, so it has to be complete rather than
+	// merely correct about the ones that fired.
+	if n := strings.Count(out, "HATCH "); n != 4 {
+		t.Errorf("got %d HATCH declarations, want 4 (one in allowfile, three in allowline):\n%s", n, out)
 	}
 }
 
@@ -113,6 +136,7 @@ func c() {}
 	want := []string{
 		"3: escape: //rift:allow-nondeterminism requires a written reason",
 		"6: escape: malformed escape hatch",
+		"9: escape: this escape hatch excused nothing",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d diagnostics %q, want %d", len(got), got, len(want))
@@ -122,8 +146,10 @@ func c() {}
 			t.Errorf("diagnostic %d = %q, want prefix %q", i, got[i], want[i])
 		}
 	}
-	if out := sink.String(); !strings.Contains(out, "UNUSED (line)") || !strings.Contains(out, "excuses nothing") {
-		t.Errorf("stale hatch was not announced; got:\n%s", out)
+	// The two malformed hatches are not hatches at all, so exactly one is
+	// declared and lands in the registry stream.
+	if n := strings.Count(sink.String(), "HATCH "); n != 1 {
+		t.Errorf("got %d HATCH declarations, want 1:\n%s", n, sink)
 	}
 }
 
@@ -135,21 +161,38 @@ func TestScopeTable(t *testing.T) {
 		path string
 		want scope
 	}{
+		// In scope: everything that executes during a simulated run.
 		{mod + "raft", scopeCore},
 		{mod + "raft/quorum", scopeCore},
 		{mod + "raft_test", scopeCore}, // an external test package is still the package
 		{mod + "kv", scopeCore},
 		{mod + "engine", scopeCore},
 		{mod + "engine/model", scopeCore},
-		{mod + "engine/cgo", scopeOff}, // DR-11 puts the poller goroutine here
+		{mod + "clock", scopeCore},
+		{mod + "sim", scopeCore},
 		{mod + "sim/toy", scopeCore},
 		{mod + "sim/toy/mutants", scopeCore},
-		{mod + "sim", scopeOff},   // owns the nondeterminism it injects
-		{mod + "clock", scopeOff}, // CLAUDE.md exempts the real clock by name
-		{mod + "internal/rng", scopeOff},
+		{mod + "internal/rng", scopeCore},
+		{mod + "internal/sorted", scopeCore},
+
+		// A subpackage nobody has classified is in scope, not out of it. That
+		// default is the whole point: a new package under engine/ arrives
+		// checked, and gets excluded only by someone writing it down.
+		{mod + "engine/wherever", scopeCore},
+
+		// Excluded by name: the real-mode adapters that need what the rules
+		// forbid, and which do not run inside a simulated run.
+		{mod + "engine/real", scopeOff},
+		{mod + "engine/pump/poller", scopeOff},
+
+		// Orchestration around runs.
 		{mod + "cmd/simctl", scopeOff},
+		{mod + "soak", scopeOff},
+		{mod + "tools/determinismcheck", scopeOff},
+
 		{mod + "node", scopeMailbox},
 		{mod + "node/transport", scopeMailbox},
+
 		{mod + "raftlike", scopeOff}, // a prefix is not a parent directory
 		{"time", scopeOff},
 	}

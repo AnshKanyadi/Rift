@@ -1,0 +1,14 @@
+# id: blind-reflect
+# must-fail: TestCoreRules
+# blinds: reflect-based map iteration, the go1.23 iterator hole
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -157,7 +157,7 @@
+ // outright -- core packages have no business in reflect at all, but these are
+ // the ones that are silently nondeterministic rather than merely unwise.
+ var bannedReflect = map[string]bool{
+-	"MapRange": true,
++	"MapRangeNope": true,
+ 	"MapKeys":  true,
+ 	"MapIter":  true,
+ }

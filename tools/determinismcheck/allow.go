@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -16,8 +17,8 @@ import (
 // stops being an exemption and becomes the rule.
 const directive = "//rift:allow-nondeterminism"
 
-// allowanceSink is where used and unused hatches are announced. A package
-// variable so tests can read what CI would have seen.
+// allowanceSink is where hatch activity is announced. A package variable so
+// tests can read what CI would have seen.
 //
 // The mutex is not optional: the analysis driver runs one pass per package
 // concurrently, and they all announce through this one writer. Without it the
@@ -36,6 +37,7 @@ type allowIndex struct {
 type fileAllow struct {
 	whole *allowance         // covers the file; nil if absent
 	lines map[int]*allowance // covers its own line and the line below
+	decls []*allowance       // every hatch in the file, in source order
 }
 
 type allowance struct {
@@ -75,6 +77,7 @@ func newAllowIndex(pass *analysis.Pass) *allowIndex {
 				}
 
 				a := &allowance{reason: reason, pos: c.Pos()}
+				fa.decls = append(fa.decls, a)
 				if c.End() < f.Package {
 					// Above the package clause: the whole file is exempt.
 					fa.whole = a
@@ -95,66 +98,81 @@ func isNearMiss(text string) bool {
 	return strings.HasPrefix(strings.TrimSpace(t), strings.TrimLeft(directive, "/"))
 }
 
-// suppress reports whether pos is exempted, recording and announcing the use.
-// A line-level hatch covers its own line (trailing comment) and the line below
-// it (comment on its own line above the code); nothing further, so a hatch
-// cannot drift away from what it excuses.
-func (ai *allowIndex) suppress(pos token.Pos, rule, msg string) bool {
+// covering returns the hatch that applies at pos, if any. A line-level hatch
+// covers its own line (trailing comment) and the line below it (comment on its
+// own line above the code); nothing further, so a hatch cannot drift away from
+// what it excuses.
+func (ai *allowIndex) covering(pos token.Pos) (*allowance, string) {
 	p := ai.pass.Fset.Position(pos)
 	fa := ai.files[p.Filename]
 	if fa == nil {
+		return nil, ""
+	}
+	if fa.whole != nil {
+		return fa.whole, "file"
+	}
+	if a := fa.lines[p.Line]; a != nil {
+		return a, "line"
+	}
+	if a := fa.lines[p.Line-1]; a != nil {
+		return a, "line"
+	}
+	return nil, ""
+}
+
+// suppress reports whether pos is exempted, recording and announcing the use.
+func (ai *allowIndex) suppress(pos token.Pos, rule, msg string) bool {
+	a, kind := ai.covering(pos)
+	if a == nil {
 		return false
 	}
-
-	a := fa.whole
-	kind := "file"
-	if a == nil {
-		kind = "line"
-		if a = fa.lines[p.Line]; a == nil {
-			a = fa.lines[p.Line-1]
-		}
-	}
-	if a == nil {
-		return false
-	}
-
 	a.uses++
-	ai.printf("determinismcheck: ALLOWED (%s) %s:%d:%d: %s: %s -- reason: %s\n",
-		kind, p.Filename, p.Line, p.Column, rule, msg, a.reason)
+	ai.announce("ALLOWED", kind, pos, rule+": "+msg+" -- reason: "+a.reason)
 	return true
 }
 
-// finish announces hatches that excused nothing. This is a warning rather than
-// a diagnostic: the line-level form covers a two-line window, so a stale hatch
-// is a housekeeping problem, and failing a build over housekeeping is how a
-// rule set loses its welcome. It is still printed on every run, so a reviewer
-// deleting dead exemptions has a list.
+// refuse consumes a hatch that covers an unhatchable rule and reports whether
+// one was there. The hatch is marked used so the author gets the one diagnostic
+// that matters -- the rule itself -- rather than that plus a confusing
+// complaint that their hatch excused nothing.
+func (ai *allowIndex) refuse(pos token.Pos, rule, msg string) bool {
+	a, kind := ai.covering(pos)
+	if a == nil {
+		return false
+	}
+	a.uses++
+	ai.announce("REFUSED", kind, pos, rule+": "+msg+" -- refused reason: "+a.reason)
+	return true
+}
+
+// finish announces every declared hatch, which is what HATCHES.txt is diffed
+// against, and fails any that excused nothing.
+//
+// Unused hatches are a diagnostic rather than a warning, ruled 2026-08-11:
+// warnings rot and nobody reads CI warnings. A hatch that excuses nothing is
+// either a rule that has been fixed -- delete the hatch -- or a hatch that has
+// drifted off the line it was written for, which means something is now
+// unexcused and unnoticed.
 func (ai *allowIndex) finish() {
 	for _, f := range ai.pass.Files {
-		name := ai.pass.Fset.Position(f.Package).Filename
-		fa := ai.files[name]
+		fa := ai.files[ai.pass.Fset.Position(f.Package).Filename]
 		if fa == nil {
 			continue
 		}
-		if fa.whole != nil && fa.whole.uses == 0 {
-			ai.warnUnused(fa.whole, "file")
-		}
-		// Iterate the file's comments rather than the line map: same set,
-		// source order, no map range.
-		for _, cg := range f.Comments {
-			for _, c := range cg.List {
-				if a := fa.lines[ai.pass.Fset.Position(c.Pos()).Line]; a != nil && a.pos == c.Pos() && a.uses == 0 {
-					ai.warnUnused(a, "line")
-				}
+		for _, a := range fa.decls {
+			p := ai.pass.Fset.Position(a.pos)
+			ai.printf("determinismcheck: HATCH %s:%d  %s\n", displayPath(p.Filename), p.Line, a.reason)
+			if a.uses == 0 {
+				ai.pass.Reportf(a.pos,
+					"%s: this escape hatch excused nothing; delete it, or move it onto the line it was written for", ruleEscape)
 			}
 		}
 	}
 }
 
-func (ai *allowIndex) warnUnused(a *allowance, kind string) {
-	p := ai.pass.Fset.Position(a.pos)
-	ai.printf("determinismcheck: UNUSED (%s) %s:%d:%d: escape hatch excused nothing -- reason was: %s\n",
-		kind, p.Filename, p.Line, p.Column, a.reason)
+func (ai *allowIndex) announce(verdict, kind string, pos token.Pos, detail string) {
+	p := ai.pass.Fset.Position(pos)
+	ai.printf("determinismcheck: %s (%s) %s:%d:%d: %s\n", verdict, kind, displayPath(p.Filename), p.Line, p.Column, detail)
 }
 
 func (ai *allowIndex) printf(format string, args ...any) {
@@ -164,4 +182,23 @@ func (ai *allowIndex) printf(format string, args ...any) {
 	allowanceMu.Lock()
 	defer allowanceMu.Unlock()
 	fmt.Fprintf(allowanceSink, format, args...)
+}
+
+// displayPath renders a file relative to the repo root, so announcements are
+// stable enough to diff against a checked-in registry and short enough to read
+// in a build log.
+func displayPath(name string) string {
+	root := flagRoot
+	if root == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return name
+		}
+		root = wd
+	}
+	rel, err := filepath.Rel(root, name)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return name
+	}
+	return rel
 }

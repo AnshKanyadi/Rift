@@ -63,6 +63,21 @@ jobs:
           check-latest: false
       - run: make smoke
 
+  blind:
+    name: blinded analyzer (the pass's own mutation lane)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # Blinds one determinism rule at a time and requires the named test to
+      # fail. A pass that has quietly stopped checking something looks exactly
+      # like a pass with nothing to report; this is the difference. Permanent,
+      # alongside the mutant suite -- the two halves of CLAUDE.md Amendment A2.
+      - run: make blind
+
   mutants:
     name: mutant suite + kill-time (stub)
     runs-on: ubuntu-latest

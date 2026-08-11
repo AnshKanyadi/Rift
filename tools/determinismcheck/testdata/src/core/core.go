@@ -6,9 +6,12 @@ package core
 import (
 	"fmt"
 	"log"       // want `import: importing "log"`
+	"maps"      // want `import: importing "maps"`
 	"math/rand" // want `import: importing "math/rand"`
 	"os"        // want `import: importing "os"`
-	"sync"      // want `import: importing "sync"`
+	"reflect"
+	"slices"
+	"sync" // want `import: importing "sync"`
 	"time"
 	"unsafe" // want `import: importing "unsafe"`
 )
@@ -74,4 +77,19 @@ func (n *node) campaign() {
 
 func (n *node) send(id uint64, msg []byte) {
 	n.inflight[n.peers[id]] = uint64(len(msg)) + uint64(rand.Intn(2)) + uint64(unsafe.Sizeof(id))
+}
+
+// sortedPeers is the go1.23 iterator hole: not one map-range statement in
+// sight, and exactly the same nondeterminism. Banning the import is the only
+// place to stand, so the diagnostic is on the import line rather than here.
+func (n *node) sortedPeers() []uint64 {
+	return slices.Sorted(maps.Keys(n.peers))
+}
+
+// reflective is the other half of the hole: map iteration reached through
+// method calls, where neither the syntax rule nor an import ban can see it.
+func (n *node) reflective(v reflect.Value) int {
+	iter := v.MapRange() // want `maprange: reflect.MapRange`
+	_ = iter
+	return len(v.MapKeys()) // want `maprange: reflect.MapKeys`
 }

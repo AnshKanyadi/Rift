@@ -18,10 +18,12 @@ catch it being wrong.
 
 **Deterministic simulation.** The distributed layer runs on a single-threaded, event-driven
 simulator with a virtual clock. There are no goroutines, channels, locks, wall-clock reads, or
-network and filesystem calls in `raft/`, `store/`, `kv/`, `router/`, `balancer/`, or `engine/model` —
-a custom vet pass (`tools/determinismcheck`) rejects them at build time, including `range` over a
-map, and prints every use of its escape hatch into the build log. Same seed, same trace, byte for
-byte.
+network and filesystem calls in any package that executes during a run — a custom vet pass
+(`tools/determinismcheck`) rejects them at build time, including `range` over a map and the go1.23
+iterator forms that look nothing like one. Its escape hatch requires a written reason, refuses to
+sanction concurrency at all, and every use is listed in [HATCHES.txt](HATCHES.txt), which a test
+diffs against the tree. The pass is itself mutation-tested: `make blind` blinds one rule at a time
+and requires the rule's own test to fail. Same seed, same trace, byte for byte.
 
 **Faults are the default, not a special mode.** Message drop, delay, duplication, reordering,
 symmetric and asymmetric partitions, crashes, restarts, GC-style pauses, loss of unsynced writes, and
@@ -36,9 +38,11 @@ sequential draw is taken during plan execution. Seeds reproduce at the commit th
 plans reproduce at any commit. Both are stored in [`seeds/`](seeds/).
 
 **The harness is calibrated against known bugs.** A green test suite proves the harness *runs*, not
-that it *catches*. `sim/toy/mutants` holds deliberately broken implementations — acknowledge before
-fsync, acknowledge before replicating, apply a retried request twice, iterate a map, read the wall
-clock, serve a stale read, restart from non-durable state — each with a budget in seeds. A mutant
+that it *catches*. `sim/mutants/*.patch` holds deliberately broken implementations — acknowledge
+before fsync, acknowledge before replicating, apply a retried request twice, iterate a map, read the
+wall clock, serve a stale read, restart from non-durable state — each applied to a scratch worktree
+and each with a budget in seeds. (Patches rather than committed source: two of them must not
+compile, which is the point of them.) A mutant
 that survives its budget means the harness is too weak and the phase is not done. CI records
 **kill-time per mutant**, so harness sensitivity is a monitored number rather than a belief. Every
 entry in [BUGS.md](BUGS.md) names the mutant class that would have caught it; when none exists, a new
@@ -90,6 +94,7 @@ Unchecked means not built.)*
 | `sim/` | event-loop simulator, fault injectors, checkers, toy protocol and mutants |
 | `cmd/simctl/` | `run` / `replay` / `hunt` / `minimize` |
 | `internal/rng/` | project-owned PCG64 with pinned test vectors and named sub-streams |
+| `internal/sorted/` | the only map iteration in the repo, so key order is never an accident |
 | `tools/determinismcheck/` | the vet pass that makes the determinism rules build failures |
 | `bench/`, `chaos/`, `soak/` | load generators, real-mode chaos, the soak-farm runner |
 
@@ -100,6 +105,7 @@ make help      # every lane, and which are real vs. still stubs
 make test      # Go unit tests
 make race      # Go unit tests under -race
 make lint      # vet, formatting, the determinism pass, tooling-only dependencies
+make blind     # mutation-test the determinism pass itself
 make smoke     # 500-seed simulator smoke
 ```
 
@@ -113,6 +119,7 @@ Go is pinned by `go.mod`'s `toolchain` directive and CI runs exactly that versio
 - [BUGS.md](BUGS.md) — every bug found, with its seed or kill point, root cause, and the invariant
   and mutant class that caught it
 - [SOAK.md](SOAK.md) — the cumulative verification ledger
+- [HATCHES.txt](HATCHES.txt) — every determinism exemption in the repo, with its reason
 - [BENCHMARKS.md](BENCHMARKS.md) — methodology first, numbers second, both engines
 
 ## License

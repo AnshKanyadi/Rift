@@ -1,0 +1,14 @@
+# id: blind-unused-hatch
+# must-fail: TestEscapeHatch
+# blinds: the unused-hatch rule, letting a drifted hatch rot in place
+--- a/tools/determinismcheck/allow.go
++++ b/tools/determinismcheck/allow.go
+@@ -162,7 +162,7 @@
+ 		for _, a := range fa.decls {
+ 			p := ai.pass.Fset.Position(a.pos)
+ 			ai.printf("determinismcheck: HATCH %s:%d  %s\n", displayPath(p.Filename), p.Line, a.reason)
+-			if a.uses == 0 {
++			if false {
+ 				ai.pass.Reportf(a.pos,
+ 					"%s: this escape hatch excused nothing; delete it, or move it onto the line it was written for", ruleEscape)
+ 			}

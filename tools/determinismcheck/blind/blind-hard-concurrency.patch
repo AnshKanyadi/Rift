@@ -1,0 +1,14 @@
+# id: blind-hard-concurrency
+# must-fail: TestHatchesCannotSanctionConcurrency
+# blinds: the refusal of hatches over concurrency, making go/select/chan excusable
+--- a/tools/determinismcheck/analyzer.go
++++ b/tools/determinismcheck/analyzer.go
+@@ -124,7 +124,7 @@
+ // their hatch excused nothing.
+ func (r *reporter) reportHard(pos token.Pos, rule, format string, args ...any) {
+ 	msg := fmt.Sprintf(format, args...)
+-	if r.allow.refuse(pos, rule, msg) {
++	if r.allow.suppress(pos, rule, msg) { return }; if false {
+ 		msg += "; the escape hatch on this line does not apply -- no annotation sanctions concurrency in core scope"
+ 	}
+ 	r.pass.Reportf(pos, "%s: %s", rule, msg)

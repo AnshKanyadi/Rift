@@ -1,0 +1,17 @@
+# Determinism escape-hatch registry.
+#
+# Every //rift:allow-nondeterminism in the repo, one per line, as
+#
+#   <file>:<line>  <reason>
+#
+# TestHatchRegistry diffs this file against what the determinism pass actually
+# finds, so a hatch cannot appear in the tree without appearing here: adding one
+# is a conscious edit to a checked-in list, reviewed like any other diff.
+#
+# Regenerate with:  go test ./tools/determinismcheck -update-hatches
+#
+# Ruled by Ansh, 2026-08-11. Hatches never sanction go, select, chan or sync in
+# core scope -- those are refused outright, so nothing of that kind can ever
+# appear below.
+
+internal/sorted/sorted.go:40  the one map range in the repo; every caller sorts before returning, so this order is never observable

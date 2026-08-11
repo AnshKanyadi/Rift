@@ -51,10 +51,12 @@ const (
 
 var (
 	flagCore           = strings.Join(defaultCore, ",")
+	flagExclude        = strings.Join(defaultExclude, ",")
 	flagMailbox        = strings.Join(defaultMailbox, ",")
 	flagMailboxAllow   = "Handle,Status"
 	flagPostFunc       = "post"
 	flagListAllowances = true
+	flagRoot           = ""
 )
 
 // The scope tables live in the code rather than in a Makefile line, so adding a
@@ -63,6 +65,8 @@ var (
 func init() {
 	Analyzer.Flags.StringVar(&flagCore, "core", flagCore,
 		"comma-separated package patterns under the core rules (`p` or `p/...`)")
+	Analyzer.Flags.StringVar(&flagExclude, "exclude", flagExclude,
+		"comma-separated package patterns exempted from every rule; wins over -core and -mailbox")
 	Analyzer.Flags.StringVar(&flagMailbox, "mailbox", flagMailbox,
 		"comma-separated package patterns under the mailbox rule")
 	Analyzer.Flags.StringVar(&flagMailboxAllow, "mailbox-allow", flagMailboxAllow,
@@ -71,6 +75,8 @@ func init() {
 		"name of the only function in a mailbox package permitted to send on a channel")
 	Analyzer.Flags.BoolVar(&flagListAllowances, "list-allowances", flagListAllowances,
 		"print every use of the //rift:allow-nondeterminism escape hatch to stderr")
+	Analyzer.Flags.StringVar(&flagRoot, "root", flagRoot,
+		"render announced paths relative to this `dir` (default: the working directory)")
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -104,6 +110,22 @@ func (r *reporter) report(pos token.Pos, rule, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	if r.allow.suppress(pos, rule, msg) {
 		return
+	}
+	r.pass.Reportf(pos, "%s: %s", rule, msg)
+}
+
+// reportHard is for the rules no annotation may sanction: go, select, chan and
+// sync in core scope. Ruled 2026-08-11, and the reasoning is short -- either
+// the concurrency moves out of core, or the design is wrong. Neither of those
+// is a thing a comment can fix, so there is no comment for it.
+//
+// A hatch covering the position is consumed rather than ignored, so the author
+// gets the one diagnostic that matters instead of that plus a complaint that
+// their hatch excused nothing.
+func (r *reporter) reportHard(pos token.Pos, rule, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if r.allow.refuse(pos, rule, msg) {
+		msg += "; the escape hatch on this line does not apply -- no annotation sanctions concurrency in core scope"
 	}
 	r.pass.Reportf(pos, "%s: %s", rule, msg)
 }
