@@ -1,0 +1,302 @@
+# DESIGN-A0.4: Clocks, drift, and the skew envelope
+
+**Status:** **PROPOSED** — awaiting Ansh's decision. No code until then.
+**Phase:** A0.4 (Track A). **Author:** Claude. **Decider:** Ansh.
+**Blocks:** A0.6 (the event loop schedules ticks through this), A5 (HLC wraps `PhysicalNow`),
+A8 (lease disjointness and the envelope experiment consume the schedules defined here).
+**Consumes:** DESIGN-A0 D2 (virtual time), D9 and DR-15 (clock injectors), the A0.3 rulings
+(`clock/` is core scope; the real implementation takes a per-line hatch).
+
+---
+
+## 0. What A0.4 must deliver
+
+From CLAUDE.md and DESIGN-A0's landing plan: `Clock` interfaces, a sim clock with drift and jump
+schedules, and a skew checker, gated on skew property tests.
+
+Two requirements carry over from the A0 rulings and are treated as fixed inputs rather than open
+questions:
+
+1. **Drift shapes tick rate, not only `Now()`.** A node whose oscillator runs fast campaigns and
+   heartbeats fast. Drift that moved only `PhysicalNow()` would be cosmetic (D9).
+2. **The plan format exposes a hold-at-boundary primitive** that pins a node at ±`maxOffset` for a
+   window, *and* a schedule that deliberately exceeds it. A8's envelope experiments consume both
+   directly, and A0.4's exit criteria include a demonstration schedule of each.
+
+A0.4 does **not** build the HLC. That is A5. It must not preclude it.
+
+---
+
+## 1. Problem
+
+Three consumers want different things from "the time", and conflating them is how clock bugs become
+safety bugs:
+
+- **Safety decisions** (A8 leases, A5 uncertainty intervals) need each node's *estimate of wall
+  time*, which drifts from other nodes' estimates and may be stepped by NTP. `maxOffset` bounds the
+  disagreement, and every lease argument rests on that bound holding.
+- **Timeouts** (elections, heartbeats, lease renewal) need *elapsed* time, which must never run
+  backwards. A real system takes these from a monotonic clock precisely so an NTP step cannot make a
+  timer fire early or hang for an hour.
+- **The simulator** needs both to be pure functions of virtual time, computable without an event
+  loop, so that A0.4 can ship and be tested before A0.6 exists.
+
+The tension is between fidelity and simplicity. One clock per node is simpler and wrong in a way
+that matters: it makes a backward jump rewind the election timer, which no real system does, and
+would let us "discover" bugs that cannot happen while hiding the ones that can.
+
+---
+
+## 2. Decisions
+
+### D1 — One clock per node, or two?
+
+**Candidates**
+
+- **(a) One clock.** `Now()` returns the node's wall estimate: virtual time plus a per-node offset
+  schedule covering drift and jumps. Ticks are scheduled off it.
+- **(b) Two clocks per node, one oscillator.** A **monotonic** clock, affected by drift only, never
+  jumping, strictly increasing; and a **wall** clock, the monotonic reading plus a step function of
+  jumps. Ticks come from monotonic; leases and HLC come from wall.
+- **(c) One wall clock plus a global tick rate.** Ticks fire on a fixed global cadence, unaffected by
+  the node's clock.
+
+**Tradeoffs**
+
+(c) is the simplest and violates requirement 1 outright: drift stops shaping tick rate, so a slow
+node no longer campaigns slowly, and the injector becomes cosmetic. Rejected on the ruling.
+
+(a) is one field and one function, and it mismodels the case we care most about. Under a backward
+jump of 500ms, a node's election timer would stall for 500ms of extra real time, and under a forward
+jump it would fire instantly — neither of which happens in production, because `time.After` and
+`time.Since` read `CLOCK_MONOTONIC`. We would spend seed budget on artifacts.
+
+(b) mirrors POSIX exactly, at the cost of one extra field and one extra method. Drift belongs to the
+oscillator and therefore affects *both* readings — which is what requirement 1 asks for — while jumps
+are corrections applied to the wall estimate only. The safety story lines up: leases and uncertainty
+intervals are the things bounded by `maxOffset` and the things a jump perturbs; timers are the things
+that must not rewind.
+
+**Recommendation: (b).**
+
+```go
+package clock
+
+// Instant is nanoseconds on a single node's timeline. It is deliberately not
+// time.Time: no location, no embedded monotonic reading, no formatting, and no
+// way to accidentally compare two nodes' instants as if they were the same
+// timeline.
+type Instant int64
+
+type Clock interface {
+    // Mono is elapsed nanoseconds on this node's oscillator. Strictly
+    // increasing; unaffected by jumps. Everything that measures a timeout
+    // reads this.
+    Mono() Instant
+
+    // Wall is this node's estimate of physical time: Mono plus accumulated
+    // steps. It moves backwards when a jump does. Everything bounded by
+    // maxOffset -- leases, uncertainty intervals, the HLC in A5 -- reads this.
+    Wall() Instant
+
+    // MaxOffset is the assumed bound on |Wall_i - Wall_j| across the cluster.
+    // Safety arguments quote it; the envelope experiment violates it.
+    MaxOffset() int64
+}
+```
+
+**Rejected:** (a) — a backward jump would rewind timers, which no real system does, manufacturing
+bugs we cannot ship and hiding ones we can. (c) — drift stops shaping ticks, contradicting the
+ruling and making the injector decorative.
+
+---
+
+### D2 — How is a node's timeline expressed, and by what arithmetic?
+
+Per D9 the plan carries a **piecewise-linear** offset schedule. A0.4 has to say precisely what it is
+linear *in*, because the answer decides whether ticks can be computed in closed form.
+
+**Recommendation.** Two separate curves per node, both authored in the plan:
+
+- **`skew`** — a piecewise-linear function of global virtual time `t`, giving the node's oscillator
+  offset: `mono_i(t) = t + skew_i(t)`. A sloped segment is a drift *rate* (slope 1e-6 is 1000 ppm);
+  a flat segment is a **sustained hold**, which is what A8 needs. Slope is constrained to
+  `(-1, +∞)`, i.e. `mono_i` is strictly increasing — an oscillator that runs backwards is not a
+  fault, it is a different kind of object.
+- **`steps`** — a list of `(at_ns, delta_ns)` jumps, applied to the wall reading only:
+  `wall_i(t) = mono_i(t) + Σ{delta : at ≤ t}`. Deltas may be negative.
+
+Both are pure functions of `t`, evaluable in constant time per segment with a cursor, and both are
+invertible where it matters (see D3). The skew checker asserts on `wall`, since `maxOffset` bounds
+disagreement about physical time, not about oscillators.
+
+**Why not express drift as a rate with a start time** (`drift node=n rate=ppm from=t`): a rate is a
+special case of a segment slope, and a rate-only model cannot express a hold, which DR-15 already
+established is the case A8 actually needs. Keeping one representation with two readings of it is
+cheaper than two representations.
+
+---
+
+### D3 — Where do ticks come from?
+
+Requirement 1 in mechanical form: node *i*'s tick *k* fires at the global time `t` satisfying
+`mono_i(t) = k · interval`. Since `mono_i` is strictly increasing and piecewise linear, that
+inversion is exact and cheap — walk to the segment containing the target, solve one linear equation.
+
+**Candidates**
+
+- **(a) Closed-form inversion**, as above. `NextTick(node, afterGlobal) Instant` is a pure function;
+  A0.6's event loop calls it to enqueue the next tick and nothing else.
+- **(b) Fixed global cadence, node counts ticks it "should" have had.** Approximates drift by
+  dropping or doubling ticks.
+- **(c) Re-evaluate drift at each tick and schedule `interval / (1 + slope)` ahead.** Correct within
+  a segment, wrong across a segment boundary, and the error accumulates silently.
+
+**Recommendation: (a).** It is the only one that is exact, and exactness here is worth having because
+the tick schedule is the thing that decides election timing, which is the thing seeds are spent on.
+(b) quantizes drift to whole ticks, so a 200 ppm drift is invisible until it accumulates a whole
+interval. (c) is a bug generator: it looks right in every test with a single segment.
+
+**Consequence, stated because it is load-bearing:** ticks are driven by `mono`, so a backward wall
+jump does **not** rewind the tick schedule. That is the behaviour of every real system and the reason
+D1 recommends two clocks.
+
+**Tick interval** is one global constant in plan config (`tick_interval_ns`), not per-node. Per-node
+tick *rates* emerge from drift, which is the point; randomized election timeouts are A1's business
+and come from the PRF, not from the tick source.
+
+---
+
+### D4 — The hold-at-boundary primitive
+
+A8 needs a cluster that *sits* just short of the skew cliff across many lease acquisitions,
+transfers and expirations. Authoring that as absolute per-node offsets is possible and miserable: it
+is pairwise reasoning ("2 is 490ms ahead of 1") written in absolute coordinates, and every edit to
+one node's schedule silently changes every pair it participates in.
+
+**Candidates for what the plan file carries**
+
+- **(a) Compiled per-node schedules only.** Execution is trivial. The intent is unreadable, the
+  minimizer can only delete whole schedules, and a bundle stops being a bug report a human can read.
+- **(b) The authored primitive only, compiled at load.** The plan says what was meant; a pure,
+  RNG-free compiler turns it into per-node curves at load time.
+- **(c) Both, with a checker asserting they agree.** Belt and braces, and two sources of truth that
+  will diverge the first time someone hand-edits a bundle.
+
+**Recommendation: (b).**
+
+```jsonc
+"clock": {
+  "max_offset_ns": 5e8,
+  "tick_interval_ns": 1e7,
+  "nodes": [ { "node": 2, "skew": [[0, 0], [4e9, 4.9e8]], "steps": [{"at_ns": 9e9, "delta_ns": -3e8}] } ],
+  "holds": [
+    // Pin the pair at 98% of maxOffset from 10s to 40s: a flat segment, not a sweep.
+    { "a": 1, "b": 2, "at": "0.98*max_offset", "from_ns": 1e10, "to_ns": 4e10, "ramp_ns": 2e8 },
+    // The A8 envelope: deliberately outside the assumption.
+    { "a": 1, "b": 3, "at": "1.20*max_offset", "from_ns": 2e10, "to_ns": 3e10, "ramp_ns": 2e8,
+      "envelope": true }
+  ]
+}
+```
+
+A `hold` compiles to segments on the named nodes' `skew` curves: ramp in over `ramp_ns`, hold flat,
+ramp out. `at` is a fraction of `maxOffset` rather than an absolute nanosecond count, so a plan that
+holds *at the boundary* keeps holding at the boundary when `maxOffset` is changed — which is exactly
+what an envelope sweep varies. Holds are individually deletable, so ddmin can ask "does the bug still
+happen without the hold?", which is the first question anyone will ask.
+
+`envelope: true` marks a hold as deliberately outside the assumption. Its effect is on the checker
+(D5), not on the arithmetic.
+
+**Rejected:** (a) — unreadable bundles and a minimizer that can only delete whole timelines. (c) —
+two representations of one fact, guaranteed to disagree eventually.
+
+---
+
+### D5 — The skew checker, and what "envelope mode" means
+
+The checker asserts, at every step where a clock is read: `max_{i,j} |wall_i(t) − wall_j(t)| ≤
+maxOffset`. Two modes:
+
+- **Safety runs (default).** A violation is a **harness failure**, not a protocol failure, and says
+  so in its message. The generator constrains schedules to satisfy the bound by construction, so if
+  the checker ever fires, the generator is wrong — and a generator bug that quietly exceeded our own
+  assumption would present as a protocol violation and cost days (DR-15).
+- **Envelope runs (`--skew-envelope`, or any plan containing a hold marked `envelope`).** The
+  checker **inverts**: it records the realized excess rather than failing, and the safety checkers
+  are *expected* to fire. Characterizing what breaks, and how we detect it, is the experiment.
+
+Two properties I want asserted in A0.4 rather than assumed later:
+
+1. **Realized, not intended, skew is what gets recorded.** The checker reads the compiled curves,
+   not the authored holds, so a compiler bug shows up as a discrepancy rather than as agreement
+   between two things computed the same way.
+2. **The bound is checked continuously, not at hold boundaries.** A ramp that overshoots between two
+   sample points is exactly the bug this checker exists to catch. Because both curves are piecewise
+   linear, pairwise `|wall_i − wall_j|` is piecewise linear too, so its extrema occur at segment
+   endpoints — the checker can therefore be *exact* by evaluating at the union of both nodes'
+   breakpoints, rather than sampling and hoping.
+
+---
+
+### D6 — The real clock, and the one hatch
+
+Per the A0.3 ruling, `clock/` is in core scope and the real implementation takes a per-line hatch
+rather than living in an excluded package, so that every wall-clock touchpoint in the repo is
+enumerable from `HATCHES.txt`.
+
+`clock/real.go` holds **exactly one** `time.Now()` call, hatched, from which both readings derive:
+Go's `time.Time` carries a monotonic reading, so `Mono` is the difference between two samples and
+`Wall` is the wall component. One hatch, one line, one entry in the registry — and `make hatches`
+fails if a second appears.
+
+The sim clock has no hatch at all: it is arithmetic on plan data.
+
+---
+
+## 3. Exit criteria
+
+Signed off by Ansh, not by me. Each is a test, and each names what it would catch.
+
+1. **Skew property tests.** Over randomized schedules, realized pairwise skew never exceeds
+   `maxOffset`; the exact-extrema argument in D5 is tested against a dense-sampling oracle on the
+   same schedules, so "exact" is verified rather than asserted.
+2. **Demonstration schedule A — the hold.** A plan pins nodes 1 and 2 at 0.98 `maxOffset` for 30
+   simulated seconds. Recorded: realized skew at every breakpoint, its min and max over the window,
+   and the checker's verdict. Passing means A8 has its substrate before A8 needs it.
+3. **Demonstration schedule B — the envelope.** A plan drives the pair to 1.20 `maxOffset`. The
+   checker inverts, records an excess of exactly 0.20 `maxOffset`, and the run reports rather than
+   fails. Passing means the A8 experiment is expressible today, not a thing we hope to add later.
+4. **Drift shapes ticks.** A node at +200 ppm accumulates ticks faster than a node at nominal, by the
+   expected ratio to within one tick over a long window. This is the test that would have caught
+   D1(c) or D3(b) shipping by mistake.
+5. **Jumps do not rewind timers.** Under schedules with negative steps, `Mono` is strictly
+   increasing and the tick sequence is unperturbed, while `Wall` moves backwards as authored.
+6. **Determinism.** Clock-heavy plans produce identical `(node, tick_ordinal, mono, wall)` sequences
+   across an in-process rerun and a fresh process. (The rolling trace hash is A0.6; until it exists
+   this sequence is the thing compared.)
+7. **One hatch.** `HATCHES.txt` gains exactly one entry, in `clock/real.go`, and `make hatches` is
+   green.
+
+---
+
+## 4. Questions for Ansh
+
+| # | Question | My recommendation |
+|---|---|---|
+| 1 | `Instant` as a project-owned `int64`, or reuse `time.Time`/`time.Duration` in core signatures? | **Project-owned `Instant`.** `time.Time` carries a location, a monotonic reading and formatting we do not want, and it makes two nodes' timelines look mutually comparable. `time.Duration` stays legal and idiomatic for *durations*. |
+| 2 | Does `Clock` expose `MaxOffset()`, or does it come from config alongside the clock? | **On the interface.** Every consumer of `Wall` needs the bound in the same breath, and separating them invites a lease computed against a stale bound. |
+| 3 | Should the sim clock also model **frequency error in the estimate** (a node that knows it is uncertain), or only true offset? | **Only true offset in A0.4.** Uncertainty intervals are A5/A6 and are derived from `maxOffset`, not from a per-node error estimate. Adding it now would be modelling something no consumer reads. |
+| 4 | `holds` expressed as a fraction of `maxOffset` (`"0.98*max_offset"`) — accept the mini-expression, or require a plain float multiplier field? | **Plain float field** (`"at_frac": 0.98`) on reflection: a string expression is a parser and a parser is a place for bugs. Flagging that I changed my own mind between D4's sketch and here; the sketch shows the readable form, the field is the safe one. |
+| 5 | Does A0.4 land the tick *scheduling* (pure `NextTick`) only, with A0.6 wiring it to the queue? | **Yes.** It keeps A0.4 testable without an event loop and keeps A0.6 to one integration. |
+
+---
+
+## 5. What this does not decide
+
+- The HLC: its causality rules, its `maxOffset` interaction and uncertainty-interval restarts are A5.
+  A0.4 only guarantees `Wall()` is the reading it will wrap.
+- Lease validity arithmetic and the stasis rule (never serve past expiration minus `maxOffset`): A8.
+- How the event loop interleaves ticks with message delivery at equal virtual times: A0.6, under
+  D2's `(at_nanos, insertion_seq)` total order.
