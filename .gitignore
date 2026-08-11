@@ -1,0 +1,40 @@
+# Build output
+/bin/
+/build/
+*.a
+*.o
+*.so
+*.dylib
+*.test
+*.out
+
+# Go
+/vendor/
+coverage.out
+cpu.prof
+mem.prof
+trace.out
+
+# CMake / C++ (Track B)
+engine-cpp/build/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Simulator artifacts
+# NOTE: seeds/ IS tracked -- the failing-seed corpus is a deliverable.
+# These are transient run outputs, not corpus entries.
+/runs/
+/soak-out/
+*.trace.jsonl
+*.trace.jsonl.zst
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Worktrees created as siblings are outside the repo; this catches the
+# in-repo layout if we ever switch to it.
+/.worktrees/
