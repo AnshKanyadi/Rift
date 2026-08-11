@@ -53,6 +53,8 @@ In sim mode, node logic is event-driven: the simulator owns one event queue (mes
 
 ## Determinism rules, Go side (violations are bugs)
 
+Which packages these rules bind is settled by the scope principle: any code that executes during a simulated run is in scope, orchestration around runs is not, and an unclassified package defaults in `[A5]`.
+
 - No `time.Now()`, `time.Sleep`, `time.After` outside the real clock implementation. Inject `Clock`.
 - No global `math/rand`. Inject `Rand` owned by the simulator `[A1]`.
 - No direct network or filesystem access in `raft/`, `store/`, `kv/`, `router/`, `balancer/`. Inject `Transport` and `Engine`.
@@ -63,6 +65,8 @@ In sim mode, node logic is event-driven: the simulator owns one event queue (mes
 - Clock skew is modeled: per-node drift and jump schedules, bounded by maxOffset in safety runs, deliberately exceeding it in envelope experiments.
 
 ## Determinism and fault injection, C++ side
+
+Env is the C++ side of the same boundary the Go determinism pass enforces: every syscall goes through it for the reason every clock read goes through `Clock` `[A5]`.
 
 - The engine performs all file operations through an `Env` abstraction (open, read, write, sync, rename, list), LevelDB style. Production Env hits the real filesystem. TestEnv injects: sync loss windows, torn writes at arbitrary byte offsets, IO errors, disk-full via quota, and kill points at any syscall boundary.
 - Crash-consistency rig: run a randomized workload, kill at a swept set of Env call points, reopen, verify recovered state against the operation log. Every recovery invariant violation gets a BUGS.md entry like any sim bug.
@@ -224,3 +228,13 @@ timeout, not the model, not the operation set. Rationale: "zero violations acros
 false if a fraction of those seeds never finished checking, and the usual cause of a rising
 inconclusive rate is a workload drifting toward pathological concurrency, which is exactly when the
 checker matters most.
+
+**A5 — Determinism scope principle.** Ansh, 2026-08-11, ratified on the A0.3 follow-up rulings
+(DESIGN-A0 D10, DR-23). Any code that executes during a simulated run is deterministic by
+construction; orchestration around runs (hunters, real-mode drivers, `cmd/`) is not required to be.
+Each language enforces the boundary with its own mechanism: Go through the determinismcheck scope,
+C++ through the Env seam. Every clock read goes through Clock, every random draw through
+`internal/rng`, every syscall on the C++ side through Env, all for the same reason. Exceptions are
+per-line hatches in a golden registry, never package exclusions. Concurrency primitives are
+unhatchable in core scope: code that needs a goroutine is orchestration and lives outside the
+boundary, or the design is wrong. Unclassified packages default in.
