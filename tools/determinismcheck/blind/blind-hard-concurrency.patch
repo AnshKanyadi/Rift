@@ -1,5 +1,6 @@
 # id: blind-hard-concurrency
-# must-fail: TestHatchesCannotSanctionConcurrency
+# covering-test: TestHatchesCannotSanctionConcurrency
+# expect: killed
 # blinds: the refusal of hatches over concurrency, making go/select/chan excusable
 --- a/tools/determinismcheck/analyzer.go
 +++ b/tools/determinismcheck/analyzer.go

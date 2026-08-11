@@ -1,0 +1,20 @@
+# id: canary-mispointed
+# covering-test: TestScopeTable
+# expect: alive
+# blinds: the map-range rule, declared against a test that does not cover it
+#
+# This patch must SURVIVE. It is the lane's proof that it can still report
+# ALIVE -- that a kill means the named test caught the blinding, rather than
+# that the test was failing anyway. The stale-test incident of 2026-08-11 is
+# exactly the case it catches.
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -192,7 +192,7 @@
+ 		return
+ 	}
+ 	switch t.Underlying().(type) {
+-	case *types.Map:
++	case *types.Slice:
+ 		// The advice is deliberately not "collect the keys and sort them":
+ 		// collecting them means ranging the map, which is this rule. Keep the
+ 		// order beside the map, or take it from a helper outside the core

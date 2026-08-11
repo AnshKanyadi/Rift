@@ -792,17 +792,34 @@ one hatch, one range statement in the entire repository.
   believes it is not.
 - **`HATCHES.txt` is a checked-in golden registry** of every hatch in the repo (`file:line` plus
   reason), diffed against the tree by `TestHatchRegistry`. Adding a hatch is a conscious edit to a
-  reviewed list, not a comment somebody slips into a diff.
+  reviewed list, not a comment somebody slips into a diff. `-update-hatches` is **local-only** and
+  refuses to run with `CI` set; the lane asserts diff-clean, because a check that can rewrite the
+  list it checks against is not a check.
 - **No hatch sanctions `go`, `select`, `chan` or `sync` in core scope.** These are refused outright,
   with the covering hatch consumed so the author gets the diagnostic that matters rather than that
   plus a complaint about their annotation. Either the concurrency moves out of core or the design is
   wrong, and neither is something a comment can fix.
 
 **5. The pass is mutation-tested, permanently.** `tools/determinismcheck/blind/*.patch` each blind
-one rule; `make blind` applies each to a scratch copy and requires the named test to fail. A pass
-that has quietly stopped checking something looks exactly like a pass with nothing to report, and
-this is the difference. It runs on every push, alongside the mutant suite: the two halves of
-Amendment A2, one covering the protocol and one covering the instrument.
+one rule; `make blind` applies each to a scratch copy and requires the test named in its header to
+fail. A pass that has quietly stopped checking something looks exactly like a pass with nothing to
+report, and this is the difference. It runs on every push, alongside the mutant suite: the two halves
+of Amendment A2, one covering the protocol and one covering the instrument.
+
+**A kill counts only against the declared test.** Attribution is the whole value: "some test failed"
+says nothing about which rule is under test, and a lane that accepts any failure will happily accept
+a failure that has nothing to do with the mutation. Two gates enforce that, both added after a lane
+reported seven kills while one of the tests doing the killing was failing for its own reasons:
+
+- **Baseline gate.** The unpatched tree must pass its *whole* suite before any patch is applied. A
+  red baseline makes every later failure ambiguous, so the lane reports **INVALID** and refuses to
+  report kills at all — the failure mode that occurred, encoded so it cannot recur silently.
+- **ALIVE canary.** One patch blinds a real rule but is declared against a test that does not cover
+  it, and **must survive**. If the canary dies, the lane cannot distinguish "this rule is checked"
+  from "this test fails regardless", and every kill it reports is worthless. Every run therefore
+  proves both directions: real blinds die, the canary lives.
+
+The same structure applies to `sim/mutants/*.patch` when A0.12 lands it.
 
 **6. Test files are checked under the same rules as their package.** A determinism leak in a test
 helper is still a leak; it just costs a flaky test instead of a flaky database. This is what forced

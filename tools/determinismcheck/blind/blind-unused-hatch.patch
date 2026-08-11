@@ -1,5 +1,6 @@
 # id: blind-unused-hatch
-# must-fail: TestEscapeHatch
+# covering-test: TestEscapeHatch
+# expect: killed
 # blinds: the unused-hatch rule, letting a drifted hatch rot in place
 --- a/tools/determinismcheck/allow.go
 +++ b/tools/determinismcheck/allow.go

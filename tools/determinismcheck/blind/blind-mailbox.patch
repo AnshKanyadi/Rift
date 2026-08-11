@@ -1,5 +1,6 @@
 # id: blind-mailbox
-# must-fail: TestMailboxRule
+# covering-test: TestMailboxRule
+# expect: killed
 # blinds: the mailbox rule: any core method becomes callable from a driver
 --- a/tools/determinismcheck/mailbox.go
 +++ b/tools/determinismcheck/mailbox.go

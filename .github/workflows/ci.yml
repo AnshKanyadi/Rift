@@ -51,6 +51,10 @@ jobs:
       # golang.org/x/tools is approved for this pass on the condition that it
       # never reaches a shipping binary (DESIGN-A0 Q4). This is the condition.
       - run: make tooling-only
+      # The hatch registry is asserted diff-clean here. -update-hatches is
+      # local-only and refuses to run with CI set: a lane that can rewrite the
+      # list it checks against is not checking anything.
+      - run: make hatches
 
   smoke:
     name: 500-seed simulator smoke (stub)

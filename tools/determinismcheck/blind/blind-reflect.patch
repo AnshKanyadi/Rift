@@ -1,5 +1,6 @@
 # id: blind-reflect
-# must-fail: TestCoreRules
+# covering-test: TestCoreRules
+# expect: killed
 # blinds: reflect-based map iteration, the go1.23 iterator hole
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go

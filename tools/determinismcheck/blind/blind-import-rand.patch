@@ -1,5 +1,6 @@
 # id: blind-import-rand
-# must-fail: TestCoreRules
+# covering-test: TestCoreRules
+# expect: killed
 # blinds: the math/rand import ban
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go

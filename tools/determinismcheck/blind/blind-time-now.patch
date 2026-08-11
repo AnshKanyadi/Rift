@@ -1,5 +1,6 @@
 # id: blind-time-now
-# must-fail: TestM5WallClock
+# covering-test: TestM5WallClock
+# expect: killed
 # blinds: the wall-clock rule for time.Now, which is mutant M5
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go

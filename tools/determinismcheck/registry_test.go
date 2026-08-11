@@ -62,6 +62,13 @@ func TestHatchRegistry(t *testing.T) {
 	got := hatchLines(sink)
 
 	if *updateHatches {
+		// Local-only, ruled 2026-08-11. A lane that can rewrite the list it is
+		// checking against is not checking anything: CI asserts diff-clean, and
+		// updating the registry is a thing a person does on a laptop and then
+		// commits, in the diff, where it can be argued with.
+		if ci := os.Getenv("CI"); ci != "" {
+			t.Fatalf("-update-hatches is local-only and CI=%s; the lane asserts the registry is diff-clean", ci)
+		}
 		writeRegistry(t, filepath.Join(root, registryFile), got)
 		t.Logf("wrote %s with %d hatch(es)", registryFile, len(got))
 		return
