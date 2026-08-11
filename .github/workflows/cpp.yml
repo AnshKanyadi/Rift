@@ -1,0 +1,35 @@
+# Track B lanes. The C++ engine's own tests run directly under sanitizers, not
+# through cgo -- ASan and UBSan see the engine, not the boundary.
+name: cpp
+
+on:
+  push:
+    paths: ['engine-cpp/**', '.github/workflows/cpp.yml', 'Makefile']
+  pull_request:
+    paths: ['engine-cpp/**', '.github/workflows/cpp.yml', 'Makefile']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make cpp-test
+
+  asan:
+    name: AddressSanitizer (stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make cpp-asan
+
+  ubsan:
+    name: UndefinedBehaviorSanitizer (stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make cpp-ubsan

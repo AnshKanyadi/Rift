@@ -1,0 +1,72 @@
+# Push lane. Everything here must stay fast enough that nobody is tempted to skip it.
+#
+# Lanes marked (stub) are wired but check nothing yet; they print a loud banner
+# saying so. No lane may remain a stub past the phase named in the Makefile.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Fail rather than silently downloading a different toolchain than the pin.
+  GOTOOLCHAIN: local
+
+jobs:
+  build-test:
+    name: build + vet + unit + race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Reads the go/toolchain directive from go.mod, so CI runs exactly the
+          # pinned version and cannot drift from local development.
+          go-version-file: go.mod
+          check-latest: false
+      - run: go version
+      - run: make build
+      - run: make vet
+      - run: make fmt-check
+      - run: make tidy-check
+      - run: make test
+      - run: make race
+
+  determinism:
+    name: determinism vet pass (stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - run: make determinism
+
+  smoke:
+    name: 500-seed simulator smoke (stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - run: make smoke
+
+  mutants:
+    name: mutant suite + kill-time (stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - run: make mutants
+      # Once real (A0.12) this uploads kill-time per mutant so a regression in
+      # harness sensitivity is visible even while every mutant is still killed.
+      # See CLAUDE.md Amendment A2.

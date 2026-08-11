@@ -1,0 +1,31 @@
+# Weekly benchmark smoke with regression tracking.
+#
+# Shared CI runners are too noisy for publishable numbers; this lane exists to
+# catch order-of-magnitude regressions, not to produce figures. Every number in
+# BENCHMARKS.md comes from stated hardware and reproduces from a clean clone by
+# script.
+name: bench
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'   # Mondays 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  bench-smoke:
+    name: benchmark smoke (stub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - run: make bench

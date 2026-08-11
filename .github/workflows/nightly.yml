@@ -1,0 +1,50 @@
+# Nightly lanes: the ones that are too slow for a push lane and too important to
+# skip. Failures here halt feature work on the affected track until root-caused,
+# per CLAUDE.md.
+name: nightly
+
+on:
+  schedule:
+    - cron: '17 7 * * *'   # 07:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  soak:
+    name: 10k-seed soak (stub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - run: make soak
+      # Once real: appends a row to SOAK.md (seeds, ops, CPU-hours, violations,
+      # inconclusive) and uploads any failing bundles as artifacts.
+
+  killpoints:
+    name: crash-consistency kill-point sweep (stub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - run: make killpoints
+
+  differential:
+    name: differential engine lane (stub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - run: make differential
