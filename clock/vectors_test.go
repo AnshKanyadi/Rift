@@ -50,7 +50,7 @@ var tickVectors = []struct {
 	{
 		name: "hold",
 		timeline: func() *Timeline {
-			tl, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 3 * s, To: 9 * s, Ramp: 2 * time.Second, Realize: SlewHold}.
+			tl, _, err := Hold{A: 1, B: 2, AtPPB: Percent(98), From: 3 * s, To: 9 * s, Ramp: 2 * time.Second, Realize: SlewHold}.
 				Compile(*Flat(), 500*time.Millisecond)
 			if err != nil {
 				panic(err)

@@ -139,7 +139,7 @@ func buildClocks(p *Plan) ([]*clock.Sim, error) {
 		}
 		out, _, err := clock.Hold{
 			A: h.A, B: h.B,
-			AtFrac:   h.AtFrac,
+			AtPPB:    h.AtPPB,
 			From:     at(h.FromNS),
 			To:       at(h.ToNS),
 			Ramp:     ns(h.RampNS),

@@ -355,7 +355,7 @@ func TestUniformMaxOffsetIsAsserted(t *testing.T) {
 // bound the nodes advertise. If the bound moved with the experiment, the
 // experiment would be vacuous -- nothing would ever be outside it.
 func TestEnvelopeShapesOffsetsNotTheBound(t *testing.T) {
-	tl, _, err := Hold{A: 1, B: 2, AtFrac: Percent(120), From: 2 * s, To: 4 * s,
+	tl, _, err := Hold{A: 1, B: 2, AtPPB: Percent(120), From: 2 * s, To: 4 * s,
 		Ramp: 2 * time.Second, Realize: SlewHold, Envelope: true}.Compile(*Flat(), maxOffset)
 	if err != nil {
 		t.Fatalf("compile: %v", err)

@@ -53,13 +53,18 @@ func (r Realization) String() string {
 type Hold struct {
 	A, B int // node labels; the offset is applied to B, relative to A
 
-	// AtFrac is the target skew as a fraction of maxOffset. A fraction rather
-	// than nanoseconds so that a plan holding at the boundary keeps holding at
-	// the boundary when maxOffset is swept, which is what an envelope
-	// experiment varies. Above 1.0 is deliberate: see Envelope.
+	// AtPPB is the target skew as parts per billion of maxOffset: 980_000_000
+	// is 0.98 of the bound. A fraction of the bound rather than a count of
+	// nanoseconds, so that a plan holding at the boundary keeps holding at the
+	// boundary when maxOffset is swept, which is what an envelope experiment
+	// varies. Above 1e9 is deliberate: see Envelope.
 	//
-	//rift:allow-nondeterminism authored intent in plan units; converted to nanoseconds by fracNanos before anything evaluates it, so this float never reaches the trace hash
-	AtFrac float64
+	// An integer, and that is a ruling rather than a preference. The plan IS
+	// replay identity; a fraction that survived into the serialized plan would
+	// be multiplied on the replaying machine, and off + slope*(t-start) is
+	// exactly the multiply-add an arm64 fuses and an amd64 without FMA does
+	// not. Authoring may take a fraction; compile materializes it here.
+	AtPPB int64
 
 	// From and To bound the window in which the pair is held at the target.
 	// Ramps sit outside the window: ramp in over [From-Ramp, From], hold flat
@@ -108,12 +113,9 @@ func (h Hold) Compile(base Timeline, maxOffset time.Duration) (Timeline, Realiza
 		return base, SlewHold, err
 	}
 
-	// The float boundary, and the only one: everything downstream of this call
-	// is integer arithmetic (DESIGN-A0.4 §4, and clock/frac.go).
-	target, err := fracNanos(h.AtFrac, maxOffset)
-	if err != nil {
-		return base, SlewHold, err
-	}
+	// Integer throughout: target = maxOffset * AtPPB / 1e9, with a 128-bit
+	// intermediate. No float appears on this path at all.
+	target := mulDiv(int64(maxOffset), h.AtPPB, ppb)
 
 	out := Timeline{
 		Skew:  append([]Segment(nil), base.Skew...),

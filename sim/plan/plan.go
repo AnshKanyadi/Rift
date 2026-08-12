@@ -20,9 +20,23 @@
 // desynchronize the moment a code change alters how many draws are taken.
 // Counter-based dice have no draw order to desynchronize.
 //
-// Execution is guarded rather than promised: a run built from a plan is handed
-// a poisoned Rand whose every method panics, so a stray sequential draw dies at
+// **TestDeletingAFaultEntryPerturbsOnlyItself is the enforcement of that
+// design, not an independent property.** Per-link keys are precisely why
+// deleting one plan entry does not perturb its neighbours. Anyone who switches
+// this package to embedded stream state will break that test, and the test is
+// where they will find out why they should not.
+//
+// Execution is guarded rather than promised: **every** built run carries a
+// poisoned Rand whose every method panics, so a stray sequential draw dies at
 // the call site instead of quietly producing an unreproducible schedule.
+//
+// That the poison is on by default rather than only in a test is the whole
+// guarantee. A poison installed for one exit test proves absence only along the
+// paths that one plan happens to exercise; installed on every run, the
+// completion of any seed is the proof for that seed, and ten thousand seeds are
+// ten thousand proofs. The exit test remains, in the other role: it asserts the
+// poison is *live*, because a dead poison silently converts the whole guarantee
+// into decoration.
 package plan
 
 import (
@@ -139,17 +153,23 @@ type Hold struct {
 	A int `json:"a"`
 	B int `json:"b"`
 
-	// AtFrac is the target as a fraction of maxOffset, authored intent in plan
-	// units (Q4). It is converted to nanoseconds by clock's compile boundary
-	// and never read as a float again.
+	// AtPPB is the target as parts per billion of maxOffset: 980_000_000 is
+	// 0.98 of the bound.
 	//
-	//rift:allow-nondeterminism authored intent in plan units; clock/frac.go converts it to nanoseconds before anything evaluates it, so this float never reaches the trace hash
-	AtFrac   float64 `json:"at_frac"`
-	FromNS   int64   `json:"from_ns"`
-	ToNS     int64   `json:"to_ns"`
-	RampNS   int64   `json:"ramp_ns"`
-	Realize  string  `json:"realize"` // "step" or "slew"
-	Envelope bool    `json:"envelope,omitempty"`
+	// An integer, and the reason is the whole point of the plan format. The
+	// plan is replay identity. A fraction carried here would be multiplied on
+	// the replaying machine, and that multiply-add is exactly what an arm64
+	// fuses into one FMA and an amd64 without FMA does not -- reconstructing
+	// the cross-architecture divergence the float rule exists to kill, this
+	// time behind an exemption. No float crosses this boundary in either
+	// direction, and TestPlanCarriesNoFloatingPoint checks it structurally.
+	AtPPB int64 `json:"at_ppb"`
+
+	FromNS   int64  `json:"from_ns"`
+	ToNS     int64  `json:"to_ns"`
+	RampNS   int64  `json:"ramp_ns"`
+	Realize  string `json:"realize"` // "step" or "slew"
+	Envelope bool   `json:"envelope,omitempty"`
 }
 
 // Faults are timed entries and reactive rules.
@@ -251,10 +271,8 @@ func (p *Plan) Validate() error {
 			return fmt.Errorf("plan: key %q: %w", k.name, err)
 		}
 	}
-	for i, h := range p.Clock.Holds {
-		if h.Realize != "step" && h.Realize != "slew" {
-			return fmt.Errorf("plan: hold %d realizes as %q; it must say \"step\" or \"slew\" rather than leave it to be inferred", i, h.Realize)
-		}
+	if err := p.validateHolds(); err != nil {
+		return err
 	}
 	for i, e := range p.Faults.Entries {
 		if !knownAction(e.Action) {
@@ -267,6 +285,61 @@ func (p *Plan) Validate() error {
 		}
 		if r.On == "" {
 			return fmt.Errorf("plan: rule %d has no trigger", i)
+		}
+	}
+	return nil
+}
+
+// validateHolds enforces the legality a hold's physics requires.
+//
+// The generator was taught not to layer a hold on a drifting node, because a
+// hold *is* oscillator discipline and free drift underneath it was the
+// generator lying about the crystal. But the generator is not the only author
+// of plans: a hand-written plan, a corpus entry edited during an
+// investigation, and any future fuzzer all bypass a generator-side fix
+// entirely. Legality belongs here, where the illegal shape is rejected no
+// matter who wrote it.
+func (p *Plan) validateHolds() error {
+	drift := make([]bool, p.Config.Nodes)
+	for _, nc := range p.Clock.Nodes {
+		if nc.Node < 0 || nc.Node >= p.Config.Nodes {
+			return fmt.Errorf("plan: clock schedule names unknown node %d", nc.Node)
+		}
+		for _, seg := range nc.Skew {
+			if seg.SlopePPB != 0 {
+				drift[nc.Node] = true
+			}
+		}
+	}
+
+	held := make([]bool, p.Config.Nodes)
+	for i, h := range p.Clock.Holds {
+		if h.Realize != "step" && h.Realize != "slew" {
+			return fmt.Errorf("plan: hold %d realizes as %q; it must say \"step\" or \"slew\" rather than leave it to be inferred", i, h.Realize)
+		}
+		if h.B < 0 || h.B >= p.Config.Nodes {
+			return fmt.Errorf("plan: hold %d names unknown node %d", i, h.B)
+		}
+		if h.FromNS >= h.ToNS {
+			return fmt.Errorf("plan: hold %d has an empty window [%d,%d)", i, h.FromNS, h.ToNS)
+		}
+		if drift[h.B] {
+			return fmt.Errorf(
+				"plan: hold %d disciplines node %d, which the plan also gives free drift; a hold is oscillator discipline, so its target would depend on when it began",
+				i, h.B)
+		}
+		if held[h.B] {
+			return fmt.Errorf("plan: node %d carries two holds; they would fight over one timeline and the plan would mean neither", h.B)
+		}
+		held[h.B] = true
+
+		if h.Realize == "slew" {
+			if h.RampNS <= 0 {
+				return fmt.Errorf("plan: hold %d slews with a zero ramp; a slew is a rate and needs a window, use \"step\" for an instant correction", i)
+			}
+			if h.FromNS < h.RampNS {
+				return fmt.Errorf("plan: hold %d ramps in from %d, which is before time zero", i, h.FromNS-h.RampNS)
+			}
 		}
 	}
 	return nil

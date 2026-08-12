@@ -147,7 +147,7 @@ func genClocks(p *Plan, r rng.Rand, cfg GenConfig) {
 		from := ramp + int64(r.IntN(int(p.Config.DurationNS/2)))
 		p.Clock.Holds = append(p.Clock.Holds, Hold{
 			A: a, B: b,
-			AtFrac:  clock.Percent(90),
+			AtPPB:   clock.Percent(90),
 			FromNS:  from,
 			ToNS:    from + width,
 			RampNS:  ramp,

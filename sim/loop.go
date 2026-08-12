@@ -251,9 +251,16 @@ func (l *Loop) scheduleTick(node NodeID) {
 // instant, not dispatched to any node.
 //
 // It exists so that a link cut lands at its instant, ordered against the
-// messages in flight then. Applying one at setup instead would silently cut
-// messages the plan says should have crossed, and the run would be reproducing
-// a different schedule than the one it claims.
+// messages in flight then.
+//
+// The class it avoids, named: **build-time topology contradicting the plan's
+// own delivery claims.** A partition applied at setup silently cuts messages
+// the plan says should have crossed, so the run reproduces a different schedule
+// than the one it claims to -- and nothing reports the difference, because both
+// halves are internally consistent. The general rule follows: every harness
+// action is an event, ordered against the traffic in flight when it fires. Any
+// future injector tempted by build-time convenience semantics answers to this
+// paragraph.
 func (l *Loop) Do(at clock.Instant, fn func()) {
 	l.At(at, KindAction, 0, fn)
 }

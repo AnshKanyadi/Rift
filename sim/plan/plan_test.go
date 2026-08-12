@@ -359,3 +359,48 @@ func TestReactiveRulesFireOnCondition(t *testing.T) {
 		t.Errorf("cut_both fired %d cuts, want 2 (one per direction); Times was not honoured", after-before)
 	}
 }
+
+// TestValidationRejectsIllegalHolds is the correction to the generator fix: a
+// generator-side rule is not a rule, because hand-written plans, edited corpus
+// entries and any future fuzzer bypass it entirely. These shapes are rejected
+// no matter who wrote them.
+func TestValidationRejectsIllegalHolds(t *testing.T) {
+	base, err := plan.Materialize(11, plan.DefaultGenConfig())
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*plan.Plan)
+	}{
+		{"hold on a drifting node", func(p *plan.Plan) {
+			p.Clock.Holds = []plan.Hold{{A: 0, B: 1, AtPPB: 900_000_000, FromNS: 5_000_000_000, ToNS: 8_000_000_000, RampNS: 2_000_000_000, Realize: "slew"}}
+			p.Clock.Nodes = []plan.NodeClock{{Node: 1, Skew: []plan.Segment{{StartNS: 0, SlopePPB: 100_000}}}}
+		}},
+		{"two holds on one node", func(p *plan.Plan) {
+			p.Clock.Nodes = nil
+			h := plan.Hold{A: 0, B: 1, AtPPB: 900_000_000, FromNS: 5_000_000_000, ToNS: 8_000_000_000, Realize: "step"}
+			p.Clock.Holds = []plan.Hold{h, h}
+		}},
+		{"slew with no ramp", func(p *plan.Plan) {
+			p.Clock.Nodes = nil
+			p.Clock.Holds = []plan.Hold{{A: 0, B: 1, AtPPB: 900_000_000, FromNS: 5_000_000_000, ToNS: 8_000_000_000, Realize: "slew"}}
+		}},
+		{"ramp before time zero", func(p *plan.Plan) {
+			p.Clock.Nodes = nil
+			p.Clock.Holds = []plan.Hold{{A: 0, B: 1, AtPPB: 900_000_000, FromNS: 1_000_000_000, ToNS: 8_000_000_000, RampNS: 2_000_000_000, Realize: "slew"}}
+		}},
+		{"empty window", func(p *plan.Plan) {
+			p.Clock.Nodes = nil
+			p.Clock.Holds = []plan.Hold{{A: 0, B: 1, AtPPB: 900_000_000, FromNS: 8_000_000_000, ToNS: 8_000_000_000, Realize: "step"}}
+		}},
+	}
+	for _, tc := range cases {
+		p := *base
+		tc.mutate(&p)
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s: accepted by validation", tc.name)
+		}
+	}
+}
