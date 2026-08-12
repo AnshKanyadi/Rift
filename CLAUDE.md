@@ -238,3 +238,21 @@ C++ through the Env seam. Every clock read goes through Clock, every random draw
 per-line hatches in a golden registry, never package exclusions. Concurrency primitives are
 unhatchable in core scope: code that needs a goroutine is orchestration and lives outside the
 boundary, or the design is wrong. Unclassified packages default in.
+
+
+**A6 — v1 scope.** Ansh, 2026-08-11, ratified after A0.5. The v1 deliverable: from-scratch Raft
+(elections, replication, persistence, snapshots, pre-vote, leadership transfer, single-node
+membership changes with learner catch-up); multi-raft with size-threshold range splits and a manual
+rebalance command (replica movement via conf change plus leadership transfer, riding with A4); MVCC
+with HLC timestamps and uncertainty-interval reads; Percolator-style snapshot-isolated transactions;
+linearizable reads via read index; the C++ LSM engine (Env, WAL, memtable, SSTables with bloom
+filters and block index, manifest, a correct compaction policy chosen and measured in DESIGN-B3)
+behind the batch cgo interface; the full verification machinery and soak ledger. Moved to STRETCH.md
+with rationale preserved: joint consensus (production etcd's own omission; correctness surface
+unjustified for v1), parallel commits (latency optimization with a heavy recovery protocol;
+Percolator's extra round trip is the measured cost), leader leases (read optimization; read index is
+correct without clock trust), automatic load-based balancing (policy atop mechanisms v1 ships),
+observed-timestamps optimization, multi-level leveled compaction beyond the v1 policy, simctl
+minimize (build when the first corpus bug earns it). The timestamp source lands behind an interface
+in A5; TSO fallback is pre-authorized if A6's uncertainty machinery is not green by Dec 1. Nothing in
+the verification spine moves. Resume claims track v1; STRETCH items are never claimed.
