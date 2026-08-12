@@ -67,15 +67,16 @@ not back.
 ## What it is
 
 *(Each item lands with a design doc, an exit criterion signed off by the architect, and a test lane.
-Unchecked means not built.)*
+Unchecked means not built. Scope deliberately outside v1 — joint consensus, parallel commits, leader
+leases, automatic balancing — is in [STRETCH.md](STRETCH.md) with the reasoning preserved, and is
+never claimed here.)*
 
 - [ ] From-scratch Raft: elections, log replication, persistence, snapshots, pre-vote, leadership
-      transfer, joint-consensus membership changes
-- [ ] Multi-raft: one Raft group per range, dynamic size-threshold splitting, load-based rebalancing
-- [ ] Distributed transactions over MVCC: Percolator-style 2PC and parallel commits, snapshot
-      isolation, hybrid logical clocks with uncertainty intervals
-- [ ] Linearizable reads: read index and expiration-based leader leases with an explicit clock-skew
-      safety envelope
+      transfer, single-node membership changes with learner catch-up
+- [ ] Multi-raft: one Raft group per range, dynamic size-threshold splitting, manual replica movement
+- [ ] Distributed transactions over MVCC: Percolator-style 2PC, snapshot isolation, hybrid logical
+      clocks with uncertainty intervals
+- [ ] Linearizable reads via read index
 - [ ] From-scratch C++ LSM engine: skiplist memtable, WAL, SSTables with bloom filters and block
       index, leveled compaction, MANIFEST, behind a batch-oriented cgo interface
 
@@ -119,6 +120,7 @@ Go is pinned by `go.mod`'s `toolchain` directive and CI runs exactly that versio
 - [BUGS.md](BUGS.md) — every bug found, with its seed or kill point, root cause, and the invariant
   and mutant class that caught it
 - [SOAK.md](SOAK.md) — the cumulative verification ledger
+- [STRETCH.md](STRETCH.md) — what is deliberately outside v1, and why. Never claimed
 - [HATCHES.txt](HATCHES.txt) — every determinism exemption in the repo, with its reason
 - [BENCHMARKS.md](BENCHMARKS.md) — methodology first, numbers second, both engines
 
