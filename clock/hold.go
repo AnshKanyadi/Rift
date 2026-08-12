@@ -22,15 +22,27 @@ import (
 type Realization int
 
 const (
-	SlewHold Realization = iota
+	// RealizeUnset is the zero value and is rejected. A hold's realization is
+	// authored, never inferred from Ramp: ddmin has to be able to convert one
+	// into the other and ask whether the bug survives, and a field derived from
+	// another field cannot be flipped independently. Rejecting the zero value
+	// is the same discipline as the nonzero wall epoch -- a forgotten field
+	// must not read as a decision.
+	RealizeUnset Realization = iota
+	SlewHold
 	StepHold
 )
 
 func (r Realization) String() string {
-	if r == StepHold {
+	switch r {
+	case StepHold:
 		return "step"
+	case SlewHold:
+		return "slew"
+	case RealizeUnset:
+		return "unset"
 	}
-	return "slew"
+	return "unknown"
 }
 
 // Hold is one authored hold, in the form it takes in the plan: a pair, a
@@ -58,6 +70,13 @@ type Hold struct {
 	From, To Instant
 	Ramp     time.Duration
 
+	// Realize says how the hold reaches its target, and is authored rather than
+	// inferred. A step is a discontinuous NTP correction, invisible to timers;
+	// a slew disciplines the oscillator and is therefore visible in the tick
+	// rate too. ddmin flips this field and asks whether the bug survives, which
+	// it cannot do to a value derived from Ramp.
+	Realize Realization
+
 	// Envelope marks a hold as deliberately outside the assumption. It changes
 	// the checker's verdict, never the arithmetic.
 	Envelope bool
@@ -70,6 +89,10 @@ type Hold struct {
 // over one node's timeline is an authoring error whose symptom would otherwise
 // be a schedule that silently means neither of them.
 func (h Hold) Compile(base Timeline, maxOffset time.Duration) (Timeline, Realization, error) {
+	if h.Realize == RealizeUnset {
+		return base, RealizeUnset, fmt.Errorf(
+			"clock: hold %d->%d does not say how it realizes; set Realize to StepHold or SlewHold rather than leaving it to be inferred from Ramp", h.A, h.B)
+	}
 	if h.From >= h.To {
 		return base, SlewHold, fmt.Errorf("clock: hold window is empty: from %d to %d", h.From, h.To)
 	}
@@ -99,10 +122,12 @@ func (h Hold) Compile(base Timeline, maxOffset time.Duration) (Timeline, Realiza
 		Epoch: base.Epoch,
 	}
 
-	if h.Ramp == 0 {
+	if h.Realize == StepHold {
 		// A step: wall-only, so the oscillator and therefore the tick schedule
 		// are untouched. That asymmetry is physical, not an implementation
 		// convenience -- an NTP step does not change how fast a crystal runs.
+		// Ramp is ignored here rather than rejected, so that ddmin can flip a
+		// slew to a step without also having to rewrite the ramp.
 		out.Steps = insertStep(out.Steps, Step{At: h.From, Delta: target})
 		out.Steps = insertStep(out.Steps, Step{At: h.To, Delta: -target})
 		if err := out.Validate(); err != nil {
@@ -114,6 +139,10 @@ func (h Hold) Compile(base Timeline, maxOffset time.Duration) (Timeline, Realiza
 	// A slew: the oscillator itself is disciplined, so the node also ticks
 	// fast or slow while the correction is being applied.
 	rampNs := int64(h.Ramp)
+	if rampNs <= 0 {
+		return base, SlewHold, fmt.Errorf(
+			"clock: hold %d->%d asks to slew with a zero ramp; a slew is a rate and needs a window, use StepHold for an instant correction", h.A, h.B)
+	}
 
 	// A correction wider than its ramp cannot be slewed. Applying it would
 	// need the oscillator to run backwards on the way out, which is not a

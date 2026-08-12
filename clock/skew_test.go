@@ -166,10 +166,11 @@ func TestDemonstrationScheduleA(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := Hold{
 				A: 1, B: 2,
-				AtFrac: Percent(98),
-				From:   10 * s,
-				To:     40 * s,
-				Ramp:   tc.ramp,
+				AtFrac:  Percent(98),
+				From:    10 * s,
+				To:      40 * s,
+				Ramp:    tc.ramp,
+				Realize: tc.want,
 			}
 			a := Flat()
 			b, realized, err := h.Compile(*Flat(), maxOffset)
@@ -215,6 +216,7 @@ func TestDemonstrationScheduleB(t *testing.T) {
 		From:     20 * s,
 		To:       30 * s,
 		Ramp:     3 * time.Second,
+		Realize:  SlewHold,
 		Envelope: true,
 	}
 	a := Flat()
@@ -246,13 +248,13 @@ func TestDemonstrationScheduleB(t *testing.T) {
 // be a schedule that silently means neither of them.
 func TestHoldsRejectCollisions(t *testing.T) {
 	base := *Flat()
-	first, _, err := Hold{A: 1, B: 2, AtFrac: Percent(50), From: 10 * s, To: 20 * s, Ramp: 2 * time.Second}.
+	first, _, err := Hold{A: 1, B: 2, AtFrac: Percent(50), From: 10 * s, To: 20 * s, Ramp: 2 * time.Second, Realize: SlewHold}.
 		Compile(base, maxOffset)
 	if err != nil {
 		t.Fatalf("first hold: %v", err)
 	}
 
-	if _, _, err := (Hold{A: 1, B: 2, AtFrac: Percent(70), From: 15 * s, To: 25 * s}).Compile(first, maxOffset); err == nil {
+	if _, _, err := (Hold{A: 1, B: 2, AtFrac: Percent(70), From: 15 * s, To: 25 * s, Realize: StepHold}).Compile(first, maxOffset); err == nil {
 		t.Error("a second overlapping hold on the same node was accepted")
 	}
 
@@ -290,12 +292,12 @@ func TestSlewMovesTicksAndStepDoesNot(t *testing.T) {
 
 	flat := count(Flat())
 
-	slew, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 10 * s, To: 40 * s, Ramp: 2 * time.Second}.
+	slew, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 10 * s, To: 40 * s, Ramp: 2 * time.Second, Realize: SlewHold}.
 		Compile(*Flat(), maxOffset)
 	if err != nil {
 		t.Fatalf("slew: %v", err)
 	}
-	step, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 10 * s, To: 40 * s}.Compile(*Flat(), maxOffset)
+	step, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 10 * s, To: 40 * s, Realize: StepHold}.Compile(*Flat(), maxOffset)
 	if err != nil {
 		t.Fatalf("step: %v", err)
 	}

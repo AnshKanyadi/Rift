@@ -22,6 +22,14 @@ const (
 	KindCrash
 	KindRestart
 	KindClient
+
+	// KindAction is the harness acting on the run itself: cutting a link,
+	// healing one. It is an event like everything else so that a partition
+	// takes effect at its instant, ordered against the messages in flight then,
+	// rather than being applied out of band at setup.
+	KindAction
+
+	numKinds
 )
 
 func (k Kind) String() string {
@@ -38,6 +46,10 @@ func (k Kind) String() string {
 		return "restart"
 	case KindClient:
 		return "client"
+	case KindAction:
+		return "action"
+	case numKinds:
+		return "invalid"
 	}
 	return fmt.Sprintf("kind(%d)", uint8(k))
 }

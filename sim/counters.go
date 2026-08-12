@@ -89,6 +89,18 @@ func (i Injector) String() string {
 	return "unknown"
 }
 
+// InjectorByName resolves a plan's min_fires key to the injector it names. It
+// lives here rather than in the plan package so that the name a plan uses and
+// the name a report prints cannot drift apart.
+func InjectorByName(s string) (Injector, bool) {
+	for i := Injector(1); i < numInjectors; i++ {
+		if i.String() == s {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 // Counters records fires and the minimum each enabled injector must reach.
 //
 // An array rather than a map: the injector set is closed and known at compile

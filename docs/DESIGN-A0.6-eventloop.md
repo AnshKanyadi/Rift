@@ -83,8 +83,12 @@ quiescent, and no oracle fired. Folding it into any of the three would put a lie
 is the exact failure the closed enum exists to prevent.
 
 **Forward binding, recorded now:** SOAK.md accounting counts only `OutcomeDeadline` runs toward
-cumulative hours. Quiescent runs are logged with their quiet point and investigated, never silently
-banked. `Outcome.CountsTowardSoakHours` is the single place that rule lives, so adding a kind forces
+cumulative hours. Quiescent runs are logged with their **quiet point** and investigated, never
+silently banked. Step-limit runs are investigated the same way with a different first clue: their
+**step census** — the per-kind event counts the run accumulated — because a run that fired a million
+ticks and delivered nothing is a liveness smell, while one that delivered a million messages is a
+workload that needs bounding. The census costs one array and is tomorrow's first question answered
+today. `Outcome.CountsTowardSoakHours` is the single place that rule lives, so adding a kind forces
 a decision there rather than defaulting to "sure, count it".
 
 **And the type system holds the line.** `determinismcheck` gained an `exhaustive` rule: a switch over

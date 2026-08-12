@@ -2,6 +2,7 @@ package sim
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/anshkanyadi/rift/clock"
@@ -69,6 +70,7 @@ type Loop struct {
 	now    clock.Instant
 	seq    uint64
 	steps  uint64
+	census Census
 	closed bool
 
 	// down tracks crashed nodes. A crashed node receives no events until it is
@@ -170,7 +172,7 @@ func (l *Loop) Run() (Outcome, error) {
 }
 
 func (l *Loop) outcome(k OutcomeKind, at clock.Instant) Outcome {
-	return Outcome{Kind: k, At: at, Steps: l.steps}
+	return Outcome{Kind: k, At: at, Steps: l.steps, Census: l.census}
 }
 
 // step fires exactly one event. Exported behaviour lives in Run; this is
@@ -189,6 +191,9 @@ func (l *Loop) step() {
 	}
 	l.now = ev.At
 	l.steps++
+	if ev.Kind < numKinds {
+		l.census[ev.Kind]++
+	}
 
 	for _, c := range l.cfg.Clocks {
 		c.Advance(l.now)
@@ -201,6 +206,15 @@ func (l *Loop) step() {
 		l.down[ev.Node] = false
 		// A restart begins a new boot, so the tick schedule restarts with it.
 		l.scheduleTick(ev.Node)
+	}
+
+	// A harness action is the loop's own work: no node is involved, so a
+	// crashed node does not suppress it.
+	if ev.Kind == KindAction {
+		if fn, ok := ev.Payload.(func()); ok {
+			fn()
+		}
+		return
 	}
 
 	// A crashed node receives nothing. The event is dropped rather than
@@ -231,6 +245,17 @@ func (l *Loop) step() {
 func (l *Loop) scheduleTick(node NodeID) {
 	at, _ := l.cfg.Clocks[node].NextTick(l.cfg.TickInterval)
 	l.At(at, KindTick, node, nil)
+}
+
+// Do schedules a harness action: a closure run by the loop itself at an
+// instant, not dispatched to any node.
+//
+// It exists so that a link cut lands at its instant, ordered against the
+// messages in flight then. Applying one at setup instead would silently cut
+// messages the plan says should have crossed, and the run would be reproducing
+// a different schedule than the one it claims.
+func (l *Loop) Do(at clock.Instant, fn func()) {
+	l.At(at, KindAction, 0, fn)
 }
 
 // Crash and Restart are scheduling helpers for injectors and tests. They are
@@ -294,15 +319,36 @@ func (k OutcomeKind) String() string {
 	return "unknown"
 }
 
-// Outcome is how a run ended, with the instant it ended at.
+// Outcome is how a run ended, with the instant it ended at and a census of
+// what it was doing.
 //
 // At is load-bearing for two of the kinds: a quiescent run's quiet point is
 // what an investigator needs first, and a halted run's instant is where the
 // violation was found.
+//
+// Census is load-bearing for a third. A step-limit run burned its budget
+// without reaching its deadline, and the first question is what it was doing
+// while it burned -- a run that fired a million ticks and delivered nothing is
+// a liveness smell, and one that delivered a million messages is a workload
+// that needs bounding. The counts are the first clue and cost one array.
 type Outcome struct {
-	Kind  OutcomeKind
-	At    clock.Instant
-	Steps uint64
+	Kind   OutcomeKind
+	At     clock.Instant
+	Steps  uint64
+	Census Census
+}
+
+// Census counts fired events by kind.
+type Census [numKinds]uint64
+
+func (c Census) String() string {
+	var b strings.Builder
+	for k := Kind(1); k < numKinds; k++ {
+		if c[k] > 0 {
+			fmt.Fprintf(&b, "%s=%d ", k, c[k])
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // CountsTowardSoakHours reports whether this run may be banked in SOAK.md.
@@ -321,7 +367,7 @@ func (o Outcome) CountsTowardSoakHours() bool {
 }
 
 func (o Outcome) String() string {
-	return fmt.Sprintf("%s at %d after %d steps", o.Kind, int64(o.At), o.Steps)
+	return fmt.Sprintf("%s at %d after %d steps [%s]", o.Kind, int64(o.At), o.Steps, o.Census)
 }
 
 var _ Scheduler = (*Loop)(nil)

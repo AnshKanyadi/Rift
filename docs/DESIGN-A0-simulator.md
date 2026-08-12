@@ -883,6 +883,27 @@ while measuring rounding is banked as evidence. State the signal, state the nois
 in the test's own comment so the next person to shorten the window sees why they should not
 (DESIGN-A0.6 §2).
 
+The rule's correct *residue*, when a quantity turns out not to support an assertion at all: keep the
+count, refuse the inference, and say why in a comment. The reorder count in A0.7 is the example — it
+is logged and deliberately not asserted as a rate, because every send in that test happens at one
+instant and the fraction is an artifact of the test rather than a property of the network. Deleting
+the count would have hidden the decision; asserting it would have banked an artifact as evidence.
+
+**Policy lives in exactly one method on the type it belongs to, never at call sites.**
+`Outcome.CountsTowardSoakHours` is the model: the rule about what SOAK.md may bank is one method, so
+adding an outcome kind forces a decision *there* rather than defaulting to "sure, count it" at
+whichever call site forgot. Same shape as the hatch registry and the float boundary — policies and
+exceptions concentrate, they never scatter.
+
+**`determinismcheck` now carries two rule families with different scopes, and its name is slightly a
+lie.** *Determinism rules* — time, randomness, I/O, concurrency, map iteration, floats — are bounded
+by Amendment A5's boundary: they apply to code that executes during a simulated run and not to
+orchestration. *Correctness rules* — currently the closed-enum exhaustive check — are **repo-wide**,
+because they are not about determinism at all and their most important consumer is the soak runner,
+which is orchestration and exempt from every determinism rule there is. The name stays; renaming a
+tool that a dozen documents already cite would cost more than the inaccuracy does. This paragraph is
+the correction.
+
 **A rule is wired only when a planted violation in live code fails the lane.** The fixture proves
 the rule; the planted hit proves the wiring. They are different claims and the second is the one that
 has been wrong: a rule can be correct and unreachable because its scope table, its package
