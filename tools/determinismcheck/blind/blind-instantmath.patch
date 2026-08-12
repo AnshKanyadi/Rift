@@ -1,0 +1,18 @@
+# id: blind-instantmath
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: the instant-arithmetic rule, letting a - b on two Monos yield an instant that is really a duration
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -517,9 +517,10 @@
+ 
+ 	x := instantTypeName(r.pass.TypesInfo.TypeOf(be.X))
+ 	y := instantTypeName(r.pass.TypesInfo.TypeOf(be.Y))
+-	if x == "" || x != y {
++	if true {
+ 		return
+ 	}
++	_ = y
+ 	verb := "arithmetic on"
+ 	if be.Op == token.SUB {
+ 		verb = "subtracting"

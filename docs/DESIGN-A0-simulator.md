@@ -856,6 +856,20 @@ replay, and `clock/frac.go` and `internal/rng/float.go` are the two that qualify
 dependency: A10's balancer load arithmetic is integer or fixed-point for exactly this reason**, as is
 anything else that computes a number a decision is made from.
 
+**When a rule collides with legitimate code, exceptions concentrate; they never scatter.** The float
+ban landed against 37 real violations across `clock` and `internal/rng`, including the frozen `Rand`
+interface. The wrong response is 37 hatches: a registry of 37 entries is not a reviewed list, it is a
+wall of text nobody reads, and each entry restates a shared argument badly. The right response is to
+gather the exception into the narrowest surface that can carry the argument once -- two files and ten
+registry entries, each with a reason that is actually about *that* code. A rule whose exceptions
+scatter has been half-adopted; a rule whose exceptions concentrate has been understood.
+
+**A signed package is refactored only when pinned vectors exist to prove identity, and the vectors
+never change in the same commit as the refactor.** `internal/rng` was rearranged to concentrate its
+float surface, which is exactly the kind of change that can silently alter a generator; its own
+known-answer vectors are what made it safe, because they fail if a single output moves. Vectors
+changing in the same commit as the code they pin would remove the only evidence that anything held.
+
 **Two governance rules, ruled 2026-08-11 after a report acted on a delegation that was not one.**
 *Ruling echo:* every report opens with the rulings received since the last one, quoted verbatim, or
 "none"; a ruling that is not echoed was not received and must not be acted on. *Provisional

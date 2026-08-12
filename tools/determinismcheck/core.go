@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,7 @@ func checkCore(r *reporter, insp *inspector.Inspector) {
 
 	insp.Preorder([]ast.Node{
 		(*ast.BasicLit)(nil),
+		(*ast.BinaryExpr)(nil),
 		(*ast.CallExpr)(nil),
 		(*ast.ChanType)(nil),
 		(*ast.GoStmt)(nil),
@@ -32,6 +34,8 @@ func checkCore(r *reporter, insp *inspector.Inspector) {
 		(*ast.UnaryExpr)(nil),
 	}, func(n ast.Node) {
 		switch n := n.(type) {
+		case *ast.BinaryExpr:
+			checkInstantMath(r, n)
 		case *ast.CallExpr:
 			checkPointerFormat(r, n)
 		case *ast.ChanType:
@@ -485,4 +489,61 @@ func containsMono(t types.Type, seen map[types.Type]bool) bool {
 		}
 	}
 	return false
+}
+
+// checkInstantMath closes the last gap in the monotonic-leakage claim.
+//
+// Defined integer types make cross-type arithmetic uncompilable, which is most
+// of the win, but they keep their operators within a type: `a - b` on two Monos
+// compiles and yields a Mono. That is a type lie. The quantity in hand is a
+// duration -- how long between two readings -- and calling it an instant lets
+// it flow into instant-typed positions, which is the same confusion the two
+// types were introduced to prevent, one level down.
+//
+// So arithmetic between two values of the same instant type is banned outside
+// the package that defines them. Sub and Add are the sanctioned spellings, and
+// comparisons stay legal: ordering two readings from one node is exactly what
+// defined integer types bought, and no lie is available there.
+func checkInstantMath(r *reporter, be *ast.BinaryExpr) {
+	switch be.Op {
+	case token.ADD, token.SUB, token.MUL, token.QUO, token.REM,
+		token.AND, token.OR, token.XOR, token.SHL, token.SHR, token.AND_NOT:
+	default:
+		return // comparisons and logical operators are fine
+	}
+	if r.pass.Pkg != nil && r.pass.Pkg.Path() == flagMonoPkg {
+		return
+	}
+
+	x := instantTypeName(r.pass.TypesInfo.TypeOf(be.X))
+	y := instantTypeName(r.pass.TypesInfo.TypeOf(be.Y))
+	if x == "" || x != y {
+		return
+	}
+	verb := "arithmetic on"
+	if be.Op == token.SUB {
+		verb = "subtracting"
+	} else if be.Op == token.ADD {
+		verb = "adding"
+	}
+	r.report(be.OpPos, ruleInstantMath,
+		"%s two %s values is not allowed outside %s; the result is typed as an instant but the quantity is a duration, and that lie flows into instant-typed positions -- use Sub for the difference between two readings, or Add to advance one by a Duration",
+		verb, x, flagMonoPkg)
+}
+
+// instantTypeName returns the bare name of t if it is one of the instant types,
+// and "" otherwise.
+func instantTypeName(t types.Type) string {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return ""
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != flagMonoPkg {
+		return ""
+	}
+	if slices.Contains(splitPatterns(flagInstantTypes), obj.Name()) {
+		return obj.Pkg().Name() + "." + obj.Name()
+	}
+	return ""
 }

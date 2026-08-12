@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"monocore"
 )
 
 type peer struct {
@@ -96,4 +98,14 @@ func (n *node) fixedPoint(bytesPerSec, capacity int64) int64 {
 		return 0
 	}
 	return bytesPerSec * ppb / capacity
+}
+
+// leaseWindow is the sanctioned spelling of the same arithmetic: a difference
+// between two readings is a Duration, advancing one keeps its type, and
+// ordering them is a comparison.
+func leaseWindow(start, end monocore.Mono, grace time.Duration) (time.Duration, bool) {
+	if !(start.Before(end)) {
+		return 0, false
+	}
+	return end.Add(grace).Sub(start), true
 }

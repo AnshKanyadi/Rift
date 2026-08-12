@@ -409,10 +409,30 @@ driver has to remember.
   unset rather than as the beginning of the run. `Timeline.Validate` rejects a zero epoch.
 - A5's HLC wraps `Wall` only.
 
-*Residual gap, stated rather than hidden:* because these are defined integer types, `a - b` on two
-`Mono`s compiles and yields a `Mono` rather than a `Duration`. `Sub` is the sanctioned spelling.
-Closing that too would mean making them structs, which costs the comparison operators and every
-constant expression; the ruling said `int64`, so `int64` is what this is.
+*The residual gap, and how it closed.* Because these are defined integer types, `a - b` on two
+`Mono`s compiles and yields a `Mono` rather than a `Duration`. Making them structs would close it and
+cost the comparison operators and every constant expression, which was rejected.
+
+**[Amended — Ansh, 2026-08-11] Closed by analyzer rule instead.** `determinismcheck` bans binary
+arithmetic between two values of the same instant type, in core and driver scope, outside `clock`
+itself. `Sub` and `Add` are the sanctioned spellings; comparisons stay legal, which is what defined
+integer types bought in the first place. The rationale is that `a - b` on two `Mono`s yields an
+instant when the quantity in hand is a *duration*, and that type lie then flows into instant-typed
+positions -- the same confusion the two types exist to prevent, one level down. An untyped constant
+takes the instant's type, so `w * 2` and `w + 1` are caught by the same rule, correctly: an instant
+scaled by a scalar is not an instant.
+
+With that landed the uncompilable claim is whole, one analyzer rule wide.
+
+*The predicted class fired.* Within a minute of the nonzero-epoch rule existing, `Compile` was found
+building its output `Timeline` field by field and dropping `Epoch` -- a forgotten field that would
+have read as a valid instant at the beginning of the run. That is the class the constant was ruled in
+to catch, caught on its first day. It stays out of BUGS.md under the harness-bug rule; this is its
+record.
+
+*Tick 5's one-nanosecond overshoot is pinned deliberately.* It is the ceiling rounding, and any
+future change that makes the reading exact must fail the golden vector and force a conversation
+rather than silently reshaping every recorded run.
 
 | # | Question | Ruling |
 |---|---|---|

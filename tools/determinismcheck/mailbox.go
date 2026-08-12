@@ -30,8 +30,13 @@ func checkMailbox(r *reporter, insp *inspector.Inspector) {
 	// The monotonic-leakage rule applies here too. A driver package is exactly
 	// where a struct that goes on the wire tends to live, and a Mono is
 	// meaningful only on the node and boot that produced it.
-	insp.Preorder([]ast.Node{(*ast.StructType)(nil)}, func(n ast.Node) {
-		checkMonoLeak(r, n.(*ast.StructType))
+	insp.Preorder([]ast.Node{(*ast.StructType)(nil), (*ast.BinaryExpr)(nil)}, func(n ast.Node) {
+		switch n := n.(type) {
+		case *ast.StructType:
+			checkMonoLeak(r, n)
+		case *ast.BinaryExpr:
+			checkInstantMath(r, n)
+		}
 	})
 
 	insp.Preorder([]ast.Node{(*ast.SelectorExpr)(nil)}, func(n ast.Node) {

@@ -46,6 +46,7 @@ const (
 	ruleMapKey      = "mapkey"
 	ruleFloat       = "float"
 	ruleMonoLeak    = "monoleak"
+	ruleInstantMath = "instantmath"
 	rulePointerFmt  = "pointerfmt"
 	ruleMailbox     = "mailbox"
 	ruleEscape      = "escape"
@@ -60,6 +61,7 @@ var (
 	flagListAllowances = true
 	flagRoot           = ""
 	flagMonoPkg        = "github.com/anshkanyadi/rift/clock"
+	flagInstantTypes   = "Wall,Mono"
 )
 
 // The scope tables live in the code rather than in a Makefile line, so adding a
@@ -80,6 +82,8 @@ func init() {
 		"print every use of the //rift:allow-nondeterminism escape hatch to stderr")
 	Analyzer.Flags.StringVar(&flagMonoPkg, "mono-pkg", flagMonoPkg,
 		"import `path` of the package defining the Mono reading type, which may not appear in exported or tagged struct fields elsewhere")
+	Analyzer.Flags.StringVar(&flagInstantTypes, "instant-types", flagInstantTypes,
+		"comma-separated instant type `names` in -mono-pkg; binary arithmetic on two of the same is banned outside it")
 	Analyzer.Flags.StringVar(&flagRoot, "root", flagRoot,
 		"render announced paths relative to this `dir` (default: the working directory)")
 }
