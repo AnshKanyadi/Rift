@@ -88,13 +88,6 @@ var defaultMailbox = []string{
 }
 
 func scopeFor(path string) scope {
-	// The test binary's main package is synthesized by the go tool, imports os
-	// and flag, and is nobody's code to fix. It is not the package under test:
-	// that one has the same path without the suffix and is checked normally.
-	if strings.HasSuffix(path, ".test") {
-		return scopeOff
-	}
-
 	path = normalize(path)
 	switch {
 	case matchAny(splitPatterns(flagExclude), path):
@@ -106,6 +99,18 @@ func scopeFor(path string) scope {
 	default:
 		return scopeOff
 	}
+}
+
+// isSynthesizedTestMain reports whether this is the test binary's main package,
+// which the go tool generates, which imports os and flag, and which is nobody's
+// code to fix.
+//
+// Both halves of the test matter. The path suffix alone would also exclude a
+// real source directory named x.test, which is somebody's code and belongs in
+// scope; the package name alone would exclude every command in the repo. Only
+// the generated main satisfies both.
+func isSynthesizedTestMain(path, pkgName string) bool {
+	return pkgName == "main" && strings.HasSuffix(path, ".test")
 }
 
 // isCorePkg reports whether path holds core types, which is what the mailbox

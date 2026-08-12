@@ -856,6 +856,29 @@ replay, and `clock/frac.go` and `internal/rng/float.go` are the two that qualify
 dependency: A10's balancer load arithmetic is integer or fixed-point for exactly this reason**, as is
 anything else that computes a number a decision is made from.
 
+**Every oracle judges from independently observed history, never from the system under test's own
+account.** *An oracle that interrogates the engine believes the lie.* The durability checker
+recomputes expected post-crash state by replaying the harness's own operation log, because an engine
+that lies about what it made durable is precisely the bug it exists to catch, and asking that engine
+what it had would launder the lie into a pass. The general form: an oracle's input is the harness's
+op log, the client-observed responses, or plan-derived truth — never the system's self-report.
+Forward bindings, so this is settled before each arrives: **porcupine consumes client histories
+only**; **the bank checker consumes client operations only**; **the envelope checker consumes
+plan-derived offsets, never node-reported clocks**.
+
+**Safety oracles never count a timeout or an unavailability as a violation.** A partitioned cluster
+that stops answering is behaving correctly, and an oracle that scores it as a safety failure trains
+everyone to ignore it. Liveness is measured separately, reported separately, and **never gates a
+safety claim**; a run in which nothing made progress is a liveness result and a safety pass, and both
+sentences are true at once. (Promoted from `sim/toy`'s acceptance note, where it was a property of
+one workload, to a property of the oracle framework.)
+
+**A rule is wired only when a planted violation in live code fails the lane.** The fixture proves
+the rule; the planted hit proves the wiring. They are different claims and the second is the one that
+has been wrong: a rule can be correct and unreachable because its scope table, its package
+classification or its driver misses the code it was written for. Sibling to the induced-failure
+policy above — that one proves a gate can fail, this one proves it can see.
+
 **When a rule collides with legitimate code, exceptions concentrate; they never scatter.** The float
 ban landed against 37 real violations across `clock` and `internal/rng`, including the frozen `Rand`
 interface. The wrong response is 37 hatches: a registry of 37 entries is not a reviewed list, it is a

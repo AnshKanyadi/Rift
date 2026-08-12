@@ -89,6 +89,9 @@ func init() {
 }
 
 func run(pass *analysis.Pass) (any, error) {
+	if isSynthesizedTestMain(pass.Pkg.Path(), pass.Pkg.Name()) {
+		return nil, nil
+	}
 	sc := scopeFor(pass.Pkg.Path())
 	if sc == scopeOff {
 		return nil, nil

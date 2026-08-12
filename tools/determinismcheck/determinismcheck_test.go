@@ -155,6 +155,28 @@ func c() {}
 
 // TestScopeTable pins the package classification itself, which is the part of
 // this pass that decides whether any of the rest of it runs.
+// TestSynthesizedTestMainIsExcluded pins both directions of the exclusion. The
+// generated test binary main imports os and flag and is nobody's code to fix; a
+// source directory that happens to be named x.test is somebody's code and stays
+// in scope.
+func TestSynthesizedTestMainIsExcluded(t *testing.T) {
+	const mod = "github.com/anshkanyadi/rift/"
+	cases := []struct {
+		path, pkgName string
+		want          bool
+	}{
+		{mod + "raft.test", "main", true},               // the generated one
+		{mod + "raft/fixtures.test", "fixtures", false}, // a source directory so named
+		{mod + "cmd/simctl", "main", false},             // an ordinary command
+		{mod + "raft", "raft", false},
+	}
+	for _, tc := range cases {
+		if got := isSynthesizedTestMain(tc.path, tc.pkgName); got != tc.want {
+			t.Errorf("isSynthesizedTestMain(%q, %q) = %v, want %v", tc.path, tc.pkgName, got, tc.want)
+		}
+	}
+}
+
 func TestScopeTable(t *testing.T) {
 	const mod = "github.com/anshkanyadi/rift/"
 	cases := []struct {
@@ -164,8 +186,9 @@ func TestScopeTable(t *testing.T) {
 		// In scope: everything that executes during a simulated run.
 		{mod + "raft", scopeCore},
 		{mod + "raft/quorum", scopeCore},
-		{mod + "raft_test", scopeCore}, // an external test package is still the package
-		{mod + "raft.test", scopeOff},  // the synthesized test binary main is not ours
+		{mod + "raft_test", scopeCore},          // an external test package is still the package
+		{mod + "raft/fixtures.test", scopeCore}, // a source directory named x.test is somebody's code
+		{mod + "raft.test", scopeOff},           // a sibling path, matched by no pattern
 		{mod + "kv", scopeCore},
 		{mod + "engine", scopeCore},
 		{mod + "engine/model", scopeCore},
