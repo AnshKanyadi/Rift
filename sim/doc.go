@@ -42,8 +42,30 @@
 // cover all variants with no default arm -- so adding a kind breaks every
 // consumer that has not decided what to do about it.
 //
-// Landed in A0.6 (checklist step 1). Still to come: the transport and its
-// injectors (step 3/4), plans as the repro unit (step 5), the oracle framework
-// (step 6), and the trace hash with its fresh-process gate (step 2, riding with
-// simctl at step 8).
+// # Messages cross the real wire codec
+//
+// Nodes share an address space, so a message passed by reference lets a sender
+// mutate what a receiver reads: a bug class that cannot exist in production and
+// a determinism leak that can. Encoding removes it, and pays a second time --
+// every message in every soak run goes through the production encoder, so
+// truncation and dropped fields are caught by the corpus rather than at I2. It
+// also makes message size observable, which the delay model wants.
+//
+// Per-message dice come from a keyed PRF over (from, to, ordinal on that
+// directed link), never a sequential draw. Traffic on one link therefore cannot
+// perturb another link's outcomes, which is what makes a plan a total repro and
+// the minimizer sound (DR-6). Reordering is emergent from independent latency
+// rather than a knob; there is no reorder flag to look for.
+//
+// # Fire counts
+//
+// Every injector counts, and an enabled injector that never fired fails the
+// run. Without that, a chaos suite is chaos-shaped decoration: every seed green
+// and no partition ever formed. With it, a soak can say how many times each
+// fault actually happened, which is what makes the safety claim mean something.
+//
+// Landed: the loop (step 1), transport and codec (step 3), injectors and fire
+// counts (step 4). Still to come: plans as the repro unit (step 5), the oracle
+// framework (step 6), the toy protocol (step 7), and the trace hash with its
+// fresh-process gate (step 2, riding with simctl at step 8).
 package sim
