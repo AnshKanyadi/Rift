@@ -7,7 +7,10 @@ go 1.26.0
 
 toolchain go1.26.5
 
-require golang.org/x/tools v0.48.0
+require (
+	github.com/anishathalye/porcupine v1.3.0
+	golang.org/x/tools v0.48.0
+)
 
 require (
 	golang.org/x/mod v0.38.0 // indirect

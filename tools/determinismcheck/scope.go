@@ -72,6 +72,12 @@ var defaultExclude = []string{
 	// settle on, the other line goes.
 	"github.com/anshkanyadi/rift/engine/real/...",
 	"github.com/anshkanyadi/rift/engine/pump/...",
+
+	// The end-of-run checkers. History *collection* runs in-sim and stays
+	// dependency-free inside the boundary; porcupine runs after the run is
+	// over, is an external dependency, and needs a timeout -- so it lives out
+	// here by ruling. Nothing in this package executes during a simulated run.
+	"github.com/anshkanyadi/rift/sim/checker/...",
 }
 
 // defaultMailbox lists the real-mode driver packages, which exist to hold the

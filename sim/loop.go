@@ -57,6 +57,14 @@ type Config struct {
 	// schedules faster than time advances. Zero means no bound, which is only
 	// safe for a workload known to terminate.
 	MaxSteps uint64
+
+	// Oracles watch the run as it happens. A violation halts it.
+	Oracles []Oracle
+
+	// PlanRef identifies the plan this run came from, and is carried into any
+	// violation dump. A dump that does not say which plan produced it is a bug
+	// report nobody can act on.
+	PlanRef string
 }
 
 // Loop is the deterministic event loop.
@@ -72,6 +80,11 @@ type Loop struct {
 	steps  uint64
 	census Census
 	closed bool
+
+	// halted holds the first violation seen. First, not last: a checker firing
+	// after the system has already gone wrong is reporting a consequence, and
+	// the first one is the one an investigator wants.
+	halted *Violation
 
 	// down tracks crashed nodes. A crashed node receives no events until it is
 	// restarted, and events scheduled for it in the meantime are dropped
@@ -168,6 +181,10 @@ func (l *Loop) Run() (Outcome, error) {
 			return l.outcome(OutcomeStepLimit, l.now), nil
 		}
 		l.step()
+		if l.halted != nil {
+			l.closed = true
+			return l.outcome(OutcomeHalted, l.now), nil
+		}
 	}
 }
 
@@ -229,6 +246,44 @@ func (l *Loop) step() {
 	if ev.Kind == KindTick {
 		l.scheduleTick(ev.Node)
 	}
+
+	// Oracles see the step after it has been applied, so they judge the state
+	// the event produced rather than the one it was about to replace.
+	for _, o := range l.cfg.Oracles {
+		if !o.Interested(ev.Kind) {
+			continue
+		}
+		if v := o.OnStep(l, ev); v != nil {
+			v.At = l.now
+			v.Step = l.steps
+			l.halted = v
+			return
+		}
+	}
+}
+
+// Violation returns the violation that halted the run, or nil.
+func (l *Loop) Violation() *Violation { return l.halted }
+
+// Dump renders a violation with everything needed to act on it: which plan,
+// where in the run, and what the run had been doing.
+//
+// The plan reference is the load-bearing half. A dump that says a checker fired
+// without saying which plan produced it is a bug report nobody can reproduce,
+// which is the same as no bug report.
+func (l *Loop) Dump() string {
+	if l.halted == nil {
+		return ""
+	}
+	return fmt.Sprintf("VIOLATION %s\n  plan:   %s\n  at:     instant %d, step %d\n  census: %s",
+		l.halted.Detail, planRefOr(l.cfg.PlanRef), int64(l.halted.At), l.halted.Step, l.census)
+}
+
+func planRefOr(s string) string {
+	if s == "" {
+		return "(unnamed; the run was built without a plan reference)"
+	}
+	return s
 }
 
 // scheduleTick enqueues a node's next tick, taken from its own clock.

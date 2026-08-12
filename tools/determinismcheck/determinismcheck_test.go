@@ -207,6 +207,7 @@ func TestScopeTable(t *testing.T) {
 		// Excluded by name: the real-mode adapters that need what the rules
 		// forbid, and which do not run inside a simulated run.
 		{mod + "engine/real", scopeOff},
+		{mod + "sim/checker", scopeOff}, // porcupine runs after the run, outside the boundary
 		{mod + "engine/pump/poller", scopeOff},
 
 		// Orchestration around runs.

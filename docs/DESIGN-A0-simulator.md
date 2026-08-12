@@ -1193,7 +1193,12 @@ Stated up front so no claim is ever broader than the evidence:
    scope.** Crash-stop plus omission plus timing only.
 5. **Linearizability checking is bounded**: porcupine runs with a history cap and a timeout, and a
    timeout is reported as *inconclusive*, never as *pass*.
-6. **Clock uncertainty is a static promised bound, not a measured one.** Real deployments carry a
+6. **Linearizability checking is bounded per key and per run.** Histories are partitioned by key and
+   each key is checked with a timeout; a run that exceeds the budget is reported *inconclusive*
+   rather than checked partially and called clean. The consequence, stated: cross-key
+   linearizability is not checked, and a run's whole history is never treated as one problem.
+   Single-key linearizability is what the invariant list claims and what is checked `[A0.9]`.
+7. **Clock uncertainty is a static promised bound, not a measured one.** Real deployments carry a
    dynamic per-node error estimate from NTP, which widens when a peer goes away and narrows as it
    settles. We model a static `maxOffset` that every node advertises identically, and A5/A6
    uncertainty intervals derive from that bound alone. The consequence is honest and worth stating:
