@@ -1,4 +1,4 @@
-package toy_test
+package hunt_test
 
 import (
 	"fmt"
@@ -20,9 +20,7 @@ import (
 // it. The reader asked for seeds-per-second, and seeds-per-second cannot be
 // computed from virtual time.
 func wallTimer() func() time.Duration {
-	//rift:allow-nondeterminism hunt wall time is a report metric measured outside every run; it never enters a plan, a history or the trace hash, and no simulated behaviour reads it
 	s := time.Now()
-	//rift:allow-nondeterminism the other half of the same report metric
 	return func() time.Duration { return time.Since(s) }
 }
 
@@ -41,6 +39,10 @@ type result struct {
 // *in the plan*, and the history the checker sees is what a client observed.
 // Nothing here reads node state.
 func runSeed(t *testing.T, seed uint64, flaw toy.Flaw) result {
+	return runSeedWith(t, seed, flaw, 0)
+}
+
+func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Instant) result {
 	t.Helper()
 
 	cfg := plan.DefaultGenConfig()
@@ -85,6 +87,7 @@ func runSeed(t *testing.T, seed uint64, flaw toy.Flaw) result {
 	for i := range nodes {
 		toys[i] = toy.New(sim.NodeID(i), 0, peersFor(sim.NodeID(i), peers, p.Config.Nodes),
 			run.Transport, hist, flaw)
+		toys[i].SyncLatency = syncLatency
 		nodes[i].(*lateBinder).inner = toys[i]
 	}
 	toys[0].OnUnsyncedWindow = func() { run.Trigger("unsynced_window_open") }
@@ -267,5 +270,37 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 				t.Logf("RECORDED GAP: %s is not observable through this toy's client interface -- %s", flaw, tc.why)
 			}
 		})
+	}
+}
+
+// TestAblationReactiveCrashAtOriginalWindow answers the question the remedy
+// bundled two changes into.
+//
+// The fix that caught ack-before-sync did two things at once: it made the crash
+// reactive on the unsynced window, and it widened the modelled fsync from 2ms
+// to 50ms. Only the first is legitimate -- A1's real Raft will not offer a
+// window knob -- so the second has to be shown unnecessary or admitted as a
+// dependency. This measures the reactive crash alone, at the original 2ms.
+func TestAblationReactiveCrashAtOriginalWindow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an ablation is not a -short test")
+	}
+
+	for _, window := range []clock.Instant{2_000_000, 10_000_000, 50_000_000} {
+		caught := 0
+		first := -1
+		for seed := uint64(0); seed < 1000; seed++ {
+			r := runSeedWith(t, seed, toy.FlawAckBeforeSync, window)
+			for _, rep := range r.reports {
+				if rep.Verdict == sim.VerdictViolation {
+					caught++
+					if first < 0 {
+						first = int(seed)
+					}
+				}
+			}
+		}
+		t.Logf("fsync window %6dus: %3d of 1000 caught, first at seed %d",
+			int64(window)/1000, caught, first)
 	}
 }

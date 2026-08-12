@@ -430,7 +430,24 @@ have read as a valid instant at the beginning of the run. That is the class the 
 to catch, caught on its first day. It stays out of BUGS.md under the harness-bug rule; this is its
 record.
 
-*Tick 5's one-nanosecond overshoot is pinned deliberately.* It is the ceiling rounding, and any
+#### [Amended — Ansh, 2026-08-12] When an input DSL changes, the want data must not
+
+A vector file may change **in the construction of its input**, never in a `want` block, and the
+commit message states that split explicitly so a reviewer learns it without diffing.
+
+The `AtFrac` → `AtPPB` rename touched `clock/vectors_test.go` by one line — the `Hold` literal in a
+schedule constructor. Zero rows inside any `want` block moved, and the unchanged tick times are the
+end-to-end proof that `Percent(98)` returning `980_000_000` instead of `0.98` preserves the 490ms
+compiled target.
+
+**Made structural rather than disciplinary.** Expected values now live in
+`clock/vectors_data_test.go`, which constructs nothing and speaks no authoring DSL, while the
+schedules live beside the runner. A future DSL change *cannot* touch the file holding expected
+values, because there is nothing in it to change. A rule enforced by which file a line is in cannot
+be got wrong by accident.
+
+*Tick 5's one-nanosecond overshoot is pinned deliberately, and has now been unmoved through two
+refactors:* the integer-slope change and the `AtPPB` change. It is the ceiling rounding, and any
 future change that makes the reading exact must fail the golden vector and force a conversation
 rather than silently reshaping every recorded run.
 

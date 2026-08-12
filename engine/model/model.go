@@ -19,11 +19,33 @@
 // determinism leak this project's vet pass exists to catch -- and hide
 // iteration cost inside every scan.
 //
-// # Durability
+// # Durability, and the contract B4 compares against
 //
-// Two versions are kept: visible (every applied batch) and durable (batches at
-// or below DurableSeq). Crash discards visible and reloads from durable, which
-// is exactly the WAL contract: buffered writes are readable and losable.
+// **Every version between the durable watermark and the visible one is
+// retained**, not two. That is the fix DESIGN-A0.5 §2 records as
+// recovery-to-intermediate-sequence, and the sentence this comment used to
+// carry -- "two versions are kept, visible and durable" -- described precisely
+// the assumption that made a lagging watermark silently recover *more* state
+// than the engine had promised.
+//
+// The contract, stated here so it lives with the code rather than only in a
+// design doc:
+//
+//	For any sequence w that has been applied, if DurableSeq() == w then a crash
+//	recovers exactly the state produced by applying batches 1..w in order, and
+//	nothing else. This holds for EVERY applied w, not only for the most recent
+//	one.
+//
+// That universal quantifier is what B4's crash rig compares against. The rig
+// kills the C++ engine at a swept set of Env call points, reopens, and checks
+// the recovered state against engine/model's state at the same watermark; the
+// comparison is only well-defined because the model can produce the state at an
+// arbitrary applied sequence. An engine that rounded the watermark up would be
+// compared against a model that rounded it up too, and every disagreement would
+// be blamed on the C++ side.
+//
+// Crash discards everything above the watermark and reloads from it, which is
+// exactly the WAL contract: buffered writes are readable and losable.
 //
 // Durability does not advance on its own. The owner calls AdvanceDurable, which
 // in simulation is driven by an event the simulator schedules at a chosen

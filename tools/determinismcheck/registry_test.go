@@ -14,6 +14,8 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/anshkanyadi/rift/internal/sorted"
 )
 
 var updateHatches = flag.Bool("update-hatches", false, "rewrite HATCHES.txt from the current tree")
@@ -194,4 +196,57 @@ func writeRegistry(t *testing.T, path string, entries []string) {
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("writing the registry: %v", err)
 	}
+}
+
+// TestNoCorePackageImportsOrchestration asserts the boundary's direction.
+//
+// An exclusion says "this package need not be deterministic". That is only safe
+// if nothing deterministic depends on it -- a boundary is real when it cannot be
+// crossed inward. Review cannot hold that line across thirty thousand lines, so
+// it is a test: every package in core or mailbox scope is checked against the
+// exclusion list, and importing an excluded package is a failure.
+//
+// The direction matters and the reverse is fine: orchestration importing core
+// is the whole point of a hunter.
+func TestNoCorePackageImportsOrchestration(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("locating repo root: %v", err)
+	}
+	setFlags(t, map[string]string{"root": root})
+
+	cfg := &packages.Config{
+		Mode:  packages.NeedName | packages.NeedImports | packages.NeedDeps,
+		Dir:   root,
+		Tests: true,
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		t.Fatalf("loading the tree: %v", err)
+	}
+	if len(pkgs) == 0 {
+		t.Fatal("loaded no packages, so this proves nothing")
+	}
+
+	excluded := splitPatterns(flagExclude)
+	checked := 0
+	for _, pkg := range pkgs {
+		if isSynthesizedTestMain(pkg.PkgPath, pkg.Name) {
+			continue
+		}
+		if scopeFor(pkg.PkgPath) == scopeOff {
+			continue
+		}
+		checked++
+		for _, imp := range sorted.Keys(pkg.Imports) {
+			if matchAny(excluded, normalize(imp)) {
+				t.Errorf("%s is in scope and imports the excluded package %s; an exclusion is only safe while nothing deterministic depends on it",
+					pkg.PkgPath, imp)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no in-scope packages were examined, so this proves nothing")
+	}
+	t.Logf("checked %d in-scope packages against %d exclusions", checked, len(excluded))
 }

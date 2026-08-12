@@ -73,6 +73,12 @@ var defaultExclude = []string{
 	"github.com/anshkanyadi/rift/engine/real/...",
 	"github.com/anshkanyadi/rift/engine/pump/...",
 
+	// The hunt driver. Orchestration by Amendment A5's own text, which names
+	// hunters alongside real-mode drivers and cmd/. Named exactly, never as a
+	// prefix: a wildcard here would silently adopt every future subpackage,
+	// which is how a boundary becomes a hole.
+	"github.com/anshkanyadi/rift/sim/hunt",
+
 	// The end-of-run checkers. History *collection* runs in-sim and stays
 	// dependency-free inside the boundary; porcupine runs after the run is
 	// over, is an external dependency, and needs a timeout -- so it lives out

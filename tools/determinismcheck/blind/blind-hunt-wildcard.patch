@@ -1,0 +1,15 @@
+# id: blind-hunt-wildcard
+# covering-test: TestScopeTable
+# expect: killed
+# blinds: the exactness of the hunt exclusion, letting a wildcard silently adopt every future subpackage of an orchestration package
+--- a/tools/determinismcheck/scope.go
++++ b/tools/determinismcheck/scope.go
+@@ -77,7 +77,7 @@
+ 	// hunters alongside real-mode drivers and cmd/. Named exactly, never as a
+ 	// prefix: a wildcard here would silently adopt every future subpackage,
+ 	// which is how a boundary becomes a hole.
+-	"github.com/anshkanyadi/rift/sim/hunt",
++	"github.com/anshkanyadi/rift/sim/hunt/...",
+ 
+ 	// The end-of-run checkers. History *collection* runs in-sim and stays
+ 	// dependency-free inside the boundary; porcupine runs after the run is

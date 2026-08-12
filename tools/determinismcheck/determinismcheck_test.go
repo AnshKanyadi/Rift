@@ -212,6 +212,8 @@ func TestScopeTable(t *testing.T) {
 		// package that imports porcupine and runs afterwards is excluded, and
 		// the exclusion must not reach one package further.
 		{mod + "sim/checker", scopeOff},
+		{mod + "sim/hunt", scopeOff},        // the hunt driver is orchestration
+		{mod + "sim/hunt/inner", scopeCore}, // named exactly: no wildcard adopts a subpackage
 		{mod + "sim/toy", scopeCore},
 		{mod + "sim/plan", scopeCore},
 		{mod + "engine/pump/poller", scopeOff},

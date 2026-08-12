@@ -16,5 +16,3 @@
 
 clock/real.go:40  the repo's single wall-clock read; the real Clock implementation is where physical time necessarily enters, and every other package takes an injected Clock so this stays the one place
 internal/sorted/sorted.go:40  the one map range in the repo; every caller sorts before returning, so this order is never observable
-sim/toy/hunt_test.go:23  hunt wall time is a report metric measured outside every run; it never enters a plan, a history or the trace hash, and no simulated behaviour reads it
-sim/toy/hunt_test.go:25  the other half of the same report metric

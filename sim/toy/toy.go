@@ -146,6 +146,12 @@ type Node struct {
 	// makes the crash land in the window by construction, which is the
 	// difference between testing durability and hoping to.
 	OnUnsyncedWindow func()
+
+	// SyncLatency overrides the modelled fsync duration, for ablation. The
+	// harness's power against ack-before-durable should not depend on a knob
+	// we control, and the only way to know whether it does is to vary the knob
+	// and measure.
+	SyncLatency clock.Instant
 }
 
 // New builds a replica.
@@ -216,7 +222,11 @@ func (n *Node) onClient(ev sim.Event, s sim.Scheduler) {
 
 	// The modelled fsync completes later, which is what creates the window in
 	// which acknowledged-but-unsynced data can exist.
-	s.At(ev.At+n.syncLatency, sim.KindDurable, n.ID, seq)
+	lat := n.syncLatency
+	if n.SyncLatency != 0 {
+		lat = n.SyncLatency
+	}
+	s.At(ev.At+lat, sim.KindDurable, n.ID, seq)
 	if n.OnUnsyncedWindow != nil {
 		n.OnUnsyncedWindow()
 	}
