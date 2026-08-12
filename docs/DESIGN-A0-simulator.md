@@ -834,6 +834,26 @@ reported seven kills while one of the tests doing the killing was failing for it
 
 The same structure applies to `sim/mutants/*.patch` when A0.12 lands it.
 
+#### [Amended — Ansh, 2026-08-11] Two standing policies, both about how a rule earns trust
+
+**A gate is not landed until its failure has been induced and observed.** A gate whose failure has
+never fired is a decoration: it has demonstrated that it does not fire when nothing is wrong, which
+is the cheap half. Landing one means writing down what was broken to make it fire, and what it
+printed. The baseline gate and the ALIVE canary above were both landed this way — the first by
+leaving a registry mismatch in the tree and watching the lane report INVALID with zero kills, the
+second by repointing a copy of the canary at a test that does cover its rule and watching it report
+DIED. This applies to every checker, oracle and lane from here on, including the invariants of A1
+through A10.
+
+**Enforcement surfaces are default-deny.** A blocklist requires a human to *notice* that it needs
+extending; an allowlist requires a human to *approve* an addition. The first is a hope about
+attention, the second is a review. Where an enforcement surface can be expressed either way, it is
+expressed as an allowlist: the `time` package (value types, constants, methods and deterministic
+constructors are listed; everything else, including whatever Go adds next, is banned), and the scope
+table, where an unclassified package defaults **in**. Where a blocklist is unavoidable — banned
+imports, whose universe is unbounded — the blind lane carries a patch per entry so that deleting one
+is a test failure rather than a quiet loosening.
+
 **6. Test files are checked under the same rules as their package.** A determinism leak in a test
 helper is still a leak; it just costs a flaky test instead of a flaky database. This is what forced
 `internal/sorted` into existence rather than a private helper per package, and A0.3 landing found

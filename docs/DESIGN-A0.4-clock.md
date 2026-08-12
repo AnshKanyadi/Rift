@@ -1,6 +1,9 @@
 # DESIGN-A0.4: Clocks, drift, and the skew envelope
 
-**Status:** **PROPOSED** — awaiting Ansh's decision. No code until then.
+**Status:** **APPROVED in architecture** by Ansh, 2026-08-11 (two-clock model, closed-form tick
+inversion, intent-form holds, inverting envelope checker). Three amendments applied below, marked
+**[Amended — Ansh, 2026-08-11]**. Four questions in §4 remain open and **no code lands until they are
+ruled**.
 **Phase:** A0.4 (Track A). **Author:** Claude. **Decider:** Ansh.
 **Blocks:** A0.6 (the event loop schedules ticks through this), A5 (HLC wraps `PhysicalNow`),
 A8 (lease disjointness and the envelope experiment consume the schedules defined here).
@@ -109,6 +112,28 @@ type Clock interface {
 bugs we cannot ship and hiding ones we can. (c) — drift stops shaping ticks, contradicting the
 ruling and making the injector decorative.
 
+#### [Amended — Ansh, 2026-08-11] The monotonic epoch is per-boot
+
+`Mono` is elapsed time **since this boot**, not since the simulation began. A `restart` event starts
+a fresh monotonic curve at zero; `Wall` continues from the oscillator plus accumulated steps, because
+a restarting machine does not forget what time it is. Restart times are materialized in the plan, so
+the closed-form inversion of D3 holds unchanged — it is applied per boot segment, and the segment
+boundaries are known before the run starts rather than discovered during it.
+
+This mirrors `CLOCK_MONOTONIC`, whose epoch is unspecified and in practice per-boot, and it makes a
+whole bug class expressible rather than accidentally impossible:
+
+> **Named bug class — monotonic leakage.** A monotonic-derived value must never be persisted, sent on
+> the wire, or compared across nodes or across a restart. It is meaningful only as a difference
+> between two readings on the same node within one boot. A lease expiry stored as a `Mono` value
+> survives a restart as a number from a timeline that no longer exists, and the node then serves
+> reads under a lease it does not hold.
+
+That is a design-doc invariant today and a review-checklist item until there is a mechanical check
+for it. A mechanical check is possible — `Instant` could split into distinct `Mono` and `Wall` types
+so the compiler rejects the mix, and serialization could refuse the monotonic type — and if the
+review item is ever hit in practice, that is the fix rather than more vigilance.
+
 ---
 
 ### D2 — How is a node's timeline expressed, and by what arithmetic?
@@ -209,6 +234,25 @@ happen without the hold?", which is the first question anyone will ask.
 `envelope: true` marks a hold as deliberately outside the assumption. Its effect is on the checker
 (D5), not on the arithmetic.
 
+#### [Amended — Ansh, 2026-08-11] Compiled holds record step or slew
+
+A hold reaches its target one of two ways, and the compiled output records which:
+
+- **step** — `ramp_ns == 0`, realized as a `steps` entry: a discontinuous correction, an NTP step.
+- **slew** — `ramp_ns > 0`, realized as a sloped `skew` segment: the oscillator is disciplined
+  gradually, which is what `adjtime` and every well-behaved daemon actually do.
+
+They stress different consumers and must not be conflated in a corpus. A step is the A5 case: the HLC
+must not go backwards, and an uncertainty interval must widen across the discontinuity. A slew is the
+A8 case: a lease's stasis margin is consumed continuously while the node believes its clock is fine,
+so the failure is gradual and the detection story is different. A bundle that says only "the clocks
+disagreed by 490ms" cannot tell an investigator which of those they are looking at.
+
+The realization is therefore a recorded field on the compiled segment rather than something inferred
+from `ramp_ns` at read time, `simctl` prints it in the run summary, and **ddmin can distinguish
+them** — "does the bug still happen if this hold slews instead of steps?" is a question the minimizer
+should be able to ask, and a minimized bundle should say which answer it found.
+
 **Rejected:** (a) — unreadable bundles and a minimizer that can only delete whole timelines. (c) —
 two representations of one fact, guaranteed to disagree eventually.
 
@@ -234,9 +278,30 @@ Two properties I want asserted in A0.4 rather than assumed later:
    between two things computed the same way.
 2. **The bound is checked continuously, not at hold boundaries.** A ramp that overshoots between two
    sample points is exactly the bug this checker exists to catch. Because both curves are piecewise
-   linear, pairwise `|wall_i − wall_j|` is piecewise linear too, so its extrema occur at segment
+   linear, pairwise `|wall_i - wall_j|` is piecewise linear too, so its extrema occur at segment
    endpoints — the checker can therefore be *exact* by evaluating at the union of both nodes'
    breakpoints, rather than sampling and hoping.
+
+#### [Amended — Ansh, 2026-08-11] Exactness, spelled out so it can be tested
+
+"Evaluate at the breakpoints" is not yet a specification. The evaluation set is the **union of both
+nodes' breakpoints**, and it explicitly includes:
+
+- every `skew` segment endpoint on either node;
+- **hold ramp endpoints** — ramp-in start, ramp-in end, ramp-out start, ramp-out end — which is where
+  a compiled hold's extremum sits when the two nodes' ramps are not aligned;
+- **hold window edges**, which are breakpoints of intent even when the compiler emits no segment
+  boundary there;
+- every `steps` discontinuity, at which **both one-sided limits are evaluated**. A jump is a
+  discontinuity in `wall`, so the supremum of `|wall_i - wall_j|` may be attained on either side and
+  is attained by neither if only the post-jump value is sampled. This is the case a naive
+  implementation gets wrong, because evaluating "at the jump" reads as one point and is two.
+
+The exit criterion (§3.1) is correspondingly sharpened: a fixture in which the skew maximum exists
+**only strictly inside a ramp**, between sample points a reasonable implementation would have chosen
+— midpoints, segment starts, a fixed grid — so that a sampling checker demonstrably passes a schedule
+that violates the bound. Under the standing policy that a gate is not landed until its failure has
+been induced, that fixture is what induces this one.
 
 ---
 
@@ -259,20 +324,27 @@ The sim clock has no hatch at all: it is arithmetic on plan data.
 
 Signed off by Ansh, not by me. Each is a test, and each names what it would catch.
 
-1. **Skew property tests.** Over randomized schedules, realized pairwise skew never exceeds
-   `maxOffset`; the exact-extrema argument in D5 is tested against a dense-sampling oracle on the
-   same schedules, so "exact" is verified rather than asserted.
+1. **Skew property tests, and the induced failure of the exact checker.** Over randomized schedules,
+   realized pairwise skew never exceeds `maxOffset`; the exact-extrema argument in D5 is tested
+   against a dense-sampling oracle on the same schedules, so "exact" is verified rather than
+   asserted. Plus the fixture required by the D5 amendment: a schedule whose skew maximum lies
+   strictly inside a ramp, on which a sampling checker passes and the exact checker fails. Without
+   that fixture the exactness claim is untested, and an untested gate is a decoration.
 2. **Demonstration schedule A — the hold.** A plan pins nodes 1 and 2 at 0.98 `maxOffset` for 30
-   simulated seconds. Recorded: realized skew at every breakpoint, its min and max over the window,
-   and the checker's verdict. Passing means A8 has its substrate before A8 needs it.
+   simulated seconds, **once as a step and once as a slew**. Recorded: realized skew at every
+   breakpoint, its min and max over the window, the realization (step or slew), and the checker's
+   verdict. Passing means A8 has its substrate before A8 needs it, in both shapes.
 3. **Demonstration schedule B — the envelope.** A plan drives the pair to 1.20 `maxOffset`. The
    checker inverts, records an excess of exactly 0.20 `maxOffset`, and the run reports rather than
    fails. Passing means the A8 experiment is expressible today, not a thing we hope to add later.
 4. **Drift shapes ticks.** A node at +200 ppm accumulates ticks faster than a node at nominal, by the
    expected ratio to within one tick over a long window. This is the test that would have caught
    D1(c) or D3(b) shipping by mistake.
-5. **Jumps do not rewind timers.** Under schedules with negative steps, `Mono` is strictly
-   increasing and the tick sequence is unperturbed, while `Wall` moves backwards as authored.
+5. **Jumps do not rewind timers, and restarts reset the right clock.** Under schedules with negative
+   steps, `Mono` is strictly increasing within a boot and the tick sequence is unperturbed, while
+   `Wall` moves backwards as authored. Across a `restart`, `Mono` returns to zero and `Wall` does
+   not — the per-boot epoch of the D1 amendment, tested rather than assumed, since a `Mono` that
+   survived a restart is the monotonic-leakage bug class in its most direct form.
 6. **Determinism.** Clock-heavy plans produce identical `(node, tick_ordinal, mono, wall)` sequences
    across an in-process rerun and a fresh process. (The rolling trace hash is A0.6; until it exists
    this sequence is the thing compared.)
@@ -288,7 +360,7 @@ Signed off by Ansh, not by me. Each is a test, and each names what it would catc
 | 1 | `Instant` as a project-owned `int64`, or reuse `time.Time`/`time.Duration` in core signatures? | **Project-owned `Instant`.** `time.Time` carries a location, a monotonic reading and formatting we do not want, and it makes two nodes' timelines look mutually comparable. `time.Duration` stays legal and idiomatic for *durations*. |
 | 2 | Does `Clock` expose `MaxOffset()`, or does it come from config alongside the clock? | **On the interface.** Every consumer of `Wall` needs the bound in the same breath, and separating them invites a lease computed against a stale bound. |
 | 3 | Should the sim clock also model **frequency error in the estimate** (a node that knows it is uncertain), or only true offset? | **Only true offset in A0.4.** Uncertainty intervals are A5/A6 and are derived from `maxOffset`, not from a per-node error estimate. Adding it now would be modelling something no consumer reads. |
-| 4 | `holds` expressed as a fraction of `maxOffset` (`"0.98*max_offset"`) — accept the mini-expression, or require a plain float multiplier field? | **Plain float field** (`"at_frac": 0.98`) on reflection: a string expression is a parser and a parser is a place for bugs. Flagging that I changed my own mind between D4's sketch and here; the sketch shows the readable form, the field is the safe one. |
+| ~~4~~ | ~~`holds` expressed as a fraction of `maxOffset`~~ | **RULED, Ansh 2026-08-11: plain float field** (`"at_frac": 0.98`). A string expression is a parser and a parser is a place for bugs. (The mid-document reversal stands as written: that is what design docs are for.) |
 | 5 | Does A0.4 land the tick *scheduling* (pure `NextTick`) only, with A0.6 wiring it to the queue? | **Yes.** It keeps A0.4 testable without an event loop and keeps A0.6 to one integration. |
 
 ---
