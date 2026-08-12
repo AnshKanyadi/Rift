@@ -14,4 +14,5 @@
 # core scope -- those are refused outright, so nothing of that kind can ever
 # appear below.
 
+clock/real.go:40  the repo's single wall-clock read; the real Clock implementation is where physical time necessarily enters, and every other package takes an injected Clock so this stays the one place
 internal/sorted/sorted.go:40  the one map range in the repo; every caller sorts before returning, so this order is never observable

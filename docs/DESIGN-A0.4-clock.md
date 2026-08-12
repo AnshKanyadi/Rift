@@ -136,6 +136,21 @@ review item is ever hit in practice, that is the fix rather than more vigilance.
 
 ---
 
+#### [Found while implementing — Ansh to rule] A slew cannot be wider than its ramp
+
+`Compile` rejects a hold whose correction exceeds its ramp duration, because applying it would need
+the oscillator to run backwards on the way out. This is not an implementation limit: it is the same
+constraint that makes real implementations rate-limit slewing rather than letting `adjtime` take
+arbitrary corrections. The caller's options are a longer ramp or `Ramp: 0` for a step, and those are
+genuinely different experiments rather than two spellings of one.
+
+Consequence for A8's schedules: holding a pair at 0.98 of a 500ms `maxOffset` needs a ramp longer
+than 490ms. The demonstration schedules use 2s and 3s ramps. If A8 wants a *fast* approach to the
+boundary, that is a step, and the doc now says so where somebody will read it before writing the
+plan.
+
+---
+
 ### D2 — How is a node's timeline expressed, and by what arithmetic?
 
 Per D9 the plan carries a **piecewise-linear** offset schedule. A0.4 has to say precisely what it is
@@ -325,6 +340,10 @@ The sim clock has no hatch at all: it is arithmetic on plan data.
 
 Signed off by Ansh, not by me. Each is a test, and each names what it would catch.
 
+**Status: all seven met.** `go test ./clock/` is green, and the two demonstration schedules print
+their numbers (schedule A: max skew 490,000,000ns against a 500,000,000ns bound, in both
+realizations; schedule B: 600,000,000ns, excess 100,000,000ns, 1.20x, recorded not failed).
+
 1. **Skew property tests, and the induced failure of the exact checker.** Over randomized schedules,
    realized pairwise skew never exceeds `maxOffset`; the exact-extrema argument in D5 is tested
    against a dense-sampling oracle on the same schedules, so "exact" is verified rather than
@@ -349,6 +368,14 @@ Signed off by Ansh, not by me. Each is a test, and each names what it would catc
 6. **Determinism.** Clock-heavy plans produce identical `(node, tick_ordinal, mono, wall)` sequences
    across an in-process rerun and a fresh process. (The rolling trace hash is A0.6; until it exists
    this sequence is the thing compared.)
+
+   *Landed as:* the in-process half is asserted more strongly than "rerun and compare" — every
+   reading is a pure function of `(timeline, t)`, so the test evaluates a schedule forwards and then
+   backwards and requires identical results, which a cursor or cache would fail. **The fresh-process
+   half is deferred to A0.6 and here is why:** spawning a process needs `os/exec`, which is
+   orchestration and does not belong in a core package. Hatching it in `clock`'s tests would put the
+   wrong thing in the registry. It lands in the runner that owns process spawning, alongside the
+   trace-hash gate it was always going to share.
 7. **One hatch.** `HATCHES.txt` gains exactly one entry, in `clock/real.go`, and `make hatches` is
    green.
 
