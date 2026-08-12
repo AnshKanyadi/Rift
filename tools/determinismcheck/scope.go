@@ -88,6 +88,13 @@ var defaultMailbox = []string{
 }
 
 func scopeFor(path string) scope {
+	// The test binary's main package is synthesized by the go tool, imports os
+	// and flag, and is nobody's code to fix. It is not the package under test:
+	// that one has the same path without the suffix and is checked normally.
+	if strings.HasSuffix(path, ".test") {
+		return scopeOff
+	}
+
 	path = normalize(path)
 	switch {
 	case matchAny(splitPatterns(flagExclude), path):

@@ -165,6 +165,7 @@ func TestScopeTable(t *testing.T) {
 		{mod + "raft", scopeCore},
 		{mod + "raft/quorum", scopeCore},
 		{mod + "raft_test", scopeCore}, // an external test package is still the package
+		{mod + "raft.test", scopeOff},  // the synthesized test binary main is not ours
 		{mod + "kv", scopeCore},
 		{mod + "engine", scopeCore},
 		{mod + "engine/model", scopeCore},
