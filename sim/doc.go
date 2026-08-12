@@ -1,17 +1,45 @@
-// Package sim is the deterministic simulator: one event queue, one event at a
-// time, virtual nanosecond timestamps, total order by (at, insertion_seq).
+// Package sim is the deterministic simulator: one event queue, one node at a
+// time, virtual time that advances only at event boundaries.
 //
-// It owns the fault injectors (drop, delay, duplicate, asymmetric and symmetric
-// partitions, crash, restart, pause, sync-loss windows, clock drift and jumps),
-// the checkers, the trace hash that gates determinism, and the fault plan --
-// the serializable artifact that makes a failing run reproducible at any commit
-// rather than only at the one that produced it.
+// # The total order
 //
-// Plan execution takes no sequential randomness at all: every random quantity
-// is either materialized in the plan or derived by a stateless keyed PRF over a
-// canonical event identity. A poisoned Rand panics if any sequential draw is
-// attempted, so "a plan is a complete reproduction" is enforced rather than
-// promised.
+// Every event is ordered by (at_nanos, insertion_seq). The instant comes from
+// whoever scheduled it; the sequence is a counter this package owns. The second
+// half is not a tie-break of convenience -- container/heap is not stable and
+// neither is the heap here, so without an explicit counter two events at the
+// same nanosecond would order by whatever the heap did last, and the simulator
+// would be subtly irreproducible in a way no single run reveals (DESIGN-A0 D2).
 //
-// See DESIGN-A0 DR-3, DR-5, DR-6, DR-14, DR-17, DR-18. Lands in A0.6-A0.9.
+// # What a node is
+//
+// A synchronous, non-blocking state machine with one entry point. The loop
+// calls Handle; Handle runs to completion and may schedule future events. There
+// are no goroutines inside a node, so a data race in node logic is not unlikely
+// but unrepresentable, and the same Handle runs in real mode behind a mailbox
+// so the two modes cannot drift apart in behaviour (DESIGN-A0 D1).
+//
+// # Ticks come from each node's own clock
+//
+// The loop asks a node's clock when its next tick falls, which is the
+// closed-form inverse of that node's oscillator (DESIGN-A0.4 D3). A node whose
+// crystal runs fast reaches its next tick earlier in global time, so it
+// campaigns and heartbeats fast -- drift shapes the schedule and not only the
+// reported time, which is what makes the injector worth having.
+//
+// A restart begins a new boot, so the monotonic curve restarts at zero and the
+// tick schedule restarts with it.
+//
+// # Stopping
+//
+// Run reports why it stopped, and the distinction is load-bearing: a run that
+// went quiescent early did less than its configured duration suggests, and
+// reporting that as a completed run would overstate every soak number built on
+// it. Ticks are therefore scheduled past the deadline rather than suppressed at
+// it, so a tick-only run ends at the deadline with a non-empty queue and says
+// so.
+//
+// Landed in A0.6 (checklist step 1). Still to come: the transport and its
+// injectors (step 3/4), plans as the repro unit (step 5), the oracle framework
+// (step 6), and the trace hash with its fresh-process gate (step 2, riding with
+// simctl at step 8).
 package sim

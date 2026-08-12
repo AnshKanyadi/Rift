@@ -11,6 +11,14 @@ import (
 // distinction is load-bearing -- a node knows only what its own clock says.
 type Instant int64
 
+// Add returns t advanced by d. Instant keeps its operators -- it is the
+// simulator's own coordinate, not a node reading, so there is no wire for it to
+// leak onto and no second timeline to confuse it with.
+func (t Instant) Add(d time.Duration) Instant { return t + Instant(d) }
+
+// Sub returns the duration from u to t.
+func (t Instant) Sub(u Instant) time.Duration { return time.Duration(t - u) }
+
 // Wall is a node's estimate of physical time, in nanoseconds. It is the
 // oscillator plus accumulated steps: it moves backwards when a step does, it
 // survives a restart, and MaxOffset bounds how far two nodes' Walls may differ.
