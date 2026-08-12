@@ -144,7 +144,8 @@ linear *in*, because the answer decides whether ticks can be computed in closed 
 **Recommendation.** Two separate curves per node, both authored in the plan:
 
 - **`skew`** — a piecewise-linear function of global virtual time `t`, giving the node's oscillator
-  offset: `mono_i(t) = t + skew_i(t)`. A sloped segment is a drift *rate* (slope 1e-6 is 1000 ppm);
+  offset: `osc_i(t) = t + skew_i(t)`. A sloped segment is a drift *rate* (slope 1000 ppb is 1 ppm;
+  see the §4 refinement on why the slope is an integer);
   a flat segment is a **sustained hold**, which is what A8 needs. Slope is constrained to
   `(-1, +∞)`, i.e. `mono_i` is strictly increasing — an oscillator that runs backwards is not a
   fault, it is a different kind of object.
@@ -355,13 +356,40 @@ Signed off by Ansh, not by me. Each is a test, and each names what it would catc
 
 ## 4. Questions for Ansh
 
-| # | Question | My recommendation |
+**All five ruled. Q4 by Ansh directly; Q1, Q2, Q3 and Q5 delegated to Claude, 2026-08-11
+("your rulings on those four, then A0.4 code"), each adopting the recommendation as written.** A
+delegated ruling is still a ruling and is recorded as one; each is a one-line change to overturn, and
+the code says which line.
+
+| # | Question | Ruling |
 |---|---|---|
-| 1 | `Instant` as a project-owned `int64`, or reuse `time.Time`/`time.Duration` in core signatures? | **Project-owned `Instant`.** `time.Time` carries a location, a monotonic reading and formatting we do not want, and it makes two nodes' timelines look mutually comparable. `time.Duration` stays legal and idiomatic for *durations*. |
+| 1 | `Instant` as a project-owned `int64`, or reuse `time.Time`/`time.Duration` in core signatures? | **Project-owned `Instant`.** `time.Time` carries a location, a monotonic reading and formatting we do not want, and it makes two nodes' timelines look mutually comparable. `time.Duration` stays legal and idiomatic for *durations*. Strengthened since it was written: with the Unix family and `Time.Local` now banned, a project-owned `Instant` is also what stops core code reaching for them. |
 | 2 | Does `Clock` expose `MaxOffset()`, or does it come from config alongside the clock? | **On the interface.** Every consumer of `Wall` needs the bound in the same breath, and separating them invites a lease computed against a stale bound. |
-| 3 | Should the sim clock also model **frequency error in the estimate** (a node that knows it is uncertain), or only true offset? | **Only true offset in A0.4.** Uncertainty intervals are A5/A6 and are derived from `maxOffset`, not from a per-node error estimate. Adding it now would be modelling something no consumer reads. |
-| ~~4~~ | ~~`holds` expressed as a fraction of `maxOffset`~~ | **RULED, Ansh 2026-08-11: plain float field** (`"at_frac": 0.98`). A string expression is a parser and a parser is a place for bugs. (The mid-document reversal stands as written: that is what design docs are for.) |
-| 5 | Does A0.4 land the tick *scheduling* (pure `NextTick`) only, with A0.6 wiring it to the queue? | **Yes.** It keeps A0.4 testable without an event loop and keeps A0.6 to one integration. |
+| 3 | Should the sim clock also model **frequency error in the estimate** (a node that knows it is uncertain), or only true offset? | **Only true offset in A0.4.** Uncertainty intervals are A5/A6 and derive from `maxOffset`, not from a per-node error estimate. Modelling something no consumer reads would be modelling it wrong for free. |
+| 4 | `holds` expressed as a fraction of `maxOffset` | **Plain float field** (`"at_frac": 0.98`) — Ansh, 2026-08-11. A string expression is a parser and a parser is a place for bugs. |
+| 5 | Does A0.4 land the tick *scheduling* (pure `NextTick`) only, with A0.6 wiring it to the queue? | **Yes.** It keeps A0.4 testable without an event loop and keeps A0.6 to one integration. The per-boot amendment reinforces it: `NextTick` becomes per-boot-segment, still pure. |
+
+### [Refinement found while implementing — flagged for overrule] Slopes are integers, not `float64`
+
+D2's sketch gives a segment a `float64` slope. **The implementation uses `SlopePPB int64`** — parts
+per billion — with 128-bit intermediate arithmetic, and no floating point anywhere on the evaluation
+path. The reason is a determinism hazard, not taste:
+
+> The Go spec permits an implementation to fuse floating-point operations: *"an implementation may
+> combine multiple floating-point operations into a single fused operation, possibly across
+> statements, and produce a result that differs from the value obtained by executing and rounding the
+> instructions individually."*
+
+`skew = off + slope*(t-start)` is exactly the multiply-add that arm64 fuses into `FMADD` and amd64
+without FMA support does not. The same seed on a laptop and on a CI runner could therefore produce
+clock readings differing in the last bit, and a one-nanosecond difference in a lease expiry is a
+different history. That would not have shown up in any test on one machine — it would have shown up
+as an unreproducible soak failure months later, which is the failure mode this project exists to
+avoid.
+
+`at_frac` stays a `float64` in the plan (Q4), because it is used once at *compile* time in a bare
+multiply with no addition to fuse, and the result is rounded to an integer immediately. The boundary
+is: floats may appear in authored intent, never on the evaluation path.
 
 ---
 
