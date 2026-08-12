@@ -99,14 +99,6 @@ func TestKnownAnswersDerived(t *testing.T) {
 	if got, want := New(7).Perm(10), []int{2, 3, 0, 9, 5, 8, 4, 1, 7, 6}; !equalInts(got, want) {
 		t.Errorf("Perm(10) = %v, want %v", got, want)
 	}
-	r := New(7)
-	//rift:allow-nondeterminism pinned Float64 outputs; these are exact 53-bit values by construction (see float.go), which is what makes them safe to pin at all
-	want := []float64{0.6248256197582158, 0.8882669983164009, 0.2245666245042589}
-	for i, w := range want {
-		if got := r.Float64(); got != w {
-			t.Errorf("Float64 draw %d = %v, want %v", i, got, w)
-		}
-	}
 }
 
 func TestKeyRoundTrip(t *testing.T) {

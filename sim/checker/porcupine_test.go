@@ -42,6 +42,9 @@ func TestLinearizableHistoryPasses(t *testing.T) {
 	if reports[0].Consumed != 4 {
 		t.Errorf("consumed %d operations, want 4", reports[0].Consumed)
 	}
+	if reports[0].Min != 3 {
+		t.Errorf("floor reported as %d, want 3", reports[0].Min)
+	}
 }
 
 // TestNonLinearizableHistoryIsAViolation is the induced failure the gate
@@ -80,6 +83,15 @@ func TestEmptyHistoryIsInconclusiveNeverPass(t *testing.T) {
 		{"one operation", func() *sim.History {
 			h := sim.NewHistory()
 			put(h, 1, 1, "a", "one", 0, 10)
+			return h
+		}()},
+		// Two operations is below the floor by argument: no two-operation
+		// history can exhibit the failure this checker looks for, so a check
+		// that consumed two could not have failed and must not read as a pass.
+		{"two operations", func() *sim.History {
+			h := sim.NewHistory()
+			put(h, 1, 1, "a", "one", 0, 10)
+			get(h, 2, 1, "a", "one", 20, 30)
 			return h
 		}()},
 	} {

@@ -2,7 +2,15 @@ package rng
 
 import "math/bits"
 
-// Rand is the injected source of randomness. Nothing in Rift reads a
+// Rand is the injected source of randomness.
+//
+// There is deliberately no Float64 and no Bool(p float64). They existed, had no
+// consumer once the clock and plan paths became integer parts-per-billion, and
+// were carrying four registry hatches between them. A hatched function with no
+// callers is an invitation with a permission slip attached, so probabilities in
+// this project are integer per-mille and the float surface is gone. If one is
+// ever genuinely needed, it comes back with a caller and an argument, not
+// before. Nothing in Rift reads a
 // package-level generator; a Rand is always passed in, always owned by whoever
 // controls the seed, and in plan-execution mode is always poisoned.
 //
@@ -25,17 +33,6 @@ type Rand interface {
 
 	// IntN returns a uniformly distributed value in [0, n). It panics if n <= 0.
 	IntN(n int) int
-
-	// Float64 returns a uniformly distributed value in [0, 1) with 53 bits of
-	// precision.
-	//
-	//rift:allow-nondeterminism generation-side only; the value is exact (see float.go) and is materialized as an integer in the plan before anything evaluates it
-	Float64() float64
-
-	// Bool reports true with probability p. p <= 0 is never, p >= 1 is always.
-	//
-	//rift:allow-nondeterminism generation-side only; p is plan-authored intent and the outcome is a bool, so no float crosses into evaluation
-	Bool(p float64) bool
 
 	// Shuffle permutes n elements using swap, by Fisher-Yates descending.
 	Shuffle(n int, swap func(i, j int))

@@ -237,7 +237,13 @@ func (l *Loop) step() {
 	// A crashed node receives nothing. The event is dropped rather than
 	// deferred: a message to a dead process does not wait for it to come back,
 	// and a timer that fired while it was down did not fire.
-	if l.down[ev.Node] && ev.Kind != KindRestart {
+	//
+	// Crash and Restart are the exceptions, and Crash is the one that matters:
+	// a node has to be *told* it died, or its engine keeps the unsynced writes
+	// a real process death would have taken with it -- and the whole
+	// ack-before-durable bug class becomes unreachable. The loop marking a node
+	// down without notifying it was a fault that injected nothing.
+	if l.down[ev.Node] && ev.Kind != KindRestart && ev.Kind != KindCrash {
 		return
 	}
 

@@ -14,12 +14,9 @@ import (
 // claims to execute.
 func TestPoisonedPanicsOnEverything(t *testing.T) {
 	calls := map[string]func(r Rand){
-		"Uint64":  func(r Rand) { r.Uint64() },
-		"Uint64N": func(r Rand) { r.Uint64N(10) },
-		"IntN":    func(r Rand) { r.IntN(10) },
-		"Float64": func(r Rand) { r.Float64() },
-		//rift:allow-nondeterminism naming a probability is the only way to call Bool; the poison panics before the value is used for anything
-		"Bool":      func(r Rand) { r.Bool(0.5) },
+		"Uint64":    func(r Rand) { r.Uint64() },
+		"Uint64N":   func(r Rand) { r.Uint64N(10) },
+		"IntN":      func(r Rand) { r.IntN(10) },
 		"Shuffle":   func(r Rand) { r.Shuffle(4, func(i, j int) {}) },
 		"Perm":      func(r Rand) { r.Perm(4) },
 		"Derive":    func(r Rand) { r.Derive("net") },

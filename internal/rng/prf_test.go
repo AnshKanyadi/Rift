@@ -132,18 +132,6 @@ func TestPRFBetweenPanicsOnEmptyRange(t *testing.T) {
 	}
 }
 
-func TestPRFBoolExtremes(t *testing.T) {
-	k := testKey()
-	for i := uint64(0); i < 1000; i++ {
-		if k.Bool(DomainNetDrop, i, 0, 0, 0) {
-			t.Fatal("Bool(p=0) returned true")
-		}
-		if !k.Bool(DomainNetDrop, i, 0, 0, 1) {
-			t.Fatal("Bool(p=1) returned false")
-		}
-	}
-}
-
 func BenchmarkPRF(b *testing.B) {
 	k := testKey()
 	b.ResetTimer()

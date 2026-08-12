@@ -211,7 +211,7 @@ func genFaults(p *Plan, r rng.Rand, cfg GenConfig) {
 
 func genWorkload(p *Plan, r rng.Rand, cfg GenConfig) {
 	dur := p.Config.DurationNS
-	for i := range cfg.ClientOps {
+	for range cfg.ClientOps {
 		kind := "put"
 		if r.IntN(2) == 0 {
 			kind = "get"
@@ -219,13 +219,33 @@ func genWorkload(p *Plan, r rng.Rand, cfg GenConfig) {
 		p.Workload.Ops = append(p.Workload.Ops, Op{
 			AtNS:   int64(r.IntN(int(dur))),
 			Client: r.IntN(3),
-			Seq:    uint64(i + 1),
 			Kind:   kind,
 			Key:    fmt.Sprintf("k%02d", r.IntN(8)),
 			Value:  fmt.Sprintf("v%d", r.IntN(100)),
 		})
 	}
 	sortOps(p.Workload.Ops)
+
+	// Sequence numbers are assigned per client AFTER the sort, and that order
+	// is the whole point.
+	//
+	// Assigning them at creation and sorting afterwards produces a client whose
+	// sequence numbers arrive out of order -- seq 5 at one second, seq 3 at
+	// two. A server deduping on "highest sequence seen" then silently swallows
+	// the later request, the client is told it succeeded, and a subsequent read
+	// returns the old value. That is a non-linearizable history manufactured
+	// entirely by the workload generator, and it is indistinguishable in the
+	// report from a real server bug.
+	//
+	// A client's sequence numbers are monotone in the order that client issues
+	// them. Anything else is not a retry model, it is a reordering the client
+	// could not have produced.
+	next := make(map[int]uint64)
+	for i := range p.Workload.Ops {
+		c := p.Workload.Ops[i].Client
+		next[c]++
+		p.Workload.Ops[i].Seq = next[c]
+	}
 }
 
 // sortEntries and sortOps put the plan in time order. Insertion sort by

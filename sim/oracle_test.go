@@ -192,3 +192,23 @@ func TestHistoryRejectsAnUnrecordedOutcome(t *testing.T) {
 		t.Error("a returned operation with no outcome was accepted")
 	}
 }
+
+// TestHaltedRunBanksNoSoakHours answers the question directly, at the single
+// site the policy lives. A violation is a result, not a duration; banking it
+// would credit the ledger with time spent discovering that the system is
+// broken.
+func TestHaltedRunBanksNoSoakHours(t *testing.T) {
+	for _, tc := range []struct {
+		kind OutcomeKind
+		bank bool
+	}{
+		{OutcomeDeadline, true},
+		{OutcomeQuiescent, false},
+		{OutcomeHalted, false},
+		{OutcomeStepLimit, false},
+	} {
+		if got := (Outcome{Kind: tc.kind}).CountsTowardSoakHours(); got != tc.bank {
+			t.Errorf("%v banks soak hours = %v, want %v", tc.kind, got, tc.bank)
+		}
+	}
+}

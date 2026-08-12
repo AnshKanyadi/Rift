@@ -80,28 +80,6 @@ func TestIntNPanicsOnNonPositive(t *testing.T) {
 	}
 }
 
-func TestFloat64InRange(t *testing.T) {
-	r := New(5)
-	for i := 0; i < 100000; i++ {
-		v := r.Float64()
-		if v < 0 || v >= 1 {
-			t.Fatalf("Float64 returned %v, want [0,1)", v)
-		}
-	}
-}
-
-func TestBoolExtremes(t *testing.T) {
-	r := New(3)
-	for i := 0; i < 1000; i++ {
-		if r.Bool(0) {
-			t.Fatal("Bool(0) returned true")
-		}
-		if !r.Bool(1) {
-			t.Fatal("Bool(1) returned false")
-		}
-	}
-}
-
 func TestShuffleIsPermutation(t *testing.T) {
 	r := New(11)
 	for n := 0; n <= 64; n++ {

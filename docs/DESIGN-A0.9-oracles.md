@@ -7,6 +7,25 @@ step 10 rebuilds the mutant suite as patches.
 
 ---
 
+## 0. The general shape: can the code stop existing?
+
+**When a rule collides with code, the first question is whether the code can stop existing. A hatch
+is only considered after that answer is no.**
+
+The `at_frac` cycle is the worked example. A float in the serialized plan was proposed with a hatch;
+the ruling refused it, and the answer to "can this code stop existing?" turned out to be yes — the
+authoring vocabulary became exact integer constructors, `clock/frac.go` was deleted outright, and
+there was no boundary left to concentrate. Then `internal/rng`'s float surface was found to have
+**zero consumers** once the clock and plan paths were integers, and it went too, taking four more
+hatches with it.
+
+`HATCHES.txt` went from **11 entries to 2** during a cycle that added features. That direction is the
+outcome to want: a growing exception list means rules are being worked around, and a shrinking one
+means they are being satisfied.
+
+(It rose to 4 by the end of the next cycle, for the hunt harness's wall-clock timer — a report metric
+that measures the harness from outside every run. Every entry earns itself or leaves.)
+
 ## 1. The scope split, and why it is a split
 
 **History collection runs in-sim.** `sim.History` is dependency-free, obeys every determinism rule,

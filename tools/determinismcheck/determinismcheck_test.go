@@ -193,7 +193,7 @@ func TestScopeTable(t *testing.T) {
 		{mod + "engine", scopeCore},
 		{mod + "engine/model", scopeCore},
 		{mod + "clock", scopeCore},
-		{mod + "sim", scopeCore},
+		{mod + "sim", scopeCore}, // history collection, the op log and View run in-sim
 		{mod + "sim/toy", scopeCore},
 		{mod + "sim/toy/mutants", scopeCore},
 		{mod + "internal/rng", scopeCore},
@@ -207,7 +207,13 @@ func TestScopeTable(t *testing.T) {
 		// Excluded by name: the real-mode adapters that need what the rules
 		// forbid, and which do not run inside a simulated run.
 		{mod + "engine/real", scopeOff},
-		{mod + "sim/checker", scopeOff}, // porcupine runs after the run, outside the boundary
+		// Both polarities pinned explicitly. Collection runs during a simulated
+		// run and is in scope with no exclusion and no hatches; only the
+		// package that imports porcupine and runs afterwards is excluded, and
+		// the exclusion must not reach one package further.
+		{mod + "sim/checker", scopeOff},
+		{mod + "sim/toy", scopeCore},
+		{mod + "sim/plan", scopeCore},
 		{mod + "engine/pump/poller", scopeOff},
 
 		// Orchestration around runs.

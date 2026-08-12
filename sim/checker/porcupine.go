@@ -53,11 +53,33 @@ type Linearizability struct {
 	Floor int
 }
 
-// NewLinearizability returns a checker with defaults that have been chosen
-// rather than inherited: one second per key, and a floor of two operations,
-// since a single operation is linearizable by inspection and proves nothing.
+// NewLinearizability returns a checker whose floor is derived from an argument
+// rather than picked.
+//
+// # The smallest falsifiable history
+//
+// The failure this checker exists to find is a read observing a value that a
+// completed later write replaced. Constructing one needs three operations: a
+// write that completes, a second write that completes after it, and a read
+// strictly after both that returns the first value. There is no three-operation
+// history smaller than that which this model can reject, and there is no
+// two-operation history that can exhibit it at all.
+//
+// So the floor is 3. A two-operation history is linearizable in essentially
+// every schedule, which means a check that consumed two operations *could not
+// have failed* -- and reporting that as a pass banks a soak hour for a check
+// that was never at risk. Below the floor the verdict is inconclusive.
+//
+// (A two-operation history can be rejected in one narrow way: a read returning
+// a value nothing ever wrote. That is a cruder bug than this checker is for,
+// one a value-provenance assertion catches directly, and it is not worth
+// lowering the floor to catch by accident.)
+//
+// The timeout is one second per key, chosen rather than inherited: long enough
+// that a healthy key finishes, short enough that a pathological one is reported
+// inconclusive rather than stalling a hunt.
 func NewLinearizability() *Linearizability {
-	return &Linearizability{Timeout: time.Second, Floor: 2}
+	return &Linearizability{Timeout: time.Second, Floor: 3}
 }
 
 func (c *Linearizability) Name() string { return "linearizability" }

@@ -1,0 +1,15 @@
+# id: blind-exclusion-overbroad
+# covering-test: TestScopeTable
+# expect: killed
+# blinds: the narrowness of the checker exclusion, putting the in-sim history collector outside the determinism boundary by accident
+--- a/tools/determinismcheck/scope.go
++++ b/tools/determinismcheck/scope.go
+@@ -77,7 +77,7 @@
+ 	// dependency-free inside the boundary; porcupine runs after the run is
+ 	// over, is an external dependency, and needs a timeout -- so it lives out
+ 	// here by ruling. Nothing in this package executes during a simulated run.
+-	"github.com/anshkanyadi/rift/sim/checker/...",
++	"github.com/anshkanyadi/rift/sim/...",
+ }
+ 
+ // defaultMailbox lists the real-mode driver packages, which exist to hold the
