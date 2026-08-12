@@ -52,8 +52,8 @@ func (s *Sim) Now() Instant { return s.now }
 // Timeline returns the schedule this clock reads, for checkers.
 func (s *Sim) Timeline() *Timeline { return s.tl }
 
-func (s *Sim) Mono() Instant            { return s.tl.Mono(s.now) }
-func (s *Sim) Wall() Instant            { return s.tl.Wall(s.now) }
+func (s *Sim) Mono() Mono               { return s.tl.Mono(s.now) }
+func (s *Sim) Wall() Wall               { return s.tl.Wall(s.now) }
 func (s *Sim) MaxOffset() time.Duration { return s.maxOffset }
 
 // NextTick is the global time of this node's next tick after the current
@@ -65,14 +65,14 @@ func (s *Sim) NextTick(interval time.Duration) (Instant, int64) {
 // Flat returns a timeline with no drift, no steps and no restarts: the clock a
 // node has when the plan says nothing about it.
 func Flat() *Timeline {
-	return &Timeline{Skew: []Segment{{Start: 0, Off: 0, SlopePPB: 0}}}
+	return &Timeline{Skew: []Segment{{Start: 0, Off: 0, SlopePPB: 0}}, Epoch: DefaultEpoch}
 }
 
 // Drifting returns a timeline whose oscillator runs fast or slow by ppm parts
 // per million for the whole run. A convenience for tests and for the simplest
 // plans; anything with structure is built from Segments or compiled from Holds.
 func Drifting(ppm int64) *Timeline {
-	return &Timeline{Skew: []Segment{{Start: 0, Off: 0, SlopePPB: ppm * 1000}}}
+	return &Timeline{Skew: []Segment{{Start: 0, Off: 0, SlopePPB: ppm * 1000}}, Epoch: DefaultEpoch}
 }
 
 // compile-time assertion: the sim clock is a Clock.

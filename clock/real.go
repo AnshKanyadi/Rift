@@ -26,12 +26,12 @@ func NewReal(maxOffset time.Duration) *Real {
 // Mono is elapsed time since this clock was constructed. Sub on two Times both
 // carrying monotonic readings uses those readings, so this is immune to wall
 // steps exactly as CLOCK_MONOTONIC is.
-func (c *Real) Mono() Instant { return Instant(hostNow().Sub(c.epoch)) }
+func (c *Real) Mono() Mono { return Mono(hostNow().Sub(c.epoch)) }
 
 // Wall is the host's estimate of physical time as nanoseconds since the Unix
 // epoch. UnixNano is absolute: no location is involved, so no reading here
 // depends on the host's timezone.
-func (c *Real) Wall() Instant { return Instant(hostNow().UnixNano()) }
+func (c *Real) Wall() Wall { return Wall(hostNow().UnixNano()) }
 
 func (c *Real) MaxOffset() time.Duration { return c.maxOffset }
 

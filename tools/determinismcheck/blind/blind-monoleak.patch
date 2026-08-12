@@ -1,0 +1,15 @@
+# id: blind-monoleak
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: the monotonic-leakage rule, letting a Mono onto the wire
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -463,7 +463,7 @@
+ 
+ 	if named, ok := t.(*types.Named); ok {
+ 		obj := named.Obj()
+-		if obj != nil && obj.Name() == "Mono" && obj.Pkg() != nil && obj.Pkg().Path() == flagMonoPkg {
++		if false {
+ 			return true
+ 		}
+ 		return containsMono(named.Underlying(), seen)

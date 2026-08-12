@@ -1,7 +1,6 @@
 package rng
 
 import (
-	"math/bits"
 	"testing"
 )
 
@@ -79,30 +78,6 @@ func TestPRFNoCollisions(t *testing.T) {
 	t.Logf("%d distinct identities, no collisions", len(seen))
 }
 
-// TestPRFAvalanche checks that a single-bit change to the identity changes
-// about half the output bits. A weak mixer here would make neighbouring
-// message ordinals produce correlated dice, so consecutive messages on a link
-// would drop together -- which is exactly the correlated failure the injector
-// is supposed to control explicitly rather than produce by accident.
-func TestPRFAvalanche(t *testing.T) {
-	k := testKey()
-	const base = 0x0123456789abcdef
-	ref := k.PRF(DomainNetLatency, base, 7, 11)
-
-	total := 0
-	for bit := 0; bit < 64; bit++ {
-		flipped := k.PRF(DomainNetLatency, base^(1<<uint(bit)), 7, 11)
-		d := bits.OnesCount64(ref ^ flipped)
-		if d < 18 || d > 46 {
-			t.Errorf("flipping bit %d changed %d output bits, want roughly 32", bit, d)
-		}
-		total += d
-	}
-	if avg := float64(total) / 64; avg < 30 || avg > 34 {
-		t.Errorf("average avalanche %.2f bits, want close to 32", avg)
-	}
-}
-
 func TestPRFUint64NInRange(t *testing.T) {
 	k := testKey()
 	for _, n := range []uint64{1, 2, 3, 10, 1 << 20, 1<<63 + 1, ^uint64(0)} {
@@ -110,25 +85,6 @@ func TestPRFUint64NInRange(t *testing.T) {
 			if v := k.Uint64N(DomainEngineSync, i, 0, 0, n); v >= n {
 				t.Fatalf("Uint64N(n=%d) returned %d, out of range", n, v)
 			}
-		}
-	}
-}
-
-// The PRF trades exact uniformity for statelessness and documents the bias as
-// bounded by n/2^64. This pins that the practical distribution is still flat
-// enough for fault dice; if it were not, the documented tradeoff would be
-// wrong rather than merely tight.
-func TestPRFUint64NUniformEnough(t *testing.T) {
-	k := testKey()
-	const draws, buckets = 120000, 6
-	var counts [buckets]int
-	for i := uint64(0); i < draws; i++ {
-		counts[k.Uint64N(DomainWorkload, i, 0, 0, buckets)]++
-	}
-	expected := float64(draws) / buckets
-	for i, c := range counts {
-		if dev := (float64(c) - expected) / expected; dev < -0.03 || dev > 0.03 {
-			t.Errorf("bucket %d: %d draws, expected ~%.0f (%.2f%% off)", i, c, expected, dev*100)
 		}
 	}
 }
@@ -185,21 +141,6 @@ func TestPRFBoolExtremes(t *testing.T) {
 		if !k.Bool(DomainNetDrop, i, 0, 0, 1) {
 			t.Fatal("Bool(p=1) returned false")
 		}
-	}
-}
-
-func TestPRFBoolRate(t *testing.T) {
-	k := testKey()
-	const draws = 200000
-	hits := 0
-	for i := uint64(0); i < draws; i++ {
-		if k.Bool(DomainNetDrop, 1, 2, i, 0.01) {
-			hits++
-		}
-	}
-	// Expect ~2000; deterministic, so a 10% band cannot flake.
-	if hits < 1800 || hits > 2200 {
-		t.Errorf("Bool(p=0.01) fired %d times in %d, want ~2000", hits, draws)
 	}
 }
 

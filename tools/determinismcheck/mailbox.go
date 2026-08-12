@@ -27,6 +27,13 @@ import (
 func checkMailbox(r *reporter, insp *inspector.Inspector) {
 	allowed := splitPatterns(flagMailboxAllow)
 
+	// The monotonic-leakage rule applies here too. A driver package is exactly
+	// where a struct that goes on the wire tends to live, and a Mono is
+	// meaningful only on the node and boot that produced it.
+	insp.Preorder([]ast.Node{(*ast.StructType)(nil)}, func(n ast.Node) {
+		checkMonoLeak(r, n.(*ast.StructType))
+	})
+
 	insp.Preorder([]ast.Node{(*ast.SelectorExpr)(nil)}, func(n ast.Node) {
 		sel := n.(*ast.SelectorExpr)
 		selection := r.pass.TypesInfo.Selections[sel]

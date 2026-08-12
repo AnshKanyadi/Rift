@@ -35,8 +35,6 @@ func (p poisoned) die(method string) {
 func (p poisoned) Uint64() uint64              { p.die("Uint64"); return 0 }
 func (p poisoned) Uint64N(uint64) uint64       { p.die("Uint64N"); return 0 }
 func (p poisoned) IntN(int) int                { p.die("IntN"); return 0 }
-func (p poisoned) Float64() float64            { p.die("Float64"); return 0 }
-func (p poisoned) Bool(float64) bool           { p.die("Bool"); return false }
 func (p poisoned) Shuffle(int, func(i, j int)) { p.die("Shuffle") }
 func (p poisoned) Perm(int) []int              { p.die("Perm"); return nil }
 func (p poisoned) Derive(name string) Rand     { p.die("Derive(" + name + ")"); return nil }

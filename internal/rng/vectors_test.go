@@ -100,6 +100,7 @@ func TestKnownAnswersDerived(t *testing.T) {
 		t.Errorf("Perm(10) = %v, want %v", got, want)
 	}
 	r := New(7)
+	//rift:allow-nondeterminism pinned Float64 outputs; these are exact 53-bit values by construction (see float.go), which is what makes them safe to pin at all
 	want := []float64{0.6248256197582158, 0.8882669983164009, 0.2245666245042589}
 	for i, w := range want {
 		if got := r.Float64(); got != w {

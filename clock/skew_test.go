@@ -11,11 +11,11 @@ const maxOffset = 500 * time.Millisecond
 // is what anyone writes first and what looks correct in every test built from
 // round numbers. It lives in the test file because it is not a thing this
 // package should offer.
-func sampleMaxSkew(a, b *Timeline, from, to Instant, stride Instant) (int64, Instant) {
-	var max int64 = -1
+func sampleMaxSkew(a, b *Timeline, from, to Instant, stride Instant) (time.Duration, Instant) {
+	max := time.Duration(-1)
 	var at Instant
 	for t := from; t <= to; t += stride {
-		d := int64(a.Wall(t) - b.Wall(t))
+		d := a.Wall(t).Sub(b.Wall(t))
 		if d < 0 {
 			d = -d
 		}
@@ -44,6 +44,7 @@ func TestExactCheckerCatchesWhatSamplingMisses(t *testing.T) {
 	// wider than its ramp would need the oscillator to run backwards.
 	const base = 495 * int64(time.Millisecond)
 	const peak = 501 * int64(time.Millisecond)
+	const peakDur = 501 * time.Millisecond
 	rampStart := Instant(1_329 * int64(time.Millisecond))
 	peakAt := Instant(1_337 * int64(time.Millisecond))
 	rampEnd := Instant(1_345 * int64(time.Millisecond))
@@ -54,7 +55,7 @@ func TestExactCheckerCatchesWhatSamplingMisses(t *testing.T) {
 		{Start: rampStart, Off: base, SlopePPB: rate},
 		{Start: peakAt, Off: peak, SlopePPB: -rate},
 		{Start: rampEnd, Off: base, SlopePPB: 0},
-	}}
+	}, Epoch: DefaultEpoch}
 	if err := b.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestExactCheckerCatchesWhatSamplingMisses(t *testing.T) {
 	// The strawman, on a grid a careful person would pick.
 	for _, stride := range []Instant{100 * ms, 50 * ms, 25 * ms} {
 		got, _ := sampleMaxSkew(a, b, from, to, stride)
-		if got > int64(maxOffset) {
+		if got > maxOffset {
 			t.Fatalf("the fixture is not a counterexample at stride %v: sampling found %d", stride, got)
 		}
 	}
@@ -74,8 +75,8 @@ func TestExactCheckerCatchesWhatSamplingMisses(t *testing.T) {
 	if !rep.Exceeded {
 		t.Errorf("exact checker missed the peak: max %d at %d, bound %d", rep.Max, rep.At, rep.Bound)
 	}
-	if rep.Max != peak {
-		t.Errorf("exact max = %d at %d, want exactly %d at %d", rep.Max, rep.At, peak, peakAt)
+	if rep.Max != peakDur {
+		t.Errorf("exact max = %v at %d, want exactly %v at %d", rep.Max, rep.At, peakDur, peakAt)
 	}
 	if rep.At != peakAt {
 		t.Errorf("exact checker located the peak at %d, want %d", rep.At, peakAt)
@@ -94,6 +95,7 @@ func TestExactCheckerTakesBothLimitsAtAStep(t *testing.T) {
 	// the left limit at the step: at the step instant itself the pair is back
 	// in agreement, and every earlier sample is below the peak.
 	const ahead = 400 * int64(time.Millisecond)
+	const aheadDur = 400 * time.Millisecond
 	stepAt := 1 * s
 
 	b := &Timeline{
@@ -102,14 +104,15 @@ func TestExactCheckerTakesBothLimitsAtAStep(t *testing.T) {
 			{Start: stepAt, Off: ahead, SlopePPB: 0},
 		},
 		Steps: []Step{{At: stepAt, Delta: -ahead}},
+		Epoch: DefaultEpoch,
 	}
 	if err := b.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 
 	rep := Check(a, b, 0, 2*s, maxOffset)
-	if rep.Max != ahead {
-		t.Errorf("max skew = %d at %d, want %d (the left limit at the step)", rep.Max, rep.At, ahead)
+	if rep.Max != aheadDur {
+		t.Errorf("max skew = %v at %d, want %v (the left limit at the step)", rep.Max, rep.At, aheadDur)
 	}
 	if rep.At != stepAt {
 		t.Errorf("max located at %d, want %d", rep.At, stepAt)
@@ -132,7 +135,7 @@ func TestExactAgreesWithDenseSampling(t *testing.T) {
 		{Start: 100 * ms, Off: 0, SlopePPB: 400_000},
 		{Start: 700 * ms, Off: 240_000, SlopePPB: -900_000},
 		{Start: 1200 * ms, Off: -210_000, SlopePPB: 0},
-	}}
+	}, Epoch: DefaultEpoch}
 	if err := b.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -142,10 +145,10 @@ func TestExactAgreesWithDenseSampling(t *testing.T) {
 	dense, denseAt := sampleMaxSkew(a, b, from, to, Instant(1_000)) // every microsecond
 
 	if exact < dense {
-		t.Errorf("exact max %d at %d is below dense sampling's %d at %d", exact, at, dense, denseAt)
+		t.Errorf("exact max %v at %d is below dense sampling's %v at %d", exact, at, dense, denseAt)
 	}
-	if exact-dense > 1_000 {
-		t.Errorf("exact max %d at %d is implausibly above dense sampling's %d at %d", exact, at, dense, denseAt)
+	if exact-dense > time.Microsecond {
+		t.Errorf("exact max %v at %d is implausibly above dense sampling's %v at %d", exact, at, dense, denseAt)
 	}
 }
 
@@ -163,7 +166,7 @@ func TestDemonstrationScheduleA(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := Hold{
 				A: 1, B: 2,
-				AtFrac: 0.98,
+				AtFrac: Percent(98),
 				From:   10 * s,
 				To:     40 * s,
 				Ramp:   tc.ramp,
@@ -177,13 +180,15 @@ func TestDemonstrationScheduleA(t *testing.T) {
 				t.Errorf("realized as %v, want %v", realized, tc.want)
 			}
 
-			want := int64(0.98 * float64(maxOffset))
+			// 0.98 of 500ms, stated as an integer: the fraction is authored
+			// intent, and everything downstream of the compile is nanoseconds.
+			const want = 490 * time.Millisecond
 
 			// Inside the window the pair sits exactly at the target, at every
 			// breakpoint and in between.
 			for at := h.From; at <= h.To; at += 137 * ms {
-				if got := int64(a.Wall(at) - b.Wall(at)); got != -want {
-					t.Fatalf("at %d the pair is %d apart, want %d held", at, -got, want)
+				if got := b.Wall(at).Sub(a.Wall(at)); got != want {
+					t.Fatalf("at %d the pair is %v apart, want %v held", at, got, want)
 				}
 			}
 
@@ -192,9 +197,9 @@ func TestDemonstrationScheduleA(t *testing.T) {
 				t.Errorf("a hold at 0.98 exceeded the bound: %d > %d at %d", rep.Max, rep.Bound, rep.At)
 			}
 			if rep.Max != want {
-				t.Errorf("max skew %d, want exactly %d", rep.Max, want)
+				t.Errorf("max skew %v, want exactly %v", rep.Max, want)
 			}
-			t.Logf("hold %v: max skew %d ns at %d, bound %d, realization %v",
+			t.Logf("hold %v: max skew %v at %d, bound %v, realization %v",
 				tc.name, rep.Max, rep.At, rep.Bound, realized)
 		})
 	}
@@ -206,7 +211,7 @@ func TestDemonstrationScheduleA(t *testing.T) {
 func TestDemonstrationScheduleB(t *testing.T) {
 	h := Hold{
 		A: 1, B: 3,
-		AtFrac:   1.20,
+		AtFrac:   Percent(120),
 		From:     20 * s,
 		To:       30 * s,
 		Ramp:     3 * time.Second,
@@ -223,15 +228,17 @@ func TestDemonstrationScheduleB(t *testing.T) {
 		t.Fatalf("an envelope hold at 1.20 did not exceed the bound: %+v", rep)
 	}
 
-	want := int64(1.20 * float64(maxOffset))
+	const want = 600 * time.Millisecond
 	if rep.Max != want {
-		t.Errorf("max skew %d, want exactly %d", rep.Max, want)
+		t.Errorf("max skew %v, want exactly %v", rep.Max, want)
 	}
-	if excess := rep.Max - rep.Bound; excess != want-int64(maxOffset) {
-		t.Errorf("excess %d, want %d", excess, want-int64(maxOffset))
+	if excess := rep.Max - rep.Bound; excess != want-maxOffset {
+		t.Errorf("excess %v, want %v", excess, want-maxOffset)
 	}
-	t.Logf("envelope %v: max skew %d ns at %d, bound %d, excess %d (%.2fx)",
-		realized, rep.Max, rep.At, rep.Bound, rep.Max-rep.Bound, float64(rep.Max)/float64(rep.Bound))
+	// Permille rather than a ratio: no float on any path a report is built
+	// from, so that a printed number and a hashed number cannot disagree.
+	t.Logf("envelope %v: max skew %v at %d, bound %v, excess %v (%d permille of bound)",
+		realized, rep.Max, rep.At, rep.Bound, rep.Max-rep.Bound, rep.Max*1000/rep.Bound)
 }
 
 // TestHoldsRejectCollisions covers the conflict detection: two holds fighting
@@ -239,21 +246,21 @@ func TestDemonstrationScheduleB(t *testing.T) {
 // be a schedule that silently means neither of them.
 func TestHoldsRejectCollisions(t *testing.T) {
 	base := *Flat()
-	first, _, err := Hold{A: 1, B: 2, AtFrac: 0.5, From: 10 * s, To: 20 * s, Ramp: 2 * time.Second}.
+	first, _, err := Hold{A: 1, B: 2, AtFrac: Percent(50), From: 10 * s, To: 20 * s, Ramp: 2 * time.Second}.
 		Compile(base, maxOffset)
 	if err != nil {
 		t.Fatalf("first hold: %v", err)
 	}
 
-	if _, _, err := (Hold{A: 1, B: 2, AtFrac: 0.7, From: 15 * s, To: 25 * s}).Compile(first, maxOffset); err == nil {
+	if _, _, err := (Hold{A: 1, B: 2, AtFrac: Percent(70), From: 15 * s, To: 25 * s}).Compile(first, maxOffset); err == nil {
 		t.Error("a second overlapping hold on the same node was accepted")
 	}
 
 	for _, bad := range []Hold{
-		{From: 10 * s, To: 10 * s},                                       // empty window
-		{From: 20 * s, To: 10 * s},                                       // reversed
-		{From: 1 * s, To: 2 * s, Ramp: 2 * time.Second},                  // ramp starts before zero
-		{AtFrac: 0.98, From: 10 * s, To: 20 * s, Ramp: time.Millisecond}, // slew too fast to be physical
+		{From: 10 * s, To: 10 * s},                                              // empty window
+		{From: 20 * s, To: 10 * s},                                              // reversed
+		{From: 1 * s, To: 2 * s, Ramp: 2 * time.Second},                         // ramp starts before zero
+		{AtFrac: Percent(98), From: 10 * s, To: 20 * s, Ramp: time.Millisecond}, // slew too fast to be physical
 	} {
 		if _, _, err := bad.Compile(*Flat(), maxOffset); err == nil {
 			t.Errorf("Compile accepted %+v", bad)
@@ -283,12 +290,12 @@ func TestSlewMovesTicksAndStepDoesNot(t *testing.T) {
 
 	flat := count(Flat())
 
-	slew, _, err := Hold{A: 1, B: 2, AtFrac: 0.98, From: 10 * s, To: 40 * s, Ramp: 2 * time.Second}.
+	slew, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 10 * s, To: 40 * s, Ramp: 2 * time.Second}.
 		Compile(*Flat(), maxOffset)
 	if err != nil {
 		t.Fatalf("slew: %v", err)
 	}
-	step, _, err := Hold{A: 1, B: 2, AtFrac: 0.98, From: 10 * s, To: 40 * s}.Compile(*Flat(), maxOffset)
+	step, _, err := Hold{A: 1, B: 2, AtFrac: Percent(98), From: 10 * s, To: 40 * s}.Compile(*Flat(), maxOffset)
 	if err != nil {
 		t.Fatalf("step: %v", err)
 	}
@@ -308,9 +315,9 @@ func TestSlewMovesTicksAndStepDoesNot(t *testing.T) {
 	at := 20 * s
 	flatMono := Flat().Mono(at)
 	if step.Mono(at) != flatMono {
-		t.Errorf("a step perturbed Mono: %d, want %d", step.Mono(at), flatMono)
+		t.Errorf("a step perturbed Mono: %v, want %v", step.Mono(at), flatMono)
 	}
-	if slew.Mono(at) <= flatMono {
-		t.Errorf("a slew did not move Mono: %d, want more than %d", slew.Mono(at), flatMono)
+	if !slew.Mono(at).After(flatMono) {
+		t.Errorf("a slew did not move Mono: %v, want more than %v", slew.Mono(at), flatMono)
 	}
 }

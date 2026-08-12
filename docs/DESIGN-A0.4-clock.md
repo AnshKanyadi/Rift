@@ -1,9 +1,9 @@
 # DESIGN-A0.4: Clocks, drift, and the skew envelope
 
-**Status:** **APPROVED in architecture** by Ansh, 2026-08-11 (two-clock model, closed-form tick
-inversion, intent-form holds, inverting envelope checker). Three amendments applied below, marked
-**[Amended — Ansh, 2026-08-11]**. Four questions in §4 remain open and **no code lands until they are
-ruled**.
+**Status:** **APPROVED** by Ansh, 2026-08-11. Architecture (two-clock model, closed-form tick
+inversion, intent-form holds, inverting envelope checker) plus all five §4 questions, all amendments,
+and the A0.4b implementation ruling. Amendments are marked inline **[Amended — Ansh, 2026-08-11]**.
+Nothing here is provisional.
 **Phase:** A0.4 (Track A). **Author:** Claude. **Decider:** Ansh.
 **Blocks:** A0.6 (the event loop schedules ticks through this), A5 (HLC wraps `PhysicalNow`),
 A8 (lease disjointness and the envelope experiment consume the schedules defined here).
@@ -388,13 +388,39 @@ realizations; schedule B: 600,000,000ns, excess 100,000,000ns, 1.20x, recorded n
 delegated ruling is still a ruling and is recorded as one; each is a one-line change to overturn, and
 the code says which line.
 
+#### [Amended — Ansh, 2026-08-11] Q1's implementation: two types, A0.4b
+
+`Instant` alone was the right direction and the wrong implementation. The per-boot amendment created
+a bug class -- a monotonic value persisted or sent on the wire -- and one type leaves it reviewable.
+**`Wall` and `Mono` are separate defined types**, both `int64` nanoseconds, and the class becomes
+uncompilable: the same move as D5 making persist-before-reply structural rather than a rule every
+driver has to remember.
+
+- **Encoding.** The wire codec implements `Wall` only. `Mono` has no encoder anywhere; its
+  `MarshalJSON` exists solely to fail loudly if a reflection-based path reaches it. No serializable
+  struct carries a `Mono`.
+- **The vet rule.** `determinismcheck` rejects a `clock.Mono` in an exported or tagged struct field
+  outside `clock`, in core *and* driver scope, with a fixture and a blind patch. Exported-or-tagged
+  is the test because those are the fields that leave the node; an unexported, untagged field is
+  node-local by construction, which is what a `Mono` is for.
+- **Arithmetic.** Same-type instants subtract to a `Duration`; an instant plus a `Duration` is the
+  same instant type; cross-type arithmetic does not compile.
+- **Zero value.** The simulated wall epoch is a nonzero plan constant, so a zero `Wall` reads as
+  unset rather than as the beginning of the run. `Timeline.Validate` rejects a zero epoch.
+- A5's HLC wraps `Wall` only.
+
+*Residual gap, stated rather than hidden:* because these are defined integer types, `a - b` on two
+`Mono`s compiles and yields a `Mono` rather than a `Duration`. `Sub` is the sanctioned spelling.
+Closing that too would mean making them structs, which costs the comparison operators and every
+constant expression; the ruling said `int64`, so `int64` is what this is.
+
 | # | Question | Ruling |
 |---|---|---|
 | 1 | `Instant` as a project-owned `int64`, or reuse `time.Time`/`time.Duration` in core signatures? | **Project-owned `Instant`.** `time.Time` carries a location, a monotonic reading and formatting we do not want, and it makes two nodes' timelines look mutually comparable. `time.Duration` stays legal and idiomatic for *durations*. Strengthened since it was written: with the Unix family and `Time.Local` now banned, a project-owned `Instant` is also what stops core code reaching for them. |
-| 2 | Does `Clock` expose `MaxOffset()`, or does it come from config alongside the clock? | **On the interface.** Every consumer of `Wall` needs the bound in the same breath, and separating them invites a lease computed against a stale bound. |
+| 2 | Does `Clock` expose `MaxOffset()`, or does it come from config alongside the clock? | **On the interface**, with four conditions, all landed in A0.4b: the bound is fixed at construction and immutable for the process lifetime (unexported field, no setter — the compiler, not a test); `AssertUniformMaxOffset` requires every node to advertise the same value and sim setup halts otherwise; the bug class is named in its doc comment — two nodes with different bounds are each individually self-consistent, so a divergence presents as a lease-disjointness violation that is a harness artifact, or as a real violation that a too-generous bound hides; and an envelope experiment exceeds the bound by shaping true offsets in the plan while the advertised bound never moves, which is asserted by `TestEnvelopeShapesOffsetsNotTheBound` — if the bound moved with the experiment, nothing would ever be outside it. |
 | 3 | Should the sim clock also model **frequency error in the estimate** (a node that knows it is uncertain), or only true offset? | **Only true offset in A0.4.** Uncertainty intervals are A5/A6 and derive from `maxOffset`, not from a per-node error estimate. Modelling something no consumer reads would be modelling it wrong for free. |
 | 4 | `holds` expressed as a fraction of `maxOffset` | **Plain float field** (`"at_frac": 0.98`) — Ansh, 2026-08-11. A string expression is a parser and a parser is a place for bugs. |
-| 5 | Does A0.4 land the tick *scheduling* (pure `NextTick`) only, with A0.6 wiring it to the queue? | **Yes.** It keeps A0.4 testable without an event loop and keeps A0.6 to one integration. The per-boot amendment reinforces it: `NextTick` becomes per-boot-segment, still pure. |
+| 5 | Does A0.4 land the tick *scheduling* (pure `NextTick`) only, with A0.6 wiring it to the queue? | **Yes**, plus pinned golden vectors in the `internal/rng` style, since tick times feed the trace hash and get locked the way the generator did. Three schedules, one per behaviour the design turns on: a drift ramp, a compiled hold's ramp/flat/ramp, and a per-boot reset. They are self-generated and say so; changing one is only ever correct alongside a deliberate clock change that invalidates the corpus. |
 
 ### [Refinement found while implementing — flagged for overrule] Slopes are integers, not `float64`
 

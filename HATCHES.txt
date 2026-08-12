@@ -14,5 +14,13 @@
 # core scope -- those are refused outright, so nothing of that kind can ever
 # appear below.
 
+clock/frac.go:1  the plan-compile float boundary: at_frac is authored intent, converted to nanoseconds here and never read again, so no float reaches the evaluation path or the trace hash
+clock/hold.go:49  authored intent in plan units; converted to nanoseconds by fracNanos before anything evaluates it, so this float never reaches the trace hash
 clock/real.go:40  the repo's single wall-clock read; the real Clock implementation is where physical time necessarily enters, and every other package takes an injected Clock so this stays the one place
+internal/rng/float.go:1  the generation-side float surface, isolated here so the exception is one file rather than a habit: float64(u>>11) * 0x1p-53 is exact -- a 53-bit integer scaled by a power of two, no rounding and no addend for an FMA to fuse -- and every consumer materializes an integer into the plan before anything evaluates it, so no value here reaches the trace hash
+internal/rng/float_test.go:1  the tests of the generation-side float surface; they exercise exactly the functions float.go isolates, and no value here reaches an evaluation path or the trace hash
+internal/rng/poison_test.go:21  naming a probability is the only way to call Bool; the poison panics before the value is used for anything
+internal/rng/rand.go:32  generation-side only; the value is exact (see float.go) and is materialized as an integer in the plan before anything evaluates it
+internal/rng/rand.go:37  generation-side only; p is plan-authored intent and the outcome is a bool, so no float crosses into evaluation
+internal/rng/vectors_test.go:103  pinned Float64 outputs; these are exact 53-bit values by construction (see float.go), which is what makes them safe to pin at all
 internal/sorted/sorted.go:40  the one map range in the repo; every caller sorts before returning, so this order is never observable

@@ -54,23 +54,6 @@ func (k Key) PRF(d Domain, a, b, c uint64) uint64 {
 	return h
 }
 
-// Float64 returns a PRF-derived value in [0, 1) with 53 bits of precision.
-func (k Key) Float64(d Domain, a, b, c uint64) float64 {
-	return float64(k.PRF(d, a, b, c)>>11) * 0x1p-53
-}
-
-// Bool reports true with probability p for the given identity.
-func (k Key) Bool(d Domain, a, b, c uint64, p float64) bool {
-	switch {
-	case p <= 0:
-		return false
-	case p >= 1:
-		return true
-	default:
-		return k.Float64(d, a, b, c) < p
-	}
-}
-
 // Uint64N returns a PRF-derived value in [0, n). It panics if n == 0.
 //
 // Unlike (*PCG).Uint64N this does NOT reject-and-redraw, because a stateless

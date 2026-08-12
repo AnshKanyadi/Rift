@@ -1,0 +1,15 @@
+# id: blind-float
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: the float32/float64 ban, letting FMA-fusable arithmetic into core scope
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -393,7 +393,7 @@
+ 		return
+ 	}
+ 	switch basic.Kind() {
+-	case types.Float32, types.Float64, types.Complex64, types.Complex128, types.UntypedFloat, types.UntypedComplex:
++	case types.Complex64, types.Complex128:
+ 		r.report(id.Pos(), ruleFloat,
+ 			"%s is not allowed in core packages; %s", tn.Name(), floatWhy)
+ 	}

@@ -845,6 +845,23 @@ second by repointing a copy of the canary at a test that does cover its rule and
 DIED. This applies to every checker, oracle and lane from here on, including the invariants of A1
 through A10.
 
+**No floating point on any path feeding the trace hash or replay identity.** The Go spec permits an
+implementation to fuse a multiply-add into one FMA; arm64 does, amd64 without FMA does not, and the
+same seed then produces last-bit differences on two machines. On a replay path a last bit is a
+different history, and it would surface as an unreproducible soak failure months later rather than as
+a test failure on anyone's laptop. Floats live only at plan-compile boundaries, with results
+materialized as integers before evaluation. `determinismcheck` rejects `float32` and `float64` in
+core scope; the exemption is a hatch whose registry reason must state why the value cannot affect
+replay, and `clock/frac.go` and `internal/rng/float.go` are the two that qualify. **Forward
+dependency: A10's balancer load arithmetic is integer or fixed-point for exactly this reason**, as is
+anything else that computes a number a decision is made from.
+
+**Two governance rules, ruled 2026-08-11 after a report acted on a delegation that was not one.**
+*Ruling echo:* every report opens with the rulings received since the last one, quoted verbatim, or
+"none"; a ruling that is not echoed was not received and must not be acted on. *Provisional
+delegation:* when Claude proceeds on its own recommendation, the doc marks it PROVISIONAL, and no
+signed tag is cut while a provisional ruling touches a frozen interface.
+
 **Enforcement surfaces are default-deny.** A blocklist requires a human to *notice* that it needs
 extending; an allowlist requires a human to *approve* an addition. The first is a hope about
 attention, the second is a review. Where an enforcement surface can be expressed either way, it is
@@ -1108,6 +1125,13 @@ Stated up front so no claim is ever broader than the evidence:
    scope.** Crash-stop plus omission plus timing only.
 5. **Linearizability checking is bounded**: porcupine runs with a history cap and a timeout, and a
    timeout is reported as *inconclusive*, never as *pass*.
+6. **Clock uncertainty is a static promised bound, not a measured one.** Real deployments carry a
+   dynamic per-node error estimate from NTP, which widens when a peer goes away and narrows as it
+   settles. We model a static `maxOffset` that every node advertises identically, and A5/A6
+   uncertainty intervals derive from that bound alone. The consequence is honest and worth stating:
+   we will not find bugs that require a node to *know* its own clock is unusually uncertain, and our
+   uncertainty intervals are neither as tight as a healthy real cluster's nor as wide as a degraded
+   one's `[A0.4 Q3]`.
 
 ---
 

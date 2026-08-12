@@ -9,10 +9,10 @@ import "time"
 // point of the experiment is the caller's business, because `envelope: true`
 // inverts the checker rather than the arithmetic (DESIGN-A0.4 D5).
 type SkewReport struct {
-	Max      int64   // largest |Wall_a - Wall_b| over the window, in nanoseconds
-	At       Instant // where it occurred
-	Bound    int64   // maxOffset, for the record
-	Exceeded bool    // Max > Bound
+	Max      time.Duration // largest |Wall_a - Wall_b| over the window
+	At       Instant       // where it occurred
+	Bound    time.Duration // maxOffset, for the record
+	Exceeded bool          // Max > Bound
 }
 
 // MaxSkew is the exact maximum of |Wall_a - Wall_b| over [from, to].
@@ -33,12 +33,12 @@ type SkewReport struct {
 // step is a discontinuity in Wall, so the supremum of the difference may be
 // attained on the side that is not sampled; evaluating "at the jump" reads as
 // one point and is two.
-func MaxSkew(a, b *Timeline, from, to Instant) (int64, Instant) {
+func MaxSkew(a, b *Timeline, from, to Instant) (time.Duration, Instant) {
 	points := mergePoints(a.Breakpoints(from, to), b.Breakpoints(from, to))
 
-	var max int64 = -1
+	max := time.Duration(-1)
 	var at Instant
-	consider := func(d int64, t Instant) {
+	consider := func(d time.Duration, t Instant) {
 		if d < 0 {
 			d = -d
 		}
@@ -48,11 +48,11 @@ func MaxSkew(a, b *Timeline, from, to Instant) (int64, Instant) {
 	}
 
 	for _, t := range points {
-		consider(int64(a.Wall(t)-b.Wall(t)), t)
+		consider(a.Wall(t).Sub(b.Wall(t)), t)
 		// The left limit differs from the value only at a step, where it is a
 		// genuinely different reading that some observer saw.
 		if t > from {
-			consider(int64(a.WallLimit(t)-b.WallLimit(t)), t)
+			consider(a.WallLimit(t).Sub(b.WallLimit(t)), t)
 		}
 	}
 	return max, at
@@ -71,8 +71,8 @@ func Check(a, b *Timeline, from, to Instant, maxOffset time.Duration) SkewReport
 	return SkewReport{
 		Max:      max,
 		At:       at,
-		Bound:    int64(maxOffset),
-		Exceeded: max > int64(maxOffset),
+		Bound:    maxOffset,
+		Exceeded: max > maxOffset,
 	}
 }
 

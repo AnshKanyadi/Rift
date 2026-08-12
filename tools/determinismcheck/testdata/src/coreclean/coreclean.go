@@ -86,3 +86,14 @@ func (n *node) describe(p *peer) string {
 func (n *node) pct() string {
 	return fmt.Sprintf("%s", "100%pure")
 }
+
+// fixedPoint is how core code carries a fraction: parts per billion in an
+// integer, which is exactly reproducible on every machine. A10's balancer load
+// arithmetic lands here for the same reason.
+func (n *node) fixedPoint(bytesPerSec, capacity int64) int64 {
+	const ppb = 1_000_000_000
+	if capacity == 0 {
+		return 0
+	}
+	return bytesPerSec * ppb / capacity
+}

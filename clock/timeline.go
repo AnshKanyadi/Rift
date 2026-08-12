@@ -46,7 +46,19 @@ type Timeline struct {
 	// boot is implicit at time 0; each entry after that is a restart, at which
 	// Mono returns to zero and Wall does not.
 	Boots []Instant
+
+	// Epoch is where this node's wall clock reads at global time zero. It is a
+	// plan constant and it must be nonzero, so that a zero Wall anywhere in the
+	// system reads as unset rather than as the beginning of the run. Skew
+	// between two nodes is a difference, so the epoch cancels and the checker
+	// is unaffected by its value.
+	Epoch Wall
 }
+
+// DefaultEpoch is the wall reading at global time zero when a plan does not say
+// otherwise: 2020-09-13T12:26:40Z in Unix nanoseconds. Any nonzero constant
+// would do; what matters is that it is not zero.
+const DefaultEpoch = Wall(1_600_000_000_000_000_000)
 
 var (
 	errUnsorted      = errors.New("clock: segments or steps are out of order")
@@ -63,6 +75,9 @@ func (tl *Timeline) Validate() error {
 	}
 	if tl.Skew[0].Start != 0 {
 		return fmt.Errorf("clock: first skew segment starts at %d, want 0", tl.Skew[0].Start)
+	}
+	if tl.Epoch == 0 {
+		return errors.New("clock: timeline has a zero wall epoch; zero means unset, so a run would be unable to tell an unfilled field from the start of time (use DefaultEpoch)")
 	}
 
 	for i, seg := range tl.Skew {
@@ -97,9 +112,10 @@ func (tl *Timeline) Validate() error {
 	return nil
 }
 
-// Osc is the absolute oscillator position at global time t: t plus the node's
-// accumulated skew. It is not a Clock reading -- Mono is measured from a boot
-// and Wall adds steps -- but both are derived from it.
+// osc is the absolute oscillator position at global time t: t plus the node's
+// accumulated skew. It is unexported because it is neither reading a node can
+// take -- Mono is measured from a boot and Wall adds an epoch and steps -- and
+// exporting it would offer a third notion of time with no owner.
 //
 // Osc is monotone non-decreasing, which is the property the inverse needs, and
 // is NOT strictly increasing: a clock running slower than real time advances
@@ -113,22 +129,22 @@ func (tl *Timeline) Validate() error {
 // exactly -1e9 would stop the clock forever; below that it would run backwards,
 // and an oscillator that runs backwards is not a fault, it is a different kind
 // of object.
-func (tl *Timeline) Osc(t Instant) Instant {
+func (tl *Timeline) osc(t Instant) Instant {
 	return t + Instant(tl.skewAt(t))
 }
 
 // Mono is elapsed oscillator time since the boot in force at t. It restarts at
 // zero on every restart, mirroring CLOCK_MONOTONIC, whose epoch is unspecified
 // and in practice per-boot.
-func (tl *Timeline) Mono(t Instant) Instant {
-	return tl.Osc(t) - tl.Osc(tl.BootAt(t))
+func (tl *Timeline) Mono(t Instant) Mono {
+	return Mono(tl.osc(t) - tl.osc(tl.BootAt(t)))
 }
 
 // Wall is the node's estimate of physical time: the oscillator plus every step
 // applied at or before t. Steps are applied at their instant, so Wall is
 // right-continuous; WallLimit reads the value approached from the left.
-func (tl *Timeline) Wall(t Instant) Instant {
-	return tl.Osc(t) + Instant(tl.stepsThrough(t, true))
+func (tl *Timeline) Wall(t Instant) Wall {
+	return tl.Epoch + Wall(tl.osc(t)) + Wall(tl.stepsThrough(t, true))
 }
 
 // WallLimit is Wall's left limit at t: the value an observer would have read
@@ -136,8 +152,8 @@ func (tl *Timeline) Wall(t Instant) Instant {
 // exactly that step's delta, and the pair is why the skew checker can be exact
 // at a discontinuity rather than reading one of two values and calling it the
 // answer (DESIGN-A0.4 D5).
-func (tl *Timeline) WallLimit(t Instant) Instant {
-	return tl.Osc(t) + Instant(tl.stepsThrough(t, false))
+func (tl *Timeline) WallLimit(t Instant) Wall {
+	return tl.Epoch + Wall(tl.osc(t)) + Wall(tl.stepsThrough(t, false))
 }
 
 // BootAt returns the start of the boot in force at t. Times before the first
@@ -175,14 +191,14 @@ func (tl *Timeline) NextTick(t Instant, interval time.Duration) (at Instant, ord
 		boot := tl.BootAt(t)
 		mono := int64(tl.Mono(t))
 		ordinal = mono/iv + 1
-		target := tl.Osc(boot) + Instant(ordinal*iv)
+		target := tl.osc(boot) + Instant(ordinal*iv)
 
 		at = tl.solveOsc(target)
 		// Ties go forward: a tick landing exactly on t belongs to the past,
 		// since the contract is "strictly after".
 		if at <= t {
 			ordinal++
-			at = tl.solveOsc(tl.Osc(boot) + Instant(ordinal*iv))
+			at = tl.solveOsc(tl.osc(boot) + Instant(ordinal*iv))
 		}
 
 		next, ok := tl.nextBootAfter(t)

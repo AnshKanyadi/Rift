@@ -44,6 +44,8 @@ const (
 	ruleConcurrency = "concurrency"
 	ruleMapRange    = "maprange"
 	ruleMapKey      = "mapkey"
+	ruleFloat       = "float"
+	ruleMonoLeak    = "monoleak"
 	rulePointerFmt  = "pointerfmt"
 	ruleMailbox     = "mailbox"
 	ruleEscape      = "escape"
@@ -57,6 +59,7 @@ var (
 	flagPostFunc       = "post"
 	flagListAllowances = true
 	flagRoot           = ""
+	flagMonoPkg        = "github.com/anshkanyadi/rift/clock"
 )
 
 // The scope tables live in the code rather than in a Makefile line, so adding a
@@ -75,6 +78,8 @@ func init() {
 		"name of the only function in a mailbox package permitted to send on a channel")
 	Analyzer.Flags.BoolVar(&flagListAllowances, "list-allowances", flagListAllowances,
 		"print every use of the //rift:allow-nondeterminism escape hatch to stderr")
+	Analyzer.Flags.StringVar(&flagMonoPkg, "mono-pkg", flagMonoPkg,
+		"import `path` of the package defining the Mono reading type, which may not appear in exported or tagged struct fields elsewhere")
 	Analyzer.Flags.StringVar(&flagRoot, "root", flagRoot,
 		"render announced paths relative to this `dir` (default: the working directory)")
 }

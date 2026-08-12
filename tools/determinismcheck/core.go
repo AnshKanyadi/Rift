@@ -19,12 +19,14 @@ func checkCore(r *reporter, insp *inspector.Inspector) {
 	checkImports(r)
 
 	insp.Preorder([]ast.Node{
+		(*ast.BasicLit)(nil),
 		(*ast.CallExpr)(nil),
 		(*ast.ChanType)(nil),
 		(*ast.GoStmt)(nil),
 		(*ast.Ident)(nil),
 		(*ast.MapType)(nil),
 		(*ast.RangeStmt)(nil),
+		(*ast.StructType)(nil),
 		(*ast.SelectStmt)(nil),
 		(*ast.SendStmt)(nil),
 		(*ast.UnaryExpr)(nil),
@@ -40,8 +42,16 @@ func checkCore(r *reporter, insp *inspector.Inspector) {
 				"go statements are not allowed in core packages; node logic runs single-threaded off the event loop, which is what makes a data race here unrepresentable rather than merely unlikely")
 		case *ast.Ident:
 			checkBannedSymbol(r, n)
+			checkFloat(r, n)
+		case *ast.BasicLit:
+			if n.Kind == token.FLOAT || n.Kind == token.IMAG {
+				r.report(n.Pos(), ruleFloat,
+					"floating-point literals are not allowed in core packages; %s", floatWhy)
+			}
 		case *ast.MapType:
 			checkMapKey(r, n)
+		case *ast.StructType:
+			checkMonoLeak(r, n)
 		case *ast.RangeStmt:
 			checkRange(r, n)
 		case *ast.SelectStmt:
@@ -358,4 +368,121 @@ func formatArg(r *reporter, call *ast.CallExpr) int {
 		return -1
 	}
 	return params.Len() - 2
+}
+
+// floatWhy is one sentence, repeated by every float diagnostic, because the
+// reason is the whole rule.
+const floatWhy = "the Go spec permits fusing a multiply-add into one FMA, which arm64 does and amd64 without FMA does not, so the same seed can produce last-bit differences on two machines -- and a one-nanosecond difference in a lease expiry is a different history; keep integers or fixed-point on every path feeding the trace hash, and materialize plan-authored floats to integers at the compile boundary"
+
+// checkFloat rejects float32 and float64 in core scope, by resolved kind rather
+// than by name, so a defined type over a float is caught with the same rule.
+//
+// Ruled 2026-08-11 and promoted to a standing rule: no floating point on any
+// path feeding the trace hash or replay identity. Hatchable only with a
+// registry reason stating why the value cannot affect replay -- clock/frac.go
+// is the model, where a plan-authored fraction becomes nanoseconds and is never
+// read as a float again.
+func checkFloat(r *reporter, id *ast.Ident) {
+	obj := r.pass.TypesInfo.Uses[id]
+	tn, ok := obj.(*types.TypeName)
+	if !ok {
+		return
+	}
+	basic, ok := tn.Type().Underlying().(*types.Basic)
+	if !ok {
+		return
+	}
+	switch basic.Kind() {
+	case types.Float32, types.Float64, types.Complex64, types.Complex128, types.UntypedFloat, types.UntypedComplex:
+		r.report(id.Pos(), ruleFloat,
+			"%s is not allowed in core packages; %s", tn.Name(), floatWhy)
+	}
+}
+
+// checkMonoLeak rejects a clock.Mono in an exported or tagged struct field
+// outside package clock.
+//
+// A monotonic reading's epoch is this boot of this node, so the value means
+// nothing anywhere else: persisted, it survives a restart as a number from a
+// timeline that no longer exists; sent on the wire, it is read against a
+// different boot entirely. A lease expiry stored that way makes a node serve
+// reads under a lease it does not hold.
+//
+// Exported or tagged is the test because those are the fields that leave: an
+// unexported, untagged field is node-local by construction, which is exactly
+// what a Mono is for.
+func checkMonoLeak(r *reporter, st *ast.StructType) {
+	if r.pass.Pkg != nil && r.pass.Pkg.Path() == flagMonoPkg {
+		return // the package that defines it may hold it
+	}
+	for _, field := range st.Fields.List {
+		if !mentionsMono(r, field.Type) {
+			continue
+		}
+		tagged := field.Tag != nil
+		for _, name := range field.Names {
+			if name.IsExported() || tagged {
+				r.report(name.Pos(), ruleMonoLeak,
+					"%s carries a clock.Mono in an %s struct field; a monotonic reading is meaningful only on the node and boot that produced it, so it must never be persisted or sent on the wire -- store a clock.Wall, or store the duration",
+					name.Name, exportedOrTagged(name.IsExported(), tagged))
+			}
+		}
+		if len(field.Names) == 0 && tagged {
+			r.report(field.Type.Pos(), ruleMonoLeak,
+				"an embedded clock.Mono in a tagged struct field is still on the wire; store a clock.Wall, or store the duration")
+		}
+	}
+}
+
+func exportedOrTagged(exported, tagged bool) string {
+	switch {
+	case exported && tagged:
+		return "exported, tagged"
+	case exported:
+		return "exported"
+	default:
+		return "tagged"
+	}
+}
+
+// mentionsMono reports whether a field type is clock.Mono or contains one:
+// a slice of them, a pointer to one, a map of them are all the same leak.
+func mentionsMono(r *reporter, expr ast.Expr) bool {
+	t := r.pass.TypesInfo.TypeOf(expr)
+	if t == nil {
+		return false
+	}
+	return containsMono(t, make(map[types.Type]bool))
+}
+
+func containsMono(t types.Type, seen map[types.Type]bool) bool {
+	if t == nil || seen[t] {
+		return false
+	}
+	seen[t] = true
+
+	if named, ok := t.(*types.Named); ok {
+		obj := named.Obj()
+		if obj != nil && obj.Name() == "Mono" && obj.Pkg() != nil && obj.Pkg().Path() == flagMonoPkg {
+			return true
+		}
+		return containsMono(named.Underlying(), seen)
+	}
+	switch u := t.(type) {
+	case *types.Slice:
+		return containsMono(u.Elem(), seen)
+	case *types.Array:
+		return containsMono(u.Elem(), seen)
+	case *types.Pointer:
+		return containsMono(u.Elem(), seen)
+	case *types.Map:
+		return containsMono(u.Key(), seen) || containsMono(u.Elem(), seen)
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if containsMono(u.Field(i).Type(), seen) {
+				return true
+			}
+		}
+	}
+	return false
 }

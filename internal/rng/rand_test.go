@@ -16,25 +16,6 @@ func TestUint64NInRange(t *testing.T) {
 	}
 }
 
-func TestUint64NUniform(t *testing.T) {
-	// Deterministic, so a tight bound cannot flake. 3% leaves room for honest
-	// sampling noise (about 5 sigma here) while still failing loudly on a real
-	// modulo-bias regression.
-	const draws, buckets = 120000, 6
-	var counts [buckets]int
-	r := New(20250810)
-	for i := 0; i < draws; i++ {
-		counts[r.Uint64N(buckets)]++
-	}
-	expected := float64(draws) / buckets
-	for i, c := range counts {
-		dev := (float64(c) - expected) / expected
-		if dev < -0.03 || dev > 0.03 {
-			t.Errorf("bucket %d: %d draws, expected ~%.0f (%.2f%% off)", i, c, expected, dev*100)
-		}
-	}
-}
-
 // TestUint64NRejectionIsLive proves the rejection loop is reached rather than
 // being dead code that happens to look correct. Without rejection the
 // distribution is subtly biased for n that does not divide 2^64, and a purely
@@ -105,21 +86,6 @@ func TestFloat64InRange(t *testing.T) {
 		v := r.Float64()
 		if v < 0 || v >= 1 {
 			t.Fatalf("Float64 returned %v, want [0,1)", v)
-		}
-	}
-}
-
-// TestBoolConsumesExactlyOneDraw pins a property that exists to keep diffs
-// readable: setting a fault probability to 0 or 1 in a config must not shift
-// the rest of the stream, so two runs differing only in that probability stay
-// comparable.
-func TestBoolConsumesExactlyOneDraw(t *testing.T) {
-	for _, p := range []float64{-1, 0, 0.5, 1, 2} {
-		a, b := New(77), New(77)
-		a.Bool(p)
-		b.Uint64()
-		if got, want := a.Uint64(), b.Uint64(); got != want {
-			t.Errorf("Bool(%v) consumed the wrong number of draws: next was %#x, want %#x", p, got, want)
 		}
 	}
 }

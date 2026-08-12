@@ -28,9 +28,13 @@ type Rand interface {
 
 	// Float64 returns a uniformly distributed value in [0, 1) with 53 bits of
 	// precision.
+	//
+	//rift:allow-nondeterminism generation-side only; the value is exact (see float.go) and is materialized as an integer in the plan before anything evaluates it
 	Float64() float64
 
 	// Bool reports true with probability p. p <= 0 is never, p >= 1 is always.
+	//
+	//rift:allow-nondeterminism generation-side only; p is plan-authored intent and the outcome is a bool, so no float crosses into evaluation
 	Bool(p float64) bool
 
 	// Shuffle permutes n elements using swap, by Fisher-Yates descending.
@@ -79,29 +83,6 @@ func (p *PCG) IntN(n int) int {
 		panic("rng: IntN called with n <= 0")
 	}
 	return int(p.Uint64N(uint64(n)))
-}
-
-// Float64 returns a uniformly distributed value in [0, 1).
-func (p *PCG) Float64() float64 {
-	return float64(p.Uint64()>>11) * 0x1p-53
-}
-
-// Bool reports true with probability p.
-//
-// It always consumes exactly one draw, including for p <= 0 and p >= 1, so
-// changing a probability to zero in a config cannot shift the rest of the
-// stream. That property costs nothing and removes a whole class of confusing
-// diffs between two nearly-identical runs.
-func (p *PCG) Bool(prob float64) bool {
-	v := p.Float64()
-	switch {
-	case prob <= 0:
-		return false
-	case prob >= 1:
-		return true
-	default:
-		return v < prob
-	}
 }
 
 // Shuffle permutes n elements using swap, by Fisher-Yates descending.

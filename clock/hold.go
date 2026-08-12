@@ -2,7 +2,6 @@ package clock
 
 import (
 	"fmt"
-	"math"
 	"time"
 )
 
@@ -46,6 +45,8 @@ type Hold struct {
 	// than nanoseconds so that a plan holding at the boundary keeps holding at
 	// the boundary when maxOffset is swept, which is what an envelope
 	// experiment varies. Above 1.0 is deliberate: see Envelope.
+	//
+	//rift:allow-nondeterminism authored intent in plan units; converted to nanoseconds by fracNanos before anything evaluates it, so this float never reaches the trace hash
 	AtFrac float64
 
 	// From and To bound the window in which the pair is held at the target.
@@ -75,26 +76,27 @@ func (h Hold) Compile(base Timeline, maxOffset time.Duration) (Timeline, Realiza
 	if h.Ramp < 0 {
 		return base, SlewHold, fmt.Errorf("clock: hold ramp is negative: %s", h.Ramp)
 	}
-	if math.IsNaN(h.AtFrac) || math.IsInf(h.AtFrac, 0) {
-		return base, SlewHold, fmt.Errorf("clock: hold at_frac is not a number: %v", h.AtFrac)
-	}
 	start := h.From - Instant(h.Ramp)
 	if start < 0 {
 		return base, SlewHold, fmt.Errorf("clock: hold ramp starts before time zero (from %d, ramp %s)", h.From, h.Ramp)
 	}
-	if err := h.checkClear(base, start, h.To+Instant(h.Ramp)); err != nil {
+	baseOff, err := h.baseOffsetFor(base, start, h.To+Instant(h.Ramp))
+	if err != nil {
 		return base, SlewHold, err
 	}
 
-	// The one float multiply in the package, at compile time, with nothing to
-	// fuse it with and an immediate rounding to integer. Everything downstream
-	// of this line is integer arithmetic (DESIGN-A0.4 §4).
-	target := int64(math.Round(h.AtFrac * float64(maxOffset)))
+	// The float boundary, and the only one: everything downstream of this call
+	// is integer arithmetic (DESIGN-A0.4 §4, and clock/frac.go).
+	target, err := fracNanos(h.AtFrac, maxOffset)
+	if err != nil {
+		return base, SlewHold, err
+	}
 
 	out := Timeline{
 		Skew:  append([]Segment(nil), base.Skew...),
 		Steps: append([]Step(nil), base.Steps...),
 		Boots: append([]Instant(nil), base.Boots...),
+		Epoch: base.Epoch,
 	}
 
 	if h.Ramp == 0 {
@@ -126,40 +128,59 @@ func (h Hold) Compile(base Timeline, maxOffset time.Duration) (Timeline, Realiza
 	}
 
 	rate := mulDiv(target, ppb, rampNs)
-	out.Skew = append(out.Skew,
-		Segment{Start: start, Off: 0, SlopePPB: rate},
-		Segment{Start: h.From, Off: target, SlopePPB: 0},
-		Segment{Start: h.To, Off: target, SlopePPB: -rate},
-		Segment{Start: h.To + Instant(rampNs), Off: 0, SlopePPB: 0},
-	)
+	ramp := []Segment{
+		{Start: start, Off: baseOff, SlopePPB: rate},
+		{Start: h.From, Off: baseOff + target, SlopePPB: 0},
+		{Start: h.To, Off: baseOff + target, SlopePPB: -rate},
+		{Start: h.To + Instant(rampNs), Off: baseOff, SlopePPB: 0},
+	}
+	// A ramp beginning exactly where the base's last segment begins replaces
+	// it rather than sitting beside it: two segments at one instant is not a
+	// schedule, it is a tie the evaluator would have to break.
+	if last := len(out.Skew) - 1; last >= 0 && out.Skew[last].Start == ramp[0].Start {
+		out.Skew = out.Skew[:last]
+	}
+	out.Skew = append(out.Skew, ramp...)
 	if err := out.Validate(); err != nil {
 		return base, SlewHold, fmt.Errorf("compiling hold %d->%d: %w", h.A, h.B, err)
 	}
 	return out, SlewHold, nil
 }
 
-// checkClear rejects a base timeline that already says something about the
-// window this hold is about to describe.
-func (h Hold) checkClear(base Timeline, from, to Instant) error {
+// baseOffsetFor returns the constant offset the base holds across the window a
+// hold is about to describe, and rejects a base that already says something
+// there.
+//
+// The condition is "no structure in the window", not "no segments at all": the
+// segment in force at the start is the base's own, and a hold layered on a
+// constant offset is perfectly meaningful. What is rejected is a segment
+// beginning inside the window, or a sloped one running through it -- either
+// would make the hold's target depend on when the hold happens to start, and
+// two holds fighting over one node's timeline is an authoring error whose
+// symptom would otherwise be a schedule that silently means neither of them.
+func (h Hold) baseOffsetFor(base Timeline, from, to Instant) (int64, error) {
+	inForce := base.Skew[0]
 	for _, seg := range base.Skew {
-		if seg.Start >= from {
-			return fmt.Errorf("clock: hold %d->%d over [%d,%d] collides with an existing skew segment at %d",
+		if seg.Start <= from {
+			inForce = seg
+			continue
+		}
+		if seg.Start <= to {
+			return 0, fmt.Errorf("clock: hold %d->%d over [%d,%d] collides with a skew segment beginning at %d",
 				h.A, h.B, from, to, seg.Start)
 		}
-		if seg.SlopePPB != 0 && seg.Start < from {
-			// A sloped segment running into the window would make the hold's
-			// target depend on when the hold happens to start.
-			return fmt.Errorf("clock: hold %d->%d over [%d,%d] starts inside a drifting segment at %d",
-				h.A, h.B, from, to, seg.Start)
-		}
+	}
+	if inForce.SlopePPB != 0 {
+		return 0, fmt.Errorf("clock: hold %d->%d over [%d,%d] starts inside a drifting segment at %d; its target would depend on when the hold begins",
+			h.A, h.B, from, to, inForce.Start)
 	}
 	for _, s := range base.Steps {
 		if s.At >= from && s.At <= to {
-			return fmt.Errorf("clock: hold %d->%d over [%d,%d] collides with a step at %d",
+			return 0, fmt.Errorf("clock: hold %d->%d over [%d,%d] collides with a step at %d",
 				h.A, h.B, from, to, s.At)
 		}
 	}
-	return nil
+	return offsetIn(inForce, from), nil
 }
 
 func insertStep(steps []Step, s Step) []Step {

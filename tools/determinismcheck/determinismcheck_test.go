@@ -20,7 +20,7 @@ import (
 // pasted over it within a fortnight, at which point it is decoration.
 func TestCoreRules(t *testing.T) {
 	sink := captureAllowances(t)
-	setFlags(t, map[string]string{"core": "core,coreclean"})
+	setFlags(t, map[string]string{"core": "core,coreclean", "exclude": "monocore", "mono-pkg": "monocore"})
 
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "core", "coreclean")
 

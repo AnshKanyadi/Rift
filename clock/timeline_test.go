@@ -24,14 +24,14 @@ func TestOscNeverGoesBackwards(t *testing.T) {
 		{Start: 0, Off: 0, SlopePPB: 0},
 		{Start: 1 * s, Off: 0, SlopePPB: 500_000_000},                // +50%, absurd but legal
 		{Start: 2 * s, Off: 500 * int64(ms), SlopePPB: -999_000_000}, // -99.9%, still forward
-	}}
+	}, Epoch: DefaultEpoch}
 	if err := tl.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 
-	prev := tl.Osc(0)
+	prev := tl.osc(0)
 	for at := Instant(1); at <= 3*s; at += Instant(997) { // a prime stride, to land off segment edges
-		got := tl.Osc(at)
+		got := tl.osc(at)
 		if got < prev {
 			t.Fatalf("Osc went backwards at %d: %d after %d", at, got, prev)
 		}
@@ -40,7 +40,7 @@ func TestOscNeverGoesBackwards(t *testing.T) {
 
 	// It plateaus but never stalls: over a long enough span even the 0.001x
 	// segment makes progress.
-	if a, b := tl.Osc(2*s), tl.Osc(3*s); b <= a {
+	if a, b := tl.osc(2*s), tl.osc(3*s); b <= a {
 		t.Errorf("oscillator stalled permanently: %d at 2s, %d at 3s", a, b)
 	}
 
@@ -48,7 +48,7 @@ func TestOscNeverGoesBackwards(t *testing.T) {
 	// plateaus really are a property of slowness rather than of the code.
 	fast := Drifting(1000)
 	for at := Instant(0); at < 1*ms; at++ {
-		if fast.Osc(at+1) <= fast.Osc(at) {
+		if fast.osc(at+1) <= fast.osc(at) {
 			t.Fatalf("a fast oscillator plateaued at %d", at)
 		}
 	}
@@ -59,20 +59,22 @@ func TestValidateRejectsTheThreeImpossibleSchedules(t *testing.T) {
 		name string
 		tl   Timeline
 	}{
-		{"backwards oscillator", Timeline{Skew: []Segment{{Start: 0, SlopePPB: -ppb}}}},
+		{"backwards oscillator", Timeline{Skew: []Segment{{Start: 0, SlopePPB: -ppb}}, Epoch: DefaultEpoch}},
 		{"discontinuous oscillator", Timeline{Skew: []Segment{
 			{Start: 0, Off: 0, SlopePPB: 0},
 			{Start: 1 * s, Off: 500 * int64(ms), SlopePPB: 0}, // teleports; belongs in Steps
-		}}},
+		}, Epoch: DefaultEpoch}},
 		{"unsorted segments", Timeline{Skew: []Segment{
 			{Start: 0, SlopePPB: 0},
 			{Start: 2 * s, SlopePPB: 0},
 			{Start: 1 * s, SlopePPB: 0},
-		}}},
+		}, Epoch: DefaultEpoch}},
 		{"unsorted steps", Timeline{
 			Skew:  []Segment{{Start: 0}},
 			Steps: []Step{{At: 2 * s, Delta: 1}, {At: 1 * s, Delta: 1}},
+			Epoch: DefaultEpoch,
 		}},
+		{"zero epoch", Timeline{Skew: []Segment{{Start: 0}}}},
 	}
 	for _, tc := range cases {
 		if err := tc.tl.Validate(); err == nil {
@@ -132,7 +134,7 @@ func TestTicksAreExactlyInverted(t *testing.T) {
 		{Start: 1 * s, Off: 0, SlopePPB: 300_000},        // +300 ppm
 		{Start: 3 * s, Off: 600_000, SlopePPB: -150_000}, // and back down
 		{Start: 5 * s, Off: 300_000, SlopePPB: 0},
-	}}
+	}, Epoch: DefaultEpoch}
 	if err := tl.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -160,6 +162,7 @@ func TestRestartResetsMonoNotWall(t *testing.T) {
 	tl := &Timeline{
 		Skew:  []Segment{{Start: 0, Off: 0, SlopePPB: 0}},
 		Boots: []Instant{10 * s},
+		Epoch: DefaultEpoch,
 	}
 	if err := tl.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
@@ -168,20 +171,20 @@ func TestRestartResetsMonoNotWall(t *testing.T) {
 	beforeMono, beforeWall := tl.Mono(9*s), tl.Wall(9*s)
 	afterMono, afterWall := tl.Mono(11*s), tl.Wall(11*s)
 
-	if beforeMono != 9*s {
-		t.Errorf("mono before restart = %d, want %d", beforeMono, 9*s)
+	if beforeMono != Mono(9*s) {
+		t.Errorf("mono before restart = %v, want %d", beforeMono, 9*s)
 	}
-	if afterMono != 1*s {
-		t.Errorf("mono after restart = %d, want %d (epoch is per boot)", afterMono, 1*s)
+	if afterMono != Mono(1*s) {
+		t.Errorf("mono after restart = %v, want %d (epoch is per boot)", afterMono, 1*s)
 	}
-	if afterMono >= beforeMono {
-		t.Errorf("mono did not reset across the restart: %d then %d", beforeMono, afterMono)
+	if !afterMono.Before(beforeMono) {
+		t.Errorf("mono did not reset across the restart: %v then %v", beforeMono, afterMono)
 	}
-	if afterWall <= beforeWall {
-		t.Errorf("wall did not continue across the restart: %d then %d", beforeWall, afterWall)
+	if !afterWall.After(beforeWall) {
+		t.Errorf("wall did not continue across the restart: %v then %v", beforeWall, afterWall)
 	}
-	if afterWall != 11*s {
-		t.Errorf("wall after restart = %d, want %d; a rebooting machine does not forget the date", afterWall, 11*s)
+	if want := DefaultEpoch + Wall(11*s); afterWall != want {
+		t.Errorf("wall after restart = %v, want %v; a rebooting machine does not forget the date", afterWall, want)
 	}
 }
 
@@ -195,21 +198,22 @@ func TestStepsMoveWallNotTimers(t *testing.T) {
 	stepped := &Timeline{
 		Skew:  []Segment{{Start: 0, Off: 0, SlopePPB: 0}},
 		Steps: []Step{{At: 1 * s, Delta: -500 * int64(ms)}, {At: 2 * s, Delta: 300 * int64(ms)}},
+		Epoch: DefaultEpoch,
 	}
 	if err := stepped.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 
 	// Wall follows the steps.
-	if got, want := stepped.Wall(1500*ms), 1000*ms; got != want {
-		t.Errorf("wall after backward step = %d, want %d", got, want)
+	if got, want := stepped.Wall(1500*ms), DefaultEpoch+Wall(1000*ms); got != want {
+		t.Errorf("wall after backward step = %v, want %v", got, want)
 	}
-	if got, want := stepped.Wall(2500*ms), 2300*ms; got != want {
-		t.Errorf("wall after forward step = %d, want %d", got, want)
+	if got, want := stepped.Wall(2500*ms), DefaultEpoch+Wall(2300*ms); got != want {
+		t.Errorf("wall after forward step = %v, want %v", got, want)
 	}
 	// Mono does not.
-	if got, want := stepped.Mono(1500*ms), 1500*ms; got != want {
-		t.Errorf("mono was perturbed by a step: %d, want %d", got, want)
+	if got, want := stepped.Mono(1500*ms), Mono(1500*ms); got != want {
+		t.Errorf("mono was perturbed by a step: %v, want %v", got, want)
 	}
 
 	// And neither does the tick schedule.
@@ -242,6 +246,7 @@ func TestReadingsAreOrderIndependent(t *testing.T) {
 		},
 		Steps: []Step{{At: 4 * s, Delta: 250 * int64(ms)}},
 		Boots: []Instant{8 * s},
+		Epoch: DefaultEpoch,
 	}
 	if err := tl.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
@@ -252,13 +257,18 @@ func TestReadingsAreOrderIndependent(t *testing.T) {
 		times = append(times, at)
 	}
 
-	forward := make([][3]Instant, len(times))
+	type reading struct {
+		osc  Instant
+		mono Mono
+		wall Wall
+	}
+	forward := make([]reading, len(times))
 	for i, at := range times {
-		forward[i] = [3]Instant{tl.Osc(at), tl.Mono(at), tl.Wall(at)}
+		forward[i] = reading{tl.osc(at), tl.Mono(at), tl.Wall(at)}
 	}
 	for i := len(times) - 1; i >= 0; i-- {
 		at := times[i]
-		got := [3]Instant{tl.Osc(at), tl.Mono(at), tl.Wall(at)}
+		got := reading{tl.osc(at), tl.Mono(at), tl.Wall(at)}
 		if got != forward[i] {
 			t.Fatalf("reading at %d depended on evaluation order: %v then %v", at, forward[i], got)
 		}
@@ -300,4 +310,67 @@ func TestSimClockAdvanceRejectsGoingBackwards(t *testing.T) {
 		}
 	}()
 	c.Advance(4 * s)
+}
+
+// TestUniformMaxOffsetIsAsserted covers Q2's condition. Two nodes running with
+// different bounds are each individually self-consistent, so nothing
+// downstream can detect the divergence: it presents as a lease-disjointness
+// violation that is an artifact of the harness, or -- worse -- as a real
+// violation that a too-generous bound hides.
+func TestUniformMaxOffsetIsAsserted(t *testing.T) {
+	a, err := NewSim(Flat(), maxOffset)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	b, err := NewSim(Flat(), maxOffset)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := AssertUniformMaxOffset(a, b); err != nil {
+		t.Errorf("identical bounds were rejected: %v", err)
+	}
+
+	c, err := NewSim(Flat(), maxOffset/2)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := AssertUniformMaxOffset(a, b, c); err == nil {
+		t.Error("a divergent bound was accepted; every lease argument in the run would be invalid")
+	}
+
+	// The bound is fixed at construction: there is no setter, and the field is
+	// unexported, so this is checked by the compiler rather than by this test.
+	// What this asserts is that the reading does not drift.
+	if got := a.MaxOffset(); got != maxOffset {
+		t.Errorf("MaxOffset drifted: %v, want %v", got, maxOffset)
+	}
+	a.Advance(10 * s)
+	if got := a.MaxOffset(); got != maxOffset {
+		t.Errorf("MaxOffset changed as time advanced: %v, want %v", got, maxOffset)
+	}
+}
+
+// TestEnvelopeShapesOffsetsNotTheBound is the other half of Q2: an envelope
+// experiment exceeds the bound by moving the true offsets, never by moving the
+// bound the nodes advertise. If the bound moved with the experiment, the
+// experiment would be vacuous -- nothing would ever be outside it.
+func TestEnvelopeShapesOffsetsNotTheBound(t *testing.T) {
+	tl, _, err := Hold{A: 1, B: 2, AtFrac: Percent(120), From: 2 * s, To: 4 * s,
+		Ramp: 2 * time.Second, Envelope: true}.Compile(*Flat(), maxOffset)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	c, err := NewSim(&tl, maxOffset)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	c.Advance(3 * s)
+	if got := c.MaxOffset(); got != maxOffset {
+		t.Errorf("an envelope hold moved the advertised bound to %v; it must stay %v", got, maxOffset)
+	}
+	rep := Check(Flat(), &tl, 0, 6*s, maxOffset)
+	if !rep.Exceeded {
+		t.Errorf("the envelope hold did not exceed the bound: %+v", rep)
+	}
 }
