@@ -160,50 +160,8 @@ Each gets a covering-test header in the same shape the blind patches use: `# id`
 
 ---
 
-## 9. Standing practices this cycle produced
+## 9. Where step 7's findings live
 
-### Harness-manufactured violation, and the triage gate
-
-**The named class.** A violation produced by the harness or the workload rather than by the system
-under test. The generator's out-of-order client sequence numbers were one: 913 of 1000 seeds
-reported a non-linearizable history, and every one of them was the generator's fault.
-
-At 913 of 1000 it was unmissable. **At 3 of 1000 it would have been indistinguishable from a real
-find** — it would have entered the corpus, replayed faithfully forever, and spent the credibility of
-every genuine entry beside it. A poisoned corpus entry is worse than a missing one.
-
-**The gate, standing from here through A6.** Before any violation becomes a corpus candidate, replay
-its plan with the fault entries stripped. **A violation that survives with zero injected faults is
-the harness or the workload, not the system under test.** It uses the entry-independence property
-`TestDeletingAFaultEntryPerturbsOnlyItself` already proved — which is a good demonstration that the
-property earns its keep — and lands as a `simctl` affordance rather than a manual procedure.
-
-### The two harness bugs failed in opposite directions
-
-Worth separating, because the report that first described them called both of them "green":
-
-- **The silent one — false negatives.** The loop marked a crashed node down without telling it, so
-  its engine kept the unsynced writes a real process death would have taken. The crash injector was
-  injecting nothing and the whole ack-before-durable class was unreachable, while every lane
-  reported clean.
-- **The loud one — false positives.** The generator's out-of-order sequences, 913 of 1000.
-
-A harness can be wrong in both directions and only one of them announces itself.
-
-### seeds-to-first-detection
-
-The harness's power expressed as a number, and the number that says whether a green sweep means
-anything. **Every planted flaw class carries its own, recorded per class and tracked across cycles.
-A rising number means the harness got weaker and nobody noticed.**
-
-| flaw | detection | seeds-to-first | notes |
-|---|---|---|---|
-| `ack-before-sync` | 82 / 1000 | 30 | at a 50ms modelled fsync; see the ablation |
-| `ack-before-replicate` | 0 / 1000 | — | recorded gap: not observable without promotion |
-
-### The bidirectional gap assertion
-
-**Most recorded gaps rot into folklore; this one cannot.** Each planted flaw declares whether it is
-currently observable *and the reason*, and the test asserts both directions: an observable flaw that
-is missed fails, and an unobservable flaw that is suddenly caught fails too — because the record has
-become wrong and must say so. The gap maintains itself.
+They are in **DESIGN-A0.10**, not here. This document covers checklist step 6, the oracle framework;
+the toy's 1k-seed sweep and the two harness bugs it found belong to step 7 and were moved so that a
+stranger following the ladder does not have to guess which document holds which phase.

@@ -61,6 +61,10 @@ type Config struct {
 	// Oracles watch the run as it happens. A violation halts it.
 	Oracles []Oracle
 
+	// Trace, when set, records the run's rolling hash. Nil means no tracing,
+	// which is what a hunt wants once a seed has been checked.
+	Trace *Trace
+
 	// PlanRef identifies the plan this run came from, and is carried into any
 	// violation dump. A dump that does not say which plan produced it is a bug
 	// report nobody can act on.
@@ -126,6 +130,10 @@ func NewLoop(cfg Config) (*Loop, error) {
 	}
 	return l, nil
 }
+
+// SetTrace attaches a trace after construction, for drivers that build the loop
+// through a plan and want its identity recorded.
+func (l *Loop) SetTrace(t *Trace) { l.cfg.Trace = t }
 
 // Now is the current global virtual time.
 func (l *Loop) Now() clock.Instant { return l.now }
@@ -210,6 +218,9 @@ func (l *Loop) step() {
 	l.steps++
 	if ev.Kind < numKinds {
 		l.census[ev.Kind]++
+	}
+	if l.cfg.Trace != nil {
+		l.cfg.Trace.Step(l.steps, ev)
 	}
 
 	for _, c := range l.cfg.Clocks {

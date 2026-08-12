@@ -288,19 +288,27 @@ func TestAblationReactiveCrashAtOriginalWindow(t *testing.T) {
 
 	for _, window := range []clock.Instant{2_000_000, 10_000_000, 50_000_000} {
 		caught := 0
-		first := -1
+		// Detected is a distinguishable state, not a negative seed. An in-band
+		// magic number in a field that otherwise holds a seed is exactly what
+		// Mono's zero value and Hold's rejected realization exist to avoid, and
+		// a -1 could be averaged by a future aggregation without complaint.
+		detected := false
+		var first uint64
 		for seed := uint64(0); seed < 1000; seed++ {
 			r := runSeedWith(t, seed, toy.FlawAckBeforeSync, window)
 			for _, rep := range r.reports {
 				if rep.Verdict == sim.VerdictViolation {
 					caught++
-					if first < 0 {
-						first = int(seed)
+					if !detected {
+						detected, first = true, seed
 					}
 				}
 			}
 		}
-		t.Logf("fsync window %6dus: %3d of 1000 caught, first at seed %d",
-			int64(window)/1000, caught, first)
+		firstStr := "not detected"
+		if detected {
+			firstStr = fmt.Sprintf("first at seed %d", first)
+		}
+		t.Logf("fsync window %6dus: %3d of 1000 caught, %s", int64(window)/1000, caught, firstStr)
 	}
 }

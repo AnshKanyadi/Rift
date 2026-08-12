@@ -30,6 +30,8 @@
 package toy
 
 import (
+	"fmt"
+
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
@@ -76,6 +78,58 @@ func (f Flaw) String() string {
 		return "invalid"
 	}
 	return "unknown"
+}
+
+// DefaultSyncLatency is the modelled fsync duration, and it is load-bearing.
+//
+// # Why 50ms, and why lowering it silently breaks the harness
+//
+// The ack-before-durable flaw class only *exists* when fsync is slower than a
+// replication round trip. Below that, a primary that waits for backup
+// acknowledgements is already durable by the time it answers, so the flawed
+// implementation and the correct one are behaviourally identical -- there is no
+// incorrect behaviour in existence for any oracle to find, and no amount of
+// crash targeting helps. The measured curve:
+//
+//	fsync window   2ms:   0 of 1000 seeds detect ack-before-sync
+//	fsync window  10ms:   2 of 1000, first at seed 663
+//	fsync window  50ms:  82 of 1000, first at seed 29
+//
+// A future cycle lowering this for speed would return the entire class to
+// unreachable while all thousand seeds pass and every lane stays green -- which
+// is structurally the same failure as the crash injector that marked a node
+// down without telling it: a clean sweep over an empty search space.
+//
+// So the number is named, the argument lives here rather than in a design doc,
+// and ValidateWindow refuses to run in a regime where the harness's own planted
+// flaws cannot exist.
+const DefaultSyncLatency = clock.Instant(50_000_000)
+
+// MinWindowMargin is how far the fsync window must exceed the replication round
+// trip before the ack-before-durable class is reliably reachable. Three times,
+// which is not a derived constant but a stated one: at parity the flaw is
+// unreachable, and the measured curve shows detection still marginal at 5x the
+// 2ms floor.
+const MinWindowMargin = 3
+
+// ValidateWindow refuses a configuration in which the planted flaws cannot
+// manifest.
+//
+// This is a gate rather than a warning. A harness that runs happily in a regime
+// where its own mutants are invisible reports green sweeps that mean nothing,
+// and the report reads identically to a real one.
+func ValidateWindow(syncLatency clock.Instant, replicationRTT clock.Instant) error {
+	if syncLatency <= 0 || replicationRTT <= 0 {
+		return fmt.Errorf("toy: window validation needs positive durations, got fsync %d and rtt %d", syncLatency, replicationRTT)
+	}
+	if int64(syncLatency) < int64(replicationRTT)*MinWindowMargin {
+		return fmt.Errorf(
+			"toy: modelled fsync of %dus does not exceed the replication round trip of %dus by the required %dx; "+
+				"in this regime a primary awaiting backup acks is already durable when it answers, so ack-before-durable "+
+				"cannot manifest at all and a clean sweep would be a sweep over an empty search space",
+			int64(syncLatency)/1000, int64(replicationRTT)/1000, MinWindowMargin)
+	}
+	return nil
 }
 
 // Request is a client operation carried as an event payload.
@@ -161,7 +215,7 @@ func New(id, primary sim.NodeID, peers []sim.NodeID, tr sim.Transport, h *sim.Hi
 		db: model.New(), tr: tr, hist: h,
 		applied:     make(map[int]uint64),
 		inflight:    make(map[engine.SeqNum]*pending),
-		syncLatency: clock.Instant(50_000_000), // 50ms
+		syncLatency: DefaultSyncLatency,
 	}
 }
 
