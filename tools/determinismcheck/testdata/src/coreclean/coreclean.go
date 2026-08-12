@@ -52,7 +52,7 @@ func (n *node) expired(deadline int64) bool {
 // methods and the deterministic constructors all stay legal.
 func (n *node) legalTime(lease time.Time) (time.Duration, string) {
 	deadline := lease.Add(3 * time.Second).Add(500 * time.Millisecond)
-	epoch := time.Unix(0, n.now).In(time.UTC)
+	epoch := time.Date(2026, time.August, 11, 0, 0, 0, 0, time.UTC)
 	window := deadline.Sub(epoch)
 
 	if d, err := time.ParseDuration("250ms"); err == nil && window > d {
@@ -62,6 +62,18 @@ func (n *node) legalTime(lease time.Time) (time.Duration, string) {
 		window = 0
 	}
 	return window, deadline.Format(time.RFC3339Nano)
+}
+
+// utcOnly is the other side of that closure, and the reason the ban is
+// affordable: with the Unix family off the allowlist, time.Local banned as a
+// var and Local() banned as a method, every time.Time reachable in a core
+// package is UTC or an explicit FixedZone. Formatted output therefore cannot
+// depend on the host's TZ, which is a property of the rules rather than of
+// anyone's discipline.
+func (n *node) utcOnly() string {
+	at := time.Date(2026, time.August, 11, 0, 0, 0, 0, time.UTC)
+	lease := at.Add(30 * time.Second).In(time.FixedZone("fixed", 0))
+	return lease.Format(time.RFC3339Nano)
 }
 
 func (n *node) describe(p *peer) string {

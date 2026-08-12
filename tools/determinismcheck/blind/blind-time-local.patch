@@ -1,0 +1,15 @@
+# id: blind-time-local
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: the ban on Time.Local(), letting host TZ into formatted output
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -174,7 +174,7 @@
+ // With these banned and the Unix family off the allowlist, every time.Time
+ // reachable inside a core package is UTC or an explicit FixedZone.
+ var bannedTimeMethod = map[string]string{
+-	"Local": "keep instants in UTC; Local() is time.Local with method syntax, and it makes formatted output depend on the host's TZ",
++	"LocalNope": "keep instants in UTC; Local() is time.Local with method syntax, and it makes formatted output depend on the host's TZ",
+ }
+ 
+ // timeAdvice says what to do instead, for the symbols anyone will actually

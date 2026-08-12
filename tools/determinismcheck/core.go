@@ -148,13 +148,33 @@ var timeAllowed = map[string]bool{
 	"Duration": true, "Time": true, "Month": true, "Weekday": true,
 	"Location": true, "ParseError": true,
 
-	// Deterministic constructors and parsers: same arguments, same result,
-	// on any machine at any moment.
+	// Deterministic constructors and parsers: same arguments, same result, on
+	// any machine at any moment. Each either takes an explicit *Location or
+	// returns UTC.
+	//
+	// Audited 2026-08-11 for constructors that return a location-bearing Time.
+	// Unix, UnixMilli and UnixMicro are exactly that -- they return a Time in
+	// the host's local zone, so anything formatted from one reads differently
+	// in two datacentres -- and are therefore NOT on this list. Date and
+	// ParseInLocation take a *Location explicitly, and passing time.Local to
+	// either is caught by the ban on Local itself. Parse returns UTC when the
+	// value carries no zone.
 	"Date": true, "Parse": true, "ParseInLocation": true, "ParseDuration": true,
-	"Unix": true, "UnixMicro": true, "UnixMilli": true, "FixedZone": true,
+	"FixedZone": true,
 
 	// A fixed zone. Unlike Local, which is whatever TZ says today.
 	"UTC": true,
+}
+
+// bannedTimeMethod is the closure on host-TZ dependence. Methods on time's
+// value types are otherwise legal -- Add, Sub, Before, Format all are -- but
+// Local() is time.Local written with method syntax, and it puts the host's
+// timezone into anything formatted downstream, including trace output.
+//
+// With these banned and the Unix family off the allowlist, every time.Time
+// reachable inside a core package is UTC or an explicit FixedZone.
+var bannedTimeMethod = map[string]string{
+	"Local": "keep instants in UTC; Local() is time.Local with method syntax, and it makes formatted output depend on the host's TZ",
 }
 
 // timeAdvice says what to do instead, for the symbols anyone will actually
@@ -174,6 +194,9 @@ var timeAdvice = map[string]string{
 	"Local":                  "use UTC; Local is whatever the host's TZ says, which is not a property of the run",
 	"LoadLocation":           "use UTC or FixedZone; loading a zone reads the host's tzdata",
 	"LoadLocationFromTZData": "use UTC or FixedZone",
+	"Unix":                   "carry instants as nanoseconds (clock.Instant); time.Unix returns a Time in the host's local zone",
+	"UnixMilli":              "carry instants as nanoseconds (clock.Instant); time.UnixMilli returns a Time in the host's local zone",
+	"UnixMicro":              "carry instants as nanoseconds (clock.Instant); time.UnixMicro returns a Time in the host's local zone",
 }
 
 // bannedReflect is the other half of the iterator hole. reflect reaches map
@@ -207,28 +230,48 @@ func checkBannedSymbol(r *reporter, id *ast.Ident) {
 }
 
 func checkTimeSymbol(r *reporter, id *ast.Ident, obj types.Object) {
-	switch o := obj.(type) {
-	case *types.Const:
+	if _, isConst := obj.(*types.Const); isConst {
 		return // Nanosecond through Hour, the layouts, the month names
-	case *types.Var:
-		if o.IsField() {
-			return // a field of a legal value type
-		}
-	case *types.Func:
-		if sig, ok := o.Type().(*types.Signature); ok && sig.Recv() != nil {
-			return // a method on a legal value type: Add, Sub, Before, Format
-		}
 	}
-	if timeAllowed[obj.Name()] {
+	if v, isVar := obj.(*types.Var); isVar && v.IsField() {
+		return // a field of a legal value type
+	}
+
+	// A method is legal with its type -- Add, Sub, Before, Format -- unless it
+	// is one of the few that reintroduce the host's timezone.
+	if sig := methodSig(obj); sig != nil {
+		instead, banned := bannedTimeMethod[obj.Name()]
+		if !banned {
+			return
+		}
+		recv := strings.TrimPrefix(types.TypeString(sig.Recv().Type(), nil), "*")
+		r.report(id.Pos(), ruleTime,
+			"%s.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", recv, obj.Name(), instead)
 		return
 	}
 
+	if timeAllowed[obj.Name()] {
+		return
+	}
 	instead, known := timeAdvice[obj.Name()]
 	if !known {
 		instead = "core packages take time from the injected Clock; only time's value types, constants and deterministic constructors are allowed here"
 	}
 	r.report(id.Pos(), ruleTime,
 		"time.%s is not allowed in core packages; %s (CLAUDE.md determinism rules)", obj.Name(), instead)
+}
+
+// methodSig returns obj's signature if it is a method, and nil otherwise.
+func methodSig(obj types.Object) *types.Signature {
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return nil
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return nil
+	}
+	return sig
 }
 
 // checkRange is the important one. Go randomizes map iteration order on

@@ -113,3 +113,11 @@ func (n *node) stopwatch() {
 		_ = loc
 	}
 }
+
+// hostDependent is the TZ hole. Neither line reads a clock, and both make the
+// package's output depend on where it is running: time.Unix returns a Time in
+// the host's local zone, and Local() is time.Local with method syntax.
+func (n *node) hostDependent() string {
+	at := time.Unix(0, 1)                  // want `time: time.Unix`
+	return at.Local().Format(time.RFC3339) // want `time: time.Time.Local`
+}

@@ -1,0 +1,15 @@
+# id: blind-time-unix
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: the audit result that time.Unix returns a host-local-zone Time
+--- a/tools/determinismcheck/core.go
++++ b/tools/determinismcheck/core.go
+@@ -159,7 +159,7 @@
+ 	// ParseInLocation take a *Location explicitly, and passing time.Local to
+ 	// either is caught by the ban on Local itself. Parse returns UTC when the
+ 	// value carries no zone.
+-	"Date": true, "Parse": true, "ParseInLocation": true, "ParseDuration": true,
++	"Unix": true, "Date": true, "Parse": true, "ParseInLocation": true, "ParseDuration": true,
+ 	"FixedZone": true,
+ 
+ 	// A fixed zone. Unlike Local, which is whatever TZ says today.

@@ -36,11 +36,16 @@
 // # Core rules
 //
 //   - every symbol in time except an allowlist: value types, constants, their
-//     methods, and the deterministic constructors (Date, Parse, Unix,
-//     FixedZone, UTC). Now, Since, Until, Sleep, After, AfterFunc, Tick,
-//     NewTimer, NewTicker, Timer, Ticker, Local and LoadLocation are all
-//     banned, and so is whatever Go adds next -- the allowlist is the point,
-//     since a blocklist has to be extended by someone who notices.
+//     methods, and the deterministic constructors (Date, Parse,
+//     ParseInLocation, ParseDuration, FixedZone, UTC). Now, Since, Until,
+//     Sleep, After, AfterFunc, Tick, NewTimer, NewTicker, Timer, Ticker,
+//     Local and LoadLocation are all banned, and so is whatever Go adds next
+//     -- the allowlist is the point, since a blocklist has to be extended by
+//     someone who notices.
+//   - the Unix family (Unix, UnixMilli, UnixMicro) and the method Time.Local,
+//     which return or produce a Time in the host's local zone. With those
+//     closed, every time.Time reachable in a core package is UTC or an
+//     explicit FixedZone, so no formatted output can depend on host TZ.
 //   - imports of os, net, path/filepath, io/ioutil, syscall, runtime, unsafe,
 //     sync, sync/atomic, math/rand, math/rand/v2, maps, log.
 //   - go statements, select statements, channel types, sends and receives.
