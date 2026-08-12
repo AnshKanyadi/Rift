@@ -109,3 +109,17 @@ func leaseWindow(start, end monocore.Mono, grace time.Duration) (time.Duration, 
 	}
 	return end.Add(grace).Sub(start), true
 }
+
+// An exhaustive switch with no default arm: adding a variant to the enum breaks
+// this function, which is the entire point.
+func classify(o monocore.Outcome) string {
+	switch o {
+	case monocore.OutcomeA:
+		return "a"
+	case monocore.OutcomeB:
+		return "b"
+	case monocore.OutcomeC:
+		return "c"
+	}
+	return "unreachable"
+}

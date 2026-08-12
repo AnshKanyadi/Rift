@@ -47,6 +47,7 @@ const (
 	ruleFloat       = "float"
 	ruleMonoLeak    = "monoleak"
 	ruleInstantMath = "instantmath"
+	ruleExhaustive  = "exhaustive"
 	rulePointerFmt  = "pointerfmt"
 	ruleMailbox     = "mailbox"
 	ruleEscape      = "escape"
@@ -62,6 +63,7 @@ var (
 	flagRoot           = ""
 	flagMonoPkg        = "github.com/anshkanyadi/rift/clock"
 	flagInstantTypes   = "Wall,Mono"
+	flagClosedEnums    = "github.com/anshkanyadi/rift/sim.OutcomeKind"
 )
 
 // The scope tables live in the code rather than in a Makefile line, so adding a
@@ -84,6 +86,8 @@ func init() {
 		"import `path` of the package defining the Mono reading type, which may not appear in exported or tagged struct fields elsewhere")
 	Analyzer.Flags.StringVar(&flagInstantTypes, "instant-types", flagInstantTypes,
 		"comma-separated instant type `names` in -mono-pkg; binary arithmetic on two of the same is banned outside it")
+	Analyzer.Flags.StringVar(&flagClosedEnums, "closed-enums", flagClosedEnums,
+		"comma-separated `pkg.Type` names whose switches must be exhaustive with no default arm")
 	Analyzer.Flags.StringVar(&flagRoot, "root", flagRoot,
 		"render announced paths relative to this `dir` (default: the working directory)")
 }
@@ -92,13 +96,21 @@ func run(pass *analysis.Pass) (any, error) {
 	if isSynthesizedTestMain(pass.Pkg.Path(), pass.Pkg.Name()) {
 		return nil, nil
 	}
-	sc := scopeFor(pass.Pkg.Path())
-	if sc == scopeOff {
-		return nil, nil
-	}
-
 	r := &reporter{pass: pass, allow: newAllowIndex(pass)}
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+
+	// The exhaustive rule runs in every package, not only in core scope. It is
+	// not a determinism rule: it exists so that adding a variant to a closed
+	// enum breaks every consumer that has not decided what to do about it, and
+	// the consumers that matter most -- the soak runner deciding what to bank
+	// as an hour -- are orchestration, which the determinism rules exempt.
+	checkExhaustive(r, insp)
+
+	sc := scopeFor(pass.Pkg.Path())
+	if sc == scopeOff {
+		r.allow.finish()
+		return nil, nil
+	}
 
 	switch sc {
 	case scopeCore:

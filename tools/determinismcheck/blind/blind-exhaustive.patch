@@ -1,0 +1,18 @@
+# id: blind-exhaustive
+# covering-test: TestCoreRules
+# expect: killed
+# blinds: the closed-enum rule, letting a default arm hide an unhandled variant forever
+--- a/tools/determinismcheck/exhaustive.go
++++ b/tools/determinismcheck/exhaustive.go
+@@ -42,9 +42,10 @@
+ 			return
+ 		}
+ 		full := obj.Pkg().Path() + "." + obj.Name()
+-		if !slices.Contains(enums, full) {
++		if true {
+ 			return
+ 		}
++		_ = full
+ 
+ 		covered := make(map[string]bool)
+ 		hasDefault := false

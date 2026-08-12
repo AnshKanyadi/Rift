@@ -143,30 +143,34 @@ func (l *Loop) After(d time.Duration, kind Kind, node NodeID, payload any) {
 }
 
 // Run drives events until the queue empties, time passes Until, or MaxSteps is
-// reached. It returns the reason it stopped, which a caller needs: "the queue
-// emptied" and "the clock ran out" are different results, and a run that
-// stopped because nothing was scheduled has not necessarily done anything.
-func (l *Loop) Run() (Reason, error) {
+// reached. The Outcome it returns is a closed enum rather than a bool, because
+// "the queue emptied" and "the clock ran out" are different results and only
+// the second is a completed run.
+func (l *Loop) Run() (Outcome, error) {
 	if l.closed {
-		return 0, fmt.Errorf("sim: Run on a finished loop")
+		return Outcome{}, fmt.Errorf("sim: Run on a finished loop")
 	}
 	for {
 		next, ok := l.q.peek()
 		if !ok {
 			l.closed = true
-			return ReasonQuiescent, nil
+			return l.outcome(OutcomeQuiescent, l.now), nil
 		}
 		if l.cfg.Until != 0 && next.At > l.cfg.Until {
 			l.closed = true
 			l.now = l.cfg.Until
-			return ReasonDeadline, nil
+			return l.outcome(OutcomeDeadline, l.now), nil
 		}
 		if l.cfg.MaxSteps != 0 && l.steps >= l.cfg.MaxSteps {
 			l.closed = true
-			return ReasonStepLimit, nil
+			return l.outcome(OutcomeStepLimit, l.now), nil
 		}
 		l.step()
 	}
+}
+
+func (l *Loop) outcome(k OutcomeKind, at clock.Instant) Outcome {
+	return Outcome{Kind: k, At: at, Steps: l.steps}
 }
 
 // step fires exactly one event. Exported behaviour lives in Run; this is
@@ -238,27 +242,86 @@ func (l *Loop) Restart(at clock.Instant, node NodeID) { l.At(at, KindRestart, no
 // Down reports whether a node is currently crashed.
 func (l *Loop) Down(node NodeID) bool { return l.down[node] }
 
-// Reason is why a run stopped.
-type Reason uint8
+// OutcomeKind is why a run stopped. It is a closed enum and every switch over
+// it must be exhaustive with no default arm, which `determinismcheck`'s
+// exhaustive rule enforces.
+//
+// The reason it is a type rather than a bool: SOAK.md counts only
+// OutcomeDeadline runs toward cumulative hours. A quiescent run went quiet
+// before its time was up and did less than its duration suggests; banking it as
+// a full run inflates the one number the whole verification claim rests on. A
+// halted run stopped because an oracle fired and is not a duration at all. Those
+// three are not shades of one thing, and a caller that treats them as "finished
+// or not" has already lost the distinction.
+type OutcomeKind uint8
 
 const (
-	// ReasonQuiescent means the queue emptied. Worth distinguishing: a run
-	// that went quiet early did less than its duration suggests.
-	ReasonQuiescent Reason = iota + 1
-	ReasonDeadline
-	ReasonStepLimit
+	// OutcomeDeadline: the run reached its configured end of time with work
+	// still scheduled. This is the only kind that counts toward soak hours.
+	OutcomeDeadline OutcomeKind = iota + 1
+
+	// OutcomeQuiescent: the queue emptied early. The run stopped because
+	// nothing was left to do, which is a finding about the workload rather
+	// than a completed run. Logged with its quiet point and investigated,
+	// never silently banked.
+	OutcomeQuiescent
+
+	// OutcomeHalted: an oracle reported a violation and stopped the run. Not a
+	// duration; a result.
+	OutcomeHalted
+
+	// OutcomeStepLimit: the event budget ran out before the clock did.
+	//
+	// Ansh's ruling named three kinds. This is a fourth, added under the same
+	// reasoning that motivated the ruling: a runaway workload that exhausted
+	// its budget is not "completed at deadline", is not quiescent, and no
+	// oracle fired. Folding it into any of the three would put a lie in the
+	// ledger, which is the exact failure the closed enum exists to prevent.
+	OutcomeStepLimit
 )
 
-func (r Reason) String() string {
-	switch r {
-	case ReasonQuiescent:
+func (k OutcomeKind) String() string {
+	switch k {
+	case OutcomeDeadline:
+		return "completed-at-deadline"
+	case OutcomeQuiescent:
 		return "quiescent"
-	case ReasonDeadline:
-		return "deadline"
-	case ReasonStepLimit:
+	case OutcomeHalted:
+		return "halted"
+	case OutcomeStepLimit:
 		return "step-limit"
 	}
 	return "unknown"
+}
+
+// Outcome is how a run ended, with the instant it ended at.
+//
+// At is load-bearing for two of the kinds: a quiescent run's quiet point is
+// what an investigator needs first, and a halted run's instant is where the
+// violation was found.
+type Outcome struct {
+	Kind  OutcomeKind
+	At    clock.Instant
+	Steps uint64
+}
+
+// CountsTowardSoakHours reports whether this run may be banked in SOAK.md.
+//
+// It exists so the rule lives in one place rather than being restated at every
+// call site, and so that adding a kind forces a decision here rather than
+// defaulting to "sure, count it".
+func (o Outcome) CountsTowardSoakHours() bool {
+	switch o.Kind {
+	case OutcomeDeadline:
+		return true
+	case OutcomeQuiescent, OutcomeHalted, OutcomeStepLimit:
+		return false
+	}
+	return false
+}
+
+func (o Outcome) String() string {
+	return fmt.Sprintf("%s at %d after %d steps", o.Kind, int64(o.At), o.Steps)
 }
 
 var _ Scheduler = (*Loop)(nil)

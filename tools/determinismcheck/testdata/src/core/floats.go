@@ -55,3 +55,24 @@ func (l lease) doubled() monocore.Wall {
 func (l lease) expired(now monocore.Mono) bool {
 	return now > l.end && l.start <= now
 }
+
+// Closed enums: a default arm makes an unhandled variant invisible forever, and
+// an incomplete switch is the omission a new variant has to break.
+func classify(o monocore.Outcome) string {
+	switch o { // want `exhaustive: switch over the closed enum monocore.Outcome does not handle OutcomeC`
+	case monocore.OutcomeA:
+		return "a"
+	case monocore.OutcomeB:
+		return "b"
+	}
+	return "?"
+}
+
+func classifyLazily(o monocore.Outcome) string {
+	switch o {
+	case monocore.OutcomeA:
+		return "a"
+	default: // want `exhaustive: .* may not have a default arm`
+		return "?"
+	}
+}

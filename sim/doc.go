@@ -31,12 +31,16 @@
 //
 // # Stopping
 //
-// Run reports why it stopped, and the distinction is load-bearing: a run that
-// went quiescent early did less than its configured duration suggests, and
-// reporting that as a completed run would overstate every soak number built on
-// it. Ticks are therefore scheduled past the deadline rather than suppressed at
-// it, so a tick-only run ends at the deadline with a non-empty queue and says
-// so.
+// Run returns a closed enum, not a bool, and the distinction is load-bearing: a
+// run that went quiescent early did less than its configured duration suggests,
+// and SOAK.md counts only completed-at-deadline runs toward cumulative hours.
+// Ticks are therefore scheduled past the deadline rather than suppressed at it,
+// so a tick-only run ends at the deadline with a non-empty queue and says so.
+//
+// Outcome.CountsTowardSoakHours is the one place that rule lives, and
+// determinismcheck's exhaustive rule requires every switch over OutcomeKind to
+// cover all variants with no default arm -- so adding a kind breaks every
+// consumer that has not decided what to do about it.
 //
 // Landed in A0.6 (checklist step 1). Still to come: the transport and its
 // injectors (step 3/4), plans as the repro unit (step 5), the oracle framework

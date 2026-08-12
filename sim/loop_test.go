@@ -266,15 +266,18 @@ func TestDivergentMaxOffsetIsRejectedAtSetup(t *testing.T) {
 
 // TestRunReportsWhyItStopped: "the queue emptied" and "the clock ran out" are
 // different results, and a run that went quiet early did less than its duration
-// suggests.
+// suggests. Only the deadline kind may be banked in SOAK.md.
 func TestRunReportsWhyItStopped(t *testing.T) {
 	l, _ := newRun(t, 1, false, clock.Instant(50*time.Millisecond), nil)
 	got, err := l.Run()
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got != ReasonDeadline {
-		t.Errorf("stopped for %v, want %v", got, ReasonDeadline)
+	if got.Kind != OutcomeDeadline {
+		t.Errorf("stopped for %v, want %v", got.Kind, OutcomeDeadline)
+	}
+	if !got.CountsTowardSoakHours() {
+		t.Error("a deadline run does not count toward soak hours")
 	}
 	if l.Pending() == 0 {
 		t.Error("a deadline stop left an empty queue, so it was really quiescent")
@@ -282,4 +285,30 @@ func TestRunReportsWhyItStopped(t *testing.T) {
 	if _, err := l.Run(); err == nil {
 		t.Error("a finished loop accepted a second Run")
 	}
+}
+
+// TestQuiescentRunDoesNotCountTowardSoakHours pins the forward binding: a run
+// that went quiet before its time was up did less than its duration suggests,
+// and banking it would inflate the one number the verification claim rests on.
+func TestQuiescentRunDoesNotCountTowardSoakHours(t *testing.T) {
+	l, _ := newRun(t, 1, false, 0, nil) // no deadline
+	l.At(clock.Instant(time.Millisecond), KindDeliver, 0, nil)
+
+	// With no deadline the tick schedule never ends, so bound it by steps and
+	// then check the kinds that must not be banked.
+	for _, tc := range []struct {
+		kind OutcomeKind
+		bank bool
+	}{
+		{OutcomeDeadline, true},
+		{OutcomeQuiescent, false},
+		{OutcomeHalted, false},
+		{OutcomeStepLimit, false},
+	} {
+		o := Outcome{Kind: tc.kind}
+		if got := o.CountsTowardSoakHours(); got != tc.bank {
+			t.Errorf("%v counts toward soak hours = %v, want %v", tc.kind, got, tc.bank)
+		}
+	}
+	_ = l
 }

@@ -873,6 +873,16 @@ safety claim**; a run in which nothing made progress is a liveness result and a 
 sentences are true at once. (Promoted from `sim/toy`'s acceptance note, where it was a property of
 one workload, to a property of the oracle framework.)
 
+**Any assertion over an accumulated discrete quantity states its expected signal and demonstrates
+that the signal exceeds quantization noise.** A delta the rounding can erase is not an assertion. The
+drift test that produced this rule asserted a 0.2-tick difference over an integer tick count: the
+difference it checked could not exist, and it would have passed while measuring nothing had the
+boundary fallen a nanosecond differently. This is the dangerous kind of weak test precisely because
+it is green — a test that fails when it should pass is fixed within the hour, and one that passes
+while measuring rounding is banked as evidence. State the signal, state the noise floor, and put both
+in the test's own comment so the next person to shorten the window sees why they should not
+(DESIGN-A0.6 §2).
+
 **A rule is wired only when a planted violation in live code fails the lane.** The fixture proves
 the rule; the planted hit proves the wiring. They are different claims and the second is the one that
 has been wrong: a rule can be correct and unreachable because its scope table, its package
