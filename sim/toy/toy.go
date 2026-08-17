@@ -76,6 +76,20 @@ const (
 	numFlaws
 )
 
+// ParseFlaw is the inverse of String, for command lines and bundle metadata.
+//
+// Unknown names are refused rather than defaulting to FlawNone: a typo that
+// silently selected the correct toy would report a clean sweep for a flaw
+// nobody ran.
+func ParseFlaw(s string) (Flaw, error) {
+	for f := FlawNone; f < numFlaws; f++ {
+		if f.String() == s {
+			return f, nil
+		}
+	}
+	return FlawNone, fmt.Errorf("toy: unknown flaw %q", s)
+}
+
 func (f Flaw) String() string {
 	switch f {
 	case FlawNone:

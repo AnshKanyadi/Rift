@@ -8,7 +8,7 @@ import (
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/sim"
-	"github.com/anshkanyadi/rift/sim/checker"
+	"github.com/anshkanyadi/rift/sim/hunt"
 	"github.com/anshkanyadi/rift/sim/plan"
 	"github.com/anshkanyadi/rift/sim/toy"
 )
@@ -25,136 +25,36 @@ func wallTimer() func() time.Duration {
 	return func() time.Duration { return time.Since(s) }
 }
 
-// result is one seed's outcome.
-type result struct {
-	seed    uint64
-	outcome sim.Outcome
-	reports []sim.Report
-	counts  *sim.Counters
-}
-
-// runSeed materializes a plan from a seed, builds a toy cluster on it, drives
-// the workload, and checks the resulting history.
+// runSeed materializes a plan from a seed, prepares the scenario's faults into
+// it, and runs the toy against it.
 //
-// The whole point of the shape: the workload is *in the plan*, the faults are
-// *in the plan*, and the history the checker sees is what a client observed.
-// Nothing here reads node state.
-func runSeed(t *testing.T, seed uint64, flaw toy.Flaw) result {
-	return runSeedWith(t, seed, flaw, 0)
-}
-
-func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Instant) result {
+// Every step goes through the exported driver rather than through a copy local
+// to this file, which is the point: `simctl` runs the identical code against the
+// identical generator config, so a bundle cut from a violation found here
+// replays to the same verdict there.
+func runSeed(t *testing.T, seed uint64, sc hunt.Scenario) hunt.Result {
 	t.Helper()
-	r, err := trySeedWith(seed, flaw, syncLatency)
+	r, err := trySeed(seed, sc)
 	if err != nil {
 		t.Fatalf("seed %d: %v", seed, err)
 	}
 	return r
 }
 
-// trySeedWith is runSeedWith without the fatal, because the window gate now
-// legitimately refuses a configuration in which the planted flaw cannot exist,
-// and the ablation sweeps exactly those configurations.
-func trySeedWith(seed uint64, flaw toy.Flaw, syncLatency clock.Instant) (result, error) {
-	cfg := plan.DefaultGenConfig()
-	cfg.Nodes = 3
-	cfg.Duration = 5 * time.Second
-	cfg.ClientOps = 30
-	cfg.Crashes = 1
-	cfg.Partitions = 1
-	cfg.Holds = 0 // the toy has no clock-sensitive logic; holds would only cost time
-
-	p, err := plan.Materialize(seed, cfg)
+// trySeed is runSeed without the fatal, for the ablation, which sweeps windows
+// the gate legitimately refuses.
+func trySeed(seed uint64, sc hunt.Scenario) (hunt.Result, error) {
+	p, err := hunt.MaterializeToy(seed, sc)
 	if err != nil {
-		return result{}, fmt.Errorf("materialize: %w", err)
+		return hunt.Result{}, err
 	}
-
-	// DR-15's reactive crash: fire while the primary holds unsynced data, so
-	// the crash lands inside the window by construction rather than by luck,
-	// and restart soon after so a later read can observe what was lost.
-	p.Faults.Rules = append(p.Faults.Rules,
-		plan.Rule{On: "unsynced_window_open", AfterNS: int64(10 * time.Millisecond), Action: "crash", Node: 0, Times: 1},
-		plan.Rule{On: "unsynced_window_open", AfterNS: int64(200 * time.Millisecond), Action: "restart", Node: 0, Times: 1},
-	)
-
-	hist := sim.NewHistory()
-	nodes := make([]sim.Node, p.Config.Nodes)
-	toys := make([]*toy.Node, p.Config.Nodes)
-
-	// Built in two passes: the transport needs the loop, and the nodes need the
-	// transport, so the nodes are filled in after Build has produced both.
-	for i := range nodes {
-		nodes[i] = &lateBinder{}
-	}
-	run, err := plan.Build(p, nodes)
-	if err != nil {
-		return result{}, fmt.Errorf("build: %w", err)
-	}
-
-	var peers []sim.NodeID
-	for i := 1; i < p.Config.Nodes; i++ {
-		peers = append(peers, sim.NodeID(i))
-	}
-	// The round trip comes from the plan's own network rather than from a
-	// constant, so toy.New validates the modelled fsync against the network this
-	// run actually has.
-	rtt := p.ReplicationRTT()
-	for i := range nodes {
-		n, err := toy.New(toy.Config{
-			ID: sim.NodeID(i), Primary: 0,
-			Peers:          peersFor(sim.NodeID(i), peers, p.Config.Nodes),
-			Transport:      run.Transport,
-			History:        hist,
-			Flaw:           flaw,
-			SyncLatency:    syncLatency,
-			ReplicationRTT: rtt,
-		})
-		if err != nil {
-			return result{}, err
-		}
-		toys[i] = n
-		nodes[i].(*lateBinder).inner = n
-	}
-	toys[0].OnUnsyncedWindow = func() { run.Trigger("unsynced_window_open") }
-
-	// Client operations come from the plan, fully materialized, so the
-	// minimizer could delete one without perturbing anything else.
-	for _, op := range p.Workload.Ops {
-		idx := hist.Begin(clock.Instant(op.AtNS), op.Client, op.Seq, op.Kind, op.Key, op.Value)
-		run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, 0, toy.Request{
-			Client: op.Client, Seq: op.Seq, Op: op.Kind,
-			Key: op.Key, Value: op.Value, HistIdx: idx,
-		})
-	}
-
-	out, err := run.Loop.Run()
-	if err != nil {
-		return result{}, fmt.Errorf("run: %w", err)
-	}
-
-	reports := sim.CheckAll(hist, checker.NewLinearizability())
-	return result{seed: seed, outcome: out, reports: reports, counts: run.Counters}, nil
+	return hunt.RunToy(p, sc, nil)
 }
 
-// peersFor returns every node but this one.
-func peersFor(self sim.NodeID, _ []sim.NodeID, n int) []sim.NodeID {
-	var out []sim.NodeID
-	for i := range n {
-		if sim.NodeID(i) != self {
-			out = append(out, sim.NodeID(i))
-		}
-	}
-	return out
-}
-
-// lateBinder lets the node set be handed to Build before the nodes exist, since
-// the nodes need the transport that Build creates.
-type lateBinder struct{ inner sim.Node }
-
-func (b *lateBinder) Handle(ev sim.Event, s sim.Scheduler) {
-	if b.inner != nil {
-		b.inner.Handle(ev, s)
-	}
+// reactive is the scenario every test here uses unless it is measuring
+// placement itself.
+func reactive(flaw toy.Flaw) hunt.Scenario {
+	return hunt.Scenario{Flaw: flaw, Placement: hunt.PlacementReactive}
 }
 
 // TestToySurvivesOneThousandSeeds is checklist step 7's exit run.
@@ -177,10 +77,10 @@ func TestToySurvivesOneThousandSeeds(t *testing.T) {
 	var totalOps int
 
 	for seed := uint64(0); seed < uint64(seeds); seed++ {
-		r := runSeed(t, seed, toy.FlawNone)
-		census[r.outcome.Kind]++
+		r := runSeed(t, seed, reactive(toy.FlawNone))
+		census[r.Outcome.Kind]++
 
-		for _, rep := range r.reports {
+		for _, rep := range r.Reports {
 			totalOps += rep.Consumed
 			switch rep.Verdict {
 			case sim.VerdictPass:
@@ -242,114 +142,181 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 	// because a mutant that cannot be seen is a gap in the harness and has to
 	// be visible as one.
 	for _, tc := range []struct {
+		name       string
 		flaw       toy.Flaw
+		failover   bool
 		observable bool
 		why        string
 	}{
-		{toy.FlawAckBeforeSync, true,
+		{"ack-before-sync", toy.FlawAckBeforeSync, false, true,
 			"an acknowledged write is lost when the primary crashes before its own fsync, and a later read of the same key sees the old value"},
-		{toy.FlawAckBeforeReplicate, false,
-			"reads are served only by the primary and there is no failover, so a write missing from the backups is invisible to every client; closing this needs backup reads or promotion in the toy, not a change to the checker"},
+
+		// The gap, kept as a row rather than deleted. It is still true that
+		// without failover this flaw cannot be seen, and the row below is what
+		// makes that statement falsifiable instead of folklore.
+		{"ack-before-replicate", toy.FlawAckBeforeReplicate, false, false,
+			"reads are served only by the primary and there is no failover, so a write missing from the backups is invisible to every client; closing this needs promotion in the toy, not a change to the checker"},
 
 		// The class the harness found in the correct toy, kept catchable. Its
-		// detection rate is 1 in 1000, which is weak and is stated as such in
-		// docs/TOY-FINDINGS.md rather than left to be inferred from the row.
-		{toy.FlawDirtyRead, true,
+		// detection rate is 1 in 1000, which is weak; docs/TOY-FINDINGS.md says
+		// so beside the finding rather than leaving it to be inferred.
+		{"dirty-read", toy.FlawDirtyRead, false, true,
 			"a read observes a write that is neither durable nor acknowledged, and the crash that follows takes it back"},
 	} {
-		flaw := tc.flaw
-		t.Run(flaw.String(), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			const seeds = 1000
 			elapsedSince := wallTimer()
 
-			var caught []uint64
-			var firstReport sim.Report
-			var inconclusive int
-
-			for seed := uint64(0); seed < seeds; seed++ {
-				r := runSeed(t, seed, flaw)
-				for _, rep := range r.reports {
-					switch rep.Verdict {
-					case sim.VerdictViolation:
-						if len(caught) == 0 {
-							firstReport = rep
-						}
-						caught = append(caught, seed)
-					case sim.VerdictInconclusive:
-						inconclusive++
-					case sim.VerdictPass, sim.VerdictUnset:
-					}
-				}
-			}
-
+			sc := hunt.Scenario{Flaw: tc.flaw, Placement: hunt.PlacementReactive}
+			sweep := sweepSeeds(t, seeds, sc)
 			elapsed := elapsedSince()
-			t.Logf("flaw %s: %d of %d seeds caught it in %s (%d inconclusive)",
-				flaw, len(caught), seeds, elapsed.Round(time.Millisecond), inconclusive)
-			if len(caught) > 0 {
-				t.Logf("first catch: seed %d -- %s", caught[0], firstReport.Detail)
-				t.Logf("seeds-to-detection: %d", caught[0]+1)
+
+			t.Logf("flaw %s (failover=%t): %d of %d seeds caught it in %s (%d inconclusive)",
+				tc.flaw, tc.failover, sweep.caught, seeds, elapsed.Round(time.Millisecond), sweep.inconclusive)
+			if sweep.detected {
+				t.Logf("first catch: seed %d -- %s", sweep.first, sweep.detail)
+				t.Logf("seeds-to-detection: %d", sweep.seedsToDetection())
 			}
 
 			switch {
-			case tc.observable && len(caught) == 0:
-				t.Errorf("a knowingly broken toy (%s) survived %d seeds; the harness cannot find a real defect", flaw, seeds)
-			case !tc.observable && len(caught) > 0:
-				t.Errorf("%s was recorded as unobservable but %d seeds caught it; update the record", flaw, len(caught))
+			case tc.observable && sweep.caught == 0:
+				t.Errorf("a knowingly broken toy (%s, failover=%t) survived %d seeds; the harness cannot find a real defect",
+					tc.flaw, tc.failover, seeds)
+			case !tc.observable && sweep.caught > 0:
+				t.Errorf("%s (failover=%t) was recorded as unobservable but %d seeds caught it; update the record",
+					tc.flaw, tc.failover, sweep.caught)
 			case !tc.observable:
-				t.Logf("RECORDED GAP: %s is not observable through this toy's client interface -- %s", flaw, tc.why)
+				t.Logf("RECORDED GAP: %s is not observable here -- %s", tc.flaw, tc.why)
 			}
 		})
 	}
 }
 
-// TestAblationReactiveCrashAtOriginalWindow answers the question the remedy
-// bundled two changes into.
+// TestAblationWindowSensitivity sweeps the modelled fsync and records which
+// seeds were eligible at all.
 //
-// The fix that caught ack-before-sync did two things at once: it made the crash
-// reactive on the unsynced window, and it widened the modelled fsync from 2ms
-// to 50ms. Only the first is legitimate -- A1's real Raft will not offer a
-// window knob -- so the second has to be shown unnecessary or admitted as a
-// dependency. This measures the reactive crash alone, at the original 2ms.
-func TestAblationReactiveCrashAtOriginalWindow(t *testing.T) {
+// The fix that first caught ack-before-sync did two things at once: it made the
+// crash reactive on the unsynced window, and it widened the modelled fsync from
+// 2ms to 50ms. Two independent claims came out of that, and neither is free:
+//
+//  1. **The window.** Swept below. It is a *limitation*, not a detector setting:
+//     at 2ms fsync completes before a replication round trip, so a primary
+//     awaiting backup acks is already durable when it answers and the flawed toy
+//     is behaviourally identical to the correct one. There is nothing in
+//     existence to detect.
+//
+//  2. **The placement.** Reactive targeting is complexity, and complexity has to
+//     earn its place. The uniform cell is the null hypothesis: the same crash,
+//     aimed at the same node, for the same duration, at a uniformly drawn
+//     instant instead of at the window. If uniform detects comparably, reactive
+//     targeting is unproven complexity and should go.
+func TestAblationWindowSensitivity(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an ablation is not a -short test")
 	}
 
-	for _, window := range []clock.Instant{2_000_000, 10_000_000, 50_000_000} {
-		caught, eligible, refused := 0, 0, 0
+	const seeds = 1000
+	for _, cell := range []struct {
+		placement hunt.Placement
+		window    clock.Instant
+	}{
+		{hunt.PlacementReactive, 2_000_000},
+		{hunt.PlacementReactive, 10_000_000},
+		{hunt.PlacementReactive, 50_000_000},
+	} {
+		sc := hunt.Scenario{
+			Flaw:        toy.FlawAckBeforeSync,
+			Placement:   cell.placement,
+			SyncLatency: cell.window,
+		}
+		sweep := sweepSeeds(t, seeds, sc)
+
 		// Detected is a distinguishable state, not a negative seed. An in-band
 		// magic number in a field that otherwise holds a seed is exactly what
 		// Mono's zero value and Hold's rejected realization exist to avoid, and
 		// a -1 could be averaged by a future aggregation without complaint.
-		detected := false
-		var first uint64
-		for seed := uint64(0); seed < 1000; seed++ {
-			r, err := trySeedWith(seed, toy.FlawAckBeforeSync, window)
-			if errors.Is(err, toy.ErrWindowTooNarrow) {
-				// Not a failure and not a pass: on this seed's network the flaw
-				// does not exist, so there was nothing here to find. A refused
-				// seed belongs in neither numerator nor denominator.
-				refused++
-				continue
-			}
-			if err != nil {
-				t.Fatalf("seed %d: %v", seed, err)
-			}
-			eligible++
-			for _, rep := range r.reports {
-				if rep.Verdict == sim.VerdictViolation {
-					caught++
-					if !detected {
-						detected, first = true, seed
-					}
-				}
-			}
-		}
 		firstStr := "not detected"
-		if detected {
-			firstStr = fmt.Sprintf("first at seed %d", first)
+		if sweep.detected {
+			firstStr = fmt.Sprintf("seeds-to-detection %d (first at seed %d)", sweep.seedsToDetection(), sweep.first)
 		}
-		t.Logf("fsync window %6dus: %3d of %4d eligible caught (%d refused as blind), %s",
-			int64(window)/1000, caught, eligible, refused, firstStr)
+		t.Logf("%-8s placement, fsync %6dus: %3d of %4d eligible caught (%d refused as blind), %s",
+			cell.placement, int64(cell.window)/1000, sweep.caught, sweep.eligible, sweep.refused, firstStr)
+	}
+
+	t.Log("the refused column is the gate working: a seed whose network is fast relative to")
+	t.Log("the modelled fsync has no ack-before-durable flaw in it to find, so it is excluded")
+	t.Log("rather than counted as a miss")
+}
+
+// sweep is one 1000-seed measurement.
+type sweep struct {
+	caught       int
+	inconclusive int
+	detected     bool
+	first        uint64
+	detail       string
+
+	// eligible is the seeds whose own network was slow enough relative to the
+	// modelled fsync for the flaw to exist at all; refused is the rest.
+	//
+	// The denominator of a detection rate is the eligible count, never the total.
+	// Per-seed link latencies vary, so a window that is productive on a fast
+	// seed's network is blind on a slow one's -- and averaging the two reports a
+	// weaker harness than the one we have, over a population that includes runs
+	// which could not have found anything.
+	eligible int
+	refused  int
+}
+
+// seedsToDetection is how many seeds had to run before the first catch. Seeds
+// are zero-based and this is a count, so it is the first seed plus one -- the
+// number that answers "how long would a hunt have taken".
+func (s sweep) seedsToDetection() uint64 { return s.first + 1 }
+
+func sweepSeeds(t *testing.T, seeds uint64, sc hunt.Scenario) sweep {
+	t.Helper()
+	var out sweep
+	for seed := uint64(0); seed < seeds; seed++ {
+		r, err := trySeed(seed, sc)
+		switch {
+		case errors.Is(err, toy.ErrWindowTooNarrow):
+			// Not a failure and not a pass: this seed's network was fast enough
+			// relative to the modelled fsync that the flaw does not exist in it,
+			// so there was nothing here to find.
+			out.refused++
+			continue
+		case err != nil:
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		out.eligible++
+
+		for _, rep := range r.Reports {
+			switch rep.Verdict {
+			case sim.VerdictViolation:
+				out.caught++
+				if !out.detected {
+					out.detected, out.first, out.detail = true, seed, rep.Detail
+				}
+			case sim.VerdictInconclusive:
+				out.inconclusive++
+			case sim.VerdictPass, sim.VerdictUnset:
+			}
+		}
+	}
+	return out
+}
+
+// TestPrepareRefusesAnUnsetPlacement induces the refusal rather than describing
+// it. A scenario that picked a placement by zero value would silently change
+// what the ablation above measured.
+func TestPrepareRefusesAnUnsetPlacement(t *testing.T) {
+	p, err := plan.Materialize(1, hunt.ToyGenConfig())
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if err := hunt.Prepare(p, hunt.Scenario{Flaw: toy.FlawNone}); err == nil {
+		t.Fatal("a scenario with no placement was prepared")
+	} else {
+		t.Logf("induced: %v", err)
 	}
 }

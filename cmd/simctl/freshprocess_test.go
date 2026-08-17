@@ -1,6 +1,8 @@
 package main_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,6 +170,116 @@ func perturbOneFault(s string) (string, bool) {
 		return "", false
 	}
 	return s[:start] + "1000000" + s[k:], true
+}
+
+// TestToyViolationBundlesAndReplays is checklist step 8's second half, proved
+// end to end rather than described.
+//
+// Before this existed, `simctl` hashed a run of do-nothing nodes: the gate
+// covered the loop, transport, plan and clock, and the toy was reachable only
+// through `go test`. So no toy-level violation could become a replayable
+// bundle, `seeds/` held only a README, and the repro chain -- the thing every
+// reproducibility claim in CLAUDE.md rests on -- had no mechanism behind it.
+//
+// The chain, whole: hunt seeds through the CLI until one trips the knowingly
+// broken toy; bundle it; replay the bundle from a *fresh process* and require
+// the same verdict, not merely the same hash. The hash says the run was
+// reproduced. The verdict says the finding was, and only the second is the claim
+// a corpus entry makes.
+func TestToyViolationBundlesAndReplays(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawning processes is not a -short test")
+	}
+	bin := build(t)
+	dir := t.TempDir()
+
+	// Hunt. The sweep is through the command line on purpose: it is the path a
+	// human takes, and a chain proved only through library calls would leave the
+	// CLI untested at exactly the seam that matters.
+	const maxSeeds = 200
+	seed, out := -1, ""
+	for s := range maxSeeds {
+		b, err := exec.Command(bin, "run", "--workload=toy", "--flaw=ack-before-sync",
+			fmt.Sprintf("--seed=%d", s), "--out", dir).CombinedOutput()
+		if err != nil {
+			t.Fatalf("run seed %d: %v\n%s", s, err, b)
+		}
+		if strings.Contains(string(b), "VIOLATION") {
+			seed, out = s, string(b)
+			break
+		}
+	}
+	if seed < 0 {
+		t.Fatalf("a knowingly broken toy survived %d seeds through simctl; either the harness "+
+			"cannot find a real defect or the CLI is not driving the toy", maxSeeds)
+	}
+	t.Logf("hunted: seed %d trips ack-before-sync (seeds-to-detection %d)", seed, seed+1)
+	t.Logf("%s", strings.TrimSpace(out))
+
+	// The bundle must carry everything the finding is made of.
+	for _, f := range []string{"plan.json", "meta.json", "history.json"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Fatalf("bundle is missing %s: %v", f, err)
+		}
+	}
+	var meta struct {
+		Seed      uint64 `json:"seed"`
+		Workload  string `json:"workload"`
+		Violation *struct {
+			Checker   string `json:"checker"`
+			Detail    string `json:"detail"`
+			AtNS      int64  `json:"at_ns"`
+			Step      uint64 `json:"step"`
+			StepKnown bool   `json:"step_known"`
+		} `json:"violation"`
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		t.Fatalf("reading meta: %v", err)
+	}
+	if err := json.Unmarshal(b, &meta); err != nil {
+		t.Fatalf("parsing meta: %v", err)
+	}
+	switch {
+	case meta.Violation == nil:
+		t.Fatal("the bundle records no violation, so it cannot be a corpus entry")
+	case meta.Seed != uint64(seed):
+		t.Errorf("bundle records seed %d, hunted %d", meta.Seed, seed)
+	case meta.Workload != "toy":
+		t.Errorf("bundle records workload %q", meta.Workload)
+	case !meta.Violation.StepKnown:
+		t.Error("the violation has no step ordinal, so it locates a finding in virtual time only")
+	}
+	t.Logf("bundle: seed %d, %s at instant %d, step %d",
+		meta.Seed, meta.Violation.Checker, meta.Violation.AtNS, meta.Violation.Step)
+
+	// Replay, fresh process. Same hash and same verdict.
+	rb, err := exec.Command(bin, "replay", "--bundle", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("replay: %v\n%s", err, rb)
+	}
+	text := string(rb)
+	for _, want := range []string{"MATCH", "violation reproduced"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("replay did not reproduce the finding; missing %q in:\n%s", want, text)
+		}
+	}
+	if !strings.Contains(text, meta.Violation.Detail) {
+		t.Errorf("the replayed violation is not the recorded one:\n%s", text)
+	}
+	t.Logf("replayed from a fresh process:\n%s", strings.TrimSpace(text))
+
+	// And the triage gate on the same bundle: this violation must NOT survive
+	// having its faults removed, or it was the harness all along.
+	sb, err := exec.Command(bin, "replay", "--bundle", dir, "--strip-faults").CombinedOutput()
+	if err != nil {
+		t.Fatalf("stripped replay: %v\n%s", err, sb)
+	}
+	if !strings.Contains(string(sb), "VIOLATION DID NOT SURVIVE") {
+		t.Errorf("a violation found by crashing the primary survived with zero injected faults, "+
+			"which makes it the harness or the workload rather than the toy:\n%s", sb)
+	}
+	t.Logf("triage:\n%s", strings.TrimSpace(string(sb)))
 }
 
 // TestStrippedFaultReplay demonstrates the triage affordance: the first

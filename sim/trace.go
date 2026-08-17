@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/anshkanyadi/rift/clock"
 )
 
 // Trace is the rolling hash of a run.
@@ -34,6 +36,15 @@ type Trace struct {
 	h     [32]byte
 	steps []string
 	limit int
+
+	// instants is the virtual time each retained step fired at, parallel to
+	// steps. It is not part of the hash -- the instant is already folded in --
+	// and exists only so a finding reported at an instant can be turned into a
+	// step ordinal. An end-of-run checker concludes "this key's history is not
+	// linearizable, first operation at instant T", and an investigator needs the
+	// step to diff a replay against; without this they have a number in one
+	// coordinate system and a trace in another.
+	instants []int64
 }
 
 // NewTrace returns a trace that retains at most limit per-step digests. Zero
@@ -59,7 +70,26 @@ func (t *Trace) Step(step uint64, ev Event) {
 
 	if t.limit == 0 || len(t.steps) < t.limit {
 		t.steps = append(t.steps, hex.EncodeToString(t.h[:8]))
+		t.instants = append(t.instants, int64(ev.At))
 	}
+}
+
+// StepAt returns the 1-based ordinal of the first retained step at or after at,
+// which is how a violation reported in virtual time becomes a location in the
+// trace.
+//
+// Instants are non-decreasing across a run — the loop asserts it — so this is a
+// scan over sorted data. It reports false when no retained step reaches that
+// instant, which happens when the trace was capped short of it; a bundle then
+// records the instant alone rather than an invented step, since a wrong step
+// ordinal sends an investigator to the wrong event with full confidence.
+func (t *Trace) StepAt(at clock.Instant) (uint64, bool) {
+	for i, ins := range t.instants {
+		if ins >= int64(at) {
+			return uint64(i + 1), true
+		}
+	}
+	return 0, false
 }
 
 // Sum is the digest of the whole run, short enough to paste into a report and
