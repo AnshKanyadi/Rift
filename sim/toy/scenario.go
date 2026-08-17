@@ -106,6 +106,12 @@ func (p Placement) String() string {
 	return "unknown"
 }
 
+// CrashDelay is the reactive crash's offset from the window opening, exported
+// because ValidateWindow's reachability constraint is defined against it and a
+// test that hard-coded 10ms would silently stop testing the real bound the day
+// the constant moved.
+func CrashDelay() clock.Instant { return crashDelay }
+
 // crashDelay and restartDelay are the reactive rule's offsets from the window
 // opening. The uniform placement reuses the same 190ms downtime so that the two
 // cells differ in *placement only* -- if uniform also changed how long the

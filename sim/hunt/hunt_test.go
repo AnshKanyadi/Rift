@@ -261,6 +261,7 @@ func TestAblationCrashPlacementAndWindow(t *testing.T) {
 	}{
 		{toy.PlacementReactive, 2_000_000},
 		{toy.PlacementReactive, 10_000_000},
+		{toy.PlacementReactive, 11_000_000},
 		{toy.PlacementReactive, 50_000_000},
 		{toy.PlacementUniform, 50_000_000},
 	} {

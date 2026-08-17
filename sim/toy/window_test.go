@@ -53,12 +53,34 @@ func TestWindowValidationIsAGate(t *testing.T) {
 	}
 	t.Logf("induced: %v", err)
 
-	// Exactly at the margin passes; one nanosecond below does not.
-	if err := toy.ValidateWindow(rtt*toy.MinWindowMargin, rtt); err != nil {
-		t.Errorf("exactly at the margin was refused: %v", err)
-	}
+	// Constraint 1, the equivalence bound, at its exact edge. One nanosecond
+	// below parity is refused; parity itself clears THIS constraint, and is then
+	// judged by the reachability one below -- which is the whole point of them
+	// being separate checks with separate reasons.
 	if err := toy.ValidateWindow(rtt*toy.MinWindowMargin-1, rtt); err == nil {
-		t.Error("one nanosecond below the margin was accepted")
+		t.Error("one nanosecond below parity with the round trip was accepted")
+	}
+
+	// Constraint 2, reachability, and the one the re-measured curve showed
+	// actually binds. A window at or below the reactive crash delay has closed
+	// before the crash lands, so every attempt yields an in-flight operation the
+	// checker refuses to score -- 11 per mille at parity against 534 one
+	// millisecond above it.
+	//
+	// A fast network is used here so constraint 1 is satisfied and the refusal
+	// can only be constraint 2; otherwise this would prove nothing about which
+	// check fired.
+	const fast = clock.Instant(1_000_000) // 1ms round trip
+	atDelay := toy.CrashDelay()
+	if err := toy.ValidateWindow(atDelay, fast); err == nil {
+		t.Error("a window exactly equal to the crash delay was accepted; the crash lands after the window has closed")
+	} else if !strings.Contains(err.Error(), "crash delay") {
+		t.Errorf("the refusal blames the wrong constraint: %v", err)
+	} else {
+		t.Logf("induced: %v", err)
+	}
+	if err := toy.ValidateWindow(atDelay+1, fast); err != nil {
+		t.Errorf("one nanosecond past the crash delay was refused, but the curve is at full power there: %v", err)
 	}
 }
 

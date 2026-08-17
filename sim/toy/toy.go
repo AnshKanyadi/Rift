@@ -119,35 +119,68 @@ func (f Flaw) String() string {
 
 // DefaultSyncLatency is the modelled fsync duration, and it is load-bearing.
 //
-// # Why 50ms, and why lowering it silently breaks the harness
+// # Two independent constraints, and the one that actually binds
 //
-// The ack-before-durable flaw class only *exists* when fsync is slower than a
-// replication round trip. Below that, a primary that waits for backup
-// acknowledgements is already durable by the time it answers, so the flawed
-// implementation and the correct one are behaviourally identical -- there is no
-// incorrect behaviour in existence for any oracle to find, and no amount of
-// crash targeting helps. The measured curve:
+// The ack-before-durable class needs two separate things to be true, and until
+// the curve below was re-measured on a fixed harness only the first was checked:
 //
-//	fsync window   2ms:   0 of 1000 seeds detect ack-before-sync
-//	fsync window  10ms:   2 of 1000, first at seed 663
-//	fsync window  50ms:  82 of 1000, first at seed 29
+//  1. **Equivalence.** fsync must be slower than a replication round trip. Below
+//     that, a primary awaiting backup acknowledgements is already durable when it
+//     answers, so the flawed toy and the correct one are behaviourally identical:
+//     there is no incorrect behaviour in existence for any oracle to find.
 //
-// A future cycle lowering this for speed would return the entire class to
-// unreachable while all thousand seeds pass and every lane stays green -- which
-// is structurally the same failure as the crash injector that marked a node
-// down without telling it: a clean sweep over an empty search space.
+//  2. **Reachability.** The window must outlast the reactive crash's delay. The
+//     crash fires crashDelay after the window opens, so a window narrower than
+//     that has closed -- the write is durable -- before the crash lands, and what
+//     the checker sees is an in-flight operation it correctly refuses to score.
 //
-// So the number is named, the argument lives here rather than in a design doc,
-// and ValidateWindow refuses to run in a regime where the harness's own planted
-// flaws cannot exist.
+// The measured curve, 1000 seeds per row, per *eligible* seed, at the commit that
+// re-measured it. crashDelay is 10ms:
+//
+//	fsync  2ms:     0 eligible of 1000   -- no seed's network is fast enough
+//	fsync  5ms:     1 eligible,    1000 per mille  (a one-seed sample, not a rate)
+//	fsync 10ms:   344 eligible,      11 per mille, first at seed 338
+//	fsync 11ms:   344 eligible,     534 per mille, first at seed 1
+//	fsync 12ms:  1000 eligible,     499 per mille, first at seed 1
+//	fsync 20ms:  1000 eligible,     500 per mille, first at seed 1
+//	fsync 50ms:  1000 eligible,     504 per mille, first at seed 1
+//
+// **The step is between 10ms and 11ms, which is crashDelay, not any multiple of
+// the round trip.** Detection then saturates: 11ms is worth as much as 50ms.
+// That is the empirical answer to a question that had been settled by assertion,
+// and it says the previous rationale was defending the wrong quantity.
+//
+// # Why the number is still 50ms
+//
+// It is now roughly 5x wider than reachability requires, which costs nothing but
+// is no longer *justified* by the curve. Narrowing it is a separate ruling
+// because DefaultSyncLatency is on the execution path: changing it changes every
+// trace hash in the project, including the seed 4242 cross-invocation hash
+// recorded for the CI comparison. It is not narrowed as a side effect of an
+// audit.
+//
+// A future cycle lowering it for speed without re-reading this would return the
+// class to unreachable while all thousand seeds pass and every lane stays green
+// -- structurally the same failure as the crash injector that marked a node down
+// without telling it: a clean sweep over an empty search space. ValidateWindow
+// now refuses that configuration rather than trusting the comment.
 const DefaultSyncLatency = clock.Instant(50_000_000)
 
-// MinWindowMargin is how far the fsync window must exceed the replication round
-// trip before the ack-before-durable class is reliably reachable. Three times,
-// which is not a derived constant but a stated one: at parity the flaw is
-// unreachable, and the measured curve shows detection still marginal at 5x the
-// 2ms floor.
-const MinWindowMargin = 3
+// MinWindowMargin is how far the modelled fsync must exceed the replication
+// round trip. **One**, and it is now a derived number rather than a stated one.
+//
+// It was three, defended by a curve showing detection "still marginal" at 10ms.
+// That curve was measured under the Trigger budget defect, on a harness running
+// at a sixth of its power, so it could not support any margin -- and re-measuring
+// on the fixed harness shows the round trip was never the binding constraint.
+// Parity is the real equivalence threshold: at ratio 1 the flaw exists, and the
+// only reason 10ms detects poorly is crashDelay (see DefaultSyncLatency).
+//
+// A margin above 1 would refuse regimes where the flaw genuinely manifests,
+// which is a gate refusing correct configurations for a reason that is not true.
+// The reachability constraint that *does* bind is checked separately and
+// explicitly, against the quantity that actually governs it.
+const MinWindowMargin = 1
 
 // ValidateWindow refuses a configuration in which the planted flaws cannot
 // manifest.
@@ -165,12 +198,32 @@ func ValidateWindow(syncLatency clock.Instant, replicationRTT clock.Instant) err
 	if syncLatency <= 0 || replicationRTT <= 0 {
 		return fmt.Errorf("toy: window validation needs positive durations, got fsync %d and rtt %d", syncLatency, replicationRTT)
 	}
+
+	// Constraint 1: equivalence. Below parity the flawed toy and the correct toy
+	// behave identically, so there is nothing in existence to detect.
 	if int64(syncLatency) < int64(replicationRTT)*MinWindowMargin {
 		return fmt.Errorf(
-			"toy: modelled fsync of %dus does not exceed the replication round trip of %dus by the required %dx; "+
+			"toy: modelled fsync of %dus does not exceed the replication round trip of %dus; "+
 				"in this regime a primary awaiting backup acks is already durable when it answers, so ack-before-durable "+
 				"cannot manifest at all and a clean sweep would be a sweep over an empty search space: %w",
-			int64(syncLatency)/1000, int64(replicationRTT)/1000, MinWindowMargin, ErrWindowTooNarrow)
+			int64(syncLatency)/1000, int64(replicationRTT)/1000, ErrWindowTooNarrow)
+	}
+
+	// Constraint 2: reachability, and the one that actually binds. The reactive
+	// crash fires crashDelay after the window opens; a window that has already
+	// closed by then leaves an in-flight operation the checker correctly refuses
+	// to score, which is not a violation and not a detection.
+	//
+	// Strictly greater, with no extra margin, because the curve says none is
+	// needed: at exactly crashDelay detection is 11 per mille, one millisecond
+	// above it is 534, and it is flat from there to 50ms. Demanding a multiple
+	// would refuse configurations that are measurably at full power.
+	if syncLatency <= crashDelay {
+		return fmt.Errorf(
+			"toy: modelled fsync of %dus does not outlast the reactive crash delay of %dus, so the write is "+
+				"already durable when the crash lands and every attempt produces an in-flight operation the "+
+				"checker cannot score; detection at parity is 11 per mille against 534 one millisecond above it: %w",
+			int64(syncLatency)/1000, int64(crashDelay)/1000, ErrWindowTooNarrow)
 	}
 	return nil
 }

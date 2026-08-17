@@ -36,40 +36,62 @@ same comparison read 82 vs 43 with uniform winning on seeds-to-detection. The co
 because the harness got stronger, which is the argument for re-measuring an ablation whenever the
 machinery under it changes rather than quoting a number taken once.
 
-### The window: still a limitation, now an enforced one
+### The window: two constraints, and the gate was checking the wrong one
 
-**Wrong framing:** the harness fails to detect a present bug at a 2ms fsync window.
+**Wrong framing:** the harness fails to detect a present bug at a narrow fsync window.
 
-**Right framing:** at 2ms *there is no incorrect behaviour in existence to detect.* fsync completes
-before a replication round trip does, so a primary awaiting backup acknowledgements is already
-durable when it answers — the flawed toy and the correct toy are behaviourally identical. No oracle
-could find anything, and no amount of crash targeting would help.
+**Right framing:** at a narrow window *there is no incorrect behaviour in existence to detect.* That
+much was already established. What was not established is *which* narrowness matters, and the answer
+turned out not to be the one the gate was defending.
 
-**The window does not tune the detector. It selects whether the flaw manifests at all.** That is a
-limitation, not a gap.
+The class needs two independent things to be true:
 
-That fact is now enforced rather than remembered. `toy.New` validates the modelled fsync against the
-plan's own `ReplicationRTT` and refuses to construct a node in a regime below the margin, so the
-2ms and 10ms cells report **0 of 0 eligible, 1000 refused as blind**. Eligibility is per seed, since
-per-seed link latencies vary — which is a sharper statement than the old global curve could make: a
-window that is productive on a fast seed's network is blind on a slow one's, and a refused seed
-belongs in neither numerator nor denominator.
+1. **Equivalence.** fsync must be slower than a replication round trip, or a primary awaiting backup
+   acknowledgements is already durable when it answers and the flawed toy is behaviourally identical
+   to the correct one.
+2. **Reachability.** The window must outlast the reactive crash's delay. The crash fires `crashDelay`
+   after the window opens; a window that has already closed leaves an in-flight operation the checker
+   correctly refuses to score.
 
-The historical curve, measured before the gate existed, is retained because it is what justified the
-gate:
+`MinWindowMargin` was 3, defended by a curve showing detection "still marginal" at 10ms. **That curve
+was measured under the `Trigger` budget defect**, on a harness running at a sixth of its power, so it
+could not support any margin. Re-measured at `MinWindowMargin = 1` on the fixed harness, per eligible
+seed, with `crashDelay` at 10ms:
 
-| modelled fsync | detections / 1000 | seeds to first |
-|---|---|---|
-| 2 ms | 0 | not detected |
-| 10 ms | 2 | 663 |
-| 50 ms | 82 | 29 |
+| modelled fsync | eligible / 1000 | detections per mille | seeds to first |
+|---|---|---|---|
+| 2 ms | 0 | — | no seed's network is fast enough |
+| 5 ms | 1 | (one-seed sample, not a rate) | 338 |
+| **10 ms** | 344 | **11** | 338 |
+| **11 ms** | 344 | **534** | 1 |
+| 12 ms | 1000 | 499 | 1 |
+| 20 ms | 1000 | 500 | 1 |
+| 50 ms | 1000 | 504 | 1 |
 
-**An open question for Ansh.** `MinWindowMargin` is 3, and at that margin the gate refuses the entire
-10ms row — a regime that historically produced 2 detections in 1000. So the gate is *conservative*
-relative to its own stated rationale: it refuses some regimes where the flaw can manifest, rarely,
-rather than only those where it cannot. Safe direction, but it is stricter than the sentence
-defending it, and the margin should either be lowered to ~1 or the rationale reworded to say
-"reliably reachable" rather than "reachable". This is flagged, not decided.
+**The step is between 10ms and 11ms — `crashDelay` — not at any multiple of the round trip.** Detection
+then saturates completely: 11ms is worth as much as 50ms.
+
+Three conclusions, all of which change something:
+
+- **The margin is 1, and it is now derived rather than stated.** Parity is the true equivalence
+  threshold. A margin above it refuses regimes where the flaw genuinely manifests, which is a gate
+  refusing correct configurations for a reason that is not true.
+- **The binding constraint is checked explicitly, against the quantity that governs it.**
+  `ValidateWindow` now refuses `syncLatency <= crashDelay`, strictly and with no extra margin, because
+  the curve says none is needed.
+- **The 50ms default is no longer justified by the curve.** It is ~5x wider than reachability
+  requires. It is *not* narrowed here: `DefaultSyncLatency` is on the execution path, so changing it
+  changes every trace hash including the ratified seed 4242 cross-invocation hash. That is a ruling,
+  not an audit side effect.
+
+Eligibility remains per seed, since per-seed link latencies vary and a window productive on a fast
+seed's network is blind on a slow one's. A refused seed is counted in neither numerator nor
+denominator.
+
+`TestWindowCurveIsRecorded` keeps the curve as a live artifact rather than a comment that ages. The
+previous curve went stale invisibly and was used to justify a margin for three cycles; one that is
+re-derived by running cannot fail that way. It asserts the *shape* — refused at the crash delay,
+saturated one millisecond above it — because the shape is the claim.
 
 **The carry into A1:** real Raft has its own window between acknowledgement and durability. This
 assumption is re-tested against it rather than inherited.
