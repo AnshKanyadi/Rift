@@ -70,6 +70,30 @@ var defaultExclude = []string{
 	// DR-11's poller, which adapts the C++ engine's blocking Sync() to the
 	// async durability contract. Whichever of these two names A0.5 and B5
 	// settle on, the other line goes.
+	//
+	// # What happens if neither name is ever claimed
+	//
+	// These are the only entries here for packages that do not exist, and an
+	// exclusion for a package that never arrives is a permanent hole nobody is
+	// watching: the day somebody creates engine/real for an unrelated reason, it
+	// arrives already exempt from every rule, silently, having never been
+	// argued for. That is the opposite of the default this table is built on,
+	// where an unclassified package defaults *in*.
+	//
+	// The enforcement story, so the hole cannot outlive its reason:
+	//
+	//  1. Both lines are a **B5 exit item**. B5 is where the cgo wrapper lands
+	//     and settles the name; the unclaimed line is deleted in that same PR,
+	//     not in a follow-up, on the same rule as A2's "the mutant lands with
+	//     the fix".
+	//  2. Until then they are inert by construction. scopeFor matches on package
+	//     path, and a path that names no package matches nothing, so today these
+	//     two lines change no diagnostic on any file in the tree. The
+	//     TestScopeTable rows below pin that: they assert the exclusion is exact
+	//     rather than a prefix, so neither line can adopt a sibling.
+	//  3. If B5 arrives and claims neither name, both lines are deleted rather
+	//     than kept "just in case". A speculative exemption is a decision nobody
+	//     made.
 	"github.com/anshkanyadi/rift/engine/real/...",
 	"github.com/anshkanyadi/rift/engine/pump/...",
 

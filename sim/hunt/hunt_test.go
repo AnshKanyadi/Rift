@@ -91,8 +91,6 @@ func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Ins
 		nodes[i].(*lateBinder).inner = toys[i]
 	}
 	toys[0].OnUnsyncedWindow = func() { run.Trigger("unsynced_window_open") }
-	{
-	}
 
 	// Client operations come from the plan, fully materialized, so the
 	// minimizer could delete one without perturbing anything else.
