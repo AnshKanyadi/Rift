@@ -109,7 +109,7 @@ failure is induced in both directions rather than described.
 `cmd/simctl/freshprocess_test.go:39` `TestFreshProcessTraceHashIsStable` (four invocations, two
 perturbed) and `:84` `TestFreshProcessGateDetectsDivergence`; `sim/trace.go`; `sim/trace_test.go`.
 Recorded cross-invocation hash, seed 4242, darwin/arm64:
-`a679fba6bc13468491e9cb06745609810d97c9e145925f658f8bd5d15574e6de`, held for comparison against CI's
+`046a9ce5f129c15948279ba8e2e8ed59a9621a9a7a65ff8184ed5c4954ab055a` (moved once from `a679fba6bc13468491e9cb06745609810d97c9e145925f658f8bd5d15574e6de` by the fire-count fixes; see DESIGN-A0.10 §3), held for comparison against CI's
 runner when the remote lands.
 
 This step has no landing-plan row; it rode with step 8 because `replay` is by definition a

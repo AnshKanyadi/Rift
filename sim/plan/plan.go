@@ -323,6 +323,16 @@ func (p *Plan) validateHolds() error {
 		if h.FromNS >= h.ToNS {
 			return fmt.Errorf("plan: hold %d has an empty window [%d,%d)", i, h.FromNS, h.ToNS)
 		}
+		// A hold is a configuration rather than an event, so no fire count can
+		// tell you it took effect; the equivalent guarantee is static, and this
+		// is it. A window entirely past the deadline is a hold the run never
+		// experiences, which is a plan claiming a fault it does not inject --
+		// the same class as a restart scheduled past the end of time.
+		if h.FromNS >= p.Config.DurationNS {
+			return fmt.Errorf(
+				"plan: hold %d opens at %dns, at or after the run ends at %dns, so the run never experiences it",
+				i, h.FromNS, p.Config.DurationNS)
+		}
 		if drift[h.B] {
 			return fmt.Errorf(
 				"plan: hold %d disciplines node %d, which the plan also gives free drift; a hold is oscillator discipline, so its target would depend on when it began",

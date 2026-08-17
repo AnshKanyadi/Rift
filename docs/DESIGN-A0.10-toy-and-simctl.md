@@ -156,15 +156,24 @@ state, address-dependent behaviour, or a value captured at package init. The gat
 invocations, two with `GOGC` and `GOMAXPROCS` perturbed so allocation timing and scheduler shape
 differ while the run does not.
 
-**Cross-invocation hash, seed 4242, darwin/arm64:**
+**Cross-invocation hash, seed 4242, darwin/arm64. It has moved exactly once, on purpose:**
 
 ```
-a679fba6bc13468491e9cb06745609810d97c9e145925f658f8bd5d15574e6de
+was  a679fba6bc13468491e9cb06745609810d97c9e145925f658f8bd5d15574e6de
+now  046a9ce5f129c15948279ba8e2e8ed59a9621a9a7a65ff8184ed5c4954ab055a
 ```
 
-Unchanged by this cycle's work, which is the point of recording it: `--workload none` still generates
-its plan from `plan.DefaultGenConfig`, so the number stays comparable against CI's runner the day the
-remote lands. If that runner is amd64 it is the FMA defence's first cross-architecture datapoint.
+**Why it moved.** The fire-count fixes changed the schedule the generator produces: restarts are now
+drawn from what is left of the run instead of a flat two seconds, so they land inside it. The old
+value pinned a schedule in which ~19% of runs never executed the restart their plan asserted — a
+recorded hash for a run that did not do what its plan said. Preserving it would have been preserving
+the defect.
+
+It stays comparable against CI's runner the day the remote lands; if that runner is amd64 it is the
+FMA defence's first cross-architecture datapoint. **The clock golden vectors (including tick 5) and
+the `internal/rng` KAT vectors did not move**, verified by both packages having no diff at all in the
+commit that moved this one — neither depends on injector scheduling, and both moving would have meant
+the fix reached further than intended.
 
 **Induced, both ways.** Two different seeds must produce different hashes, or the hash is not covering
 the run. And a deliberately perturbed plan — one fault entry moved — produces a divergence report

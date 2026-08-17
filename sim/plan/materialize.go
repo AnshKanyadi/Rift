@@ -153,7 +153,16 @@ func genClocks(p *Plan, r rng.Rand, cfg GenConfig) {
 			RampNS:  ramp,
 			Realize: realize,
 		})
-		p.Assert.MinFires["clock-hold"] = 1
+		// No fire count for a hold, deliberately.
+		//
+		// A hold is a *configuration* of an oscillator over a window, not an
+		// event, so there is nothing for an injector to fire -- and indeed
+		// nothing anywhere ever fired InjClockHold. The requirement was therefore
+		// unsatisfiable from the day it was written, and it was invisible because
+		// Counters.Check() was never called on any run path.
+		//
+		// The right instrument for a static property is a static check, so
+		// Plan.validateHolds now requires the window to fall inside the run.
 	}
 
 	for n := range cfg.Nodes {
@@ -170,16 +179,40 @@ func genClocks(p *Plan, r rng.Rand, cfg GenConfig) {
 func genFaults(p *Plan, r rng.Rand, cfg GenConfig) {
 	dur := p.Config.DurationNS
 
+	// The floor is the number of entries planned, not one.
+	//
+	// It was one, set inside this loop, so a plan with two crashes asserted that
+	// one of them fired: a per-kind counter covering N entries, which is the same
+	// shape as the Trigger budget defect one level up. An injector that silently
+	// stopped scheduling half its entries satisfied every assertion in the plan.
 	for range cfg.Crashes {
 		n := r.IntN(cfg.Nodes)
 		at := int64(r.IntN(int(dur)))
-		down := int64(r.IntN(int(2 * time.Second)))
+
+		// The downtime is drawn from what is left of the run, so the restart
+		// lands inside it. It was drawn from a flat two seconds regardless of
+		// where the crash fell, so ~19% of seeds scheduled a restart past the
+		// deadline -- and because the counter fired at scheduling time, the
+		// assertion was satisfied by a restart that never happened.
+		//
+		// The generator's physics is the right place for this. Loosening the
+		// assertion instead would have kept the plan describing a schedule the
+		// run does not execute, which is the defect rather than a workaround for
+		// it.
+		span := dur - at - 1
+		if span > int64(2*time.Second) {
+			span = int64(2 * time.Second)
+		}
+		down := int64(1)
+		if span > 1 {
+			down = 1 + int64(r.IntN(int(span)))
+		}
 		p.Faults.Entries = append(p.Faults.Entries,
 			Entry{AtNS: at, Action: "crash", Node: n},
 			Entry{AtNS: at + down, Action: "restart", Node: n},
 		)
-		p.Assert.MinFires["crash"] = 1
-		p.Assert.MinFires["restart"] = 1
+		p.Assert.MinFires["crash"] += 1
+		p.Assert.MinFires["restart"] += 1
 	}
 
 	for i := range cfg.Partitions {
@@ -203,7 +236,15 @@ func genFaults(p *Plan, r rng.Rand, cfg GenConfig) {
 			Entry{AtNS: at, Action: cut, From: a, To: b},
 			Entry{AtNS: at + width, Action: heal, From: a, To: b},
 		)
-		p.Assert.MinFires["partition"] = 1
+		// A symmetric cut is two directed cuts and counts as two, because that is
+		// what the transport actually does. The heal is not counted: it removes a
+		// fault rather than injecting one, and a partition that outlives the run
+		// is a legitimate schedule.
+		if cut == "cut_both" {
+			p.Assert.MinFires["partition"] += 2
+		} else {
+			p.Assert.MinFires["partition"] += 1
+		}
 	}
 
 	sortEntries(p.Faults.Entries)

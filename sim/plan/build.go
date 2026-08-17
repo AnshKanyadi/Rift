@@ -59,23 +59,25 @@ func Build(p *Plan, nodes []sim.Node) (*Run, error) {
 		return nil, err
 	}
 
-	loop, err := sim.NewLoop(sim.Config{
-		Nodes:        nodes,
-		Clocks:       clocks,
-		TickInterval: ns(p.Config.TickIntervalNS),
-		Until:        at(p.Config.DurationNS),
-		MaxSteps:     p.Config.MaxSteps,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	netKey, err := rng.ParseKey(p.Keys.Net)
 	if err != nil {
 		return nil, fmt.Errorf("plan: net key: %w", err)
 	}
 
 	counts := sim.NewCounters()
+
+	loop, err := sim.NewLoop(sim.Config{
+		Nodes:        nodes,
+		Clocks:       clocks,
+		TickInterval: ns(p.Config.TickIntervalNS),
+		Until:        at(p.Config.DurationNS),
+		MaxSteps:     p.Config.MaxSteps,
+		Counters:     counts,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	// Sorted, because an error message naming "the first unknown injector"
 	// must name the same one on every run.
 	for _, name := range sorted.Keys(p.Assert.MinFires) {
@@ -217,12 +219,12 @@ func (r *Run) Trigger(condition string) {
 // would silently cut messages the plan says should have crossed.
 func (r *Run) schedule(when clock.Instant, action string, node, from, to int) {
 	switch action {
+	// No counting here. Scheduling is an intent; the loop counts the event when
+	// it fires, which is the only thing a fire count may claim.
 	case "crash":
 		r.Loop.Crash(when, nodeID(node))
-		r.Counters.Fire(sim.InjCrash)
 	case "restart":
 		r.Loop.Restart(when, nodeID(node))
-		r.Counters.Fire(sim.InjRestart)
 	case "cut":
 		r.Loop.Do(when, func() { r.Transport.Cut(nodeID(from), nodeID(to)) })
 	case "heal":

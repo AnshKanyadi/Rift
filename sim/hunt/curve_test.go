@@ -27,7 +27,7 @@ func TestWindowCurveIsRecorded(t *testing.T) {
 	}
 	var atDelayRefused, atDelayEligible, aboveDelay int
 	delay := toy.CrashDelay()
-	for _, w := range []clock.Instant{delay, delay + 1_000_000, 20_000_000, 50_000_000} {
+	for _, w := range []clock.Instant{delay, delay + 1_000_000, 12_000_000, 20_000_000, 50_000_000} {
 		sc := toy.Scenario{Flaw: toy.FlawAckBeforeSync, Placement: toy.PlacementReactive, SyncLatency: w}
 		s := sweepSeeds(t, 1000, sc)
 		first := "not detected"
@@ -58,6 +58,11 @@ func TestWindowCurveIsRecorded(t *testing.T) {
 	// than re-derivable: at exactly the crash delay, 344 seeds were eligible and
 	// 11 per mille detected; one millisecond above, 534. That is the evidence the
 	// gate was set from.
+	//
+	// Note the eligibility column at 11ms: 344 of 1000. The rate saturates one
+	// millisecond past the crash delay, but two thirds of seeds are refused there
+	// by the *equivalence* constraint, which is why DefaultSyncLatency is 12ms
+	// and not 11 -- see its derivation.
 	if atDelayEligible != 0 {
 		t.Errorf("a window equal to the crash delay left %d seeds eligible; the reachability "+
 			"constraint is not refusing the regime it was added for", atDelayEligible)

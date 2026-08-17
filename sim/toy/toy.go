@@ -117,54 +117,81 @@ func (f Flaw) String() string {
 	return "unknown"
 }
 
-// DefaultSyncLatency is the modelled fsync duration, and it is load-bearing.
+// DefaultSyncLatency is the modelled fsync duration: 12ms, the smallest window
+// that satisfies both of the class's constraints for every seed the generator
+// can produce. Derived, not chosen.
 //
-// # Two independent constraints, and the one that actually binds
+// # Correction: the original rationale was wrong, including where the number worked
 //
-// The ack-before-durable class needs two separate things to be true, and until
-// the curve below was re-measured on a fixed harness only the first was checked:
+// This constant was 50ms, and it was defended by an equivalence argument: the
+// ack-before-durable class exists only when fsync is slower than a replication
+// round trip, so the window had to clear the round trip by a margin of three.
+// **That argument was checking the wrong quantity.** Re-measuring the curve on a
+// harness with the Trigger budget defect fixed shows the step is not at any
+// multiple of the round trip:
 //
-//  1. **Equivalence.** fsync must be slower than a replication round trip. Below
-//     that, a primary awaiting backup acknowledgements is already durable when it
-//     answers, so the flawed toy and the correct one are behaviourally identical:
-//     there is no incorrect behaviour in existence for any oracle to find.
+//	fsync   2ms:     0 eligible of 1000   -- no seed's network is fast enough
+//	fsync  10ms:   344 eligible,   11 per mille, first at seed 338
+//	fsync  11ms:   344 eligible,  534 per mille, first at seed 1
+//	fsync  12ms:  1000 eligible,  499 per mille, first at seed 1
+//	fsync  20ms:  1000 eligible,  500 per mille, first at seed 1
+//	fsync  50ms:  1000 eligible,  504 per mille, first at seed 1
 //
-//  2. **Reachability.** The window must outlast the reactive crash's delay. The
-//     crash fires crashDelay after the window opens, so a window narrower than
-//     that has closed -- the write is durable -- before the crash lands, and what
-//     the checker sees is an in-flight operation it correctly refuses to score.
+// The step is between 10ms and 11ms, which is crashDelay. The reactive crash
+// fires that long after the window opens, so a window narrower than it has
+// already closed -- the write is durable -- before the crash lands, and every
+// attempt yields an in-flight operation the checker correctly refuses to score.
 //
-// The measured curve, 1000 seeds per row, per *eligible* seed, at the commit that
-// re-measured it. crashDelay is 10ms:
+// So the class needs *two* independent things, and only the weaker one was ever
+// stated:
 //
-//	fsync  2ms:     0 eligible of 1000   -- no seed's network is fast enough
-//	fsync  5ms:     1 eligible,    1000 per mille  (a one-seed sample, not a rate)
-//	fsync 10ms:   344 eligible,      11 per mille, first at seed 338
-//	fsync 11ms:   344 eligible,     534 per mille, first at seed 1
-//	fsync 12ms:  1000 eligible,     499 per mille, first at seed 1
-//	fsync 20ms:  1000 eligible,     500 per mille, first at seed 1
-//	fsync 50ms:  1000 eligible,     504 per mille, first at seed 1
+//  1. **Equivalence.** fsync slower than a replication round trip, or the flawed
+//     toy and the correct one are behaviourally identical and there is nothing
+//     in existence to detect. True, still checked, and never the binding
+//     constraint at any window this project has used.
+//  2. **Reachability.** fsync longer than the crash delay, or the flaw exists
+//     and cannot be reached. This is what actually bound, and it was unchecked.
 //
-// **The step is between 10ms and 11ms, which is crashDelay, not any multiple of
-// the round trip.** Detection then saturates: 11ms is worth as much as 50ms.
-// That is the empirical answer to a question that had been settled by assertion,
-// and it says the previous rationale was defending the wrong quantity.
+// The old rationale happened to produce a working number, which is why it
+// survived three cycles. A reason that is wrong but yields the right answer is
+// worse than one that is visibly wrong, because nothing ever contradicts it.
 //
-// # Why the number is still 50ms
+// # Why 12, and why not 11
 //
-// It is now roughly 5x wider than reachability requires, which costs nothing but
-// is no longer *justified* by the curve. Narrowing it is a separate ruling
-// because DefaultSyncLatency is on the execution path: changing it changes every
-// trace hash in the project, including the seed 4242 cross-invocation hash
-// recorded for the CI comparison. It is not narrowed as a side effect of an
-// audit.
+// The detection *rate* saturates at 11ms -- 534 per mille against 504 at 50ms --
+// and 11ms is the answer if the rate column is read alone. The eligibility column
+// says otherwise:
 //
-// A future cycle lowering it for speed without re-reading this would return the
-// class to unreachable while all thousand seeds pass and every lane stays green
-// -- structurally the same failure as the crash injector that marked a node down
-// without telling it: a clean sweep over an empty search space. ValidateWindow
-// now refuses that configuration rather than trusting the comment.
-const DefaultSyncLatency = clock.Instant(50_000_000)
+//	fsync  11ms:   344 eligible,  184 of 1000 seeds caught
+//	fsync  12ms:  1000 eligible,  499 of 1000 seeds caught
+//	fsync  50ms:  1000 eligible,  504 of 1000 seeds caught
+//
+// At 11ms the *equivalence* constraint refuses the slowest two thirds of seeds:
+// the generator draws each link's upper latency from [1ms, 6ms], so a round trip
+// runs to 12ms, and any seed whose network is slower than the window is a regime
+// where the flaw cannot exist. Narrowing to 11ms would have raised the rate while
+// **cutting absolute detections from 504 to 184** and making two thirds of the
+// seed space untestable for this class -- including for the correct toy, since
+// the gate refuses a configuration regardless of what is planted in it.
+//
+// So the two constraints together give the number, and it needs no measurement at
+// all:
+//
+//	window > crashDelay          = 10ms   (reachability)
+//	window >= worst-case RTT     = 12ms   (equivalence, 2 x the 6ms slowest link)
+//
+// Twelve. The measured curve then confirms it: full eligibility and 499 of 1000,
+// against 504 at a window four times wider.
+//
+// The old 50ms was therefore roughly four times wider than the flaw requires,
+// which made the toy easier than the thing it calibrates. The number is now the
+// tightest regime in which the planted flaws exist on every seed.
+//
+// Lowering it below crashDelay returns the whole class to unreachable while every
+// seed passes and every lane stays green -- structurally the crash injector that
+// marked a node down without telling it, a clean sweep over an empty search
+// space. ValidateWindow refuses that rather than trusting this comment.
+const DefaultSyncLatency = clock.Instant(12_000_000)
 
 // MinWindowMargin is how far the modelled fsync must exceed the replication
 // round trip. **One**, and it is now a derived number rather than a stated one.
@@ -567,6 +594,23 @@ func (n *Node) onDeliver(ev sim.Event, s sim.Scheduler) {
 func (n *Node) onDurable(ev sim.Event, s sim.Scheduler) {
 	seq, ok := ev.Payload.(engine.SeqNum)
 	if !ok {
+		return
+	}
+
+	// A durability completion belonging to a process that has since died is not
+	// this process's news.
+	//
+	// The fsync was scheduled before a crash and lands after the restart; the
+	// write it was completing was discarded with the rest of the unsynced state,
+	// so the sequence it names no longer exists here. Acting on it advances the
+	// durability watermark past everything applied, which the engine asserts
+	// against -- and rightly, since a watermark ahead of the data is the exact
+	// corruption that assertion exists to catch.
+	//
+	// This was almost unreachable until the generator stopped scheduling
+	// restarts past the end of the run: the node had to come back before its own
+	// fsync completed, and 19% of restarts never fired at all.
+	if seq > n.db.VisibleSeq() {
 		return
 	}
 	n.db.AdvanceDurable(seq)

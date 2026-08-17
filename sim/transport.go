@@ -155,7 +155,6 @@ func (t *SimTransport) Send(e Envelope) {
 // deliver schedules one copy of a frame.
 func (t *SimTransport) deliver(frame []byte, e Envelope, p LinkParams, ord uint64, copyIdx uint64) {
 	lat := t.latency(e.From, e.To, ord, copyIdx, p)
-	t.counts.Fire(InjDeliver)
 
 	// The frame is copied per delivery, so two copies of one message cannot
 	// share a buffer either.

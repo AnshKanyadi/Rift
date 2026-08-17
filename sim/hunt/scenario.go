@@ -144,6 +144,21 @@ func RunToy(p *plan.Plan, sc toy.Scenario, tr *sim.Trace) (Result, error) {
 		return Result{}, fmt.Errorf("hunt: run: %w", err)
 	}
 
+	// The fire-count assertion, actually asked.
+	//
+	// Build has always called Require, populating what the plan demands, and
+	// nothing ever called Check -- so min_fires was decorative on every run since
+	// checklist step 4. The whole mechanism existed to catch "an enabled injector
+	// never fired", which is the exact failure mode three of this project's
+	// defects had, and it was never once consulted.
+	//
+	// A shortfall is a harness failure, not a violation: the run tested less than
+	// it claimed, so its verdict means less than it claims, and reporting it as a
+	// clean pass is how a green sweep over an empty search space is produced.
+	if short := run.Counters.Check(); len(short) > 0 {
+		return Result{}, fmt.Errorf("hunt: the run injected less than its plan asserts: %v", short)
+	}
+
 	return Result{
 		Outcome:  out,
 		Reports:  sim.CheckAll(hist, checker.NewLinearizability()),

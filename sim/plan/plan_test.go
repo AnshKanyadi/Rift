@@ -400,6 +400,15 @@ func TestEveryRuleOnOneConditionGetsItsOwnBudget(t *testing.T) {
 	run.Trigger("window_open")
 	run.Trigger("window_open") // every rule is spent, so this adds nothing
 
+	// Counted after the run, not after Trigger. Trigger schedules; the loop
+	// fires; and a fire count may only claim the second. Asserting here rather
+	// than at scheduling time is what makes this test cover both defects at
+	// once -- the shared budget, and the counter that used to be satisfied by an
+	// event that never happened.
+	if _, err := run.Loop.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
 	if got := run.Counters.Count(sim.InjCrash); got != 1 {
 		t.Errorf("crash fired %d times, want 1", got)
 	}
@@ -407,12 +416,7 @@ func TestEveryRuleOnOneConditionGetsItsOwnBudget(t *testing.T) {
 		t.Errorf("restart fired %d times, want 1; a rule sharing a condition with an earlier "+
 			"rule must have its own budget, or the plan describes a schedule the run never executes", got)
 	}
-
-	before := run.Counters.Count(sim.InjPartition)
-	if _, err := run.Loop.Run(); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if got := run.Counters.Count(sim.InjPartition) - before; got != 2 {
+	if got := run.Counters.Count(sim.InjPartition); got != 2 {
 		t.Errorf("the third rule produced %d cuts, want 2 (one per direction)", got)
 	}
 }

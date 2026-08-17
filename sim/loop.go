@@ -65,6 +65,15 @@ type Config struct {
 	// which is what a hunt wants once a seed has been checked.
 	Trace *Trace
 
+	// Counters records what the harness actually did to this run.
+	//
+	// The loop holds it because the loop is what knows an event *fired*. It was
+	// previously incremented where events were *scheduled*, which is a different
+	// claim and a weaker one: an event enqueued past the deadline, or for a node
+	// that never receives it, was counted as having happened. Measured before the
+	// fix, 600 restarts were scheduled and 544 fired.
+	Counters *Counters
+
 	// PlanRef identifies the plan this run came from, and is carried into any
 	// violation dump. A dump that does not say which plan produced it is a bug
 	// report nobody can act on.
@@ -230,8 +239,10 @@ func (l *Loop) step() {
 	switch ev.Kind {
 	case KindCrash:
 		l.down[ev.Node] = true
+		l.cfg.Counters.Fire(InjCrash)
 	case KindRestart:
 		l.down[ev.Node] = false
+		l.cfg.Counters.Fire(InjRestart)
 		// A restart begins a new boot, so the tick schedule restarts with it.
 		l.scheduleTick(ev.Node)
 	}
@@ -256,6 +267,14 @@ func (l *Loop) step() {
 	// down without notifying it was a fault that injected nothing.
 	if l.down[ev.Node] && ev.Kind != KindRestart && ev.Kind != KindCrash {
 		return
+	}
+
+	// Counted here rather than where the delivery was scheduled, and after the
+	// crashed-node check above: a frame enqueued for a node that died before it
+	// arrived was not delivered, and saying otherwise is the same overstatement
+	// the scheduling-time counters made everywhere else.
+	if ev.Kind == KindDeliver {
+		l.cfg.Counters.Fire(InjDeliver)
 	}
 
 	l.cfg.Nodes[ev.Node].Handle(ev, l)

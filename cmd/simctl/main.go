@@ -56,6 +56,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -236,9 +237,7 @@ func cmdReplay(args []string) int {
 
 	stripped := 0
 	if *strip {
-		stripped = len(p.Faults.Entries)
-		p.Faults.Entries = nil
-		p.Faults.Rules = nil
+		stripped = stripFaults(p)
 		fmt.Printf("stripped %d fault entries: a violation surviving this is the harness or the workload,\n", stripped)
 		fmt.Printf("         not the system under test\n")
 	}
@@ -457,6 +456,24 @@ func writeBundle(dir string, p *plan.Plan, meta Meta, hist *sim.History) error {
 	return os.WriteFile(filepath.Join(dir, "history.json"), hb, 0o644)
 }
 
+// stripFaults removes every injected fault from a plan, and with them the
+// assertions that were about those faults.
+//
+// Clearing min_fires matters now that Counters.Check is actually consulted: a
+// plan that still demanded a crash while having no crash entries would fail as a
+// shortfall, and the triage would report a harness error instead of the answer it
+// was asked for. A run with no faults injected asserts nothing about injection.
+// "sent" survives because it is about traffic, not about faults.
+func stripFaults(p *plan.Plan) int {
+	n := len(p.Faults.Entries)
+	p.Faults.Entries = nil
+	p.Faults.Rules = nil
+	for _, k := range []string{"crash", "restart", "partition"} {
+		delete(p.Assert.MinFires, k)
+	}
+	return n
+}
+
 func fail(format string, args ...any) int {
 	fmt.Fprintf(os.Stderr, "simctl: "+format+"\n", args...)
 	return 1
@@ -558,8 +575,8 @@ func cmdHunt(args []string) int {
 
 	// The triage gate, run before the finding is reported as a candidate.
 	stripped := *p
-	stripped.Faults.Entries = nil
-	stripped.Faults.Rules = nil
+	stripped.Assert.MinFires = maps.Clone(p.Assert.MinFires)
+	stripFaults(&stripped)
 	tmeta := Meta{Seed: meta.Seed, Workload: meta.Workload, Scenario: meta.Scenario}
 	var thist *sim.History
 	if err := execute(&stripped, &tmeta, &thist); err != nil {
