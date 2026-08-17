@@ -262,6 +262,8 @@ func TestAblationCrashPlacementAndWindow(t *testing.T) {
 		{toy.PlacementReactive, 2_000_000},
 		{toy.PlacementReactive, 10_000_000},
 		{toy.PlacementReactive, 11_000_000},
+		{toy.PlacementReactive, toy.DefaultSyncLatency},
+		{toy.PlacementUniform, toy.DefaultSyncLatency},
 		{toy.PlacementReactive, 50_000_000},
 		{toy.PlacementUniform, 50_000_000},
 	} {
@@ -284,7 +286,8 @@ func TestAblationCrashPlacementAndWindow(t *testing.T) {
 			cell.placement, int64(cell.window)/1000, sweep.caught, sweep.eligible, sweep.refused, firstStr)
 	}
 
-	t.Log("read the two 50000us rows against each other: that pair is the placement ablation.")
+	t.Log("the two rows at the default window are the placement ablation; the 50000us pair is")
+	t.Log("the same comparison at the old default, kept so the change of default is visible.")
 	t.Log("the three reactive rows are the window curve, and the refused column is the gate")
 	t.Log("working: a seed whose network is fast relative to the modelled fsync has no")
 	t.Log("ack-before-durable flaw in it to find, so it is excluded rather than counted as a miss")

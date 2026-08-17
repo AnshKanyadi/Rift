@@ -451,3 +451,102 @@ asserts something it does not check, and a fire-count mechanism that can be sati
 never occurred is the third instance of the same class in one cycle. The recorded hash's purpose is
 cross-architecture comparison, which a re-record preserves; a fire count that lies does not become
 true by being left alone.
+
+---
+
+## 7. The tally, and what it means
+
+Six harness defects have been found in this project so far. **Every one of them was in the observer
+rather than the observed, and every one made the machinery appear stronger than it was.**
+
+| # | defect | direction | what noticed it |
+|---|---|---|---|
+| 1 | crashed node marked down without being told — the crash injector injected nothing | silent | inspection |
+| 2 | generator's out-of-order client sequences manufactured violations | **loud**, 913 of 1000 | itself |
+| 3 | `Trigger` counted `Times` per condition, so a rule sharing a trigger never fired | silent | a bug it was suppressing |
+| 4 | `min_fires` keyed by injector kind while the generator plans N entries | silent | the audit |
+| 5 | counters counted scheduling, not firing — 600 restarts scheduled, 544 fired | silent | the audit |
+| 6 | `Counters.Check()` never called on any run path; `InjClockHold` never fired anywhere | silent | the audit |
+
+Not one was a wrong answer. Every one was an **unasked question**, and each reported green.
+
+### The part that matters
+
+Defects 4, 5 and 6 are all in the fire-count machinery — **the mechanism designated as the defence
+against exactly the class defects 1 and 3 belong to.** The guard rail was never installed: `Build`
+populated the requirements and nothing ever consulted them, so `min_fires` was decorative from
+checklist step 4 onward. Defect 6 would have caught 4 and 5 the day either was written; it could not,
+because it was the thing that was broken. And `InjClockHold` was required on every plan with a hold
+and fired by nothing anywhere, so that requirement was unsatisfiable from the day it was written and
+invisible for the same reason.
+
+**In this project, every defect found to date has been in the observer rather than the observed.**
+That is the sentence to keep. The system under test does not exist yet; what exists is the machinery
+built to judge it, and the machinery has been wrong six times, always in the direction of claiming
+more coverage than it had.
+
+The standing consequence is the harness-power lane (`sim/hunt/floors.go`), which is the first
+mechanism in the repository that fails when detection power drops rather than reporting it into a log
+nobody diffs.
+
+---
+
+## 8. Re-measurement after the fire-count fixes
+
+Standing rule from §5: an ablation expires when the machinery under it changes. This was the largest
+such change yet, so everything was re-run. Two numbers fell, and per the ruling a fall is a finding
+rather than noise — so both were isolated before the floors were reset.
+
+### Matched-window comparison isolates the fix from the new default
+
+The fire-count fixes and the `DefaultSyncLatency` change from 50ms to 12ms landed together, so a
+naive before/after conflates them. Re-measured at the **old** 50ms window on the **fixed** harness:
+
+| class | before the fixes | after, at matched 50ms |
+|---|---|---|
+| ack-before-sync | 504 / 1000, s2d 1 | **504 / 1000, s2d 1** |
+| ack-before-replicate, failover | 35 / 1000, s2d 7 | **35 / 1000, s2d 7** |
+| dirty-read | 1 / 1000, s2d 104 | **1 / 1000, s2d 104** |
+| ack-counting | 1 / 1000, s2d 154 | **1 / 1000, s2d 154** |
+| uniform placement | 44 / 1000, s2d 12 | **45 / 1000, s2d 12** |
+
+**No class fell because of the fire-count fixes.** One rose by one seed. The apparent falls at the new
+default are entirely the window narrowing, which is a deliberate tightening.
+
+**Why the fixes moved almost nothing, which is worth understanding rather than waving at:** the
+restart clamp applies to the *generator's* timed crash/restart pair, which targets a randomly chosen
+node. The scenarios' detection paths ride on the *reactive* rules, whose restart fires 200ms after the
+trigger and was already comfortably inside a 5s run. So the clamp corrected a real overstatement in
+what the plans asserted without much changing what the detecting seeds did. That is the honest reading:
+defects 4–6 were about what the harness *claimed*, not, in these classes, about what it *did*.
+
+### Numbers at the new default (12ms)
+
+| measurement | old (50ms default) | new (12ms default) |
+|---|---|---|
+| correct toy, 1000 seeds | 1000 pass, 0 violation, 0 inconclusive | unchanged |
+| correct toy under failover | 0 violations | unchanged |
+| ack-before-sync | 504 / 1000, s2d 1 | 499 / 1000, s2d 1 |
+| ack-before-replicate, no failover | 0 / 1000 (gap) | 0 / 1000 (gap) |
+| ack-before-replicate, failover | 35 / 1000, s2d 7 | 32 / 1000, s2d 7 |
+| dirty-read | 1 / 1000, s2d 104 | 1 / 1000, s2d 104 |
+| ack-counting | 1 / 1000, s2d 154 | 1 / 1000, s2d 154 |
+
+### The placement ablation got sharper, and that is the interesting result
+
+| placement | window | caught / eligible | seeds-to-detection |
+|---|---|---|---|
+| reactive | 50 ms (old default) | 504 / 1000 | 1 |
+| uniform | 50 ms (old default) | 45 / 1000 | 12 |
+| **reactive** | **12 ms (new default)** | **499 / 1000** | **1** |
+| **uniform** | **12 ms (new default)** | **12 / 1000** | **130** |
+
+Reactive targeting's advantage goes from **11x to 42x**, and its seeds-to-detection advantage from
+12x to 130x. Narrowing the window made aiming matter far more, which is the expected direction and
+the strongest evidence yet that reactive placement is not unproven complexity. Both pairs are kept so
+the change of default is visible rather than inferred.
+
+**Floors are reset from the new numbers**, not carried over: `ack-before-sync` from 499, and
+`ack-before-replicate under failover` from 32. The floor *values* are unchanged because the reasoning
+that set them is unchanged — half the measured rate for the strong class, detected-at-all for the two
+weak ones — and both remain comfortably above their floors.
