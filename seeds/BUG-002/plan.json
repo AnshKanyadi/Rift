@@ -1,0 +1,417 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "seed": 153,
+    "generator_version": 1
+  },
+  "config": {
+    "nodes": 3,
+    "duration_ns": 5000000000,
+    "tick_interval_ns": 10000000,
+    "max_offset_ns": 500000000,
+    "max_steps": 2000000
+  },
+  "keys": {
+    "net": "b256aa1d4486dc1f8e84a33ae1d9fadc",
+    "engine_sync": "3bbe48b023dccb10908a76f813c89a67",
+    "clock": "9074b295c68c8c0e5d1050eb4ebb4b99",
+    "raft": "364eea8c3ea1dc4300207f61641afc38"
+  },
+  "network": {
+    "links": [
+      {
+        "from": 0,
+        "to": 1,
+        "drop_per_mille": 27,
+        "dup_per_mille": 2,
+        "lat_min_ns": 359000,
+        "lat_max_ns": 6000000,
+        "tail_per_mille": 9,
+        "tail_max_ns": 64000000
+      },
+      {
+        "from": 0,
+        "to": 2,
+        "drop_per_mille": 27,
+        "dup_per_mille": 2,
+        "lat_min_ns": 460000,
+        "lat_max_ns": 3000000,
+        "tail_per_mille": 8,
+        "tail_max_ns": 50000000
+      },
+      {
+        "from": 1,
+        "to": 0,
+        "drop_per_mille": 21,
+        "dup_per_mille": 3,
+        "lat_min_ns": 442000,
+        "lat_max_ns": 3000000,
+        "tail_per_mille": 7,
+        "tail_max_ns": 84000000
+      },
+      {
+        "from": 1,
+        "to": 2,
+        "drop_per_mille": 17,
+        "dup_per_mille": 0,
+        "lat_min_ns": 449000,
+        "lat_max_ns": 3000000,
+        "tail_per_mille": 5,
+        "tail_max_ns": 114000000
+      },
+      {
+        "from": 2,
+        "to": 0,
+        "drop_per_mille": 8,
+        "dup_per_mille": 5,
+        "lat_min_ns": 374000,
+        "lat_max_ns": 6000000,
+        "tail_per_mille": 1,
+        "tail_max_ns": 61000000
+      },
+      {
+        "from": 2,
+        "to": 1,
+        "drop_per_mille": 16,
+        "dup_per_mille": 0,
+        "lat_min_ns": 105000,
+        "lat_max_ns": 2000000,
+        "tail_per_mille": 7,
+        "tail_max_ns": 71000000
+      }
+    ]
+  },
+  "clock": {
+    "epoch_ns": 1600000000000000000,
+    "nodes": [
+      {
+        "node": 0,
+        "skew": [
+          {
+            "start_ns": 0,
+            "off_ns": 0,
+            "slope_ppb": 111000
+          }
+        ]
+      },
+      {
+        "node": 1,
+        "skew": [
+          {
+            "start_ns": 0,
+            "off_ns": 0,
+            "slope_ppb": -141000
+          }
+        ]
+      },
+      {
+        "node": 2,
+        "skew": [
+          {
+            "start_ns": 0,
+            "off_ns": 0,
+            "slope_ppb": -54000
+          }
+        ]
+      }
+    ],
+    "holds": null
+  },
+  "faults": {
+    "entries": [
+      {
+        "at_ns": 1113287660,
+        "action": "cut_both",
+        "to": 1
+      },
+      {
+        "at_ns": 1419162709,
+        "action": "crash",
+        "node": 2
+      },
+      {
+        "at_ns": 1834412039,
+        "action": "restart",
+        "node": 2
+      },
+      {
+        "at_ns": 2141626158,
+        "action": "heal_both",
+        "to": 1
+      }
+    ],
+    "rules": [
+      {
+        "on": "write_acked",
+        "after_ns": 10000000,
+        "action": "crash",
+        "times": 1
+      },
+      {
+        "on": "write_acked",
+        "after_ns": 200000000,
+        "action": "restart",
+        "times": 1
+      },
+      {
+        "on": "write_acked",
+        "after_ns": 20000000,
+        "action": "promote",
+        "node": 1,
+        "times": 1
+      }
+    ]
+  },
+  "workload": {
+    "ops": [
+      {
+        "at_ns": 33833209,
+        "client": 1,
+        "seq": 1,
+        "op": "put",
+        "k": "k06",
+        "v": "v71"
+      },
+      {
+        "at_ns": 189676553,
+        "client": 2,
+        "seq": 1,
+        "op": "put",
+        "k": "k00",
+        "v": "v72"
+      },
+      {
+        "at_ns": 339960666,
+        "client": 0,
+        "seq": 1,
+        "op": "get",
+        "k": "k07",
+        "v": "v14"
+      },
+      {
+        "at_ns": 435885279,
+        "client": 1,
+        "seq": 2,
+        "op": "get",
+        "k": "k04",
+        "v": "v77"
+      },
+      {
+        "at_ns": 632664180,
+        "client": 1,
+        "seq": 3,
+        "op": "put",
+        "k": "k03",
+        "v": "v14"
+      },
+      {
+        "at_ns": 945329149,
+        "client": 2,
+        "seq": 2,
+        "op": "put",
+        "k": "k04",
+        "v": "v3"
+      },
+      {
+        "at_ns": 1096246715,
+        "client": 0,
+        "seq": 2,
+        "op": "put",
+        "k": "k02",
+        "v": "v23"
+      },
+      {
+        "at_ns": 1453035574,
+        "client": 0,
+        "seq": 3,
+        "op": "put",
+        "k": "k04",
+        "v": "v18"
+      },
+      {
+        "at_ns": 2005028694,
+        "client": 2,
+        "seq": 3,
+        "op": "get",
+        "k": "k02",
+        "v": "v18"
+      },
+      {
+        "at_ns": 2093060717,
+        "client": 2,
+        "seq": 4,
+        "op": "put",
+        "k": "k07",
+        "v": "v66"
+      },
+      {
+        "at_ns": 2343688860,
+        "client": 2,
+        "seq": 5,
+        "op": "get",
+        "k": "k05",
+        "v": "v78"
+      },
+      {
+        "at_ns": 2521717669,
+        "client": 2,
+        "seq": 6,
+        "op": "get",
+        "k": "k02",
+        "v": "v25"
+      },
+      {
+        "at_ns": 2588390466,
+        "client": 0,
+        "seq": 4,
+        "op": "put",
+        "k": "k05",
+        "v": "v7"
+      },
+      {
+        "at_ns": 2671208336,
+        "client": 2,
+        "seq": 7,
+        "op": "put",
+        "k": "k02",
+        "v": "v75"
+      },
+      {
+        "at_ns": 2962458933,
+        "client": 0,
+        "seq": 5,
+        "op": "get",
+        "k": "k07",
+        "v": "v85"
+      },
+      {
+        "at_ns": 2995929162,
+        "client": 2,
+        "seq": 8,
+        "op": "get",
+        "k": "k07",
+        "v": "v53"
+      },
+      {
+        "at_ns": 3072722997,
+        "client": 0,
+        "seq": 6,
+        "op": "get",
+        "k": "k00",
+        "v": "v65"
+      },
+      {
+        "at_ns": 3093342499,
+        "client": 0,
+        "seq": 7,
+        "op": "get",
+        "k": "k05",
+        "v": "v60"
+      },
+      {
+        "at_ns": 3117694611,
+        "client": 2,
+        "seq": 9,
+        "op": "put",
+        "k": "k01",
+        "v": "v91"
+      },
+      {
+        "at_ns": 3168870654,
+        "client": 2,
+        "seq": 10,
+        "op": "get",
+        "k": "k02",
+        "v": "v20"
+      },
+      {
+        "at_ns": 3271796013,
+        "client": 2,
+        "seq": 11,
+        "op": "get",
+        "k": "k00",
+        "v": "v42"
+      },
+      {
+        "at_ns": 3499782585,
+        "client": 0,
+        "seq": 8,
+        "op": "get",
+        "k": "k05",
+        "v": "v89"
+      },
+      {
+        "at_ns": 3511257404,
+        "client": 2,
+        "seq": 12,
+        "op": "get",
+        "k": "k07",
+        "v": "v31"
+      },
+      {
+        "at_ns": 3740624637,
+        "client": 2,
+        "seq": 13,
+        "op": "get",
+        "k": "k02",
+        "v": "v67"
+      },
+      {
+        "at_ns": 3853072440,
+        "client": 2,
+        "seq": 14,
+        "op": "get",
+        "k": "k02",
+        "v": "v70"
+      },
+      {
+        "at_ns": 3973014669,
+        "client": 2,
+        "seq": 15,
+        "op": "get",
+        "k": "k03",
+        "v": "v77"
+      },
+      {
+        "at_ns": 4077839589,
+        "client": 1,
+        "seq": 4,
+        "op": "put",
+        "k": "k00",
+        "v": "v9"
+      },
+      {
+        "at_ns": 4134025788,
+        "client": 0,
+        "seq": 9,
+        "op": "put",
+        "k": "k03",
+        "v": "v53"
+      },
+      {
+        "at_ns": 4439571040,
+        "client": 1,
+        "seq": 5,
+        "op": "get",
+        "k": "k06",
+        "v": "v62"
+      },
+      {
+        "at_ns": 4541854642,
+        "client": 1,
+        "seq": 6,
+        "op": "get",
+        "k": "k01",
+        "v": "v27"
+      }
+    ]
+  },
+  "assert": {
+    "min_fires": {
+      "crash": 1,
+      "partition": 1,
+      "restart": 1,
+      "sent": 1
+    }
+  }
+}

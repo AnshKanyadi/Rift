@@ -4,6 +4,19 @@ Every bug caught by the simulator, the crash-consistency rig, or differential te
 here. This file is the proof behind the verification claim: it is the difference between "we ran a
 lot of tests" and "we can show you what the tests found and why they found it."
 
+**What this file holds, and what it does not.** Entries here are defects in **Rift** — the real
+system: `raft/`, `store/`, `kv/`, `router/`, `balancer/`, the C++ engine — found by the verification
+machinery. Nothing else. The file's entire value is that a stranger can read any entry and know it is
+a real defect in the real system, so anything that dilutes that reading is kept out:
+
+- **Fixture defects** — bugs in `sim/toy`, the calibration protocol the harness is pointed at — live
+  in `docs/TOY-FINDINGS.md`. The toy is not the system under test; it is scaffolding built to
+  exercise the harness, and a defect in it is evidence about the *machinery*, not about Rift.
+- **Harness defects** — bugs in the simulator, generator, or injectors themselves — are recorded in
+  their fix commit and analysed in the relevant design doc, per DR-29.
+
+This file is correctly empty until A1: Rift's system under test does not exist yet.
+
 **Rules**
 
 1. Every bug found by a checker gets an entry. No exceptions for embarrassing ones — especially not
