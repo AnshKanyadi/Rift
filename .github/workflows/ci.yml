@@ -95,3 +95,17 @@ jobs:
       # Once real (A0.12) this uploads kill-time per mutant so a regression in
       # harness sensitivity is visible even while every mutant is still killed.
       # See CLAUDE.md Amendment A2.
+
+  power:
+    name: harness power floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # Three harness defects have silently reduced detection power while every
+      # other lane stayed green. This one fails when a planted flaw class stops
+      # being found at its standing floor.
+      - run: make power

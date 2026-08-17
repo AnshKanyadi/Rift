@@ -361,3 +361,14 @@ func TestPrepareRefusesAnUnsetPlacement(t *testing.T) {
 		t.Logf("induced: %v", err)
 	}
 }
+
+// flawNames lists every flaw the toy can be built with, by name. It walks the
+// enum rather than restating it, so a new flaw appears here the moment it is
+// declared -- which is the point of TestEveryObservableFlawHasAFloor.
+func flawNames() []string {
+	var out []string
+	for f := toy.FlawNone; f.String() != "invalid" && f.String() != "unknown"; f++ {
+		out = append(out, f.String())
+	}
+	return out
+}
