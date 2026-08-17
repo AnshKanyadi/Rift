@@ -73,6 +73,13 @@ const (
 	// no flaw planted.
 	FlawDirtyRead
 
+	// FlawAckCounting counts acknowledgements instead of tracking which peers
+	// sent them, so one backup's duplicated ack satisfies the whole quorum.
+	//
+	// Also added with its fix. Found on seed 153, and it is the toy-sized
+	// version of counting votes without checking who cast them.
+	FlawAckCounting
+
 	numFlaws
 )
 
@@ -102,6 +109,8 @@ func (f Flaw) String() string {
 		return "dup-apply"
 	case FlawDirtyRead:
 		return "dirty-read"
+	case FlawAckCounting:
+		return "ack-counting"
 	case numFlaws:
 		return "invalid"
 	}
@@ -197,9 +206,26 @@ const (
 
 // pending is a put waiting for durability and backup acknowledgements.
 type pending struct {
-	req      Request
-	seq      engine.SeqNum
-	acks     int
+	req Request
+	seq engine.SeqNum
+
+	// acked is the set of peers that have acknowledged, and it is a set rather
+	// than a counter for a reason the harness found on seed 153.
+	//
+	// Counting acknowledgements makes a *duplicated* ack from one backup satisfy
+	// the quorum while the other backup never received the write at all. The
+	// transport duplicates messages on purpose (DupPerMille), so this is not a
+	// hypothetical: the primary answered a client, was promoted away from, and
+	// the surviving replica did not have the value. Counting responses instead
+	// of distinct responders is the same mistake as counting votes without
+	// checking who cast them, which is how a consensus implementation
+	// accidentally commits without a majority.
+	acked map[sim.NodeID]bool
+
+	// acks is the same information counted rather than deduplicated, kept only
+	// so FlawAckCounting can be the bug this field used to be.
+	acks int
+
 	durable  bool
 	answered bool
 }
@@ -264,7 +290,35 @@ type Node struct {
 	// makes the crash land in the window by construction, which is the
 	// difference between testing durability and hoping to.
 	OnUnsyncedWindow func()
+
+	// OnWriteAcked fires when this node has told a client a write succeeded.
+	//
+	// It is the ack-before-replicate window's opening edge, and it is a
+	// different instant from OnUnsyncedWindow's on purpose: the two flaws need
+	// the crash on opposite sides of the acknowledgement. ack-before-sync needs
+	// the primary to die *before* its fsync; ack-before-replicate needs it to
+	// die *after* it has answered, while a backup is still missing the write. A
+	// single trigger aimed at one of those cannot reach the other, and a crash
+	// that lands on the wrong side produces an in-flight operation the checker
+	// correctly calls "may or may not have happened" -- no violation, and a
+	// green sweep that means nothing.
+	//
+	// It fires on every acknowledged write rather than only on under-replicated
+	// ones, so the correct toy exercises failover too. A promotion path that
+	// only ever ran against a broken build would be untested in the one
+	// configuration that is supposed to stay linearizable across it.
+	OnWriteAcked func()
 }
+
+// SetPrimary changes who serves clients.
+//
+// Promotion here is operator-driven, not elected: the toy has no consensus by
+// design (a toy with its own elections would make a failure ambiguous between
+// the harness and the protocol), so failover arrives as a scheduled plan entry
+// applied to every node at one instant. That every node is told at the same
+// instant is what makes two simultaneous primaries unrepresentable rather than
+// merely unlikely.
+func (n *Node) SetPrimary(id sim.NodeID) { n.Primary = id }
 
 // Config is one replica's construction parameters.
 //
@@ -398,7 +452,7 @@ func (n *Node) onClient(ev sim.Event, s sim.Scheduler) {
 		return
 	}
 
-	p := &pending{req: req, seq: seq}
+	p := &pending{req: req, seq: seq, acked: make(map[sim.NodeID]bool)}
 	n.inflight[seq] = p
 
 	// The modelled fsync completes later, which is what creates the window in
@@ -450,6 +504,7 @@ func (n *Node) onDeliver(ev sim.Event, s sim.Scheduler) {
 			return
 		}
 		if p := n.inflight[engine.SeqNum(seq)]; p != nil {
+			p.acked[env.From] = true
 			p.acks++
 			n.maybeAnswer(p, ev.At)
 		}
@@ -484,10 +539,20 @@ func (n *Node) maybeAnswer(p *pending, at clock.Instant) {
 	if needDurable && !p.durable {
 		return
 	}
-	if needAcks && p.acks < len(n.Peers) {
+	if needAcks && n.ackedPeers(p) < len(n.Peers) {
 		return
 	}
 	n.answer(p, at)
+}
+
+// ackedPeers is how many distinct backups have the write, or -- under
+// FlawAckCounting -- how many acknowledgements arrived, which is not the same
+// number the moment the transport duplicates one.
+func (n *Node) ackedPeers(p *pending) int {
+	if n.Flaw == FlawAckCounting {
+		return p.acks
+	}
+	return len(p.acked)
 }
 
 func (n *Node) answer(p *pending, at clock.Instant) {
@@ -498,6 +563,9 @@ func (n *Node) answer(p *pending, at clock.Instant) {
 	n.committed[p.req.Key] = p.req.Value
 	n.hist.End(p.req.HistIdx, at, sim.RespOK, "")
 	delete(n.inflight, p.seq)
+	if n.OnWriteAcked != nil {
+		n.OnWriteAcked()
+	}
 }
 
 // Crash discards everything the engine had not made durable, and forgets what

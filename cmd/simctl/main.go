@@ -4,6 +4,7 @@
 //	              [--workload toy|none]   what drives the run; toy is the A0 protocol
 //	              [--flaw NAME]           plant a known defect in the toy
 //	              [--placement NAME]      reactive | uniform crash targeting
+//	              [--failover]            crash the primary and promote a backup
 //	simctl replay --bundle DIR            re-execute a bundle and compare
 //	              [--strip-faults]        replay with every fault entry removed
 //
@@ -96,6 +97,7 @@ type Meta struct {
 type ScenarioMeta struct {
 	Flaw          string `json:"flaw"`
 	Placement     string `json:"placement"`
+	Failover      bool   `json:"failover"`
 	SyncLatencyNS int64  `json:"sync_latency_ns,omitempty"`
 }
 
@@ -142,6 +144,7 @@ func cmdRun(args []string) int {
 	wl := fs.String("workload", workloadNone, "what drives the run: none | toy")
 	flawName := fs.String("flaw", "none", "toy flaw to plant: none | ack-before-sync | ack-before-replicate | dup-apply")
 	placeName := fs.String("placement", "reactive", "toy crash targeting: reactive | uniform")
+	failover := fs.Bool("failover", false, "crash the primary and promote a backup")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl}
@@ -160,7 +163,7 @@ func cmdRun(args []string) int {
 		}
 
 	case workloadToy:
-		sc, err := scenarioFrom(*flawName, *placeName, 0)
+		sc, err := scenarioFrom(*flawName, *placeName, *failover, 0)
 		if err != nil {
 			return fail("%v", err)
 		}
@@ -172,7 +175,7 @@ func cmdRun(args []string) int {
 		}
 		meta.Scenario = &ScenarioMeta{
 			Flaw: sc.Flaw.String(), Placement: sc.Placement.String(),
-			SyncLatencyNS: int64(sc.SyncLatency),
+			Failover: sc.Failover, SyncLatencyNS: int64(sc.SyncLatency),
 		}
 
 	default:
@@ -380,7 +383,7 @@ func describeViolation(v *ViolationMeta) string {
 	return fmt.Sprintf("%s: %s [instant %d, step beyond the retained trace]", v.Checker, v.Detail, v.AtNS)
 }
 
-func scenarioFrom(flawName, placeName string, syncLatency clock.Instant) (hunt.Scenario, error) {
+func scenarioFrom(flawName, placeName string, failover bool, syncLatency clock.Instant) (hunt.Scenario, error) {
 	flaw, err := toy.ParseFlaw(flawName)
 	if err != nil {
 		return hunt.Scenario{}, err
@@ -389,21 +392,21 @@ func scenarioFrom(flawName, placeName string, syncLatency clock.Instant) (hunt.S
 	if err != nil {
 		return hunt.Scenario{}, err
 	}
-	return hunt.Scenario{Flaw: flaw, Placement: place, SyncLatency: syncLatency}, nil
+	return hunt.Scenario{Flaw: flaw, Placement: place, Failover: failover, SyncLatency: syncLatency}, nil
 }
 
 func scenarioFromMeta(m *ScenarioMeta) (hunt.Scenario, error) {
 	if m == nil {
 		return hunt.Scenario{}, fmt.Errorf("bundle drives the toy but records no scenario, so there is no build to replay against")
 	}
-	return scenarioFrom(m.Flaw, m.Placement, clock.Instant(m.SyncLatencyNS))
+	return scenarioFrom(m.Flaw, m.Placement, m.Failover, clock.Instant(m.SyncLatencyNS))
 }
 
 func report(m Meta) {
 	fmt.Printf("seed     %d\n", m.Seed)
 	fmt.Printf("workload %s\n", m.Workload)
 	if m.Scenario != nil {
-		fmt.Printf("scenario flaw=%s placement=%s\n", m.Scenario.Flaw, m.Scenario.Placement)
+		fmt.Printf("scenario flaw=%s placement=%s failover=%t\n", m.Scenario.Flaw, m.Scenario.Placement, m.Scenario.Failover)
 	}
 	fmt.Printf("outcome  %s at %d after %d steps\n", m.Outcome, m.OutcomeAtNS, m.Steps)
 	fmt.Printf("trace    %s\n", m.TraceHash)

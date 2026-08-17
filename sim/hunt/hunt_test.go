@@ -154,20 +154,30 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 		// The gap, kept as a row rather than deleted. It is still true that
 		// without failover this flaw cannot be seen, and the row below is what
 		// makes that statement falsifiable instead of folklore.
-		{"ack-before-replicate", toy.FlawAckBeforeReplicate, false, false,
+		{"ack-before-replicate/no-failover", toy.FlawAckBeforeReplicate, false, false,
 			"reads are served only by the primary and there is no failover, so a write missing from the backups is invisible to every client; closing this needs promotion in the toy, not a change to the checker"},
 
-		// The class the harness found in the correct toy, kept catchable. Its
-		// detection rate is 1 in 1000, which is weak; docs/TOY-FINDINGS.md says
-		// so beside the finding rather than leaving it to be inferred.
+		// The gap closed. Same flaw, same checker, same seeds -- the only thing
+		// that changed is that a backup can be promoted, which is precisely what
+		// the recorded gap said was missing.
+		{"ack-before-replicate/failover", toy.FlawAckBeforeReplicate, true, true,
+			"the primary dies after acknowledging a write a backup never received, and the promoted backup serves a read of that key"},
+
+		// The two classes the harness found in the correct toy this cycle. They
+		// are rows here, with their own seeds-to-detection, because Amendment A2
+		// says the moment a fix lands is the only moment we have a precise
+		// description of the blind spot -- and a bug class with no standing
+		// measurement drifts back into being uncatchable without anyone noticing.
 		{"dirty-read", toy.FlawDirtyRead, false, true,
 			"a read observes a write that is neither durable nor acknowledged, and the crash that follows takes it back"},
+		{"ack-counting", toy.FlawAckCounting, true, true,
+			"one backup's duplicated acknowledgement satisfies the whole quorum, so the promoted replica is missing a write the client was told had succeeded"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const seeds = 1000
 			elapsedSince := wallTimer()
 
-			sc := hunt.Scenario{Flaw: tc.flaw, Placement: hunt.PlacementReactive}
+			sc := hunt.Scenario{Flaw: tc.flaw, Placement: hunt.PlacementReactive, Failover: tc.failover}
 			sweep := sweepSeeds(t, seeds, sc)
 			elapsed := elapsedSince()
 
@@ -192,8 +202,37 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 	}
 }
 
-// TestAblationWindowSensitivity sweeps the modelled fsync and records which
-// seeds were eligible at all.
+// TestFailoverDoesNotManufactureViolations is the other half of promotion, and
+// the half that is easy to skip.
+//
+// Adding a failover path adds a way for the *harness* to produce a
+// non-linearizable history: promote too eagerly, lose a write the old primary
+// had legitimately committed, and every seed reports a violation that belongs to
+// the promotion mechanism rather than to the toy. That is the
+// harness-manufactured-violation class, and at three seeds in a thousand it
+// would be indistinguishable from a real find.
+//
+// So the correct toy must stay clean across exactly the schedule that catches
+// the broken one.
+func TestFailoverDoesNotManufactureViolations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("1k seeds is not a -short test")
+	}
+
+	const seeds = 1000
+	sc := hunt.Scenario{Flaw: toy.FlawNone, Placement: hunt.PlacementReactive, Failover: true}
+	sweep := sweepSeeds(t, seeds, sc)
+
+	t.Logf("correct toy under failover: %d violations, %d inconclusive over %d seeds",
+		sweep.caught, sweep.inconclusive, seeds)
+	if sweep.caught > 0 {
+		t.Errorf("promotion manufactured %d violations in a toy with no flaw; the first is seed %d -- %s",
+			sweep.caught, sweep.first, sweep.detail)
+	}
+}
+
+// TestAblationCrashPlacementAndWindow answers two questions the original remedy
+// bundled together, and keeps them separate.
 //
 // The fix that first caught ack-before-sync did two things at once: it made the
 // crash reactive on the unsynced window, and it widened the modelled fsync from
@@ -210,7 +249,7 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 //     aimed at the same node, for the same duration, at a uniformly drawn
 //     instant instead of at the window. If uniform detects comparably, reactive
 //     targeting is unproven complexity and should go.
-func TestAblationWindowSensitivity(t *testing.T) {
+func TestAblationCrashPlacementAndWindow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an ablation is not a -short test")
 	}
@@ -223,6 +262,7 @@ func TestAblationWindowSensitivity(t *testing.T) {
 		{hunt.PlacementReactive, 2_000_000},
 		{hunt.PlacementReactive, 10_000_000},
 		{hunt.PlacementReactive, 50_000_000},
+		{hunt.PlacementUniform, 50_000_000},
 	} {
 		sc := hunt.Scenario{
 			Flaw:        toy.FlawAckBeforeSync,
@@ -243,9 +283,10 @@ func TestAblationWindowSensitivity(t *testing.T) {
 			cell.placement, int64(cell.window)/1000, sweep.caught, sweep.eligible, sweep.refused, firstStr)
 	}
 
-	t.Log("the refused column is the gate working: a seed whose network is fast relative to")
-	t.Log("the modelled fsync has no ack-before-durable flaw in it to find, so it is excluded")
-	t.Log("rather than counted as a miss")
+	t.Log("read the two 50000us rows against each other: that pair is the placement ablation.")
+	t.Log("the three reactive rows are the window curve, and the refused column is the gate")
+	t.Log("working: a seed whose network is fast relative to the modelled fsync has no")
+	t.Log("ack-before-durable flaw in it to find, so it is excluded rather than counted as a miss")
 }
 
 // sweep is one 1000-seed measurement.

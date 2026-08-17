@@ -113,8 +113,14 @@ func (p Placement) String() string {
 // is the exact error the ablation was created to correct.
 const (
 	crashDelay   = clock.Instant(10_000_000)  // 10ms
+	promoteDelay = clock.Instant(20_000_000)  // 20ms, so a backup takes over after the primary dies
 	restartDelay = clock.Instant(200_000_000) // 200ms
 )
+
+// successor is the backup promoted on failover. Fixed rather than drawn: the
+// toy has no election, and choosing at random would add a variable to every
+// measurement without adding a question any of them are asking.
+const successor = 1
 
 // Scenario is what a toy run needs beyond the plan.
 //
@@ -130,6 +136,38 @@ type Scenario struct {
 	// toy.DefaultSyncLatency. Whatever it is, toy.New validates it against the
 	// plan's own round trip and refuses a regime the flaw cannot manifest in.
 	SyncLatency clock.Instant
+
+	// Failover crashes the primary and promotes a backup, and it is what makes
+	// ack-before-replicate observable at all.
+	//
+	// Without it, reads are served only by node 0, so a write missing from the
+	// backups is invisible to every client and the flaw is a recorded gap rather
+	// than a detection. With it, the surviving replica answers, and a write the
+	// dead primary acknowledged but never replicated is a stale read.
+	//
+	// It also moves the crash to the other side of the acknowledgement — see
+	// triggerFor — because the two flaws live in windows that do not overlap.
+	Failover bool
+}
+
+// triggerFor picks the condition the crash rides on, and the choice is the whole
+// reason a single scenario cannot chase both flaws at once.
+//
+//   - Without failover the target is ack-before-sync: the primary must die
+//     between acknowledging and its own fsync, so the crash rides on the
+//     unsynced window opening.
+//   - With failover the target is ack-before-replicate: the primary must die
+//     *after* it has answered a client, while a backup is still missing the
+//     write, so the crash rides on the acknowledgement itself.
+//
+// Aiming at the wrong edge does not produce a weaker signal, it produces none:
+// a crash before the acknowledgement leaves an in-flight operation the checker
+// correctly refuses to call a violation.
+func triggerFor(failover bool) string {
+	if failover {
+		return "write_acked"
+	}
+	return "unsynced_window_open"
 }
 
 // Prepare writes the scenario's faults into the plan, and must be called before
@@ -151,10 +189,15 @@ func Prepare(p *plan.Plan, sc Scenario) error {
 		// DR-15's reactive crash: fire while the window is open, so the crash
 		// lands inside it by construction rather than by luck, and restart soon
 		// after so a later read can observe what was lost.
+		on := triggerFor(sc.Failover)
 		p.Faults.Rules = append(p.Faults.Rules,
-			plan.Rule{On: "unsynced_window_open", AfterNS: int64(crashDelay), Action: "crash", Node: 0, Times: 1},
-			plan.Rule{On: "unsynced_window_open", AfterNS: int64(restartDelay), Action: "restart", Node: 0, Times: 1},
+			plan.Rule{On: on, AfterNS: int64(crashDelay), Action: "crash", Node: 0, Times: 1},
+			plan.Rule{On: on, AfterNS: int64(restartDelay), Action: "restart", Node: 0, Times: 1},
 		)
+		if sc.Failover {
+			p.Faults.Rules = append(p.Faults.Rules,
+				plan.Rule{On: on, AfterNS: int64(promoteDelay), Action: "promote", Node: successor, Times: 1})
+		}
 
 	case PlacementUniform:
 		// The null hypothesis. It crashes *the primary* -- not a uniformly chosen
@@ -178,6 +221,10 @@ func Prepare(p *plan.Plan, sc Scenario) error {
 			plan.Entry{AtNS: at, Action: "crash", Node: 0},
 			plan.Entry{AtNS: at + int64(restartDelay-crashDelay), Action: "restart", Node: 0},
 		)
+		if sc.Failover {
+			p.Faults.Entries = append(p.Faults.Entries,
+				plan.Entry{AtNS: at + int64(promoteDelay-crashDelay), Action: "promote", Node: successor})
+		}
 
 	case numPlacements:
 		return fmt.Errorf("hunt: invalid placement %d", sc.Placement)
@@ -253,16 +300,41 @@ func RunToy(p *plan.Plan, sc Scenario, tr *sim.Trace) (Result, error) {
 		nodes[i].(*lateBinder).inner = n
 	}
 
-	toys[0].OnUnsyncedWindow = func() { run.Trigger("unsynced_window_open") }
+	// Both triggers go on every node, not only on node 0. Under failover the
+	// primary changes, and a hook installed only on the original primary would
+	// go quiet exactly when the successor took over -- silently, with every lane
+	// still green.
+	for _, n := range toys {
+		n.OnUnsyncedWindow = func() { run.Trigger("unsynced_window_open") }
+		n.OnWriteAcked = func() { run.Trigger("write_acked") }
+	}
+	run.OnPromote = func(id sim.NodeID) {
+		// Every node is told at the same instant, so two simultaneous primaries
+		// are unrepresentable rather than merely unlikely.
+		for _, n := range toys {
+			n.SetPrimary(id)
+		}
+	}
 
 	// Client operations come from the plan, fully materialized, so the minimizer
 	// could delete one without perturbing anything else.
+	//
+	// Each one is delivered to *every* node, and exactly the one that is primary
+	// at that instant answers -- the rest return immediately. That is how a
+	// request reaches a primary whose identity is not known until the run
+	// produces it: routing by node index would have to be decided when the op is
+	// scheduled, which is before any promotion has happened. A crashed node
+	// receives nothing, so an operation arriving while the cluster has no live
+	// primary stays in flight, which is unavailability and correct.
 	for _, op := range p.Workload.Ops {
 		idx := hist.Begin(clock.Instant(op.AtNS), op.Client, op.Seq, op.Kind, op.Key, op.Value)
-		run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, 0, toy.Request{
+		req := toy.Request{
 			Client: op.Client, Seq: op.Seq, Op: op.Kind,
 			Key: op.Key, Value: op.Value, HistIdx: idx,
-		})
+		}
+		for i := range nodes {
+			run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, sim.NodeID(i), req)
+		}
 	}
 
 	out, err := run.Loop.Run()

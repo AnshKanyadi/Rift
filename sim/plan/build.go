@@ -24,8 +24,18 @@ type Run struct {
 	// promise, a panic.
 	Rand rng.Rand
 
-	plan *Plan
+	// OnPromote is called when a "promote" action fires, naming the node that
+	// becomes primary. Nil ignores the action.
+	//
+	// A hook rather than something this package implements, because what a
+	// promotion *means* is a property of the protocol under test and this
+	// package deliberately knows no protocol. It stays a plan entry so a
+	// failover is scheduled, ordered against the traffic in flight at its
+	// instant, and individually deletable like every other fault -- the same
+	// argument Loop.Do makes for link cuts.
+	OnPromote func(sim.NodeID)
 
+	plan *Plan
 	// fired counts per rule index, parallel to plan.Faults.Rules.
 	fired []int
 }
@@ -174,21 +184,18 @@ func buildClocks(p *Plan) ([]*clock.Sim, error) {
 //
 // Nothing random happens here. The delay and the action come from the plan; the
 // only run-dependent input is *when* the condition occurred.
-//
-// # Times is counted per rule, not per condition
+// Times is counted **per rule**, not per condition.
 //
 // It was per condition, and that was a fault injector that silently injected
 // less than the plan said. Two rules on one condition -- "crash the primary 10ms
-// after the window opens, restart it 200ms after" -- shared a counter under that
-// reading, so the first rule's fire exhausted the second rule's budget and the
-// restart never happened at all. Every seed still ran, every lane stayed green,
-// and the plan on disk described a schedule the run did not execute.
+// after the window opens, restart it 200ms after" -- share a counter under that
+// reading, so the first rule's fire exhausts the second rule's budget and the
+// restart never happens at all. Every seed still ran, every lane stayed green,
+// and the plan described a schedule the run did not execute.
 //
-// Fire counts could not catch it, and that is the part worth carrying forward:
-// the crash *did* fire and incremented its own counter, while the rule sharing
-// its condition never ran. The general rule -- **a per-entity counter proves
-// that entity acted and proves nothing about entities sharing its budget** --
-// is why the audit in DESIGN-A0.10 section 5 went looking for siblings.
+// The same shape as the crash injector that marked a node down without telling
+// it: not a wrong answer, an unasked question. Fire counts do not catch it,
+// because the *crash* fires and the counter it increments is the crash's.
 func (r *Run) Trigger(condition string) {
 	for i, rule := range r.plan.Faults.Rules {
 		if rule.On != condition {
@@ -224,5 +231,14 @@ func (r *Run) schedule(when clock.Instant, action string, node, from, to int) {
 		r.Loop.Do(when, func() { r.Transport.CutBoth(nodeID(from), nodeID(to)) })
 	case "heal_both":
 		r.Loop.Do(when, func() { r.Transport.HealBoth(nodeID(from), nodeID(to)) })
+	case "promote":
+		// Read through r at fire time rather than capturing the hook now, so a
+		// driver may set OnPromote after Build -- which it must, since the nodes
+		// the hook talks to do not exist until Build has produced the transport.
+		r.Loop.Do(when, func() {
+			if r.OnPromote != nil {
+				r.OnPromote(nodeID(node))
+			}
+		})
 	}
 }
