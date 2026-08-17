@@ -24,8 +24,10 @@ type Run struct {
 	// promise, a panic.
 	Rand rng.Rand
 
-	plan  *Plan
-	fired map[string]int
+	plan *Plan
+
+	// fired counts per rule index, parallel to plan.Faults.Rules.
+	fired []int
 }
 
 // Build turns a plan into a runnable simulation.
@@ -93,7 +95,7 @@ func Build(p *Plan, nodes []sim.Node) (*Run, error) {
 		Clocks:    clocks,
 		Rand:      rng.Poisoned("plan execution"),
 		plan:      p,
-		fired:     make(map[string]int),
+		fired:     make([]int, len(p.Faults.Rules)),
 	}
 
 	// Timed fault entries become scheduled events, so a crash is ordered
@@ -172,15 +174,30 @@ func buildClocks(p *Plan) ([]*clock.Sim, error) {
 //
 // Nothing random happens here. The delay and the action come from the plan; the
 // only run-dependent input is *when* the condition occurred.
+//
+// # Times is counted per rule, not per condition
+//
+// It was per condition, and that was a fault injector that silently injected
+// less than the plan said. Two rules on one condition -- "crash the primary 10ms
+// after the window opens, restart it 200ms after" -- shared a counter under that
+// reading, so the first rule's fire exhausted the second rule's budget and the
+// restart never happened at all. Every seed still ran, every lane stayed green,
+// and the plan on disk described a schedule the run did not execute.
+//
+// Fire counts could not catch it, and that is the part worth carrying forward:
+// the crash *did* fire and incremented its own counter, while the rule sharing
+// its condition never ran. The general rule -- **a per-entity counter proves
+// that entity acted and proves nothing about entities sharing its budget** --
+// is why the audit in DESIGN-A0.10 section 5 went looking for siblings.
 func (r *Run) Trigger(condition string) {
-	for _, rule := range r.plan.Faults.Rules {
+	for i, rule := range r.plan.Faults.Rules {
 		if rule.On != condition {
 			continue
 		}
-		if rule.Times > 0 && r.fired[condition] >= rule.Times {
+		if rule.Times > 0 && r.fired[i] >= rule.Times {
 			continue
 		}
-		r.fired[condition]++
+		r.fired[i]++
 		r.schedule(r.Loop.Now().Add(ns(rule.AfterNS)), rule.Action, rule.Node, rule.From, rule.To)
 	}
 }

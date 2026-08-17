@@ -360,6 +360,63 @@ func TestReactiveRulesFireOnCondition(t *testing.T) {
 	}
 }
 
+// TestEveryRuleOnOneConditionGetsItsOwnBudget is the regression for a fault
+// injector that silently injected less than its plan said.
+//
+// Times was counted per *condition*, so two rules sharing one trigger --
+// "crash the primary 10ms after the window opens, restart it 200ms after" --
+// shared a budget: the crash's fire exhausted it and the restart never
+// happened. Nothing reported it. Every seed ran, every lane was green, fire
+// counts were satisfied because the *crash* fired, and the plan on disk
+// described a schedule the run had not executed.
+//
+// What it cost, measured after the fix: ack-before-sync detection went from 82
+// of 1000 seeds to 504, because a primary that never restarts can never serve
+// the read that observes what it lost. The harness had been running at a
+// sixth of its power against its own headline flaw class.
+//
+// The general shape is the one this project keeps meeting: not a wrong answer,
+// an unasked question.
+func TestEveryRuleOnOneConditionGetsItsOwnBudget(t *testing.T) {
+	p, err := plan.Materialize(7, plan.DefaultGenConfig())
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	p.Faults.Entries = nil
+	// Three rules, one condition, one fire each. Under the old per-condition
+	// counter only the first would ever fire.
+	p.Faults.Rules = []plan.Rule{
+		{On: "window_open", AfterNS: int64(10 * time.Millisecond), Action: "crash", Node: 1, Times: 1},
+		{On: "window_open", AfterNS: int64(20 * time.Millisecond), Action: "restart", Node: 1, Times: 1},
+		{On: "window_open", AfterNS: int64(30 * time.Millisecond), Action: "cut_both", From: 0, To: 2, Times: 1},
+	}
+
+	nodes, _ := nodesFor(p)
+	run, err := plan.Build(p, nodes)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	run.Trigger("window_open")
+	run.Trigger("window_open") // every rule is spent, so this adds nothing
+
+	if got := run.Counters.Count(sim.InjCrash); got != 1 {
+		t.Errorf("crash fired %d times, want 1", got)
+	}
+	if got := run.Counters.Count(sim.InjRestart); got != 1 {
+		t.Errorf("restart fired %d times, want 1; a rule sharing a condition with an earlier "+
+			"rule must have its own budget, or the plan describes a schedule the run never executes", got)
+	}
+
+	before := run.Counters.Count(sim.InjPartition)
+	if _, err := run.Loop.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := run.Counters.Count(sim.InjPartition) - before; got != 2 {
+		t.Errorf("the third rule produced %d cuts, want 2 (one per direction)", got)
+	}
+}
+
 // TestValidationRejectsIllegalHolds is the correction to the generator fix: a
 // generator-side rule is not a rule, because hand-written plans, edited corpus
 // entries and any future fuzzer bypass it entirely. These shapes are rejected
