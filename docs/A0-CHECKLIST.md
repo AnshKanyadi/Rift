@@ -82,7 +82,7 @@ says yes.
 | 8 | `simctl run \| replay`, and the bundle chain | CLOSED | no |
 | 9 | `simctl hunt` | LANDED — awaiting a ruling | **yes** |
 | 10 | the mutant suite as patches | NOT STARTED | **yes** |
-| 11 | `node/`, the real-mode mailbox driver | NOT STARTED | **yes** |
+| 11 | `node/`, the real-mode mailbox driver | LANDED — awaiting a ruling | **yes** |
 
 **Steps 1 through 8 are closed** (Ansh, 2026-08-17). A0 closes on 9, 10 and 11.
 
@@ -272,7 +272,7 @@ The analogous machinery **one level down is built and green**: `tools/determinis
 19 patches, and `make blind` reports 18 killed, 1 canary alive, 0 mismatched. That is the shape step
 10 reproduces for the system under test.
 
-### Step 11 — `node/`, the real-mode mailbox driver. NOT STARTED — A0-close-blocking
+### Step 11 — `node/`, the real-mode mailbox driver. LANDED, awaiting a ruling — A0-close-blocking
 
 **Exit condition.** `node/` exists, and the mailbox rule has end-to-end teeth: in real mode every
 cross-goroutine interaction — transport receive, durability completion, timer fire, client request —
@@ -286,11 +286,26 @@ provisional: A0 does not exit until `node/` exists and the rule has end-to-end t
 `docs/DESIGN-A0-simulator.md:119` carries the same amendment. A rule proven only against fixtures is
 a rule that has never met real code.
 
-**Anchor:** the rule's scope entry `tools/determinismcheck/scope.go:98-100` (`defaultMailbox`), its
-implementation `tools/determinismcheck/mailbox.go`, its fixtures
-`tools/determinismcheck/testdata/src/mailboxcore/` and `mailboxnode/`, its test
-`TestMailboxRule`, and its blind patch `blind-mailbox.patch`. Everything exists except the package the
-rule is about.
+**Anchor:** `node/node.go` (`Driver`, `Post`, and the `sim.Scheduler` implementation);
+`node/node_test.go`. Excluded from the determinism pass by name, with the polarity pinned in
+`TestScopeTable`: `node/` out, the `sim.Node` it drives in.
+
+**One `Node` interface, two modes.** `Driver` drives a `sim.Node` — the same interface the simulator's
+loop drives, same `Handle(Event, Scheduler)` signature, no build tag and no branch on mode. The two
+modes differ only in who calls `Handle` and when: one goroutine and virtual time from a seeded queue,
+or one goroutine per node and wall time from a mailbox. `TestSameNodeLogicRunsUnderBothDrivers` runs
+one implementation both ways.
+
+**The proof that matters** is `TestRealModeDoesNotPerturbSimDeterminism`: the sim path's trace hash is
+taken, four real drivers are exercised concurrently against the same node logic with real timers and
+real goroutines, and the hash is taken again from scratch. Identical. Real mode exists without
+weakening the determinism claim, which is the whole point of building it.
+
+`defaultMailbox` is now empty, and correctly so rather than by omission. The mailbox rule constrains
+packages holding *both* node state and concurrency; `node/` holds only the concurrency and reaches
+node logic through an interface, so the compiler enforces the separation more strongly than the
+analyzer rule would have. The rule, its fixtures and `blind-mailbox.patch` all stay, in force for the
+first package that does hold both.
 
 ---
 

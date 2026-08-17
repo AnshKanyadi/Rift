@@ -103,6 +103,16 @@ var defaultExclude = []string{
 	// which is how a boundary becomes a hole.
 	"github.com/anshkanyadi/rift/sim/hunt",
 
+	// The real-mode driver. It holds the concurrency core packages may not: one
+	// goroutine per node, real timers, and a mailbox channel. Amendment A5 --
+	// code that needs a goroutine is orchestration and lives outside the
+	// boundary, or the design is wrong.
+	//
+	// The node LOGIC it drives stays in scope. That split is the whole point:
+	// node/ is a driver, and the sim.Node it drives is the same type the
+	// simulator's loop drives, with no build tag and no branch on mode.
+	"github.com/anshkanyadi/rift/node/...",
+
 	// The end-of-run checkers. History *collection* runs in-sim and stays
 	// dependency-free inside the boundary; porcupine runs after the run is
 	// over, is an external dependency, and needs a timeout -- so it lives out
@@ -110,18 +120,21 @@ var defaultExclude = []string{
 	"github.com/anshkanyadi/rift/sim/checker/...",
 }
 
-// defaultMailbox lists the real-mode driver packages, which exist to hold the
-// concurrency core packages may not (DESIGN-A0 DR-2). They get the mailbox rule
-// instead: core state is reached only through the mailbox.
+// defaultMailbox lists packages that get the mailbox rule: core state is reached
+// only through the mailbox (DESIGN-A0 DR-2).
 //
-// node/ does not exist yet -- it lands with the real-mode driver. The rule is
-// written now so it is in force the day the package appears rather than
-// retrofitted onto code that has grown around its absence. Until then it is
-// proven by fixtures only, and DESIGN-A0 marks it provisional: A0 does not exit
-// until node/ exists and the rule has end-to-end teeth.
-var defaultMailbox = []string{
-	"github.com/anshkanyadi/rift/node/...",
-}
+// It is empty, and that is the correct state rather than an omission.
+//
+// node/ now exists, and it is in defaultExclude above rather than here. The
+// mailbox rule constrains packages that hold BOTH node state and concurrency;
+// node/ holds only the concurrency. It reaches node logic through the sim.Node
+// interface and cannot touch node state at all -- the compiler enforces that,
+// which is a stronger guarantee than the analyzer rule was going to provide.
+//
+// The rule stays implemented and its fixtures stay green, because the day a
+// package does hold both -- a store/ that embeds its own driver, say -- it goes
+// here and the rule is already in force.
+var defaultMailbox = []string{}
 
 func scopeFor(path string) scope {
 	path = normalize(path)

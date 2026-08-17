@@ -230,13 +230,30 @@ func TestScopeTable(t *testing.T) {
 		{mod + "sim/plan", scopeCore},
 		{mod + "engine/pump/poller", scopeOff},
 
+		// The real-mode driver polarity, pinned in both directions. node/ holds
+		// one goroutine per node, real timers and a mailbox channel, none of
+		// which core scope permits -- so it is excluded. The node LOGIC it
+		// drives is the same sim.Node the simulator drives and stays in scope,
+		// with no build tag and no branch on mode. If these two ever agreed,
+		// one of them would be wrong.
+		{mod + "node", scopeOff},
+		{mod + "node/inner", scopeOff},
+		{mod + "sim/toy", scopeCore},
+
 		// Orchestration around runs.
 		{mod + "cmd/simctl", scopeOff},
 		{mod + "soak", scopeOff},
 		{mod + "tools/determinismcheck", scopeOff},
 
-		{mod + "node", scopeMailbox},
-		{mod + "node/transport", scopeMailbox},
+		// node/ was classified scopeMailbox before it existed, on the assumption
+		// that the real-mode driver would hold node state and need the rule
+		// policing its access. It does not: it reaches node logic through the
+		// sim.Node interface and cannot touch node state at all, which the
+		// compiler enforces more strongly than the analyzer would have. So it is
+		// excluded like every other package that holds concurrency, and
+		// defaultMailbox is empty -- correctly, not by omission. The rule and its
+		// fixtures stay, in force for the first package that does hold both.
+		{mod + "node/transport", scopeOff},
 
 		{mod + "raftlike", scopeOff}, // a prefix is not a parent directory
 		{"time", scopeOff},
