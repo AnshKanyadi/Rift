@@ -1,6 +1,7 @@
 package hunt_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -44,7 +45,17 @@ func runSeed(t *testing.T, seed uint64, flaw toy.Flaw) result {
 
 func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Instant) result {
 	t.Helper()
+	r, err := trySeedWith(seed, flaw, syncLatency)
+	if err != nil {
+		t.Fatalf("seed %d: %v", seed, err)
+	}
+	return r
+}
 
+// trySeedWith is runSeedWith without the fatal, because the window gate now
+// legitimately refuses a configuration in which the planted flaw cannot exist,
+// and the ablation sweeps exactly those configurations.
+func trySeedWith(seed uint64, flaw toy.Flaw, syncLatency clock.Instant) (result, error) {
 	cfg := plan.DefaultGenConfig()
 	cfg.Nodes = 3
 	cfg.Duration = 5 * time.Second
@@ -55,7 +66,7 @@ func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Ins
 
 	p, err := plan.Materialize(seed, cfg)
 	if err != nil {
-		t.Fatalf("seed %d: materialize: %v", seed, err)
+		return result{}, fmt.Errorf("materialize: %w", err)
 	}
 
 	// DR-15's reactive crash: fire while the primary holds unsynced data, so
@@ -77,18 +88,32 @@ func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Ins
 	}
 	run, err := plan.Build(p, nodes)
 	if err != nil {
-		t.Fatalf("seed %d: build: %v", seed, err)
+		return result{}, fmt.Errorf("build: %w", err)
 	}
 
 	var peers []sim.NodeID
 	for i := 1; i < p.Config.Nodes; i++ {
 		peers = append(peers, sim.NodeID(i))
 	}
+	// The round trip comes from the plan's own network rather than from a
+	// constant, so toy.New validates the modelled fsync against the network this
+	// run actually has.
+	rtt := p.ReplicationRTT()
 	for i := range nodes {
-		toys[i] = toy.New(sim.NodeID(i), 0, peersFor(sim.NodeID(i), peers, p.Config.Nodes),
-			run.Transport, hist, flaw)
-		toys[i].SyncLatency = syncLatency
-		nodes[i].(*lateBinder).inner = toys[i]
+		n, err := toy.New(toy.Config{
+			ID: sim.NodeID(i), Primary: 0,
+			Peers:          peersFor(sim.NodeID(i), peers, p.Config.Nodes),
+			Transport:      run.Transport,
+			History:        hist,
+			Flaw:           flaw,
+			SyncLatency:    syncLatency,
+			ReplicationRTT: rtt,
+		})
+		if err != nil {
+			return result{}, err
+		}
+		toys[i] = n
+		nodes[i].(*lateBinder).inner = n
 	}
 	toys[0].OnUnsyncedWindow = func() { run.Trigger("unsynced_window_open") }
 
@@ -104,11 +129,11 @@ func runSeedWith(t *testing.T, seed uint64, flaw toy.Flaw, syncLatency clock.Ins
 
 	out, err := run.Loop.Run()
 	if err != nil {
-		t.Fatalf("seed %d: run: %v", seed, err)
+		return result{}, fmt.Errorf("run: %w", err)
 	}
 
 	reports := sim.CheckAll(hist, checker.NewLinearizability())
-	return result{seed: seed, outcome: out, reports: reports, counts: run.Counters}
+	return result{seed: seed, outcome: out, reports: reports, counts: run.Counters}, nil
 }
 
 // peersFor returns every node but this one.
@@ -291,7 +316,7 @@ func TestAblationReactiveCrashAtOriginalWindow(t *testing.T) {
 	}
 
 	for _, window := range []clock.Instant{2_000_000, 10_000_000, 50_000_000} {
-		caught := 0
+		caught, eligible, refused := 0, 0, 0
 		// Detected is a distinguishable state, not a negative seed. An in-band
 		// magic number in a field that otherwise holds a seed is exactly what
 		// Mono's zero value and Hold's rejected realization exist to avoid, and
@@ -299,7 +324,18 @@ func TestAblationReactiveCrashAtOriginalWindow(t *testing.T) {
 		detected := false
 		var first uint64
 		for seed := uint64(0); seed < 1000; seed++ {
-			r := runSeedWith(t, seed, toy.FlawAckBeforeSync, window)
+			r, err := trySeedWith(seed, toy.FlawAckBeforeSync, window)
+			if errors.Is(err, toy.ErrWindowTooNarrow) {
+				// Not a failure and not a pass: on this seed's network the flaw
+				// does not exist, so there was nothing here to find. A refused
+				// seed belongs in neither numerator nor denominator.
+				refused++
+				continue
+			}
+			if err != nil {
+				t.Fatalf("seed %d: %v", seed, err)
+			}
+			eligible++
 			for _, rep := range r.reports {
 				if rep.Verdict == sim.VerdictViolation {
 					caught++
@@ -313,6 +349,7 @@ func TestAblationReactiveCrashAtOriginalWindow(t *testing.T) {
 		if detected {
 			firstStr = fmt.Sprintf("first at seed %d", first)
 		}
-		t.Logf("fsync window %6dus: %3d of 1000 caught, %s", int64(window)/1000, caught, firstStr)
+		t.Logf("fsync window %6dus: %3d of %4d eligible caught (%d refused as blind), %s",
+			int64(window)/1000, caught, eligible, refused, firstStr)
 	}
 }

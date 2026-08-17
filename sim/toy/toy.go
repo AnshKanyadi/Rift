@@ -30,6 +30,7 @@
 package toy
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/anshkanyadi/rift/clock"
@@ -131,6 +132,12 @@ const MinWindowMargin = 3
 // This is a gate rather than a warning. A harness that runs happily in a regime
 // where its own mutants are invisible reports green sweeps that mean nothing,
 // and the report reads identically to a real one.
+//
+// It is called by New, not merely exported for tests to call. A gate no
+// production path passes through is a green thing that cannot fail -- the same
+// class as the crash injector that marked a node down without telling it -- and
+// TestNewRefusesAWindowTheFlawCannotManifestIn proves the wiring rather than the
+// rule.
 func ValidateWindow(syncLatency clock.Instant, replicationRTT clock.Instant) error {
 	if syncLatency <= 0 || replicationRTT <= 0 {
 		return fmt.Errorf("toy: window validation needs positive durations, got fsync %d and rtt %d", syncLatency, replicationRTT)
@@ -139,11 +146,24 @@ func ValidateWindow(syncLatency clock.Instant, replicationRTT clock.Instant) err
 		return fmt.Errorf(
 			"toy: modelled fsync of %dus does not exceed the replication round trip of %dus by the required %dx; "+
 				"in this regime a primary awaiting backup acks is already durable when it answers, so ack-before-durable "+
-				"cannot manifest at all and a clean sweep would be a sweep over an empty search space",
-			int64(syncLatency)/1000, int64(replicationRTT)/1000, MinWindowMargin)
+				"cannot manifest at all and a clean sweep would be a sweep over an empty search space: %w",
+			int64(syncLatency)/1000, int64(replicationRTT)/1000, MinWindowMargin, ErrWindowTooNarrow)
 	}
 	return nil
 }
+
+// ErrWindowTooNarrow identifies a refusal by the window gate specifically, so a
+// caller can tell "this seed's network is too slow for the flaw to exist" from
+// "the harness is broken".
+//
+// It is a sentinel rather than a string match because of what the distinction is
+// worth to the ablation: a refused seed is not a failure and not a pass, it is a
+// seed that was **never eligible**, and counting it in the denominator of a
+// detection rate would quietly understate the harness's power over the seeds
+// where the flaw could actually occur. Per-seed link latencies vary, so
+// eligibility varies seed to seed rather than globally -- which is exactly the
+// nuance a single global curve could not express.
+var ErrWindowTooNarrow = errors.New("modelled fsync window leaves the flaw class unreachable")
 
 // Request is a client operation carried as an event payload.
 type Request struct {
@@ -212,13 +232,10 @@ type Node struct {
 	// rather than a draw, so the unsynced window is a real, reproducible
 	// stretch of virtual time rather than an accident.
 	//
-	// Fifty milliseconds, which is wide on purpose. At two it was narrower than
-	// a replication round trip, so a crash aimed at the window kept landing
-	// before the client had been acknowledged at all -- producing an in-flight
-	// operation the checker correctly treats as "may or may not have happened",
-	// and no violation. The window has to be wide enough that an acknowledged,
-	// not-yet-durable write actually exists for a while, or the bug class it
-	// exposes is unreachable.
+	// Unexported, and settable only through Config, because that is the only
+	// path ValidateWindow guards. A public field would let a caller widen or
+	// narrow the window after construction and walk straight past the gate,
+	// which would leave the gate technically wired and practically optional.
 	syncLatency clock.Instant
 
 	// OnUnsyncedWindow fires when this node has acknowledged-or-applied data
@@ -233,24 +250,78 @@ type Node struct {
 	// makes the crash land in the window by construction, which is the
 	// difference between testing durability and hoping to.
 	OnUnsyncedWindow func()
-
-	// SyncLatency overrides the modelled fsync duration, for ablation. The
-	// harness's power against ack-before-durable should not depend on a knob
-	// we control, and the only way to know whether it does is to vary the knob
-	// and measure.
-	SyncLatency clock.Instant
 }
 
-// New builds a replica.
-func New(id, primary sim.NodeID, peers []sim.NodeID, tr sim.Transport, h *sim.History, flaw Flaw) *Node {
+// Config is one replica's construction parameters.
+//
+// A struct rather than eight positional arguments, and specifically so that
+// ReplicationRTT cannot be added later as an optional extra that most callers
+// forget: it is required, and New refuses without it.
+type Config struct {
+	ID      sim.NodeID
+	Primary sim.NodeID
+	Peers   []sim.NodeID
+
+	Transport sim.Transport
+	History   *sim.History
+	Flaw      Flaw
+
+	// SyncLatency is the modelled fsync duration. Zero takes
+	// DefaultSyncLatency, whose argument lives at its definition.
+	SyncLatency clock.Instant
+
+	// ReplicationRTT is the round trip the window is validated against, and it
+	// has **no default on purpose**.
+	//
+	// A default here would be a number invented to satisfy the gate rather than
+	// measured from the network the run actually has, and the gate would then
+	// pass by construction on every plan — which is precisely the failure it
+	// exists to prevent. Callers take it from the plan they are about to run
+	// (plan.Plan.ReplicationRTT). Zero is refused, in the same discipline as
+	// clock.Hold's unset realization and the plan's zero wall epoch.
+	ReplicationRTT clock.Instant
+}
+
+// New builds a replica, or refuses.
+//
+// The refusal is the point. Before this, ValidateWindow existed and was induced
+// in its own test while no production path called it, so a future cycle could
+// have lowered the modelled fsync for speed and returned the entire
+// ack-before-durable class to unreachable with every seed passing and every lane
+// green. A gate nothing passes through is decoration.
+func New(cfg Config) (*Node, error) {
+	if cfg.Transport == nil {
+		return nil, fmt.Errorf("toy: node %d has no transport", cfg.ID)
+	}
+	if cfg.History == nil {
+		return nil, fmt.Errorf("toy: node %d has no history to record into", cfg.ID)
+	}
+	if cfg.Flaw >= numFlaws {
+		return nil, fmt.Errorf("toy: node %d names unknown flaw %d", cfg.ID, cfg.Flaw)
+	}
+	if cfg.ReplicationRTT <= 0 {
+		return nil, fmt.Errorf(
+			"toy: node %d was built without a replication round trip; the window gate has nothing to "+
+				"validate against, and a gate that passes by default is the failure it exists to prevent",
+			cfg.ID)
+	}
+
+	sync := cfg.SyncLatency
+	if sync == 0 {
+		sync = DefaultSyncLatency
+	}
+	if err := ValidateWindow(sync, cfg.ReplicationRTT); err != nil {
+		return nil, err
+	}
+
 	return &Node{
-		ID: id, Primary: primary, Peers: peers, Flaw: flaw,
-		db: model.New(), tr: tr, hist: h,
+		ID: cfg.ID, Primary: cfg.Primary, Peers: cfg.Peers, Flaw: cfg.Flaw,
+		db: model.New(), tr: cfg.Transport, hist: cfg.History,
 		applied:     make(map[int]uint64),
 		inflight:    make(map[engine.SeqNum]*pending),
 		committed:   make(map[string]string),
-		syncLatency: DefaultSyncLatency,
-	}
+		syncLatency: sync,
+	}, nil
 }
 
 // IsPrimary reports whether this node serves clients.
@@ -318,11 +389,7 @@ func (n *Node) onClient(ev sim.Event, s sim.Scheduler) {
 
 	// The modelled fsync completes later, which is what creates the window in
 	// which acknowledged-but-unsynced data can exist.
-	lat := n.syncLatency
-	if n.SyncLatency != 0 {
-		lat = n.SyncLatency
-	}
-	s.At(ev.At+lat, sim.KindDurable, n.ID, seq)
+	s.At(ev.At+n.syncLatency, sim.KindDurable, n.ID, seq)
 	if n.OnUnsyncedWindow != nil {
 		n.OnUnsyncedWindow()
 	}

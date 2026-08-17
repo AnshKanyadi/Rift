@@ -345,6 +345,33 @@ func (p *Plan) validateHolds() error {
 	return nil
 }
 
+// ReplicationRTT is the round trip this plan's network implies: twice the
+// slowest ordinary link latency in it.
+//
+// It exists so that a consumer validating a timing regime against the network
+// -- toy.ValidateWindow is the first -- takes the number from the plan it is
+// about to run rather than from a constant somebody chose. A constant would make
+// the validation pass by construction on every plan, which is not validation.
+//
+// # Why the heavy tail is deliberately excluded
+//
+// A link's tail excursions are rare by construction (TailPerMille), and folding
+// TailMax in here would report a round trip two orders of magnitude above the
+// one almost every message actually experiences. The regime question -- is fsync
+// slower than replication in the common case -- is about the common case. A tail
+// excursion that does make one replication slower than one fsync costs a
+// detection opportunity for that message; it cannot make the flaw class
+// unreachable, which is the thing the validation is guarding against.
+func (p *Plan) ReplicationRTT() clock.Instant {
+	var worst int64
+	for _, l := range p.Network.Links {
+		if l.LatMaxNS > worst {
+			worst = l.LatMaxNS
+		}
+	}
+	return clock.Instant(2 * worst)
+}
+
 func knownAction(a string) bool {
 	switch a {
 	case "crash", "restart", "cut", "heal", "cut_both", "heal_both":
