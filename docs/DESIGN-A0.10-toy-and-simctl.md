@@ -339,3 +339,84 @@ So, mechanically rather than as a habit:
 2. Any change that moves a detection number invalidates every ablation, and they are re-run.
 3. The harness-power lane is what detects (2) having happened, since a moved detection number is
    exactly what it watches.
+
+---
+
+## 6. The shared-budget audit
+
+§5's rule — *a per-entity counter proves that entity acted and proves nothing about entities sharing
+its budget* — was turned on the rest of the harness. Every place where two things share a resource
+keyed by something coarser than the thing itself. The answer is **not** "nothing else shares a
+budget": two more were found, both in the fire-count machinery, which is the very mechanism that was
+supposed to be the defence.
+
+### What was audited
+
+| site | keyed by | verdict |
+|---|---|---|
+| `plan.Run.fired` (rule budgets) | rule index | **fixed** in `be8a626`; was the defect |
+| `sim.Counters.minFires` | injector *kind* | **finding 1** — coarser than the entities it covers |
+| `Counters.Fire` call sites | — | **finding 2** — counts intent, not occurrence |
+| `SimTransport.ordinal` | directed link | correct — per-link, which is what the dice are keyed on |
+| `SimTransport.cut` / `links` | directed link | correct — a cut is a property of one direction of one link |
+| `toy.applied` (client dedupe) | client id | correct — dedupe is per client by definition |
+| `toy.inflight` | engine sequence | correct — one pending per write |
+| `pending.acked` | node id | **fixed** in `f9dedcd`; was TOY-002, the same class |
+| `clock` holds | node, one per node | correct — validation rejects two holds on one node |
+| `rng.PCG.children` | derived-stream name | correct — memoization, not a budget |
+| `Trace.limit` | whole run | correct — a retention cap, not a per-entity quota |
+
+### Finding 1 — `min_fires` is keyed by injector kind, not by planned entry
+
+`genFaults` sets `p.Assert.MinFires["crash"] = 1` **inside the loop** over `cfg.Crashes`. With two
+crashes planned, the plan still asserts that one crash fired. The floor proves *some* crash happened
+and says nothing about the second, which is the audited class exactly: a per-kind counter covering
+multiple entries.
+
+The consequence is bounded but real — an injector that silently stopped scheduling half its entries
+would satisfy every assertion in the plan.
+
+### Finding 2 — the counters count *scheduling*, not *firing*
+
+`Run.schedule` calls `r.Counters.Fire(sim.InjCrash)` at the moment the event is **enqueued**, not when
+it executes. Same for `InjRestart`, and `SimTransport.deliver` fires `InjDeliver` when a delivery is
+scheduled. An event scheduled past the run's deadline is counted as having fired.
+
+Measured over 300 seeds of the toy scenario, comparing each counter against the loop's own census of
+events that actually executed:
+
+| injector | scheduled | fired | seeds where they differ |
+|---|---|---|---|
+| crash | 600 | 600 | 0 |
+| **restart** | **600** | **544** | **56 of 300 (19%)** |
+| deliver | 14,216 | 14,208 | 5 of 300 |
+
+**In roughly a fifth of seeds, `min_fires["restart"]` was satisfied by a restart that never
+happened.** The generator draws the downtime as `IntN(2s)` from a crash instant anywhere in a 5s run,
+so a restart is regularly scheduled past the deadline; the counter records the intent and the run
+never performs it.
+
+This is the sharper of the two, because the mechanism is named `Fire` and the assertion is called
+`min_fires`. Both read as claims about occurrence.
+
+### Not fixed here, and why that is a ruling rather than a decision
+
+Both fixes ripple further than a fix should ripple without a ruling:
+
+- **Finding 1** changes `Assert.MinFires` in every generated plan, so every `plan.json` changes and
+  the two corpus bundles need regenerating. The trace hash is unaffected — the assert block does not
+  execute — so this one is cheap and I would take it.
+- **Finding 2** is the expensive half. Counting at fire time is a two-line change, but it would then
+  correctly *fail* the ~19% of seeds whose restart cannot fire inside the deadline. The right fix for
+  that is the generator's physics, not a looser assertion — clamp the restart inside the run — and
+  **that changes execution, so every trace hash changes**, including the seed 4242 cross-invocation
+  hash recorded for the CI comparison when the remote lands.
+
+Deliberately not taken unilaterally: that hash was ratified as a comparison point, and invalidating it
+is Ansh's call, not a side effect of an audit.
+
+**Recommendation.** Take both, in one commit, and re-record the seed 4242 hash — the counter currently
+asserts something it does not check, and a fire-count mechanism that can be satisfied by an event that
+never occurred is the third instance of the same class in one cycle. The recorded hash's purpose is
+cross-architecture comparison, which a re-record preserves; a fire count that lies does not become
+true by being left alone.
