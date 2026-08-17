@@ -1,8 +1,10 @@
 # DESIGN-B1: Env, the WAL, the memtable, and the recovery contract
 
-**Status:** **REVISION 3 — rulings of 2026-08-12 (both sets) applied; awaiting rulings on §13.**
-Nothing is self-ratified, so nothing is marked PROVISIONAL. No C++ file is written until §13 is ruled
-on and the remote gate clears.
+**Status:** **REVISION 4 — revision 3 ratified 2026-08-17; the revision-4 rulings of the same day
+applied; §14 is the full landing sequence.** Nothing is self-ratified, so nothing is marked PROVISIONAL.
+One question is open, **B1-Q12**, and it was opened by a ruling rather than by discovery (§13). **No
+C++ file is written**: the remote gate has not cleared, now for four cycles, and both the vendored tree
+and the first CMake file are implementation.
 **Phase:** B1 (Track B). **Author:** Claude (Session B). **Decider:** Ansh.
 **Blocks:** all of Track B. **Depends on:** the `engine/` interface frozen at A0.5, which this must
 meet exactly — not approximately, because B4's differential rig defines "correct" as "byte-identical
@@ -14,8 +16,10 @@ Twelve decisions, `B1-D1`..`B1-D12`. **B1-D3 and §5.3 are the WAL record layout
 
 ## 0. Ruling echo
 
-Rulings received since the last report — Ansh, 2026-08-12, on DESIGN-B1 revision 2. Verbatim, each
-followed by where it lands.
+Two sets. §0 and §0.1 carry Ansh's rulings of 2026-08-12 on revision 2, which revision 3 applied and
+which remain in force. §0.2 carries the rulings of 2026-08-17 on revision 3.
+
+Rulings — Ansh, 2026-08-12, on DESIGN-B1 revision 2. Verbatim, each followed by where it lands.
 
 > Ruling echo verbatim: correct, and noted specifically because it is the mechanism that survives
 > everything else going wrong.
@@ -183,7 +187,12 @@ network-isolated lane run as a gate with its own induced failure (BM21).
 
 Rulings from the prior cycle remain in force and are reproduced in §1.2.
 
-### 0.1 The standing principle ruled this cycle
+### 0.1 Standing principles
+
+Two, both ruled by Ansh, both about the relationship between a ruling and the session implementing it,
+and both binding on this document going forward.
+
+#### Principle 1 — a ruling owns the failure modes it opens
 
 > **A ruling that constrains a design is responsible for the failure modes it opens, and the session
 > that implements it is the one positioned to see them.** Rulings are not exempt from the
@@ -208,6 +217,135 @@ decisions in this revision arrive that way and each carries the search:
 
 The middle row is the important one: the honest outcome of this search is sometimes "nothing closes
 it", and the value is that the sentence exists.
+
+#### Principle 2 — conflicting rulings are reported, never resolved
+
+> **When two of Ansh's rulings conflict, the session reports the conflict and stops rather than
+> resolving it in whichever direction looks cheaper.** A session that resolves the architect's
+> contradictions is a session making architecture decisions without a record.
+
+Ruled 2026-08-17, on revision 4's §12.4. The instance: "Session B operates in `rift-b`, only" and
+"design docs live on `main`" were jointly unsatisfiable, because `main` is checked out in the worktree
+the first ruling forbids. Both readings were available and both were cheap — write the Track A tree
+anyway, or move the doc off `main` — and either one would have been a permanent architectural change
+made silently by the session that happened to hit the contradiction first.
+
+The operational form: **report the contradiction, enumerate the mechanisms that would resolve it, state
+that the choice is not the session's, and stop on that thread while continuing every thread that does
+not depend on it.** This is the same discipline as marking a recommendation rather than self-ratifying
+it, applied one level up: there, the session declines to ratify its own proposal; here, it declines to
+adjudicate between two of the architect's. The resolution of that instance is §12.2, and the reasoning
+Ansh gave when resolving it is the reason the principle matters — *the original rule was wrong in its
+reasoning, not merely in its consequence*, which is a correction only he could make and which a session
+resolving the conflict cheaply would have buried.
+
+### 0.2 Rulings on revision 3 — Ansh, 2026-08-17
+
+Verbatim, each followed by where it lands. Revision 3 is ratified in full; the seven rulings it applied
+are unchanged and are not restated here.
+
+> Working directory: you are Session B and you operate in /Users/anshk/Desktop/rift-b, only. Running in
+> the Track A worktree risks two sessions writing the same tree with neither one aware, which is a worse
+> failure than anything in the design.
+
+→ **§12.1**, as a standing constraint on this session rather than a note. It has a consequence the
+ruling did not have to state and §0.1 obliges this document to find: design docs live on `main`, and
+`main` is checked out in the Track A worktree, so the path by which a revision of *this file* reaches
+`main` was, at revision 4, unspecified. The gap was reported rather than resolved; it is closed by
+§12.2 and the principle that governed the reporting is §0.1 principle 2.
+
+> Where the doc lives: design docs live on main, which is where revision 2 already sits, so revision 3
+> lands there too rather than being moved. [...] Nothing else this cycle touches git.
+
+→ **§12.4**, with the executed sequence and the resulting HEAD.
+
+> B1-Q11: precondition, your recommendation is correct and the reasoning is right. A one-directional
+> predicate makes clause 4 vacuous and reopens the escape hatch under a new name, which is the same
+> failure D8 was overruled for. Ruling: kBusy lands at B5 only with a bidirectional predicate, and the
+> constraint on B5's design is stated now, in the doc, as a forward binding: the rig drives the poller
+> rather than observing it, because a rig that can only observe cannot construct the negative direction.
+> Record the cost plainly, that this makes B5's rig strictly more work, and that we are paying it
+> because a one-directional predicate is an oracle asking the engine whether it was justified.
+
+→ **§7.6.1**, as a forward binding with the cost recorded, and the `kBusy` row of §7.6's table updated
+from "to be established at B5" to a landed precondition. §13 is closed.
+
+> Deliverable: a written landing sequence for B1.0 through B1.n, each step naming what lands, which
+> gates and mutants come with it, and what would have to be true for that step to be reverted
+> independently of its neighbors. [...] specifically which step first makes a lane able to fail
+> honestly, because that step should be early rather than convenient.
+
+→ **§14**, rewritten from a four-column table into the sequence, the revert map, and §14.1's answer to
+the honesty question. Three steps split under the analysis; §14.4 gives the reasons.
+
+### 0.3 Rulings on revision 4 — Ansh, 2026-08-17
+
+The git sequence, §7.6.1's B1-Q11 landing, the three-threshold answer, the fourth revert class, and the
+three splits are ratified as written and are not restated. What follows changed something.
+
+> Record the general principle in the doc: when two of my rulings conflict, the session reports the
+> conflict and stops rather than resolving it in whichever direction looks cheaper, because a session
+> that resolves my contradictions is a session making architecture decisions without a record.
+
+→ **§0.1, principle 2.**
+
+> Resolving it: mechanism (a), amended. [...] The rule I gave you was wrong in its reasoning, not just
+> its consequence: design docs do not live on main, they live wherever their track's session can commit
+> them, and main is where they converge. So from now on, you commit DESIGN-B* on rift-b yourself, one
+> file per commit, subject naming the revision, and you report the sha. You never write the Track A
+> worktree again, including for docs. I handle every merge to main and I will tell you when one has
+> landed.
+
+→ **§12.2.** §12.4 of revision 4 is closed by this and replaced.
+
+> Track A is now working actively in that tree, so any write of yours into it would have raced live
+> edits. State in the doc that the two worktrees are single-writer by session, with rift-b yours and
+> Rift Track A's, and that convergence happens only through me.
+
+→ **§12.1**, restated as a single-writer property rather than as a prohibition on one session.
+
+> Track A learned this week that a lane can be green for five checklist steps while the machinery
+> underneath runs at a sixth of its power and nothing notices [...]. B1.1 as the ALIVE-canary moment,
+> with every green between there and B1.9 uninterpretable without it, is the correct framing and it
+> should be quoted in the doc as such.
+
+→ **§14.1**, with the Track A instance recorded as the reason rather than as an aside, and the
+ALIVE-canary sentence pulled out as a quoted rule.
+
+> It is not mainly that early tests get rewritten. It is that an engine-account test which passes gets
+> kept, and a kept engine-account test is the oracle interrogating the engine, permanently, with
+> nothing marking it as such. It will look like coverage. Write it that way, and add the mechanical
+> defense: any test written before its independent observer exists is either deleted or re-derived
+> against the observer when that observer lands, and the landing step that introduces an observer names
+> which earlier tests it must retire. Otherwise this is a discipline and we have both watched
+> disciplines fail this month.
+
+→ **§14.1's rejection**, rewritten to the stronger claim, plus **§14.1.1** stating the retirement rule,
+plus a **Retires** line on every step in §14.2 that introduces an observer — B1.1, B1.3, B1.9a.
+
+> Add one thing: name in each such step which specific published claim depends on it, so the retraction
+> has a target. A rule that says retract the claim is weaker than a rule that says retract this sentence
+> in this file.
+
+→ **§14.2**, B1.4 and B1.9b each gain a **Claim it carries** line naming file and sentence.
+
+> PosixEnv is the only component in the entire engine whose behavior is not verified by anything in B1,
+> and it is the component that talks to the actual disk. [...] it is an idealization and it belongs in
+> section 11 with the others, stated at least as plainly as you stated the kill -9 page-cache
+> degradation. [...] Then say what would raise the confidence, and whether any of it is cheap enough to
+> be worth doing at B1.
+
+→ **§11 item 9**, and the confidence question is **B1-Q12** in §13, since answering it would add gates
+and §10.2 is not mine to extend without a ruling.
+
+> Two things to carry into the next revision. [...] I want the mutant catalogue re-checked against the
+> split steps once, to confirm every mutant still has a landing step that introduces it [...]. And add
+> the harness-power principle from Track A as a forward binding on B1.9b: every planted flaw class in
+> the C++ sweep carries a floor, a minimum detection rate and a maximum seeds-to-detection, and the
+> campaign lane fails when a class drops below its floor.
+
+→ **§12.3**, recorded as owed for revision 5 and deliberately **not** done here. §10.1 and §10.2 remain
+untouched by this revision, which is the state the re-check must start from.
 
 ---
 
@@ -1111,11 +1249,54 @@ The B1 codes and their predicates:
 | `kCorruption` | the harness planted corruption in a region §5.4 requires recovery to read | yes — the region qualifier is what makes the converse statable, and is the sixth clause doing its job |
 | `kKilled` | the fault controller's dead flag is set | yes |
 | `kInvalidArgument` | the harness deliberately submitted an argument outside the frozen contract | yes |
-| `kBusy` | **B5** — the poller-backpressure policy; predicate defined with the policy, subject to clause 6 | to be established at B5 |
+| `kBusy` | **B5** — the poller-backpressure policy; predicate defined with the policy, **bidirectional by precondition**, §7.6.1 | required before the code exists |
 
 `kNotFound` is deliberately absent: it is the frozen interface's `ErrNotFound`, a normal result, and
 `engine/model` produces it too — so it is not a place the engines can legally differ and it does not
 belong in this table.
+
+### 7.6.1 B1-Q11, ruled: `kBusy` is a precondition, and the constraint it puts on B5
+
+**Ruled 2026-08-17.** `Status::kBusy` lands at B5 **only with a bidirectional predicate**. Not "lands
+with a recorded gap", not "lands one-directional and is tightened later". The reason is the one the
+ruling gives and it is worth keeping in the engine's own words: *a one-directional predicate is an
+oracle asking the engine whether it was justified* — which is the identical failure B1-D8 was overruled
+for, arriving under a new name. Clause 4 without clause 6 is not a weaker rule; it is a vacuous one for
+whichever code first finds it inconvenient, and granting the first exception at the first inconvenience
+is how the rule dies.
+
+**The forward binding on B5, stated now while it is a design constraint.**
+
+> **B5's poller rig drives the poller; it does not observe it.** Backpressure state — how many syncs are
+> outstanding, how long the poller has been behind, where the queue depth sits against its threshold —
+> is *set by the harness* and read back from the harness's own record, never inferred from the engine's
+> behaviour or read out of the engine's counters.
+
+The reason is mechanical, not stylistic. `kBusy`'s two directions are:
+
+| direction | the harness must be able to assert |
+|---|---|
+| 1 (spurious) | the engine returned `kBusy` while the harness's own record says the backpressure condition was **not** met → divergence, the run **fails** |
+| 2 (missing) | the harness's own record says the condition **was** met and the engine returned `kOk` → divergence, the run **fails** |
+
+Direction 2 is the one that forces the design. To assert it, the harness must be able to *put* the
+engine into a state where backpressure is unambiguously owed and then observe that it was not signalled.
+A rig that only watches the poller can never construct that state on purpose: it can wait for a busy
+moment to occur and check what the engine said, which tests direction 1 alone. So a rig that can only
+observe yields a one-directional predicate by construction — the two are the same decision, and ruling
+the predicate bidirectional *is* ruling the rig a driver.
+
+**The cost, plainly.** This makes B5's rig strictly more work. Driving the poller means the poller's
+pacing is a harness-controlled input rather than an emergent property: an injectable schedule, a way to
+stall and release completions deterministically, and a record of the intended state at every point where
+`kBusy` could be returned — none of which a passive observer needs. That is real additional design and
+real additional code in B5, it is known now rather than discovered then, and **we are paying it on
+purpose**, because the alternative buys a cheaper rig with an oracle that consults the subject.
+
+**Consequence for §7.6 clause 6 generally:** clause 6 is now demonstrated as well as stated. The first
+code to test it produced a genuine design constraint on a later phase rather than an exception, which is
+the outcome the clause was written to produce. Any future `Status::Code` inherits the same treatment,
+including the same willingness to let it constrain the phase that adds it.
 
 ---
 
@@ -1536,60 +1717,554 @@ Item 1 is ratified and is being carried into DESIGN-A0 §7 by Ansh (§1.1); the 
 8. **Env interception is unbypassable from an implementation, not from an edit to the base class**
    (§3.2.1). Bypassing requires defeating the count assertion in the same diff that adds the method, which
    the scan lane's blind patches cover. The honest claim is "two independent checks", not "impossible".
+9. **`PosixEnv` is unverified by every lane in B1, and it is the component that talks to the actual
+   disk.** Ruled into this list 2026-08-17. Every B1 test runs on `TestEnv`, so the one piece of the
+   engine whose behaviour B1 never checks is the piece every production durability claim runs *through*
+   — and the piece B1's verification runs *around*. Stated at full strength, because it is easy to read
+   the revert map's "only unqualified leaf" as good news and it is not: B1.2b is a leaf precisely because
+   nothing in B1 depends on it being right.
+
+   The division of labour is still correct — `TestEnv` is where fault injection belongs, and a
+   fault-injecting production Env would be a second implementation of the thing under test — so this is
+   an idealization to state, not a defect to fix here. What the correctness of `PosixEnv` currently rests
+   on, exactly and exhaustively: **(a)** the thinness of the implementation, each public wrapper being a
+   mechanical mapping onto one syscall with no logic beyond a retry loop; **(b)** the short-write,
+   `EINTR` and zero-return unit tests at the internal raw-write seam (§3.3 ⁽¹⁾, idealization 2); and
+   nothing else. There is no lane in B1 that would notice `PosixEnv` calling `pwrite` where it promised
+   `write`, syncing the wrong descriptor, or dropping a flag. **The first real evidence about it arrives
+   at B5**, with the standalone numbers taken on a real filesystem, and the first *adversarial* evidence
+   arrives later still, in I2's chaos lane.
+
+   Four things would raise the confidence, ordered by cost. §13's **B1-Q12** asks which, if any, are
+   cheap enough to be worth doing at B1; my recommendation is there rather than here, because acting on
+   it would add gates to §10.2 and that is not mine to do unruled.
 
 ---
 
 ## 12. Coordination
 
+### 12.1 The worktrees are single-writer by session
+
+**Ruled 2026-08-17.** Two worktrees over one repository, and **each has exactly one writer**:
+
+| worktree | branch | sole writer |
+|---|---|---|
+| `/Users/anshk/Desktop/rift-b` | `rift-b` | **Session B (this session)** |
+| `/Users/anshk/Desktop/Rift` | `main` | **Track A's session** |
+
+**Convergence happens only through Ansh.** No session merges, rebases onto, or writes another session's
+tree; the branches meet when he merges them and he says when one has landed.
+
+This is stated as a property of the trees rather than as a prohibition on one session because the
+prohibition form invites the question "may I, just this once, for a doc" — and the answer has to be no
+for a reason that survives the special case. The reason is concrete and was observed the same day the
+rule was made: within four hours of the ruling, the Track A worktree went from one modified doc to five
+modified `sim/` files plus an untracked `sim/hunt/scenario.go`. Any write of mine into that tree would
+have raced live edits by a session with no way to know I was there. **Two sessions writing one tree
+corrupts the evidence, not merely the code**, and evidence is the entire deliverable of this project.
+
+### 12.2 How a Track B design doc reaches `main`
+
+**Ruled 2026-08-17, mechanism (a) amended**, closing and replacing revision 4's §12.4. The amendment is
+the load-bearing part and Ansh's own words carry it: *design docs do not live on `main`, they live
+wherever their track's session can commit them, and `main` is where they converge.* The original rule
+was wrong in its reasoning and not only in its consequence, which is exactly the correction a session
+resolving the contradiction cheaply would have buried — see §0.1 principle 2.
+
+The procedure, binding from revision 4 forward:
+
+1. Session B commits `docs/DESIGN-B*.md` **on `rift-b`, itself**.
+2. **One file per commit.** The subject names the revision.
+3. Session B reports the sha in that cycle's report.
+4. **Ansh performs every merge to `main`** and tells Session B when one has landed.
+5. **Session B never writes the Track A worktree again, docs included.**
+
+### 12.3 Owed
+
 1. **Ansh is carrying to Track A:** §1.1's verification-scope text into DESIGN-A0 §7 and README, and the
    `Makefile` plus `.github/workflows/cpp.yml` changes covering `cpp-test`/`cpp-asan`/`cpp-ubsan`
-   un-stubbing, the new `cpp-tsan`, and `cpp-ci`'s network-isolated run. **No Track A file has been
-   touched by this session.**
-2. **`engine/model/model.go` lines 24–26** — the stale pre-fix comment — is being carried by Ansh.
-   Recorded only so the thread closes.
-3. **Owed by me next cycle:** rebase the `rift-b` worktree (`/Users/anshk/Desktop/rift-b`, currently at
-   `1390969`) onto `main` and report the resulting HEAD. `.gitignore` already carries `engine-cpp/build/`,
-   so nothing else is needed to receive the tree.
+   un-stubbing, the new `cpp-tsan`, and `cpp-ci`'s network-isolated run. **B1.1 is gated on these.**
+   Also `engine/model/model.go` lines 24–26, the stale pre-fix comment; recorded only so the thread
+   closes.
+2. **Owed by me in revision 5, and deliberately not done in revision 4.** (i) Re-check §10.1's mutant
+   catalogue against §14.2's thirteen steps once, confirming every mutant still has a landing step that
+   introduces it — the three splits moved boundaries even though they moved no content, and a mutant
+   with no introducing step is a mutant nobody is responsible for landing. (ii) Add the **harness-power
+   principle** from Track A as a forward binding on B1.9b: every planted flaw class in the C++ sweep
+   carries a **floor** — a minimum detection rate and a maximum seeds-to-detection — and the campaign
+   lane **fails** when a class drops below its floor. Track A is building that lane after discovering a
+   harness defect that quietly cut detection to a sixth with every lane green; this is the second time
+   in this document that Track A's experience has arrived as a forward binding rather than as a lesson
+   Track B had to repeat, and that is the point of a shared constitution.
+3. Revision 4 is committed on `rift-b` per §12.2; the sha is in the cycle report.
+
+### 12.4 Done
+
+**2026-08-17.** Revision 3 committed as `60e4ced`, one file, subject `DESIGN-B1 revision 3: the NVI
+choke point, the two-element oracle, one registry`. `rift-b` fast-forwarded from `1390969` onto `main`,
+**resulting HEAD `60e4ced`**, both ranges empty, doc byte-identical in both worktrees at blob `10f56bd`.
+Track A's untracked `docs/A0-CHECKLIST.md` was left untracked. That commit was the **last** write this
+session makes to the Track A worktree, under §12.2 item 5.
 
 ---
 
 ## 13. Questions remaining
 
-One, and it is new.
+**One.** B1-Q11 was ruled 2026-08-17 and closed; B1-Q12 was opened the same day **by a ruling rather
+than by discovery** — Ansh's §11 item 9 amendment ends "then say what would raise the confidence, and
+whether any of it is cheap enough to be worth doing at B1", and answering it in the affirmative adds
+rows to §10.2, which is not mine to extend unruled.
 
-> **B1-Q11.** "Should `Status::kBusy`'s bidirectional predicate (§7.6 clause 6) be a precondition for
-> landing backpressure at B5, or may B5 land the policy with a one-directional predicate and a recorded
-> gap?"
+> **B1-Q12.** "Which, if any, of the four measures that would raise confidence in `PosixEnv` (§11 item
+> 9) are cheap enough to land at B1, given that B1's verification deliberately runs around it?"
 
-**Recommendation: a precondition.** Clause 6 exists because a one-directional predicate makes clause 4
-vacuous for that code and reopens the escape hatch under a new name; granting the first exception to it
-at the moment it is first inconvenient is how the rule dies. The concrete difficulty is real and worth
-naming: "the engine was legitimately busy" is a statement about the poller's pacing, which is harness-side
-at B5 only if the harness owns the poller — so the precondition is really a constraint on B5's design,
-namely that the rig drives the poller rather than observing it. I would rather bind that now, while it is
-a design constraint, than discover it as an exception request later.
+**The four, ordered by cost, with what each actually buys.**
 
-Everything else in this document is either ruled or awaiting a ruling on a recommendation already stated;
-nothing new was opened by this revision.
+| # | measure | buys | cost | where it would land |
+|---|---|---|---|---|
+| 1 | **Thinness as a checked property.** A scan rule: each private virtual is a mechanical mapping onto one syscall — no branching but a documented retry loop, no state beyond the descriptor, no arithmetic on offsets or lengths beyond what the public wrapper passed, and a per-method statement cap | converts §11 item 9's assumption **(a)** from a belief about a person into a property the lane holds. Today "the implementation is thin" is *asserted*, and it is the load-bearing half of the argument | **low.** A rule inside the B1.4 lane, which already parses these sources | rule stated at **B1.2b**, enforced at **B1.4**, whose induced-failure set gains *thicken a `PosixEnv` method past the cap; the lane must fail* |
+| 2 | **Run B1.8's semantics suite against `PosixEnv` on a real filesystem**, no fault injection | catches the entire class §11 item 9 names as currently uncatchable: wrong syscall, wrong descriptor, dropped flag, mis-set offset — anything that breaks read-back-what-you-wrote against a real kernel | **near zero marginal.** The suite exists at B1.8 and `Env` is pluggable by construction; this is a build target and a fixture directory, not a harness | **B1.8** |
+| 3 | **Differential Env lane:** one op sequence through `PosixEnv` and through `TestEnv` in no-fault mode, comparing every observable including on-disk state after each `Sync` | more than 2, and in a direction worth naming: it tests **`TestEnv`** as hard as it tests `PosixEnv`. `TestEnv`'s power-loss model is a *model*, and nothing in B1 checks that its fault-free behaviour matches a real filesystem's | **moderate.** Needs an adapter that reads a real directory into the shape `TestEnv` reports | **B4**, not B1 — the differential harness against `engine/model` already exists there, and this is a second axis of that rig rather than a new one |
+| 4 | **Real crash testing on a real filesystem** — true `_exit` or device-level power cut, `dm-log-writes` or equivalent | adversarial evidence about production durability | **high**, and needs a machine and privilege story | **I2's chaos lane**, where the production-adjacent Env is already in scope |
+
+**Recommendation: 1 and 2 at B1; 3 at B4; 4 declined for B1 as already scheduled.**
+
+The reasoning for taking 1 and 2 and no more. Measure 1 is the only one that touches the argument's
+actual weak point: §11 item 9 rests on (a) thinness and (b) the seam tests, and (b) is already a checked
+property while (a) is not — so 1 costs a lane rule and removes the asymmetry. Measure 2 is close to free
+because B1.8's suite and the `Env` seam were built to make exactly this substitution possible; declining
+it would mean having built a pluggable interface and then not plugging anything into it. Measure 3 is
+genuinely valuable and genuinely not a B1 shape: it needs a comparison rig, and B4 is where the
+comparison rig lives.
+
+**One scoping condition on measure 2, stated so it is not discovered later.** A real-filesystem lane
+cannot be deterministic in the byte-digest sense and must never enter the recovery ledger: it makes no
+durability claim, injects no faults, and its runs are **not evidence** under §7.5 — the same distinction
+that separates characterization from evidence, applied to a lane rather than to a run. It is a
+correctness lane about a mapping, and describing it as anything more would be the exact overstatement
+§11 exists to prevent.
 
 ---
 
-## 14. Landing plan
+## 14. Landing sequence
 
-None started before §13 is ruled and the remote gate clears. B1.1 is gated on §12.1's Track A items.
+Nothing has started. §13 is closed, so the only remaining gate on B1.0 is the remote gate; B1.1 is
+additionally gated on §12.3's Track A items. Thirteen landings across ten numbers — §14.4 gives the
+reason for the three splits.
 
-| PR | contents | gate |
-|---|---|---|
-| B1.0 | vendored GoogleTest at the pinned commit; `VERSION`; offline hash lane; `verify-vendored-gtest.sh`; `cpp-ci` network isolation | vendored-tree integrity and no-network gates, induced by a one-byte edit and by `BM21` |
-| B1.1 | CMake skeleton, static archive, `Status::Code`, `RunOutcome`, `CountsAsRecoveryEvidence`, lanes un-stubbed | lanes fail loudly on a planted failure; `BM13` |
-| B1.2 | `Env` NVI surface, `PosixEnv`, the raw-write seam and its short-write unit test | 1:1:1 count assertion; short-write, `EINTR`, zero-return tests; `BM17` |
-| B1.3 | `TestEnv`: `content`/`durable`, fault controller, ledger, kill mechanism, both censuses | the durability model's tests; `CallSite` reachability; the ledger's induced failures |
-| B1.4 | the A5 scan lane, `CPP-HATCHES.txt`, the blind-patch set | planted `::open` fails the lane; an unused registry entry fails it |
-| B1.5 | skiplist memtable under the DB mutex, arena, deterministic heights + golden vectors, structural digest | vectors; `BM6`, `BM22`; `BM14` under TSan; `BM23` |
-| B1.6 | WAL writer: framing, fragmentation, groups, caps, regime field, byte-digest test | pinned bytes; fragmentation across a block boundary; `BM12`, `BM18`, `BM19`, `BM20` |
-| B1.7 | WAL reader and recovery: torn-tail rule, chain legality, resync | the seven recovery and corruption gates, each with its induced failure |
-| B1.8 | `Open`/`Close`/`Write`/`Get`/iterator/snapshot; `DeleteRange` over the memtable | semantics suite mirroring `engine/model`'s |
-| B1.9 | the kill-point sweep, the exactness oracle, the two-element verdict, §7.6's adjudication | full sweep green; both set elements observed; every mutant killed in budget |
+**Two ordering invariants govern the whole sequence, and everything below is a consequence of them.**
+
+1. **The observer lands before the observed.** Every mechanism that can contradict the engine —
+   un-stubbed lanes, the Env choke point, TestEnv's durability model, the scope scan — lands before the
+   first line of engine code at B1.5. Not "early". *Before.*
+2. **A gate lands only once its failure has been induced and observed** (§10.2), and per §0.1 that
+   applies to gates that exist because of a ruling exactly as it applies to the rest. So the unit of
+   landing is never "the code" — it is *the code plus the demonstration that its check can go red*.
+
+### 14.1 Which step first makes a lane able to fail honestly
+
+Asked directly, so answered directly. There are three distinct honesty thresholds and they are not the
+same event:
+
+| # | threshold | step | what is true after it that was not before |
+|---|---|---|---|
+| 1 | **lane honesty** | **B1.0** | a lane in this repo can go red at all. Both of B1.0's gates are induced-failure-first — a one-byte edit to the vendored tree must fail the hash lane, and `BM21`'s `FetchContent_Declare` must pass with networking and fail under `unshare -rn`. This happens *before a single line of our C++ exists* |
+| 2 | **our-code honesty** | **B1.1** | a failing C++ test of ours turns CI red. This is the un-stubbing, and it is the ALIVE-canary moment: "required lane" becomes "lane that can fail". Every green between here and B1.9 is uninterpretable without it |
+| 3 | **durability honesty** | **B1.3** | a lane can fail *for the right reason about durability*. Before `TestEnv`'s `content`/`durable` split there is no observer that distinguishes written from durable, so no durability test can fail correctly — it can only fail loudly |
+
+Threshold 2 is the one to quote, and Ansh ruled it be quoted as such:
+
+> **B1.1 is the ALIVE-canary moment: "required lane" becomes "lane that can fail". Every green between
+> B1.1 and B1.9 is uninterpretable without it.**
+
+**Why that is a rule and not fastidiousness.** Track A learned it this week the expensive way: a lane
+stayed green across **five checklist steps** while the machinery underneath was running at **a sixth of
+its power**, and nothing noticed, because a green lane reports the health of the lane and not the power
+of the harness behind it. Landing the observer before the observed is the only reason any subsequent
+green means anything — and the failure mode is not a red that gets ignored, it is a green that is true
+and worthless.
+
+**The engine's first line lands at B1.5, two steps after threshold 3.** That is the whole ordering claim
+in one sentence: by the time there is anything to be wrong, everything that could catch it is already
+standing and has already been seen to go red.
+
+**The convenient order, and why it is rejected.** The convenient order is memtable → WAL writer → reader
+→ *then* build the rig: it shows visible progress first, each piece is testable in isolation, and the
+expensive harness work is deferred until there is something to point it at. It is rejected for a reason
+much sharper than "we would find bugs later", and sharper than "those tests get rewritten" — that
+framing understates it, because rewriting is the *good* outcome.
+
+Every test written in that order is necessarily an **engine-account test**: it drives the engine and asks
+the engine what happened, because no independent observer exists yet. §7.3 exists to forbid exactly that,
+and the ruling behind §7.6.1 names the failure — *an oracle asking the engine whether it was justified.*
+The tests that fail get rewritten and are therefore harmless. **The danger is the ones that pass.** A
+passing engine-account test gets kept. Kept, it is the oracle interrogating the engine — permanently,
+with nothing in the file marking it as such, sitting in the suite next to real tests, indistinguishable
+from them, counted in the totals. **It will look like coverage.** That is the whole objection: not
+wasted work, but a verification claim quietly diluted by tests that can only confirm.
+
+#### 14.1.1 The retirement rule
+
+A discipline is not a defense, and we have both watched disciplines fail this month. So the rule is
+mechanical:
+
+> **Any test written before its independent observer exists is either deleted or re-derived against that
+> observer when the observer lands. The landing step that introduces an observer names, in its own
+> entry, which earlier tests it retires.**
+
+Three steps in §14.2 introduce an observer, and each carries a **Retires** line stating what it must
+account for: **B1.1** (the lanes themselves), **B1.3** (`TestEnv`, the durability observer), and
+**B1.9a** (the exactness oracle). "Nothing" is a legal and expected answer where the sequence has
+already prevented the situation — that is what an ordering invariant is *for*, and recording the empty
+case is what makes the non-empty case credible when it appears.
+
+**One more consequence worth stating.** Thresholds 1 and 2 are cheap and land at steps 0 and 1. Threshold
+3 is expensive and lands at step 3 of thirteen. The expensive one is early *because* it is expensive: a
+harness deferred is a harness scoped to the code that already exists.
+
+### 14.2 The sequence
+
+Each entry: what lands, the gates that come with it and the failure induced to prove each can go red, the
+mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; gate rows are §10.2's.
+
+---
+
+**B1.0 — the vendored tree and the offline gate.** *Gated on: the remote gate.*
+
+- **Lands:** `third_party/googletest/` at `52eb8108c5bdec04579160ae17225d66034bd723` (v1.17.0);
+  `third_party/googletest/VERSION` recording the tree hash; `scripts/verify-vendored-gtest.sh` (§9.2);
+  the offline hash lane; `cpp-ci` running the full lane set under `unshare -rn`.
+- **Gates + induced failure:** vendored-tree integrity — *edit one byte of the vendored tree, the hash
+  lane must fail*. No lane touches the network — *add `FetchContent_Declare`; it must pass with
+  networking available and fail under isolation*.
+- **Mutants:** `BM21`.
+- **Depends on:** nothing.
+- **Revert:** **Surface** (`gtest`'s API). Independently *replaceable* at any time — re-pin to another
+  commit and nothing above notices, because everything above depends on the framework's API and not on
+  the vendoring. Independently *revertible* only if nothing above has landed. The distinction matters:
+  "we can change this" is true forever; "we can remove this" expires at B1.1.
+
+---
+
+**B1.1 — the skeleton, the closed enums, and the un-stubbing.** *Gated on: §12.3 item 1's Track A items.*
+
+- **Lands:** CMake skeleton producing the static archive; `Status::Code` (closed, `-Werror=switch`, no
+  `default:` arm); `RunOutcome`; `CountsAsRecoveryEvidence` as the single policy site (§7.5);
+  `cpp-test`/`cpp-asan`/`cpp-ubsan` un-stubbed and `cpp-tsan` live.
+- **Gates + induced failure:** every lane fails loudly — *plant a failing test in each of the four lanes
+  and observe four reds*, one per lane, not one red taken as evidence for four. Characterization is not
+  evidence — *make `CountsAsRecoveryEvidence` accept `kCharacterizationOnly`*. The closed-enum property
+  — *add an enumerator and omit its arm; the build must fail*, which is what makes a future suppression
+  reason a compile error until someone classifies it.
+- **Mutants:** `BM13`.
+- **Depends on:** B1.0.
+- **Retires (§14.1.1):** **nothing, and that is the ordering invariant working rather than luck.** B1.1
+  is the first step at which any test of ours exists, so there is no earlier body to retire. B1.0's two
+  checks are about the vendored tree and the network and cannot be engine-account tests, there being no
+  engine — recorded so the empty answer is a classification and not an omission.
+- **Revert:** **Chokepoint, and the widest one in B1.** `Status::Code` and `RunOutcome` are consumed by
+  every step above; nothing above survives their removal. The mitigation is not that the revert gets
+  cheaper — it is that the enum can only *grow* under §7.6 clause 6, so the surface stays small enough
+  that a replacement is conceivable. `CountsAsRecoveryEvidence` is separately revertible, being one
+  function with one caller; that is deliberate and is why §7.5 insists on the single policy site.
+
+---
+
+**B1.2a — the Env choke point, with no implementation behind it.**
+
+- **Lands:** the `Env` NVI surface (public non-virtual intercepts, private pure virtuals implement); the
+  `CallSite` enumeration; the 1:1:1 count assertion binding public wrappers to private virtuals to
+  `CallSite` enumerators (§3.2).
+- **Gates + induced failure:** the count assertion — *add a public virtual to the base, bypassing
+  interception*; and *delete one `CallSite` registration*, the other direction of the same 1:1:1.
+- **Mutants:** `BM17` (its static half; the reachability half is B1.3's).
+- **Depends on:** B1.1.
+- **Revert:** **Chokepoint.** Every Env implementation, every fault injection point and every kill point
+  above stands on it.
+- **Note:** it lands with **zero implementations**, and can, because the count assertion is structural.
+  That is the entire reason it is separable from B1.2b — see §14.4.
+
+---
+
+**B1.2b — `PosixEnv` and the raw-write seam.**
+
+- **Lands:** `PosixEnv` implementing the private virtuals; the internal raw-write seam; its short-write,
+  `EINTR` and zero-return unit tests.
+- **Gates + induced failure:** each of the three seam tests, induced by returning a short count, `EINTR`,
+  and zero from the raw seam respectively.
+- **Mutants:** none. `PosixEnv` is outside the fault matrix by §11 idealization 2 — short writes are
+  unit-tested here and are deliberately absent from the kill-point sweep, so they never combine with
+  another injected fault in one run.
+- **Depends on:** B1.2a.
+- **Revert:** **Leaf — the only unqualified one in B1.** No B1 test uses `PosixEnv`; every B1 test runs
+  on `TestEnv`. It becomes load-bearing at B5's cgo path and at I1, and until then it is the single step
+  in this sequence that can be removed at any moment with nothing above it noticing.
+
+---
+
+**B1.3 — `TestEnv`, and threshold 3.**
+
+- **Lands:** `TestEnv` with the `content`/`durable` split implementing §4's power-loss model; the fault
+  controller and the fault matrix of §3.3; the ledger; the kill mechanism of §9.5 (in-process dead flag
+  plus the sampled real `_exit`); the `CallSite` reachability census and the kill-point census.
+- **Gates + induced failure:** the durability model — *a kill discards everything written since the last
+  covering `Sync` returned*, asserted against the ledger rather than against the engine. `CallSite`
+  reachability — *delete a public wrapper's registration; the census must report an unvisited
+  enumerator*. Kill-point census — *add an Env call and do not update the census; the sweep must report
+  the change*. The ledger's own induced failures.
+- **Mutants:** `BM17` (reachability half).
+- **Depends on:** B1.2a. **Not** on B1.2b.
+- **Retires (§14.1.1):** **nothing, subject to one classification this step must perform rather than
+  assume.** `TestEnv` is the durability observer, so every earlier test must be shown to make no
+  durability claim. The only earlier tests are B1.2b's three seam tests, and they are statements about
+  a syscall's **return value** — short count, `EINTR`, zero — not about durable state. B1.3 records that
+  classification explicitly; had any of them asserted that bytes were on disk, it would be retired here,
+  because before this step nothing could have justified the assertion.
+- **Revert:** **Chokepoint.** Every gate from B1.5 upward runs through it. It is also the step whose
+  revert is least visible and most damaging: the tree still builds without it, and everything above
+  quietly stops being able to fail correctly.
+
+---
+
+**B1.4 — the scope scan.**
+
+- **Lands:** the A5 scan lane (§9.4); `CPP-HATCHES.txt` as the checked-in registry; the blind-patch set
+  (DR-27).
+- **Gates + induced failure:** *plant a raw `::open` in an engine source; the lane must fail*. *Add an
+  unused registry entry; the lane must fail* — no dead hatches. Each blind patch must be caught.
+- **Mutants:** none of its own — and it is the reason two others cannot exist as committed files. `BM6`
+  includes `<random>` and `BM14` removes a lock, both of which this lane rejects at scan time, so they
+  exist only as patches applied to a scratch tree.
+- **Depends on:** B1.1 (lanes), B1.2a (the seam it is scanning for).
+- **Claim it carries — the retraction target, named to the sentence:**
+  - `CLAUDE.md`, *Determinism and fault injection, C++ side*, preamble: *"Env is the C++ side of the same
+    boundary the Go determinism pass enforces: every syscall goes through it for the reason every clock
+    read goes through `Clock`."*
+  - `CLAUDE.md`, same section, bullet 1: *"The engine performs all file operations through an `Env`
+    abstraction (open, read, write, sync, rename, list), LevelDB style."*
+  - `CLAUDE.md`, **Amendment A5**: *"every syscall on the C++ side through Env"*, and *"C++ through the
+    Env seam"*.
+  - This document, **§3.2.1** and **§11 item 8**: the *"two independent checks"* residual — which becomes
+    one check, and then zero.
+- **Revert:** **Mechanically a leaf; epistemically a chokepoint.** Nothing consumes the lane, so
+  reverting it breaks no build and reddens no test — and it reduces every sentence above from a property
+  to programmer discipline. **This class is the dangerous one**, because it is the class that can be
+  dropped under schedule pressure with no immediate signal. Standing rule: *a step in this class may not
+  be reverted without the claim it supports being retracted in the same diff* — and the claim is the four
+  named sentences, not the general idea, because a rule that says retract the claim is weaker than one
+  that says retract this sentence in this file. B1.9b is the other member.
+
+---
+
+**B1.5 — the memtable. The first engine code in the project.**
+
+- **Lands:** the skiplist memtable under the DB mutex (B1-D6c); the arena; deterministic tower heights as
+  a pure function of the key (B1-D6b) with their golden vectors; the structural digest;
+  `kConcurrencyClaim` as the single sanctioned wording (§6.4).
+- **Gates + induced failure:** height golden vectors — *shift the tower mapping `/2` → `/3`*.
+  Deterministic memtable shape — *swap in a PRNG height source; the structural digest must differ across
+  runs*. The memtable is actually locked — *remove the mutex from the write path; the TSan harness must
+  report a race*, which is what proves the TSan lane is not decoration. The claim is not upgraded —
+  *edit `kConcurrencyClaim` toward "race-free"*.
+- **Mutants:** `BM6`, `BM14`, `BM22`, `BM23`.
+- **Depends on:** B1.1, B1.3 (the TSan harness drives `Apply`/`Get` against `Sync`).
+- **Revert:** **Surface** (the ordered-map interface B1.7b applies into and B1.8 reads through).
+  Replaceable, but a replacement invalidates the golden vectors and the structural digest, because both
+  are specific to this height mapping — so the revert is "implementation plus two fixture sets", not
+  "implementation".
+- **Note:** B1.5 and B1.6 are **the only pair in the sequence with no dependency in either direction**.
+  They are the only two that could land in the other order, and the only two that can be reverted without
+  reference to each other.
+
+---
+
+**B1.6 — the WAL writer.**
+
+- **Lands:** framing and the frozen record layout (§5.3); fragmentation across block boundaries; sync
+  groups and `GROUP_END`; the engine-owned WAL buffer (B1-D9); `kMaxRecordBytes` and `kWalBufferBytes`
+  with the `cap ≥ 2 × max_record` ordering invariant; the `regime` field and regime-keyed aggregation
+  (§8.4); the byte-digest test.
+- **Gates + induced failure:** the pinned WAL byte digest — *leave one padding byte uninitialized; the
+  digest must differ across runs*. Fragmentation across a block boundary. `Apply` performs no I/O —
+  *move the WAL buffer into `WritableFile`; the per-thread Env-call counter must fire*. The mutex is
+  never held across an Env call — *hold the DB mutex across `Sync`; the depth guard must fire*. The
+  buffer tripwire halts — *stall the syncer past the cap; the run must halt as `kVoid`, not OOM*. The cap
+  ordering invariant — *construct with `kWalBufferBytes < 2 × kMaxRecordBytes`; construction must fail*.
+  Record-cap and buffer-cap adjudication, **both directions each** — *trip on a legal-size record* and
+  *accept an over-cap record*; both must fail the run, neither may void it. Regimes never aggregate —
+  *summarize a lowered-cap run together with a default-cap run*. Directory sync — *kill between file
+  creation and `Directory::Sync`*.
+- **Mutants:** `BM4`, `BM6`, `BM9`, `BM12`, `BM16`, `BM18`, `BM19`, `BM20`.
+- **Depends on:** B1.1, B1.3.
+- **Revert:** **Chokepoint.** B1.7a and B1.7b read what it writes and B1.9a's oracle is defined against
+  its groups. It also carries the determinism spine: the byte digest is the C++ analogue of Track A's
+  trace hash, catching ambient randomness, uninitialized padding and any float on a serialization path in
+  one test, and is why MSan stays declined. Reverting B1.6 retires that too.
+
+---
+
+**B1.7a — the WAL reader, drivable from bytes alone.**
+
+- **Lands:** fragment decode; CRC verification over `length ‖ type ‖ payload` (the stated departure from
+  LevelDB, §5.3.3); fragment-chain legality and its six-case table (§5.4.2); resync; interior-corruption
+  detection with offsets.
+- **Gates + induced failure:** CRC covers the length — *corrupt only the length field of a fully synced
+  fragment; the CRC must fail at a known offset*. Illegal fragment transitions — *plant `FIRST`
+  immediately followed by `FIRST`, both CRC-valid*. Interior-corruption detection — *flip one byte inside
+  a fully synced group; the open must fail with an offset*. Interior corruption is not truncated — *make
+  recovery stop at the first bad record; the planted corruption must go from "refused open" to "silent
+  data loss"*, which is the induced failure that names the actual consequence.
+- **Mutants:** `BM3`, `BM8`, `BM10`, `BM11`.
+- **Depends on:** B1.1 only, for its gates.
+- **Revert:** **Surface** (the decode interface B1.7b consumes).
+- **Note:** **every gate here is drivable from hand-built byte images** — no writer, no memtable, no Env
+  faults, just fixture bytes. That makes this the cheapest place in the sequence to induce failures
+  exhaustively, and it is why the reader is separated from recovery. See §14.4.
+
+---
+
+**B1.7b — recovery.**
+
+- **Lands:** the torn-tail rule, single-block (§5.4.1) and multi-block (§5.4.2); gapless WAL numbering and
+  §7.2's `max+1` rule; the watermark computation; apply-into-memtable.
+- **Gates + induced failure:** torn tail, single block — *make recovery accept `BATCH` records after the
+  last `GROUP_END`*. Torn tail, multi-block — *truncate mid-`MIDDLE` and assert the tail is discarded;
+  then plant a valid `FULL` after the gap and assert the open fails*. Gapless numbering — *delete a WAL
+  file; the open must fail*.
+- **Mutants:** `BM2`, `BM3`, `BM4`, `BM11`.
+- **Depends on:** B1.3, B1.5, B1.6, B1.7a — the most-depended step in the sequence.
+- **Revert:** **Chokepoint.** B1.8 and B1.9 both consume it.
+
+---
+
+**B1.8 — the frozen interface, met exactly.**
+
+- **Lands:** `Open`, `Close`, `Write`, `Get`, the iterator, snapshots; `DeleteRange` over the memtable
+  with §8.1's expansion at `Apply` and the WAL recording the expansion.
+- **Gates + induced failure:** the semantics suite mirroring `engine/model`'s. `Apply` performs no I/O,
+  re-asserted here because `DeleteRange` expansion is the operation most likely to violate it — *move a
+  read to the file layer*. `Close`'s error return is not dropped — *ignore it*, which is an
+  exactness-(ii) failure, not a tidiness one.
+- **Mutants:** `BM7`, `BM9`.
+- **Depends on:** B1.5, B1.7b.
+- **Revert:** **Surface.** B1.9's sweep drives this API and has nothing to drive without it.
+- **Note:** "correct" for B4 means byte-identical to `engine/model`, so this step's real acceptance test
+  is not its own suite but B4's differential rig. The suite here exists to make B4's failures debuggable,
+  not to substitute for them.
+
+---
+
+**B1.9a — the oracle and the two-element verdict.**
+
+- **Lands:** the exactness oracle of §7.3, built from the harness's submission log, its reference state
+  and TestEnv's ledger, and **asking the engine nothing**; the two-element recovery set of §7.4; the
+  verdict type that names which element it landed on.
+- **Gates + induced failure:** exactness (i) — *make recovery accept records past the last `GROUP_END`*.
+  No over-promise (ii) — *advance the watermark before `Sync` returns*. Lands on `G_{k−1}` —
+  `RecoveryLandsOnPreviousGroupWhenSyncIsTorn`, kill inside `Sync`, durability not applied. Lands on
+  `G_k` — `RecoveryLandsOnInFlightGroupWhenSyncCompletesButIsPreempted`, durability applied, kill before
+  the return. The verdict names its element — *return a boolean verdict; the oracle's own test must
+  reject it*.
+- **Mutants:** `BM1`, `BM2`, `BM5`, `BM15`.
+- **Depends on:** B1.3, B1.7b, B1.8.
+- **Retires (§14.1.1):** **a real, named set — this is the one non-empty case in the sequence.** B1.7b's
+  recovery assertions land four steps before the oracle does, and they divide in two. Those that compare
+  recovery's result against a **fixture the harness built** are sound and survive: the expectation came
+  from the harness's own construction, not from the engine. Those of the self-consistent form — *read
+  the engine's reported watermark, then check the engine's recovered contents agree with it* — are
+  engine-account tests, they pass, and they would look like coverage. **B1.9a deletes or re-derives every
+  assertion of that second form**, replacing it with one against the harness's submission log and
+  TestEnv's ledger per §7.3. B1.7b must therefore tag which of its assertions are which as it writes
+  them; an untagged recovery assertion is treated as the second form.
+- **Revert:** **Surface.** B1.9b is defined in terms of it.
+
+---
+
+**B1.9b — the sweep, the adjudication, and the mutant campaign.**
+
+- **Lands:** the full kill-point sweep across every Env call in the write path; §7.6's adjudication wired
+  so every engine error is closed harness-side; §7.5's single suppressing-injector registry in use; the
+  mutant campaign with kill-point budgets and per-mutant kill-time recording.
+- **Gates + induced failure:** both set elements observed — *run the sweep with the in-flight case
+  suppressed; the assertion must fire*, which is what stops a sweep from passing while only ever
+  exercising one of the two legal outcomes. Both suspending injectors use one mechanism — *enable the
+  sector-subset torn `Sync` and assert the outcome is `kCharacterizationOnly` without a second flag
+  existing*. Every mutant killed within its budget, with seeds-to-detection and wall-time-to-detection
+  recorded per A2.
+- **Mutants:** the full catalogue.
+- **Depends on:** everything.
+- **Claim it carries — the retraction target, named to the sentence:**
+  - `CLAUDE.md`, **Mission**, headline claim 6: *"Zero safety violations across [N] seeded fault
+    schedules, [M] operations, and [H] cumulative CPU-hours of fault-injected soak (tracked in
+    SOAK.md)…"* — the storage-engine half of it.
+  - `CLAUDE.md`, **Resume lines**, bullet 3: *"Zero safety violations across [N] seeded fault schedules…
+    spanning crashes, partitions, reordering, bounded clock skew, torn writes, and lost unsynced
+    writes"* — *torn writes* and *lost unsynced writes* are this step's words and nobody else's.
+  - `CLAUDE.md`, **Track B phase B4** exit: *"kill-point sweep green across the full write path"*.
+  - `CLAUDE.md`, **Amendment A2**: *"Every BUGS.md root cause must answer 'which mutant class would have
+    caught this.'"* — unanswerable with no campaign.
+  - `SOAK.md`: every Track B row, and the inconclusive column beside it.
+  - This document, **§10, "How B1 proves itself"** — the section title becomes false, not merely thinner.
+- **Revert:** **Mechanically a leaf; epistemically the whole B1 claim** — the second member of B1.4's
+  class, and the standing rule applies identically, against the six targets above. **A mutant surviving
+  its budget means the rig is too weak and B1 is not done, regardless of what the clean runs say.**
+
+### 14.3 The revert map
+
+| step | class | revertible alone when | what its removal actually costs |
+|---|---|---|---|
+| B1.0 | Surface (`gtest` API) | nothing above landed; *replaceable* always | the framework, and the offline-clean-clone claim |
+| B1.1 | **Chokepoint** (widest) | never, once anything is above | everything |
+| B1.2a | **Chokepoint** | never, once B1.3 is above | the Env seam and every kill point |
+| B1.2b | **Leaf** | **always** | nothing until B5 |
+| B1.3 | **Chokepoint** | never, once B1.5 is above | every gate's ability to fail for the right reason |
+| B1.4 | mech. leaf / **epist. chokepoint** | mechanically always — **forbidden without retracting the claim** | the Env-seam claim becomes discipline, not a property |
+| B1.5 | Surface (ordered map) | B1.7b and B1.8 rewritten against a replacement | the map, plus its golden vectors and structural digest |
+| B1.6 | **Chokepoint** | never, once B1.7 is above | the WAL, plus the C++ determinism spine |
+| B1.7a | Surface (decode) | B1.7b rewritten against a replacement | the corruption gates |
+| B1.7b | **Chokepoint** | never, once B1.8 is above | the recovery contract |
+| B1.8 | Surface (the frozen `engine/` API) | B1.9 has nothing to drive | interface conformance and B4's differential basis |
+| B1.9a | Surface (verdict type) | B1.9b rewritten | the oracle |
+| B1.9b | mech. leaf / **epist. whole claim** | mechanically always — **forbidden without retracting the claim** | all of B1's verification value |
+
+Three readings worth stating plainly. **One:** the sequence has exactly one unqualified leaf, B1.2b, and
+it is production-Env code that no B1 test touches — so "we can back this out cheaply" is true in
+precisely one place, and it is not a place anyone would want to back out. **Two:** four of thirteen steps
+are chokepoints and they cluster low (B1.1, B1.2a, B1.3) with one in the middle (B1.6), which is the
+correct shape: the irreversible commitments are the early ones and they are the cheap ones to get right,
+because they are interfaces rather than implementations. **Three:** the two steps that *can* be reverted
+freely at any time, B1.4 and B1.9b, are the two whose removal costs the most and signals the least. No
+mechanism can catch that — a lane that is gone cannot fail — so they get a rule instead, and the rule is
+made enforceable by naming its object: each of those two steps carries a **Claim it carries** list of
+specific sentences in specific files, and reverting the step means deleting those sentences in the same
+diff. *Retract the claim* is an instruction nobody can be held to; *delete this line of `CLAUDE.md`* is
+one that shows up in review.
+
+### 14.4 The three splits, and why revision 3's table was wrong to bundle them
+
+- **B1.2 → 2a + 2b.** Revision 3 bundled the Env NVI surface with `PosixEnv`. They are a chokepoint and
+  the sequence's only leaf, which is the worst possible pairing: bundled, the leaf inherits the
+  chokepoint's revert cost and looks load-bearing when it is not. Separable because the 1:1:1 count
+  assertion is **structural** and needs no implementation to run, so 2a can land and be proven able to
+  fail with nothing behind it.
+- **B1.7 → 7a + 7b.** The reader's gates are drivable from hand-built byte images; recovery's are not,
+  needing the writer, the memtable and TestEnv's kills. Bundled, the cheap exhaustive half is gated on
+  the expensive half's dependencies, which pushes the corruption gates later than they need to be for no
+  reason but packaging.
+- **B1.9 → 9a + 9b.** The oracle must exist before the sweep, or the sweep degenerates into "did it
+  crash". Separating them also puts §7.4 condition 3's two named single-kill tests — the induced failures
+  for both elements — ahead of the sweep that is later asserted to have visited both.
+
+Each split is a repackaging. **No gate, mutant or decision moves, and none is added or dropped;** §10.1
+and §10.2 are unchanged by this revision.
+
+### 14.5 What is deliberately not in this sequence
+
+No flush, so the memtable and WAL set grow without bound and every B1 test is small; nothing here
+exercises recovery across a flush boundary, and §7.2's `max+1` numbering rule expires at B2 when it does
+(§11 item 5). No manifest — B1-D7, the log is the single authority. No SSTable, no compaction, no
+iterator merge. `DeleteRange` is memtable-only; real range tombstones are B3 per Amendment A3, and must
+land before any I2 benchmark number is taken. `kBusy` and the poller are B5, under §7.6.1's binding.
 
 ---
 
