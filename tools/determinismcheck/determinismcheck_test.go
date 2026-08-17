@@ -214,6 +214,18 @@ func TestScopeTable(t *testing.T) {
 		{mod + "sim/checker", scopeOff},
 		{mod + "sim/hunt", scopeOff},        // the hunt driver is orchestration
 		{mod + "sim/hunt/inner", scopeCore}, // named exactly: no wildcard adopts a subpackage
+
+		// The materialization/orchestration polarity, pinned in both directions.
+		//
+		// Deciding *what run to perform* -- seed to plan -- is the first link in
+		// the reproducibility chain, so it is checked: a materializer that
+		// behaved differently on two machines would break replay identity at its
+		// source while every downstream determinism check still passed. It lives
+		// in sim/toy and sim/plan, both core.
+		//
+		// Deciding *which runs to perform, and reporting on them* is not on that
+		// chain and is excluded. sim/hunt above holds only the sweep and the
+		// cluster driver, which needs sim/checker and a wall clock.
 		{mod + "sim/toy", scopeCore},
 		{mod + "sim/plan", scopeCore},
 		{mod + "engine/pump/poller", scopeOff},

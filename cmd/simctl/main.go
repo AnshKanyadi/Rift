@@ -152,7 +152,7 @@ func cmdRun(args []string) int {
 	var hist *sim.History
 
 	// A seed only names a run relative to the configuration it was generated
-	// against, so the toy resolves its seed through hunt.MaterializeToy -- the
+	// against, so the toy resolves its seed through toy.MaterializeToy -- the
 	// same call the sweep makes. `--workload none` keeps the default generator,
 	// which is what the recorded fresh-process hashes were taken against.
 	switch *wl {
@@ -170,7 +170,7 @@ func cmdRun(args []string) int {
 		// MaterializeToy leaves the plan prepared, and the bundle stores that
 		// result: the plan in a bundle has to be the plan that ran, or replay
 		// reproduces something else.
-		if p, err = hunt.MaterializeToy(*seed, sc); err != nil {
+		if p, err = toy.MaterializeToy(*seed, sc); err != nil {
 			return fail("%v", err)
 		}
 		meta.Scenario = &ScenarioMeta{
@@ -383,21 +383,21 @@ func describeViolation(v *ViolationMeta) string {
 	return fmt.Sprintf("%s: %s [instant %d, step beyond the retained trace]", v.Checker, v.Detail, v.AtNS)
 }
 
-func scenarioFrom(flawName, placeName string, failover bool, syncLatency clock.Instant) (hunt.Scenario, error) {
+func scenarioFrom(flawName, placeName string, failover bool, syncLatency clock.Instant) (toy.Scenario, error) {
 	flaw, err := toy.ParseFlaw(flawName)
 	if err != nil {
-		return hunt.Scenario{}, err
+		return toy.Scenario{}, err
 	}
-	place, err := hunt.ParsePlacement(placeName)
+	place, err := toy.ParsePlacement(placeName)
 	if err != nil {
-		return hunt.Scenario{}, err
+		return toy.Scenario{}, err
 	}
-	return hunt.Scenario{Flaw: flaw, Placement: place, Failover: failover, SyncLatency: syncLatency}, nil
+	return toy.Scenario{Flaw: flaw, Placement: place, Failover: failover, SyncLatency: syncLatency}, nil
 }
 
-func scenarioFromMeta(m *ScenarioMeta) (hunt.Scenario, error) {
+func scenarioFromMeta(m *ScenarioMeta) (toy.Scenario, error) {
 	if m == nil {
-		return hunt.Scenario{}, fmt.Errorf("bundle drives the toy but records no scenario, so there is no build to replay against")
+		return toy.Scenario{}, fmt.Errorf("bundle drives the toy but records no scenario, so there is no build to replay against")
 	}
 	return scenarioFrom(m.Flaw, m.Placement, m.Failover, clock.Instant(m.SyncLatencyNS))
 }

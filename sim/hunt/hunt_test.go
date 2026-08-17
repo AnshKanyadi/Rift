@@ -32,7 +32,7 @@ func wallTimer() func() time.Duration {
 // to this file, which is the point: `simctl` runs the identical code against the
 // identical generator config, so a bundle cut from a violation found here
 // replays to the same verdict there.
-func runSeed(t *testing.T, seed uint64, sc hunt.Scenario) hunt.Result {
+func runSeed(t *testing.T, seed uint64, sc toy.Scenario) hunt.Result {
 	t.Helper()
 	r, err := trySeed(seed, sc)
 	if err != nil {
@@ -43,8 +43,8 @@ func runSeed(t *testing.T, seed uint64, sc hunt.Scenario) hunt.Result {
 
 // trySeed is runSeed without the fatal, for the ablation, which sweeps windows
 // the gate legitimately refuses.
-func trySeed(seed uint64, sc hunt.Scenario) (hunt.Result, error) {
-	p, err := hunt.MaterializeToy(seed, sc)
+func trySeed(seed uint64, sc toy.Scenario) (hunt.Result, error) {
+	p, err := toy.MaterializeToy(seed, sc)
 	if err != nil {
 		return hunt.Result{}, err
 	}
@@ -53,8 +53,8 @@ func trySeed(seed uint64, sc hunt.Scenario) (hunt.Result, error) {
 
 // reactive is the scenario every test here uses unless it is measuring
 // placement itself.
-func reactive(flaw toy.Flaw) hunt.Scenario {
-	return hunt.Scenario{Flaw: flaw, Placement: hunt.PlacementReactive}
+func reactive(flaw toy.Flaw) toy.Scenario {
+	return toy.Scenario{Flaw: flaw, Placement: toy.PlacementReactive}
 }
 
 // TestToySurvivesOneThousandSeeds is checklist step 7's exit run.
@@ -177,7 +177,7 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 			const seeds = 1000
 			elapsedSince := wallTimer()
 
-			sc := hunt.Scenario{Flaw: tc.flaw, Placement: hunt.PlacementReactive, Failover: tc.failover}
+			sc := toy.Scenario{Flaw: tc.flaw, Placement: toy.PlacementReactive, Failover: tc.failover}
 			sweep := sweepSeeds(t, seeds, sc)
 			elapsed := elapsedSince()
 
@@ -220,7 +220,7 @@ func TestFailoverDoesNotManufactureViolations(t *testing.T) {
 	}
 
 	const seeds = 1000
-	sc := hunt.Scenario{Flaw: toy.FlawNone, Placement: hunt.PlacementReactive, Failover: true}
+	sc := toy.Scenario{Flaw: toy.FlawNone, Placement: toy.PlacementReactive, Failover: true}
 	sweep := sweepSeeds(t, seeds, sc)
 
 	t.Logf("correct toy under failover: %d violations, %d inconclusive over %d seeds",
@@ -256,15 +256,15 @@ func TestAblationCrashPlacementAndWindow(t *testing.T) {
 
 	const seeds = 1000
 	for _, cell := range []struct {
-		placement hunt.Placement
+		placement toy.Placement
 		window    clock.Instant
 	}{
-		{hunt.PlacementReactive, 2_000_000},
-		{hunt.PlacementReactive, 10_000_000},
-		{hunt.PlacementReactive, 50_000_000},
-		{hunt.PlacementUniform, 50_000_000},
+		{toy.PlacementReactive, 2_000_000},
+		{toy.PlacementReactive, 10_000_000},
+		{toy.PlacementReactive, 50_000_000},
+		{toy.PlacementUniform, 50_000_000},
 	} {
-		sc := hunt.Scenario{
+		sc := toy.Scenario{
 			Flaw:        toy.FlawAckBeforeSync,
 			Placement:   cell.placement,
 			SyncLatency: cell.window,
@@ -314,7 +314,7 @@ type sweep struct {
 // number that answers "how long would a hunt have taken".
 func (s sweep) seedsToDetection() uint64 { return s.first + 1 }
 
-func sweepSeeds(t *testing.T, seeds uint64, sc hunt.Scenario) sweep {
+func sweepSeeds(t *testing.T, seeds uint64, sc toy.Scenario) sweep {
 	t.Helper()
 	var out sweep
 	for seed := uint64(0); seed < seeds; seed++ {
@@ -351,11 +351,11 @@ func sweepSeeds(t *testing.T, seeds uint64, sc hunt.Scenario) sweep {
 // it. A scenario that picked a placement by zero value would silently change
 // what the ablation above measured.
 func TestPrepareRefusesAnUnsetPlacement(t *testing.T) {
-	p, err := plan.Materialize(1, hunt.ToyGenConfig())
+	p, err := plan.Materialize(1, toy.ToyGenConfig())
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
-	if err := hunt.Prepare(p, hunt.Scenario{Flaw: toy.FlawNone}); err == nil {
+	if err := toy.Prepare(p, toy.Scenario{Flaw: toy.FlawNone}); err == nil {
 		t.Fatal("a scenario with no placement was prepared")
 	} else {
 		t.Logf("induced: %v", err)

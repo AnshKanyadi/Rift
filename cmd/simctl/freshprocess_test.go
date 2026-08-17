@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/anshkanyadi/rift/sim/plan"
+	"github.com/anshkanyadi/rift/sim/toy"
 )
 
 // build compiles simctl once for the suite.
@@ -280,6 +284,58 @@ func TestToyViolationBundlesAndReplays(t *testing.T) {
 			"which makes it the harness or the workload rather than the toy:\n%s", sb)
 	}
 	t.Logf("triage:\n%s", strings.TrimSpace(string(sb)))
+}
+
+// TestOneSeedMeansOnePlan makes the single-entry-point rule structural instead
+// of a convention.
+//
+// A seed only names a run relative to the configuration it was generated
+// against. When `simctl` materialized against `plan.DefaultGenConfig` and the
+// sweep used its own, **seed 29 meant two different plans**: the violation the
+// sweep found did not exist in the bundle, and both halves ran cleanly and
+// printed a hash. That is the plan-is-the-repro-unit claim failing silently,
+// which is the worst way for it to fail.
+//
+// Both paths now call `toy.MaterializeToy`. That is a convention, and a
+// convention is what just failed — so this compares the plan the CLI actually
+// wrote into a bundle against the plan the library entry point produces, byte
+// for byte, across a spread of seeds. A second config sneaking into either path
+// fails here rather than diverging in the field.
+func TestOneSeedMeansOnePlan(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawning processes is not a -short test")
+	}
+	bin := build(t)
+
+	sc := toy.Scenario{Flaw: toy.FlawAckBeforeSync, Placement: toy.PlacementReactive}
+	for _, seed := range []uint64{0, 1, 29, 103, 512, 4242} {
+		dir := t.TempDir()
+		out, err := exec.Command(bin, "run", "--workload=toy", "--flaw=ack-before-sync",
+			fmt.Sprintf("--seed=%d", seed), "--out", dir).CombinedOutput()
+		if err != nil {
+			t.Fatalf("seed %d: run: %v\n%s", seed, err, out)
+		}
+		viaCLI, err := os.ReadFile(filepath.Join(dir, "plan.json"))
+		if err != nil {
+			t.Fatalf("seed %d: reading bundle plan: %v", seed, err)
+		}
+
+		p, err := toy.MaterializeToy(seed, sc)
+		if err != nil {
+			t.Fatalf("seed %d: materialize: %v", seed, err)
+		}
+		viaLib, err := plan.Marshal(p)
+		if err != nil {
+			t.Fatalf("seed %d: marshal: %v", seed, err)
+		}
+
+		if !bytes.Equal(viaCLI, viaLib) {
+			t.Fatalf("seed %d produces two different plans: the CLI path and the library path have "+
+				"diverged, so a seed no longer names one run\n  CLI %d bytes, library %d bytes",
+				seed, len(viaCLI), len(viaLib))
+		}
+	}
+	t.Logf("six seeds, two paths, byte-identical plans")
 }
 
 // TestStrippedFaultReplay demonstrates the triage affordance: the first
