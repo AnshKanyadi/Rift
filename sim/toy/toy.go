@@ -35,6 +35,7 @@ import (
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
+	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/sim"
 )
 
@@ -61,6 +62,16 @@ const (
 	// FlawDupApply applies a retried request twice instead of deduping. M3.
 	FlawDupApply
 
+	// FlawDirtyRead serves reads from the engine's visible state instead of
+	// from committed state, so a client can observe a write that is still
+	// speculative and that a crash then takes back.
+	//
+	// Added with the fix for the defect it names, per Amendment A2: the moment a
+	// fix lands is the only moment we have a precise description of the blind
+	// spot that let the bug through. The harness found this one on seed 103 with
+	// no flaw planted.
+	FlawDirtyRead
+
 	numFlaws
 )
 
@@ -74,6 +85,8 @@ func (f Flaw) String() string {
 		return "ack-before-replicate"
 	case FlawDupApply:
 		return "dup-apply"
+	case FlawDirtyRead:
+		return "dirty-read"
 	case numFlaws:
 		return "invalid"
 	}
@@ -175,6 +188,26 @@ type Node struct {
 	// inflight is the put awaiting completion, keyed by engine sequence.
 	inflight map[engine.SeqNum]*pending
 
+	// committed is the state a client is allowed to observe.
+	//
+	// # Why reads do not come straight from the engine
+	//
+	// They did, and it was a dirty read: `db.Get` returns visible state, which
+	// includes a write that is neither durable nor replicated nor acknowledged.
+	// A client could therefore read a value the primary was still holding
+	// speculatively, and a crash a moment later would take it back -- so a read
+	// observed a write that then un-happened, which is not linearizable and is
+	// not something the flaw fields asked for. The harness found it on seed 103
+	// with no flaw planted at all.
+	//
+	// A key becomes readable here at the moment the write to it is real from
+	// this replica's point of view: acknowledged, on the primary, and applied
+	// durably, on a backup. Crash rebuilds it from what the engine actually
+	// kept, which is what makes the ack-before-sync flaw still observable --
+	// there the acknowledgement precedes durability, so the rebuild takes the
+	// value back and a later read sees the old one.
+	committed map[string]string
+
 	// syncLatency is how long the modelled fsync takes. It is a plan constant
 	// rather than a draw, so the unsynced window is a real, reproducible
 	// stretch of virtual time rather than an accident.
@@ -215,6 +248,7 @@ func New(id, primary sim.NodeID, peers []sim.NodeID, tr sim.Transport, h *sim.Hi
 		db: model.New(), tr: tr, hist: h,
 		applied:     make(map[int]uint64),
 		inflight:    make(map[engine.SeqNum]*pending),
+		committed:   make(map[string]string),
 		syncLatency: DefaultSyncLatency,
 	}
 }
@@ -247,12 +281,20 @@ func (n *Node) onClient(ev sim.Event, s sim.Scheduler) {
 	}
 
 	if req.Op == "get" {
-		val, err := n.db.Get([]byte(req.Key))
-		if err != nil {
-			n.hist.End(req.HistIdx, ev.At, sim.RespOK, "")
+		// From the committed view, never from the engine's visible state: the
+		// difference is a write this replica is still holding speculatively,
+		// and letting a client see one is a read of something that can still
+		// un-happen. FlawDirtyRead is that bug, kept reachable.
+		if n.Flaw == FlawDirtyRead {
+			val, err := n.db.Get([]byte(req.Key))
+			if err != nil {
+				n.hist.End(req.HistIdx, ev.At, sim.RespOK, "")
+				return
+			}
+			n.hist.End(req.HistIdx, ev.At, sim.RespOK, string(val))
 			return
 		}
-		n.hist.End(req.HistIdx, ev.At, sim.RespOK, string(val))
+		n.hist.End(req.HistIdx, ev.At, sim.RespOK, n.committed[req.Key])
 		return
 	}
 
@@ -315,8 +357,10 @@ func (n *Node) onDeliver(ev sim.Event, s sim.Scheduler) {
 			return
 		}
 		// A backup syncs too; nothing waits on it, but the write is not
-		// durable there until it does.
+		// durable there until it does. Once it has, the value is real here and
+		// a promotion may serve it.
 		n.db.AdvanceDurable(n.db.VisibleSeq())
+		n.committed[key] = val
 		n.tr.Send(sim.Envelope{From: n.ID, To: env.From, Kind: kindAck, Body: encodeAck(engine.SeqNum(seq))})
 
 	case kindAck:
@@ -370,6 +414,7 @@ func (n *Node) answer(p *pending, at clock.Instant) {
 		return
 	}
 	p.answered = true
+	n.committed[p.req.Key] = p.req.Value
 	n.hist.End(p.req.HistIdx, at, sim.RespOK, "")
 	delete(n.inflight, p.seq)
 }
@@ -379,6 +424,21 @@ func (n *Node) answer(p *pending, at clock.Instant) {
 func (n *Node) Crash() {
 	n.db.Crash()
 	n.inflight = make(map[engine.SeqNum]*pending)
+
+	// The committed view is memory, so it is rebuilt from what the engine kept.
+	// This is where an acknowledgement that ran ahead of durability is paid for:
+	// the value was readable a moment ago and is not now.
+	//
+	// Sorted keys rather than a map range -- the determinism rule -- so a crash
+	// rebuilds identically on every run.
+	for _, k := range sorted.Keys(n.committed) {
+		v, err := n.db.Get([]byte(k))
+		if err != nil {
+			delete(n.committed, k)
+			continue
+		}
+		n.committed[k] = string(v)
+	}
 }
 
 // Wire encoding. Fixed-width and explicit, for the same reason the envelope

@@ -225,6 +225,12 @@ func TestBrokenToyIsCaughtByAHunt(t *testing.T) {
 			"an acknowledged write is lost when the primary crashes before its own fsync, and a later read of the same key sees the old value"},
 		{toy.FlawAckBeforeReplicate, false,
 			"reads are served only by the primary and there is no failover, so a write missing from the backups is invisible to every client; closing this needs backup reads or promotion in the toy, not a change to the checker"},
+
+		// The class the harness found in the correct toy, kept catchable. Its
+		// detection rate is 1 in 1000, which is weak and is stated as such in
+		// docs/TOY-FINDINGS.md rather than left to be inferred from the row.
+		{toy.FlawDirtyRead, true,
+			"a read observes a write that is neither durable nor acknowledged, and the crash that follows takes it back"},
 	} {
 		flaw := tc.flaw
 		t.Run(flaw.String(), func(t *testing.T) {
