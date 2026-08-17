@@ -26,10 +26,20 @@ import (
 
 // Result is one toy run.
 type Result struct {
+	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
 	History  *sim.History
 	Counters *sim.Counters
+
+	// Refused means the window gate declined this seed: on its network the
+	// planted flaw cannot exist, so the seed was never eligible. Not a failure
+	// and not a pass.
+	Refused bool
+
+	// Err is a harness failure, which is neither of the above and must not be
+	// quietly folded into either.
+	Err error
 }
 
 // Violation returns the first violation report, or nil.

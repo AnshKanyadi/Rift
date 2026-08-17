@@ -5,6 +5,8 @@
 //	              [--flaw NAME]           plant a known defect in the toy
 //	              [--placement NAME]      reactive | uniform crash targeting
 //	              [--failover]            crash the primary and promote a backup
+//	simctl hunt   --from N --to M         sweep a seed range; bundle and triage the
+//	              [--workers W]           first violation before reporting it
 //	simctl replay --bundle DIR            re-execute a bundle and compare
 //	              [--strip-faults]        replay with every fault entry removed
 //
@@ -125,6 +127,8 @@ func main() {
 		os.Exit(cmdRun(os.Args[2:]))
 	case "replay":
 		os.Exit(cmdReplay(os.Args[2:]))
+	case "hunt":
+		os.Exit(cmdHunt(os.Args[2:]))
 	default:
 		usage()
 	}
@@ -133,6 +137,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: simctl run --seed N [--workload toy|none] [--flaw NAME] [--placement NAME] [--out DIR]")
 	fmt.Fprintln(os.Stderr, "       simctl replay --bundle DIR [--strip-faults]")
+	fmt.Fprintln(os.Stderr, "       simctl hunt --from N --to M [--workers W] [--flaw NAME] [--placement NAME] [--failover] [--out DIR]")
 	os.Exit(2)
 }
 
@@ -455,4 +460,118 @@ func writeBundle(dir string, p *plan.Plan, meta Meta, hist *sim.History) error {
 func fail(format string, args ...any) int {
 	fmt.Fprintf(os.Stderr, "simctl: "+format+"\n", args...)
 	return 1
+}
+
+// cmdHunt sweeps a seed range and, on the first violation, produces the artifact
+// a human can act on without being asked to do anything else.
+//
+// # Why the bundle and the triage are not optional steps
+//
+// A hunt that printed "seed 29 failed" and stopped would be handing over a
+// number and a homework assignment, and the two things that then have to happen
+// are exactly the two that are easiest to skip under pressure:
+//
+//  1. **Write the bundle.** The finding has to survive the terminal it was
+//     printed in. seeds/ exists for entries that replay at any commit.
+//  2. **Run the stripped-fault triage.** A violation that survives with zero
+//     injected faults is the harness or the workload, not the system under test.
+//     At 913 of 1000 that was unmissable; at 3 of 1000 it would be
+//     indistinguishable from a real find, and a poisoned corpus entry is worse
+//     than a missing one.
+//
+// So the hunt does both before it reports, and it reports the triage verdict
+// alongside the finding rather than leaving the reader to infer it.
+func cmdHunt(args []string) int {
+	fs := flag.NewFlagSet("hunt", flag.ExitOnError)
+	from := fs.Uint64("from", 0, "first seed, inclusive")
+	to := fs.Uint64("to", 1000, "last seed, exclusive")
+	workers := fs.Int("workers", 0, "parallel workers; 0 uses every core")
+	out := fs.String("out", "", "directory to write the bundle into when a violation is found")
+	flawName := fs.String("flaw", "none", "toy flaw to plant")
+	placeName := fs.String("placement", "reactive", "crash targeting: reactive | uniform")
+	failover := fs.Bool("failover", false, "crash the primary and promote a backup")
+	_ = fs.Parse(args)
+
+	sc, err := scenarioFrom(*flawName, *placeName, *failover, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+
+	results, err := hunt.Sweep(*from, *to, sc, *workers)
+	if err != nil {
+		return fail("%v", err)
+	}
+	c := hunt.Summarize(results)
+
+	fmt.Printf("swept    seeds [%d,%d) flaw=%s placement=%s failover=%t\n",
+		*from, *to, sc.Flaw, sc.Placement, sc.Failover)
+	fmt.Printf("eligible %d of %d (%d refused as regimes the flaw cannot exist in)\n",
+		c.Eligible, c.Seeds, c.Refused)
+	fmt.Printf("verdicts %d violation, %d inconclusive, %d harness errors\n",
+		c.Violations, c.Inconclusive, c.Errors)
+
+	if c.Errors > 0 {
+		// A harness error is not a finding and must not be reported as one.
+		for _, r := range results {
+			if r.Err != nil {
+				return fail("seed %d: %v", r.Seed, r.Err)
+			}
+		}
+	}
+	if !c.FoundAViolation {
+		fmt.Println("no violation found")
+		return 0
+	}
+
+	fmt.Printf("VIOLATION at seed %d (seeds-to-detection %d)\n", c.FirstViolation, c.FirstViolation-*from+1)
+
+	// Re-run the winning seed with a trace attached. The sweep runs without one
+	// because retaining per-step digests for every seed is what makes a hunt
+	// expensive; the single seed that matters gets the full artifact.
+	p, err := toy.MaterializeToy(c.FirstViolation, sc)
+	if err != nil {
+		return fail("re-materializing seed %d: %v", c.FirstViolation, err)
+	}
+	meta := Meta{
+		Seed: c.FirstViolation, Workload: workloadToy,
+		Scenario: &ScenarioMeta{
+			Flaw: sc.Flaw.String(), Placement: sc.Placement.String(),
+			Failover: sc.Failover, SyncLatencyNS: int64(sc.SyncLatency),
+		},
+	}
+	var hist *sim.History
+	if err := execute(p, &meta, &hist); err != nil {
+		return fail("re-running seed %d: %v", c.FirstViolation, err)
+	}
+	if meta.Violation == nil {
+		return fail("seed %d violated during the sweep but not on re-run; the hunt is not reproducible "+
+			"and that is a harness defect, not a finding", c.FirstViolation)
+	}
+	fmt.Printf("         %s\n", describeViolation(meta.Violation))
+
+	if *out != "" {
+		if err := writeBundle(*out, p, meta, hist); err != nil {
+			return fail("writing bundle: %v", err)
+		}
+		fmt.Printf("bundle   %s\n", *out)
+	}
+
+	// The triage gate, run before the finding is reported as a candidate.
+	stripped := *p
+	stripped.Faults.Entries = nil
+	stripped.Faults.Rules = nil
+	tmeta := Meta{Seed: meta.Seed, Workload: meta.Workload, Scenario: meta.Scenario}
+	var thist *sim.History
+	if err := execute(&stripped, &tmeta, &thist); err != nil {
+		return fail("stripped-fault triage: %v", err)
+	}
+	if tmeta.Violation != nil {
+		fmt.Println("TRIAGE   VIOLATION SURVIVED WITH ZERO INJECTED FAULTS")
+		fmt.Println("         this is the harness or the workload, not the system under test, and it")
+		fmt.Println("         must not enter the corpus")
+		return 1
+	}
+	fmt.Println("TRIAGE   violation did not survive fault stripping: consistent with a defect in the")
+	fmt.Println("         system under test, and a corpus candidate")
+	return 0
 }

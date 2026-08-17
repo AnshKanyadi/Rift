@@ -80,12 +80,12 @@ ci: build lint test race blind power smoke mutants ## Everything the push lane r
 # ---------------------------------------------------------------- stub lanes
 
 .PHONY: smoke
-smoke: ## [STUB->A0.10] $(SMOKE_SEEDS)-seed simulator smoke
-	@$(STUB) smoke A0.10 "simctl run over $(SMOKE_SEEDS) seeds, all checkers on"
+smoke: ## $(SMOKE_SEEDS)-seed simulator smoke: the correct toy, all checkers on
+	$(GO) run ./cmd/simctl hunt --from 0 --to $(SMOKE_SEEDS) --workers $(WORKERS)
 
 .PHONY: soak
-soak: ## [STUB->A0.11] $(SOAK_SEEDS)-seed nightly soak
-	@$(STUB) soak A0.11 "simctl hunt --workers $(WORKERS) --seeds $(SOAK_SEEDS)"
+soak: ## $(SOAK_SEEDS)-seed nightly soak
+	$(GO) run ./cmd/simctl hunt --from 0 --to $(SOAK_SEEDS) --workers $(WORKERS)
 
 .PHONY: mutants
 mutants: ## [STUB->A0.12] Mutant suite; must kill every mutant within budget, records kill-time
@@ -121,7 +121,8 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
 	@echo "       hatches blind power"
-	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12)"
+	@echo "       smoke soak"
+	@echo "STUB : mutants(A0.12)"
 	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
 	@echo "       killpoints(B4) differential(B4)"
 	@echo

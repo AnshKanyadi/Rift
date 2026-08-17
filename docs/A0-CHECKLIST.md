@@ -80,7 +80,7 @@ says yes.
 | 6 | the oracle framework | CLOSED | no |
 | 7 | the toy over 1k seeds | CLOSED | no |
 | 8 | `simctl run \| replay`, and the bundle chain | CLOSED | no |
-| 9 | `simctl hunt` | NOT STARTED | **yes** |
+| 9 | `simctl hunt` | LANDED — awaiting a ruling | **yes** |
 | 10 | the mutant suite as patches | NOT STARTED | **yes** |
 | 11 | `node/`, the real-mode mailbox driver | NOT STARTED | **yes** |
 
@@ -228,7 +228,7 @@ corpus entry no mechanism behind it. `seeds/` now holds two entries that replay.
 the sweep so the two cannot drift); `sim/trace.go` (`DivergenceReport`, `StepAt`);
 `docs/DESIGN-A0.10-toy-and-simctl.md` §3; `seeds/BUG-001`, `seeds/BUG-002`.
 
-### Step 9 — `simctl hunt`. NOT STARTED — A0-close-blocking
+### Step 9 — `simctl hunt`. LANDED, awaiting a ruling — A0-close-blocking
 
 **Exit condition.** `hunt` sweeps seeds until a violation and hands a human a replayable bundle: the
 seed, the plan, the first-violating step, the violating history. It is the mechanism that turns a
@@ -241,10 +241,21 @@ with no failing corpus entry to minimize is a tool built against an imagined inp
 `TestDiceAreIdentityKeyedNotSequential` and step 5's `TestDeletingAFaultEntryPerturbsOnlyItself` as
 soundness preconditions.
 
-**Anchor:** none yet. `cmd/simctl/main.go:56-63` dispatches only `run` and `replay`; `sim/hunt/`
-holds `doc.go` and `hunt_test.go` with no implementation file, and is excluded from the determinism
-pass by name as orchestration (`tools/determinismcheck/scope.go:80`). `make soak` is a stub
-(`Makefile:83-84`).
+**Anchor:** `sim/hunt/sweep.go` (`Sweep`, `Summarize`); `cmd/simctl/main.go` (`cmdHunt`);
+`sim/hunt/sweep_test.go` (`TestWorkerCountDoesNotAffectResults` at 1, 2, 3, 8 and 32 workers,
+`TestSweepRejectsABackwardsRange`).
+
+A violation is bundled and triaged **before** it is reported: the hunt re-runs the winning seed with a
+trace attached, writes the bundle, runs the stripped-fault replay, and prints the triage verdict
+beside the finding. Reporting a seed number without those two steps would hand over a homework
+assignment, and they are the two easiest to skip under pressure.
+
+Worker independence is structural rather than tested into existence — each seed is a complete run,
+results are written to a preallocated slice at the seed's own index, and no worker reads another's
+result — and asserted at five worker counts. The CLI's own output is byte-identical at 1, 2 and 8
+workers.
+
+`make smoke` and `make soak` are no longer stubs: both are `simctl hunt` over a seed range.
 
 ### Step 10 — the mutant suite as patches. NOT STARTED
 
