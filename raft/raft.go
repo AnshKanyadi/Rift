@@ -324,8 +324,18 @@ type Raft struct {
 	heartbeatTimeout          int
 
 	// pending output, drained by Ready.
-	msgs     []Message
-	unstable []Entry
+	msgs []Message
+
+	// tail records what has been handed over and what is durable. Never
+	// inferred from the shape of anything.
+	tail logTail
+
+	// markLastIdx is the highest index handed over under the currently open
+	// mark. At most one mark is open at a time -- dirty() reuses the open one
+	// until it is acknowledged -- so this is one field rather than a table of
+	// spans keyed by mark. A second bookkeeping structure that must stay
+	// consistent with the log under truncation is the thing to avoid.
+	markLastIdx Index
 
 	// hardStateDirty is set when (term, vote) changed and has not yet been
 	// handed to the driver in a Ready.
@@ -357,6 +367,36 @@ type Raft struct {
 	// persists, never acknowledges, and every message gated on that mark is
 	// withheld forever. The cluster stalls and every checker stays green.
 	markHandedOff bool
+}
+
+// logTail names the states a log suffix can be in, so that "handed over" and
+// "durable" cannot be spelled the same way.
+//
+// # Durability is recorded, never inferred
+//
+// This replaced an `unstable []Entry` slice whose emptiness was read as "all
+// durable". Ready() clears that slice on HANDOVER, so between Ready and
+// AckPersisted the state machine believed everything it had handed the driver
+// was already on disk, and released an append response acking entries the driver
+// had not yet written. BUG-005.
+//
+// The error is not the arithmetic, it is the shape: **a fact inferred from an
+// incidental property is a fact that silently becomes wrong the moment the
+// property changes for an unrelated reason.** The slice emptied for a reason
+// that had nothing to do with durability. Identifying a proposal by its log
+// index was the same error one subsystem over (BUG-004).
+//
+// So both facts are recorded, in fields with different names, and neither is
+// derived from the shape of anything else.
+type logTail struct {
+	// persisted is the highest index the driver has ACKNOWLEDGED durable. It
+	// moves only in AckPersisted.
+	persisted Index
+
+	// handed is the highest index given to the driver. It moves in Ready. A
+	// handed entry is not a durable entry and the two are never compared as if
+	// they were.
+	handed Index
 }
 
 // gatedMessage is an outbound message and the durability point it attests to.
@@ -611,6 +651,11 @@ func (r *Raft) stepApp(m Message) {
 	// GATE: MsgAppResp (accept) on the appended entries AND HardState.Term
 	// durable. Without it a follower acks index i, the leader commits on that
 	// ack, the follower crashes and loses i, and a committed entry is lost.
+	//
+	// Gated on the mark covering the index being ACKED, not merely on whatever
+	// this Step dirtied. A duplicate append adds no new entries and so dirties
+	// nothing, while the entries it acks may still be in flight -- which is
+	// exactly how BUG-005 released an ack for index 15 with 5 durable.
 	r.sendGated(Message{
 		Type: MsgAppResp, From: r.id, To: m.From, Term: r.term,
 		Success: true, MatchIndex: last,
@@ -761,7 +806,7 @@ func (r *Raft) sendAppend(to NodeID) {
 
 // HasReady reports whether there is anything to drain.
 func (r *Raft) HasReady() bool {
-	return r.hardStateDirty || len(r.unstable) > 0 || len(r.msgs) > 0 || r.appliedIdx < r.commitIndex
+	return r.hardStateDirty || r.tail.handed < r.lastIndex() || len(r.msgs) > 0 || r.appliedIdx < r.commitIndex
 }
 
 // Ready is a drain: it returns pending outputs and clears them.
@@ -770,7 +815,10 @@ func (r *Raft) HasReady() bool {
 // AckPersisted(rd.Mark) once the hard state and entries are durable and
 // AckApplied(index) once entries are applied, and the two are independent.
 func (r *Raft) Ready() Ready {
-	rd := Ready{Entries: r.unstable, Messages: r.msgs, Mark: r.dirtyMark}
+	rd := Ready{Messages: r.msgs, Mark: r.dirtyMark}
+	if r.tail.handed < r.lastIndex() {
+		rd.Entries = append(rd.Entries, r.log[r.tail.handed:]...)
+	}
 	if r.hardStateDirty {
 		hs := HardState{Term: r.term, Vote: r.vote}
 		rd.HardState = &hs
@@ -782,8 +830,15 @@ func (r *Raft) Ready() Ready {
 	if rd.HardState != nil || len(rd.Entries) > 0 {
 		r.markHandedOff = true
 	}
+	if n := len(rd.Entries); n > 0 {
+		// Handed over, not durable. The two are recorded separately, in fields
+		// with different names, and never compared as if they were one fact.
+		r.tail.handed = rd.Entries[n-1].Index
+		if rd.Mark != 0 {
+			r.markLastIdx = r.tail.handed
+		}
+	}
 
-	r.unstable = nil
 	r.msgs = nil
 	r.hardStateDirty = false
 
@@ -858,14 +913,20 @@ func (r *Raft) AckApplied(index Index) {
 	}
 }
 
-// persistedIndex is the highest log index the driver has made durable. Entries
-// still in the unstable tail are not counted.
-func (r *Raft) persistedIndex() Index {
-	last := r.lastIndex()
-	if len(r.unstable) == 0 {
-		return last
+// persistedIndex is the highest log index the driver has ACKNOWLEDGED durable.
+//
+// Acknowledged, not handed over. The two differ for exactly as long as a write
+// is in flight, which is the entire window persist-before-reply covers, and
+// conflating them was BUG-005.
+func (r *Raft) persistedIndex() Index { return r.tail.persisted }
+
+// markFor returns the mark that must be durable before index idx may be
+// attested to, or zero if it already is.
+func (r *Raft) markFor(idx Index) PersistMark {
+	if idx <= r.tail.persisted {
+		return 0
 	}
-	return r.unstable[0].Index - 1
+	return r.dirtyMark
 }
 
 // PendingGated is how many messages are withheld awaiting durability.
@@ -918,12 +979,15 @@ func (r *Raft) send(m Message) { r.msgs = append(r.msgs, m) }
 //
 // Every call site names the gate it is discharging, so the enumeration on
 // Ready.Messages and the code cannot drift apart silently.
-func (r *Raft) sendGated(m Message) {
-	if r.dirtyMark == 0 {
+func (r *Raft) sendGated(m Message) { r.sendGatedOn(r.dirtyMark, m) }
+
+// sendGatedOn withholds a message until the named mark is durable.
+func (r *Raft) sendGatedOn(mark PersistMark, m Message) {
+	if mark == 0 {
 		r.msgs = append(r.msgs, m)
 		return
 	}
-	r.gated = append(r.gated, gatedMessage{msg: m, mark: r.dirtyMark})
+	r.gated = append(r.gated, gatedMessage{msg: m, mark: mark})
 }
 
 // dirty opens (or extends) the pending durability point. Called by every
@@ -953,7 +1017,6 @@ func (r *Raft) setTermAndVote(t Term, v NodeID) {
 
 func (r *Raft) appendEntries(es ...Entry) {
 	r.log = append(r.log, es...)
-	r.unstable = append(r.unstable, es...)
 	r.dirty()
 }
 
@@ -962,14 +1025,22 @@ func (r *Raft) truncateFrom(i Index) {
 		return
 	}
 	r.log = r.log[:i-1]
-	// Anything unstable at or past the truncation point is no longer real.
-	kept := r.unstable[:0]
-	for _, e := range r.unstable {
-		if e.Index < i {
-			kept = append(kept, e)
-		}
+
+	// A durable entry cannot be truncated away. If it ever were, the driver
+	// acknowledged something that later vanished, which is a different bug
+	// entirely and must not be papered over by lowering the watermark.
+	if r.tail.persisted >= i {
+		panic(fmt.Sprintf(
+			"raft: node %d truncated to %d with %d already acknowledged durable; the driver "+
+				"acknowledged an entry that later vanished", r.id, i, r.tail.persisted))
 	}
-	r.unstable = kept
+	// Handed-but-unacknowledged entries at or past the cut were never real.
+	if r.tail.handed >= i {
+		r.tail.handed = i - 1
+	}
+	if r.markLastIdx >= i {
+		r.markLastIdx = i - 1
+	}
 }
 
 func (r *Raft) lastIndex() Index {
