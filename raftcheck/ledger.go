@@ -241,3 +241,22 @@ func lastIndexOf(es []raft.Entry) raft.Index {
 	}
 	return es[len(es)-1].Index
 }
+
+// Dump renders the committed ledger and per-node apply streams, for diagnosis.
+// It is a report surface, not an oracle input.
+func (l *Ledger) Dump() string {
+	s := "committed (first applied by any node):\n"
+	for _, c := range l.committed {
+		s += fmt.Sprintf("  idx=%d term=%d by=node%d at=%d data=%q\n",
+			c.entry.Index, c.entry.Term, c.node, int64(c.at), c.entry.Data)
+	}
+	s += "leaders:\n"
+	for _, r := range l.ledIn {
+		s += fmt.Sprintf("  term=%d node=%d at=%d persisted=%d entries\n",
+			r.term, r.node, int64(r.at), len(r.log))
+	}
+	for n := range l.applied {
+		s += fmt.Sprintf("node %d applied %d entries\n", n, len(l.applied[n]))
+	}
+	return s
+}

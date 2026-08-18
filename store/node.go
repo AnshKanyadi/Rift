@@ -70,6 +70,10 @@ type Node struct {
 	raft *raft.Raft
 	db   *model.DB
 
+	// epoch guards against a completion from a dead incarnation reaching this
+	// live one. See sim.Epoch for the class and its three instances.
+	epoch *sim.EpochGuard
+
 	// pending maps an engine sequence to the persist mark it carries, so a
 	// durability completion can be turned into the right AckPersisted.
 	pendingSeq  []engine.SeqNum
@@ -107,7 +111,7 @@ func New(cfg Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{cfg: cfg, raft: r, db: model.New(), kv: map[string]string{}}
+	n := &Node{cfg: cfg, raft: r, db: model.New(), kv: map[string]string{}, epoch: sim.NewEpochGuard()}
 	n.jitter()
 	return n, nil
 }
@@ -147,11 +151,18 @@ func (n *Node) Handle(ev sim.Event, s sim.Scheduler) {
 		if n.down {
 			return
 		}
-		seq, ok := ev.Payload.(engine.SeqNum)
+		tok, ok := ev.Payload.(sim.Stamped[engine.SeqNum])
 		if !ok {
 			return
 		}
-		n.onDurable(seq, ev.At)
+		// A completion is stamped with the incarnation that requested it. One
+		// from a dead incarnation is dropped and counted, never acted on: acting
+		// on it is what advanced the durability watermark past everything
+		// applied and panicked the engine.
+		if !n.epoch.Accept(tok.Epoch) {
+			return
+		}
+		n.onDurable(tok.Value, ev.At)
 	case sim.KindClient:
 		if n.down {
 			return
@@ -216,7 +227,8 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 			if err == nil {
 				n.pendingSeq = append(n.pendingSeq, seq)
 				n.pendingMark = append(n.pendingMark, rd.Mark)
-				s.At(at+n.cfg.SyncLatency, sim.KindDurable, sim.NodeID(n.cfg.Ordinal), seq)
+				s.At(at+n.cfg.SyncLatency, sim.KindDurable, sim.NodeID(n.cfg.Ordinal),
+					sim.Stamp(n.epoch.Current(), seq))
 			}
 		}
 
@@ -317,6 +329,9 @@ func (n *Node) readDurable() (raft.HardState, []raft.Entry) {
 
 // crash takes the process down: volatile state goes, unsynced writes go.
 func (n *Node) crash() {
+	// A process death ends an incarnation. Every completion already in flight
+	// belongs to it and must never reach whatever comes next.
+	n.epoch.Advance()
 	n.db.Crash()
 	n.down = true
 	n.inflight = nil
@@ -332,6 +347,10 @@ func (n *Node) crash() {
 // acknowledges a mark that instance never issued, which closes nothing and
 // leaves every message gated on its real mark withheld forever. BUG-001.
 func (n *Node) restart() {
+	// A restart is a new incarnation too, not a continuation of the crashed
+	// one. Treating it as a continuation is how a second restart handed a fresh
+	// Raft an acknowledgement for a mark it never issued (BUG-002).
+	n.epoch.Advance()
 	n.pendingSeq, n.pendingMark = nil, nil
 	n.inflight = nil
 
@@ -349,6 +368,15 @@ func (n *Node) restart() {
 	n.kv = map[string]string{}
 	n.down = false
 	n.jitter()
+}
+
+// StaleEpochDrops is how many completions from a dead incarnation this node
+// refused.
+func (n *Node) StaleEpochDrops() int { return n.epoch.Dropped() }
+
+// CheckEpochs refuses a run in which any cross-epoch delivery occurred.
+func (n *Node) CheckEpochs() error {
+	return n.epoch.Check(fmt.Sprintf("node %d", n.cfg.ID))
 }
 
 // AssertQuiescent surfaces a node that stopped with a message withheld and

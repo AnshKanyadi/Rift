@@ -52,13 +52,16 @@ func MaterializeRaft(seed uint64) (*plan.Plan, error) {
 
 // RaftResult is one Raft run.
 type RaftResult struct {
-	History  *sim.History
-	Seed     uint64
-	Outcome  sim.Outcome
-	Reports  []sim.Report
-	Census   raftcheck.Census
-	Violated *sim.Violation
-	Err      error
+	Ledger          *raftcheck.Ledger
+	History         *sim.History
+	StaleEpochDrops int
+	EpochFailure    error
+	Seed            uint64
+	Outcome         sim.Outcome
+	Reports         []sim.Report
+	Census          raftcheck.Census
+	Violated        *sim.Violation
+	Err             error
 }
 
 // syncLatency is the modelled fsync for a Raft node's engine.
@@ -154,6 +157,15 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		if err := d.AssertQuiescent(); err != nil {
 			return res, fmt.Errorf("hunt: node %d: %w", i, err)
 		}
+		// A cross-epoch delivery is dropped rather than acted on, so it cannot
+		// corrupt the run -- but it means the driver let a dead incarnation's
+		// news reach a live component, which is the class this guard exists to
+		// make impossible rather than merely survivable.
+		res.StaleEpochDrops += d.StaleEpochDrops()
+		if err := d.CheckEpochs(); err != nil {
+			res.EpochFailure = err
+		}
+		_ = i
 	}
 
 	// The fire-count assertion only means anything on a run that reached its
@@ -167,6 +179,7 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		}
 	}
 	res.History = hist
+	res.Ledger = ledger
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())
 	return res, nil
 }
