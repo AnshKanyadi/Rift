@@ -33,8 +33,14 @@ import (
 // than a value it asked a node for.
 type Ledger struct {
 	// durable[node] is what that node has made durable, most recent last.
-	durableHS  []hsRecord
-	durableLog [][]raft.Entry // indexed by node ordinal, the persisted prefix
+	durableHS []hsRecord
+
+	// durableLog[node] is the entries that node has durable ABOVE its snapshot,
+	// and durableSnap[node] is that snapshot. After A2 the two are inseparable:
+	// a log is a suffix, and reading one without the other is how a compacted
+	// node looks like a node that lost entries.
+	durableLog  [][]raft.Entry
+	durableSnap []raft.SnapshotMeta
 
 	// ledIn records, per term, which node acted as leader in it. A node "acts as
 	// leader in term T" the moment it sends an MsgApp bearing term T -- observed
@@ -56,8 +62,32 @@ type Ledger struct {
 	// at that instant, which is what the persist-before-reply oracle compares.
 	sent []sentRecord
 
+	// recv records every message a node accepted at its boundary.
+	//
+	// Sends alone cannot answer a question about cause. A leadership transfer
+	// order that was dropped, delayed or delivered to a crashed node produces no
+	// campaign, and from the send stream that is indistinguishable from a target
+	// that ignored it. The delivery is the second boundary observation, and it is
+	// what makes "it campaigned BECAUSE it was told to" a statement rather than a
+	// correlation.
+	recv []sentRecord
+
+	// snaps records every snapshot a node created or installed. The digest is
+	// of the bytes that crossed the boundary, which is what makes a snapshot
+	// checkable against an independently computed state.
+	snaps []snapRecord
+
 	nodes int
+
+	// rev increments on every recorded fact. An oracle is a pure function of the
+	// ledger, so a rev that has not moved cannot produce a verdict that has --
+	// and the sweep calls every oracle on every event, which is thousands of full
+	// re-scans per run once logs are long enough to compact.
+	rev uint64
 }
+
+// Rev is the ledger's revision, for oracles that skip unchanged state.
+func (l *Ledger) Rev() uint64 { return l.rev }
 
 type hsRecord struct {
 	node int
@@ -69,9 +99,13 @@ type leaderRecord struct {
 	term raft.Term
 	node int
 	at   clock.Instant
-	// log is what that node had persisted when it first acted as leader, which
-	// is what leader completeness is checked against.
-	log []raft.Entry
+	// log is what that node had persisted when it first acted as leader, and
+	// snap is the snapshot that log sat on top of. Leader completeness is checked
+	// against both: an entry the leader compacted away is one it applied, not one
+	// it lost, and reading only the log would call every compacted leader
+	// incomplete.
+	log  []raft.Entry
+	snap raft.SnapshotMeta
 }
 
 type commitRecord struct {
@@ -90,12 +124,33 @@ type sentRecord struct {
 	at          clock.Instant
 }
 
+// SnapshotRecord is a snapshot crossing a node's boundary: created and handed to
+// the engine, or received and installed.
+type SnapshotRecord struct {
+	Index  raft.Index
+	Term   raft.Term
+	Digest uint64
+
+	// Taken distinguishes a snapshot this node produced from one it received.
+	// Both are checkable and they check different things: a created snapshot
+	// must equal the state its own log produces, and an installed one must equal
+	// the state the cluster's log produces at that index.
+	Taken bool
+}
+
+type snapRecord struct {
+	node int
+	rec  SnapshotRecord
+	at   clock.Instant
+}
+
 // NewLedger returns a ledger for n nodes.
 func NewLedger(n int) *Ledger {
 	return &Ledger{
-		durableLog: make([][]raft.Entry, n),
-		applied:    make([][]raft.Entry, n),
-		nodes:      n,
+		durableLog:  make([][]raft.Entry, n),
+		durableSnap: make([]raft.SnapshotMeta, n),
+		applied:     make([][]raft.Entry, n),
+		nodes:       n,
 	}
 }
 
@@ -114,12 +169,48 @@ func NewLedger(n int) *Ledger {
 // checker: what may be recorded here is what the harness WITNESSED crossing the
 // boundary — the batch the driver submitted, promoted when the engine reported
 // that sequence durable — and a provenance.Reported no longer fits.
-func (l *Ledger) RecordDurable(node int, hsO provenance.Observed[raft.HardState], entriesO provenance.Observed[[]raft.Entry], at clock.Instant) {
-	hs, entries := hsO.Fact(), entriesO.Fact()
-	l.durableHS = append(l.durableHS, hsRecord{node: node, hs: hs, at: at})
-	cp := make([]raft.Entry, len(entries))
-	copy(cp, entries)
+func (l *Ledger) RecordDurable(node int, stO provenance.Observed[DurableState], at clock.Instant) {
+	l.rev++
+	st := stO.Fact()
+	l.durableHS = append(l.durableHS, hsRecord{node: node, hs: st.HardState, at: at})
+	cp := make([]raft.Entry, len(st.Log))
+	copy(cp, st.Log)
 	l.durableLog[node] = cp
+	l.durableSnap[node] = st.Snapshot
+}
+
+// DurableState is what one node has on disk: its hard state, the snapshot its
+// log sits on top of, and the entries above that snapshot.
+//
+// The three travel together because after A2 they only mean anything together.
+// A log suffix without its snapshot index is a set of entries at unknown
+// positions, and a checker handed one would compare position against position
+// and call two agreeing nodes divergent.
+type DurableState struct {
+	HardState raft.HardState
+	Snapshot  raft.SnapshotMeta
+	Log       []raft.Entry
+}
+
+// holds reports whether a node's durable state covers index i: either the entry
+// is in the log suffix, or the snapshot is at or past it.
+//
+// The snapshot arm rests on a stated assumption rather than on an observation,
+// and it is worth naming: a snapshot is taken from an APPLIED prefix, so an
+// index the snapshot covers is one this node applied. That is sound exactly as
+// far as state machine safety holds, and state machine safety is checked
+// independently -- so if it ever fails, this arm is unreliable and the run has
+// already reported the reason.
+func (l *Ledger) holds(node int, e raft.Entry) bool {
+	if l.durableSnap[node].Index >= e.Index {
+		return true
+	}
+	for _, x := range l.durableLog[node] {
+		if x.Index == e.Index && x.Term == e.Term && string(x.Data) == string(e.Data) {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordSent records a released message alongside the sender's durable state.
@@ -128,18 +219,29 @@ func (l *Ledger) RecordDurable(node int, hsO provenance.Observed[raft.HardState]
 // value that crossed the node's boundary on its way to the transport, not an
 // answer to a question about what the node believes it sent.
 func (l *Ledger) RecordSent(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
+	l.rev++
 	m := mO.Fact()
 	hs := l.durableHardState(node)
 	l.sent = append(l.sent, sentRecord{
 		node: node, msg: m, at: at,
 		durableTerm: hs.Term, durableVote: hs.Vote,
-		durableLast: lastIndexOf(l.durableLog[node]),
+		durableLast: l.durableLast(node),
 	})
 
 	// Acting as leader is observed here, from the wire, and nowhere else.
 	if m.Type == raft.MsgApp {
 		l.noteLeader(m.Term, node, at)
 	}
+}
+
+// RecordReceived records a message a node accepted.
+//
+// Observed: it is the frame crossing into the node, taken before the node has
+// done anything with it, not an answer to a question about what it thinks it
+// received.
+func (l *Ledger) RecordReceived(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
+	l.rev++
+	l.recv = append(l.recv, sentRecord{node: node, msg: mO.Fact(), at: at})
 }
 
 // RecordApplied records entries a node applied.
@@ -149,6 +251,7 @@ func (l *Ledger) RecordSent(node int, mO provenance.Observed[raft.Message], at c
 // afterwards. Reading them back would ask the system what it applied, which is
 // the question the oracle exists to answer independently.
 func (l *Ledger) RecordApplied(node int, entriesO provenance.Observed[[]raft.Entry], at clock.Instant) {
+	l.rev++
 	entries := entriesO.Fact()
 	l.applied[node] = append(l.applied[node], entries...)
 	for _, e := range entries {
@@ -158,6 +261,59 @@ func (l *Ledger) RecordApplied(node int, entriesO provenance.Observed[[]raft.Ent
 	}
 }
 
+// RecordSnapshot records a snapshot a node created or installed.
+//
+// Observed: the digest is of the bytes handed to the engine, or of the bytes
+// that arrived on the wire. Neither is a question asked of a state machine about
+// what it thinks it holds.
+func (l *Ledger) RecordSnapshot(node int, rO provenance.Observed[SnapshotRecord], at clock.Instant) {
+	l.rev++
+	l.snaps = append(l.snaps, snapRecord{node: node, rec: rO.Fact(), at: at})
+}
+
+// Snapshots returns every recorded snapshot event, in order.
+func (l *Ledger) Snapshots() []SnapshotRecord {
+	out := make([]SnapshotRecord, 0, len(l.snaps))
+	for _, s := range l.snaps {
+		out = append(out, s.rec)
+	}
+	return out
+}
+
+// SnapshotsTaken and SnapshotsInstalled count the two directions, so a lane can
+// ask whether either path ran at all.
+func (l *Ledger) SnapshotsTaken() int {
+	n := 0
+	for _, s := range l.snaps {
+		if s.rec.Taken {
+			n++
+		}
+	}
+	return n
+}
+
+// SnapshotsInstalled is the receiving half of the same count.
+func (l *Ledger) SnapshotsInstalled() int { return len(l.snaps) - l.SnapshotsTaken() }
+
+// AppliedBy returns what a node applied, in order. It exists for the apply
+// continuity oracle, which is about one node's stream rather than about two
+// nodes agreeing.
+func (l *Ledger) AppliedBy(node int) []raft.Entry { return l.applied[node] }
+
+// InstallsBy returns the snapshot indices a node installed, in order.
+func (l *Ledger) InstallsBy(node int) []raft.Index {
+	var out []raft.Index
+	for _, s := range l.snaps {
+		if s.node == node && !s.rec.Taken {
+			out = append(out, s.rec.Index)
+		}
+	}
+	return out
+}
+
+// Nodes is how many nodes this ledger covers.
+func (l *Ledger) Nodes() int { return l.nodes }
+
 func (l *Ledger) noteLeader(term raft.Term, node int, at clock.Instant) {
 	for _, r := range l.ledIn {
 		if r.term == term && r.node == node {
@@ -166,7 +322,9 @@ func (l *Ledger) noteLeader(term raft.Term, node int, at clock.Instant) {
 	}
 	log := make([]raft.Entry, len(l.durableLog[node]))
 	copy(log, l.durableLog[node])
-	l.ledIn = append(l.ledIn, leaderRecord{term: term, node: node, at: at, log: log})
+	l.ledIn = append(l.ledIn, leaderRecord{
+		term: term, node: node, at: at, log: log, snap: l.durableSnap[node],
+	})
 }
 
 func (l *Ledger) durableHardState(node int) raft.HardState {
@@ -177,6 +335,21 @@ func (l *Ledger) durableHardState(node int) raft.HardState {
 		}
 	}
 	return hs
+}
+
+// durableLast is the highest index this node has durable, counting the snapshot.
+//
+// Reading only the log suffix was correct for exactly as long as every log
+// started at index 1. A compacted node whose whole log is inside its snapshot has
+// an EMPTY suffix and everything durable, and taking the suffix's last index
+// there reports zero -- which is not a small error, it is the persist-before-reply
+// oracle accusing a correct node of acknowledging something it never wrote.
+func (l *Ledger) durableLast(node int) raft.Index {
+	last := l.durableSnap[node].Index
+	if x := lastIndexOf(l.durableLog[node]); x > last {
+		last = x
+	}
+	return last
 }
 
 func (l *Ledger) isCommitted(i raft.Index) bool {
@@ -193,6 +366,96 @@ func (l *Ledger) Committed() []raft.Entry {
 	out := make([]raft.Entry, 0, len(l.committed))
 	for _, c := range l.committed {
 		out = append(out, c.entry)
+	}
+	return out
+}
+
+// committedPrefix returns the committed entries 1..through, in index order, and
+// reports whether the ledger has witnessed every one of them.
+//
+// Incomplete is not a failure. It means the harness has not seen enough to make
+// a claim, and a checker that guessed at the gap would be asserting over a
+// history it does not have.
+func (l *Ledger) committedPrefix(through raft.Index) ([]raft.Entry, bool) {
+	if through == 0 {
+		return nil, true
+	}
+	byIndex := make(map[raft.Index]raft.Entry, len(l.committed))
+	for _, c := range l.committed {
+		if c.entry.Index <= through {
+			byIndex[c.entry.Index] = c.entry
+		}
+	}
+	out := make([]raft.Entry, 0, through)
+	for i := raft.Index(1); i <= through; i++ {
+		e, ok := byIndex[i]
+		if !ok {
+			return nil, false
+		}
+		out = append(out, e)
+	}
+	return out, true
+}
+
+// TransferRecord is one leadership transfer, reconstructed from the wire.
+//
+// Nothing here is asked of a node. A transfer is visible from outside as three
+// messages in sequence, and that is how it is recorded: the order to campaign,
+// the campaign, and the first act of leadership.
+type TransferRecord struct {
+	From raft.NodeID
+	To   raft.NodeID
+	At   clock.Instant
+
+	// Campaigned is when the target sent its vote request, or zero if it never
+	// did. Won is when it first acted as leader, or zero.
+	Campaigned clock.Instant
+	Won        clock.Instant
+
+	// PreVotedAt is when the target sent a pre-vote after the order, if it did.
+	PreVotedAt clock.Instant
+
+	// PreVoted is true if the target ran a pre-vote round before campaigning.
+	// A transfer is supposed to skip it: the current leader's say-so is stronger
+	// evidence than any quorum of peers could give, and a target that pre-votes
+	// anyway has not taken the shortcut the feature exists for.
+	PreVoted bool
+}
+
+// Transfers reconstructs every leadership transfer from the wire.
+//
+// Keyed on DELIVERY rather than on the send. A transfer order that never arrives
+// produces no campaign, and counting it against the feature would be measuring
+// the network. What is attributable is what a node did after it accepted one.
+func (l *Ledger) Transfers() []TransferRecord {
+	var out []TransferRecord
+	for _, d := range l.recv {
+		if d.msg.Type != raft.MsgTimeoutNow {
+			continue
+		}
+		t := TransferRecord{From: d.msg.From, To: d.msg.To, At: d.at}
+		for _, x := range l.sent {
+			if x.at < d.at || x.msg.From != t.To {
+				continue
+			}
+			switch x.msg.Type {
+			case raft.MsgPreVote:
+				if t.Campaigned == 0 {
+					t.PreVoted, t.PreVotedAt = true, x.at
+				}
+			case raft.MsgVote:
+				if t.Campaigned == 0 {
+					t.Campaigned = x.at
+				}
+			case raft.MsgApp:
+				if t.Campaigned != 0 && t.Won == 0 {
+					t.Won = x.at
+				}
+			case raft.MsgVoteResp, raft.MsgAppResp, raft.MsgPreVoteResp, raft.MsgSnap,
+				raft.MsgTimeoutNow:
+			}
+		}
+		out = append(out, t)
 	}
 	return out
 }

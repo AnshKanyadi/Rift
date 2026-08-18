@@ -1,0 +1,16 @@
+# id: M34-append-from-zero-over-a-snapshot
+# covering-test: TestSnapshotPrefixIsNotOverwritten
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a node whose applied prefix is already in a snapshot accepts an append starting at index 1, because the consistency check treats PrevLogIndex 0 as agreeable to everybody. It then overwrites entries it has already applied and told the cluster were committed
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1887,7 +1887,7 @@
+ 		// Rejecting is safe and self-correcting: the reject carries lastIndex as
+ 		// its hint, so the leader jumps forward, finds the follower is past its
+ 		// own log, and sends a snapshot.
+-		return r.snapIndex == 0
++		return true
+ 	}
+ 	if idx > r.lastIndex() {
+ 		return false

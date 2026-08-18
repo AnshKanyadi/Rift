@@ -211,6 +211,120 @@ the pending transfer expires after one election timeout and the leader resumes.
 
 ---
 
+## 9. What the implementation taught, and what it contradicted
+
+Recorded here rather than in commit messages alone, because four of these
+contradict a decision in §2 to §6 and a design document that quietly stops
+describing the code is worse than one that never existed.
+
+### 9.1 A pre-vote RESPONSE must echo the proposed term, not the responder's own
+
+D-A2-4 said pre-vote mutates no persistent state, so its messages need no gate.
+That was right about the *request* and wrong about the *response*, which carried
+`r.term` — the responder's real term, which is a claim about persistent state.
+A node whose term bump was still in flight advertised a term it had not written.
+
+**The persist-before-reply oracle found it on 95 of 200 seeds**, immediately, on
+the first sweep after pre-vote landed. The fix is in the message, not the check:
+a response now echoes the term it was asked about, so it says only *"yes, if you
+campaigned for that term, I would vote for you"* — a statement about volatile
+facts and nothing else, and DR-8's non-gate argument holds exactly as written
+rather than nearly.
+
+The cost is real and small: a candidate that is behind no longer learns the true
+term from a pre-vote rejection. It learns it one round later from a real leader.
+Buying that with a durability claim on the hot path of every election attempt is
+the trade DR-8 already refused.
+
+### 9.2 One counter with two names is not two streams
+
+D-A2-2 said the snapshot install gets its own persist mark. The first
+implementation gave it its own *field* and drew its value from the log's counter.
+That is one stream with two names: marks stay monotone, so acknowledging a later
+log mark implies the snapshot's, and the second answer collapses into the first.
+
+**It was found because the mutant did not fire.** Removing the snapshot arm from
+the gate changed nothing across 300 seeds. A planted violation that survives is
+either a checker that cannot see it or a defence that was never there, and here
+it was the second.
+
+Two streams means two counters and two watermarks with no ordering assumed
+between them, and the driver writing the snapshot in its own batch acknowledged
+on its own completion. With that, removing the arm produces **37 violations in
+300 seeds, first at seed 17**, with DR-8's exact message. The gate is live.
+
+### 9.3 "The later of the two marks" generalises to "all of the marks"
+
+A1's gate took the later of two marks because both lived in one ordered stream,
+where later implies earlier. With two independent streams there is no ordering to
+lean on, so a message attesting to state in both waits for **both**. A gated
+message now carries one mark per stream and is released when every one has
+landed; A1's rule is the single-stream special case.
+
+### 9.4 Re-applying after a crash is correct, and the first oracle said otherwise
+
+The apply-continuity oracle first asserted that a node applies each index exactly
+once, in increasing order. It fired on the first seed and the system was right: a
+node that crashes **without** a snapshot has an empty state machine when it
+returns and must re-apply its whole log. The invariant is not monotonicity — it
+is *no hole* and *rebuild determinism*, and §5c of DESIGN-A1's lesson applies
+directly: an oracle that has never been wrong is usually an oracle nobody has
+run.
+
+### 9.5 Pre-vote made the cluster calmer, and that cost the harness its power
+
+The finding this phase would most like to have missed.
+
+Pre-vote stops a disrupted node inflating the term, so the cluster re-elects far
+less. That is the feature working — and it means far fewer conflicting appends,
+far fewer divergent tails, and far less for the fault injection to find. Measured
+with `M18` planted, 500 seeds per arm:
+
+| configuration | log-matching detections |
+|---|---|
+| no pre-vote, no snapshots | 10, first at seed 15 |
+| pre-vote on | 0 |
+| full A2 | 0 |
+
+`M19` moved the same way: 228 of 300 under A1, 1 of 300 under A2.
+
+**A feature that makes the system calmer makes the harness weaker, and nobody
+chooses that trade — it arrives with the feature.** Two responses, both taken:
+the schedule mix was widened (four crashes and five partitions over twelve
+seconds, against two and three over eight), which restored the A1-shape rate from
+2 to 10 per 500; and each oracle's *induction* now runs in a configuration where
+it has a window, with the rate recorded beside it. Log matching and leader
+completeness still run under compaction in the main sweep — that is a real but
+weaker claim, and it is stated as one.
+
+### 9.6 The mutant lane could not tell a deleted test from an uncaught defect
+
+`M19` reported ALIVE. Its covering test had been **deleted** by an unrelated edit,
+and `go test -run` exits zero when the pattern matches nothing — so the lane
+reported the mutant as surviving and pointed the finger at the oracle. The lane
+now requires the covering test to have actually run, and reports a mutant whose
+test never executed as an ERROR rather than a verdict. Induced against a patch
+naming a test that does not exist.
+
+Seventh instance of the vacuous-green class by DESIGN-A1 §5c's register, and the
+first one inside the mutant suite itself.
+
+### 9.7 A2's own bug
+
+BUGS.md **BUG-009**: a node whose applied prefix was inside a snapshot accepted an
+append starting at index 1, because the consistency check treated `PrevLogIndex`
+0 as agreeable to everybody — true before compaction, false after. It then
+overwrote entries it had applied and reported committed. One seed in three
+thousand; it took the 10,000-seed run to surface.
+
+The instrument was the assertion **BUG-007 corrected**, with no defect in hand at
+the time. Its old form fired on the durable watermark, which Raft permits
+truncating; the corrected form fires on the commit index, which Raft does not.
+One phase later it caught this, and the old form would have missed it while
+complaining about legal truncations.
+
+---
+
 ## 8. Exit criteria
 
 Ansh's, recorded verbatim so the report can be checked against them rather than against a paraphrase.
@@ -227,3 +341,19 @@ Ansh's, recorded verbatim so the report can be checked against them rather than 
 6. Corpus lane green across the snapshot format change; if it breaks, the format change is what broke
    it and the bundles are regenerated deliberately with that recorded.
 7. 10k seeds, zero safety violations, inconclusive tracked and explained.
+
+### Status against them
+
+Claude does not mark phases complete; this is evidence for a ruling.
+
+| # | criterion | evidence |
+|---|---|---|
+| 1 | snapshot install with the log compacted behind it; recovery from snapshot plus tail identical to recovery from a full log | 204,315 snapshots taken and 29,097 installed across 10k seeds; `snapshot-equivalence` checks every one against the state the committed log independently produces, induced by `M33` |
+| 2 | pre-vote, with the single-cut argument and a measured census | §5 carries the argument; ablation over the same 200 schedules: terms summed 2450 → 623, highest 57 → 16, elections started 2450 → 515, **started per win 2.07 → 1.06**, zero seeds without a leader in either arm |
+| 3 | leadership transfer, target wins without an election timeout, no committed entry lost | 391 orders delivered, 390 took effect within a fifth of an election timeout, 385 went on to lead, 0 ran a pre-vote round; loss is covered by leader completeness, in-run |
+| 4 | the two-mark gate induced for real | `M31` removes the snapshot arm: 37 violations in 300 seeds, first at seed 17. §9.2 records that the first implementation made it un-inducible |
+| 5 | every new oracle induced before it counts | `apply-continuity` ← `M32` (300 of 300, seed 0); `snapshot-equivalence` ← `M33` (262 of 300, seed 0); `persist-before-reply`'s new arm ← `M31` |
+| 6 | corpus green across the format change | it broke, as expected: all raft bundles diverged. Regenerated deliberately, re-pinned to seeds that still reproduce, and **bundles now record their build** so the next feature cannot silently rewrite what an old one means |
+| 7 | 10k seeds, zero safety violations, inconclusive tracked | **pass 9995, violation 0, inconclusive 5, errors 0** — 0.5 per mille against a 30 per mille ceiling, each cause printed |
+
+Mutant suite: 30 killed, 1 canary alive, 0 mismatched, 0 rotted.

@@ -1,0 +1,16 @@
+# id: M32-apply-stream-skips-an-index
+# covering-test: TestApplyContinuityOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the driver acknowledges one more applied index than it applied, so the state machine never sees that command and the next Ready starts past it -- a hole no cross-node comparison can see, because every node's stream is self-consistent
+--- a/store/node.go
++++ b/store/node.go
+@@ -428,7 +428,7 @@
+ 				n.answerAt(e, op, k, at)
+ 			}
+ 			n.cfg.Ledger.RecordApplied(n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
+-			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
++			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index + 1)
+ 			n.maybeSnapshot(at, s)
+ 		}
+ 	}

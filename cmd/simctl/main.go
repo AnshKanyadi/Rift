@@ -64,6 +64,7 @@ import (
 	"strings"
 
 	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/sim"
 	"github.com/anshkanyadi/rift/sim/hunt"
 	"github.com/anshkanyadi/rift/sim/plan"
@@ -105,6 +106,16 @@ type Meta struct {
 	// corpus entry is one of these with this field set.
 	Violation *ViolationMeta `json:"violation,omitempty"`
 
+	// Raft is the build the raft workload ran against: what the cluster IS, as
+	// opposed to what happens to it.
+	//
+	// It is recorded for the same reason the toy's scenario is. A2 turned on
+	// snapshots, pre-vote and leadership transfers, and every stored raft bundle
+	// immediately replayed a different run -- not because the schedule moved but
+	// because the cluster did. A bundle that does not pin its build is a bundle
+	// whose meaning changes every time a feature lands.
+	Raft *RaftMeta `json:"raft,omitempty"`
+
 	// Census is the election census for a raft-workload run.
 	//
 	// It is in the bundle because it is the only evidence that separates "the
@@ -133,6 +144,13 @@ type Meta struct {
 	// against the fixed tree, which is the wrong way round -- the lane exists to
 	// notice rot, not to demand the bug back.
 	Mutant string `json:"mutant,omitempty"`
+}
+
+// RaftMeta is the raft workload's build parameters.
+type RaftMeta struct {
+	PreVote           bool   `json:"pre_vote"`
+	SnapshotThreshold uint64 `json:"snapshot_threshold"`
+	Transfers         int    `json:"transfers"`
 }
 
 // CensusMeta is what the run's elections looked like.
@@ -203,6 +221,9 @@ func cmdRun(args []string) int {
 	placeName := fs.String("placement", "reactive", "toy crash targeting: reactive | uniform")
 	failover := fs.Bool("failover", false, "crash the primary and promote a backup")
 	mutant := fs.String("mutant", "", "the sim/mutants patch that reintroduces the defect this schedule exposed")
+	preVote := fs.Bool("pre-vote", true, "raft workload: run the pre-vote round")
+	snapEvery := fs.Uint64("snapshot-threshold", 6, "raft workload: applied entries between snapshots; 0 disables")
+	transfers := fs.Int("transfers", 2, "raft workload: leadership transfers the plan schedules")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
@@ -237,11 +258,20 @@ func cmdRun(args []string) int {
 		}
 
 	case workloadRaft:
-		// A1's workload. Like the toy's, the plan is materialized through the
-		// same call the sweep makes, so a bundle carries the plan that ran
-		// rather than one regenerated slightly differently later.
+		// Like the toy's, the plan is materialized through the same call the
+		// sweep makes, so a bundle carries the plan that ran rather than one
+		// regenerated slightly differently later.
+		opt := hunt.RaftOptions{
+			PreVote:           *preVote,
+			SnapshotThreshold: raft.Index(*snapEvery),
+			Transfers:         *transfers,
+		}
+		meta.Raft = &RaftMeta{
+			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
+			Transfers: opt.Transfers,
+		}
 		var err error
-		if p, err = hunt.MaterializeRaft(*seed); err != nil {
+		if p, err = hunt.MaterializeRaftWith(*seed, opt); err != nil {
 			return fail("%v", err)
 		}
 
@@ -307,7 +337,10 @@ func cmdReplay(args []string) int {
 	// The bundle's plan is already prepared, so Prepare is deliberately not
 	// called again here: doing so would double the scenario's faults and replay
 	// a schedule the recorded run never had.
-	got := Meta{Seed: recorded.Seed, Workload: recorded.Workload, Scenario: recorded.Scenario}
+	got := Meta{
+		Seed: recorded.Seed, Workload: recorded.Workload,
+		Scenario: recorded.Scenario, Raft: recorded.Raft,
+	}
 	var hist *sim.History
 	if err := execute(p, &got, &hist); err != nil {
 		return fail("replay: %v", err)
@@ -421,7 +454,15 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 		return nil
 
 	case workloadRaft:
-		res, err := hunt.RunRaft(p, tr)
+		opt := hunt.A2Options()
+		if meta.Raft != nil {
+			opt = hunt.RaftOptions{
+				PreVote:           meta.Raft.PreVote,
+				SnapshotThreshold: raft.Index(meta.Raft.SnapshotThreshold),
+				Transfers:         meta.Raft.Transfers,
+			}
+		}
+		res, err := hunt.RunRaftWith(p, opt, tr)
 		if err != nil {
 			return err
 		}

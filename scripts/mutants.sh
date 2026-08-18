@@ -108,13 +108,32 @@ for patch in "$PATCHDIR"/*.patch; do
     continue
   fi
 
+  # The covering test must EXIST and RUN. `go test -run` exits 0 when the pattern
+  # matches nothing, so a deleted or renamed test reports the mutant as ALIVE --
+  # indistinguishable from "the defect is not caught", and pointing at the
+  # checker instead of at the missing test. That happened: M19's covering test
+  # was removed by an unrelated edit and the lane blamed the oracle.
+  #
+  # So the run is verified before its result is read. A mutant whose covering
+  # test did not execute is an ERROR, not a verdict.
   start=$(now_ms)
-  if (cd "$work" && $GO test -count=1 -run "$test_name" "$pkg" >/dev/null 2>&1); then
+  rc=0
+  # `|| rc=$?` rather than a bare call: set -e would abort the whole lane on the
+  # first killed mutant, which is the expected outcome for most of them.
+  (cd "$work" && $GO test -count=1 -v -run "^${test_name}\$" "$pkg" >"$scratch/$id.log" 2>&1) || rc=$?
+  end=$(now_ms)
+  if ! grep -q "^=== RUN[[:space:]]*${test_name}\$" "$scratch/$id.log"; then
+    printf '   ERROR    %s: its covering test %s never ran.\n' "$id" "$test_name"
+    printf '            A test that does not exist cannot fail, so the lane would have reported\n'
+    printf '            this mutant ALIVE and blamed the checker for a missing test.\n'
+    sed 's/^/     /' "$scratch/$id.log" | head -10
+    exit 2
+  fi
+  if [ $rc -eq 0 ]; then
     got=alive
   else
     got=killed
   fi
-  end=$(now_ms)
   elapsed=$(( (end - start) / 1000 ))
 
   if [ "$got" != "$expect" ]; then

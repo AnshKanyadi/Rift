@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 8 entries, all A1. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 9 entries — 8 from A1, 1 from A2. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -50,6 +50,10 @@ the flaw happens to be expressible as a scenario flag.
 
 **Numbering.** `BUG-NNN` here, `TOY-NNN` in `docs/TOY-FINDINGS.md`, and the bundle directories match:
 `seeds/BUG-001` belongs to this file and `seeds/TOY-001` does not.
+
+**The seeds moved at A2, deliberately.** A2 widened the schedule mix — four crashes and five partitions over twelve seconds instead of two and three over eight — because pre-vote made the cluster calm enough that the harness stopped finding things (DESIGN-A2 §9). A seed names a run only relative to the generator it was drawn against, so every A1 seed named a different run afterwards and several stopped exhibiting their defect. Each bundle was re-pinned to a seed that does, verified by applying its mutant and watching the finding come back. Where a historical seed is part of the record it is kept beside the new one rather than overwritten.
+
+**Bundles pin their build.** A raft bundle now records whether pre-vote, snapshots and transfers were on, and `replay` uses what the bundle recorded rather than today's defaults. Without that, A2 turning on three features silently changed what every stored bundle meant — not because the schedule moved but because the cluster did. BUG-001 through BUG-008 are pinned to the shape they were found in: no pre-vote, no snapshots, no transfers.
 
 ---
 
@@ -160,7 +164,7 @@ Seventy-nine terms, no leader, and not one violation reported.
 | **Found by** | sim — `raft.AssertQuiescent` |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M14-epoch-check-removed.patch && go run ./cmd/simctl replay --bundle seeds/BUG-002` (any commit) |
-| **Reproduce (seed)** | `seeds/BUG-002` carries seed 66, the first seed in the range that produces the completion-outlives-incarnation race |
+| **Reproduce (seed)** | `seeds/BUG-002` carries seed 40 (was 66; see *the seeds moved* below) |
 | **Invariant that caught it** | none of the four — this is a liveness stall, and `AssertQuiescent` is the mechanism that refuses to call one a clean run |
 | **Mutant class** | `M14-epoch-check-removed` |
 | **Fix commit** | `ff895a0`, made structural in `04d8d20` |
@@ -255,7 +259,7 @@ tells us nothing.
 | **Found by** | sim — porcupine, over the client history |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M24-answer-by-position.patch && go run ./cmd/simctl replay --bundle seeds/BUG-004` (any commit) |
-| **Reproduce (seed)** | `seeds/BUG-004` carries seed 17 |
+| **Reproduce (seed)** | `seeds/BUG-004` carries seed 0 (was 17; see *the seeds moved* below) |
 | **Invariant that caught it** | **Linearizability of single-key reads and writes**, not any of the four safety oracles |
 | **Mutant class** | none existed — added `M24-answer-by-position` in this PR |
 | **Fix commit** | `b1210cf` |
@@ -307,7 +311,7 @@ exported surface, with `Advance` pinned as a required *absence*.
 | **Found by** | sim — the **persist-before-reply** oracle |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M25-restart-recovers-unsynced-writes.patch && go run ./cmd/simctl replay --bundle seeds/BUG-005` |
-| **Reproduce (seed)** | seed **92**, violating at instant **2592077256**, step 1086 |
+| **Reproduce (seed)** | found at seed **92**, instant **2592077256**, step 1086, at commit `f624c0a`. `seeds/BUG-005` now carries seed 40 (see *the seeds moved* below) |
 | **Invariant that caught it** | persist-before-reply, which is DR-8's **first enumerated gate** |
 | **Mutant class** | none existed — added `M25-restart-recovers-unsynced-writes` |
 | **Fix commit** | `0c55e30` |
@@ -381,7 +385,7 @@ defects this entry was split out of.
 | **Found by** | sim — the **persist-before-reply** oracle, once it stopped reading the engine's own account (see the harness note below) |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M28-mark-coverage-grows-after-handover.patch && go run ./cmd/simctl replay --bundle seeds/BUG-006` |
-| **Reproduce (seed)** | seed **0**, violating at instant **4201040044**, step 1971 |
+| **Reproduce (seed)** | found at seed **0**, instant **4201040044**, step 1971. `seeds/BUG-006` still carries seed 0 |
 | **Invariant that caught it** | persist-before-reply |
 | **Mutant class** | none existed — added `M28-mark-coverage-grows-after-handover` |
 | **Fix commit** | `0c55e30` |
@@ -436,7 +440,7 @@ never fires" now has a number behind it saying what it would catch if the other 
 | **Found by** | sim — the assertion fired on the first seed after the watermark it guarded started moving |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M29-truncation-refused-below-the-durable-watermark.patch && go run ./cmd/simctl replay --bundle seeds/BUG-007` |
-| **Reproduce (seed)** | seed **15**; 47 of 300 seeds reach it |
+| **Reproduce (seed)** | `seeds/BUG-007` carries seed 12 (was 15; see *the seeds moved* below) |
 | **Invariant that caught it** | `raft.truncateFrom`'s own assertion — a **false** one, which is the bug |
 | **Mutant class** | none existed — added `M29-truncation-refused-below-the-durable-watermark` |
 | **Fix commit** | `0c55e30` |
@@ -488,7 +492,7 @@ it is safe in a way that releasing it later is not.
 | **Found by** | sim — the driver's durability record compared against the engine's own account |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M26-truncated-suffix-left-in-the-engine.patch && go run ./cmd/simctl replay --bundle seeds/BUG-008` |
-| **Reproduce (seed)** | seed **84**; 7 of 300 seeds reach it |
+| **Reproduce (seed)** | `seeds/BUG-008` carries seed 12 (was 84; see *the seeds moved* below) |
 | **Invariant that caught it** | **Storage recovery** — "after any crash, the engine recovers exactly the acknowledged-synced prefix" |
 | **Mutant class** | none existed — added `M26-truncated-suffix-left-in-the-engine`, and `M27-durable-record-ignores-a-clear` for the mirror direction |
 | **Fix commit** | `0c55e30`, with the continuous cross-check in `56e3c18` |
@@ -528,6 +532,59 @@ engine has nothing in flight — the one moment a read-back honestly *is* the du
 comparison that can only fail. 36,912 comparisons across 300 seeds. Moving it from recovery-only to
 every-completion took this defect's seeds-to-detection from **905 to 84**, which is the difference
 between a check that runs twice a run and one that runs whenever there is something to check.
+
+---
+
+### BUG-009 — a replica overwrote entries it had already applied and reported committed
+
+| field | value |
+|---|---|
+| **Found by** | sim — the 10,000-seed exit run, through `raft.truncateFrom`'s assertion |
+| **Phase** | A2 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M34-append-from-zero-over-a-snapshot.patch && go run ./cmd/simctl replay --bundle seeds/BUG-009` |
+| **Reproduce (seed)** | seed **1364**; 1 of 3000 seeds reach it |
+| **Invariant that caught it** | state machine safety, asserted inside `raft/` — *a truncation may not reach an entry this node was told was committed* |
+| **Mutant class** | none existed — added `M34-append-from-zero-over-a-snapshot` |
+| **Fix commit** | *(this commit)* |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Symptom, verbatim:**
+
+```
+panic: raft: node 3 truncated to 1 with commit index 6; an entry this node was told
+was committed is being overwritten, which is state machine safety failing
+```
+
+**Root cause.** The append consistency check answered `true` for `PrevLogIndex == 0` unconditionally
+— *"append from the very beginning"* is agreeable to a node that has a beginning, and before A2 every
+node did. Once a prefix is inside a snapshot, that is no longer true: the node has already applied
+those entries, has already told the cluster they were committed, and no longer holds them to compare
+against.
+
+A leader whose view of a follower has been reset sends exactly that append. The follower accepted it,
+found index 1 conflicting with a log that starts above the snapshot, and truncated into its own
+applied prefix.
+
+**Why the checkers caught it here and not earlier.** It could not exist before A2: it needs a
+snapshot, and A1 had none. It needed the 10,000-seed run to appear at all — 1 seed in 3000 — because
+it takes a leader that has lost its position on a follower which has *also* compacted past that
+position, which is a coincidence of two rare states.
+
+**The instrument is the assertion BUG-007 corrected, and that is the part worth keeping.** BUG-007
+was a false invariant: `truncateFrom` refused any truncation reaching the *durable* watermark, which
+Raft does not guarantee, and it was unreachable for as long as that watermark never moved. The
+correction pointed it at the *commit index*, which is what Raft actually guarantees. That correction
+was made with no defect in hand. One phase later it caught this, and the old form would not have —
+it fires on durability, which is legal to truncate, and would have missed a truncation into an
+applied prefix while crying about ordinary ones.
+
+**What this would have caused in production.** A replica silently rewriting committed history, then
+serving and replicating it. Every structural check on the way up passes: the resulting log is gapless
+and the snapshot is intact. It is the worst kind of corruption because the node has no way to notice.
+
+**Fix.** `matches` answers `PrevLogIndex == 0` with *"only if I have no snapshot"*. Rejecting is safe
+and self-correcting: the reject carries `lastIndex` as its hint, so the leader jumps forward, finds
+the follower is past its own log, and sends a snapshot — which is what it should have done.
 
 ---
 

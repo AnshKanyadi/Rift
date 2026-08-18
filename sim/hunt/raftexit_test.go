@@ -45,6 +45,8 @@ func TestRaftExitCriteria(t *testing.T) {
 		c.SeedsWithContention, c.SeedsWithNoLeader)
 	t.Logf("vacuity:      a seed with no leader, or a history below %d per mille decided, is "+
 		"inconclusive and never a pass", sim.UnknownDominatedPerMille)
+	t.Logf("a2 features:  %d snapshots taken, %d installed, %d leadership transfers requested",
+		c.SnapshotsTaken, c.SnapshotsApplied, c.TransfersAsked)
 	for _, why := range c.InconclusiveCauses {
 		t.Logf("inconclusive: %s", why)
 	}
@@ -60,6 +62,24 @@ func TestRaftExitCriteria(t *testing.T) {
 	if perMille := c.Inconclusive * 1000 / c.Seeds; perMille > 30 {
 		t.Errorf("inconclusive rate %d per mille is above the 30 threshold; the remedy is a smaller "+
 			"problem -- shorter histories, harder per-key partitioning -- never a looser checker", perMille)
+	}
+
+	// 2b. A2's features must have RUN. A green sweep in which no snapshot was
+	//     ever taken says nothing about snapshots, and this is the same
+	//     vacuous-green rule the census enforces for elections: the system has to
+	//     do the thing whose safety is being asserted.
+	if c.SnapshotsTaken == 0 {
+		t.Error("no snapshot was taken across the whole sweep; every snapshot oracle in this run " +
+			"checked nothing, and the compaction path was never executed")
+	}
+	if c.SnapshotsApplied == 0 {
+		t.Error("no snapshot was ever INSTALLED across the whole sweep. Taking one exercises " +
+			"compaction; installing one is what exercises InstallSnapshot racing appends and " +
+			"restarts, which CLAUDE.md names as A2's danger zone")
+	}
+	if c.TransfersAsked == 0 {
+		t.Error("no leadership transfer was requested across the whole sweep, so the transfer path " +
+			"is unexercised and its exit criterion unevidenced")
 	}
 
 	// 3. Elections must be observed CONTENDING, not merely completing. A run

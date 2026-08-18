@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/binary"
 
+	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/raft"
 )
 
@@ -91,6 +92,78 @@ func decodeEntry(b []byte) (raft.Entry, bool) {
 	}, true
 }
 
+// encodeSnapshot stores the snapshot metadata beside its bytes, because a
+// snapshot without its index and term is a state machine nobody can place in a
+// log.
+func encodeSnapshot(meta raft.SnapshotMeta, data []byte) []byte {
+	b := putU64(nil, uint64(meta.Index))
+	b = putU64(b, uint64(meta.Term))
+	return putBytes(b, data)
+}
+
+func decodeSnapshot(b []byte) (raft.SnapshotMeta, []byte, bool) {
+	idx, b, ok := takeU64(b)
+	if !ok {
+		return raft.SnapshotMeta{}, nil, false
+	}
+	term, b, ok := takeU64(b)
+	if !ok {
+		return raft.SnapshotMeta{}, nil, false
+	}
+	data, _, ok := takeBytes(b)
+	if !ok {
+		return raft.SnapshotMeta{}, nil, false
+	}
+	return raft.SnapshotMeta{Index: raft.Index(idx), Term: raft.Term(term)}, data, true
+}
+
+// encodeKV serialises the state machine.
+//
+// Keys are sorted, and that is load-bearing rather than tidy: a snapshot's bytes
+// are compared against an independently computed expectation, and a map range
+// here would make the same state produce different bytes on different runs. It
+// is also the classic Go determinism leak, which is why this package is in core
+// scope and cannot range a map at all.
+func encodeKV(kv map[string]string) []byte {
+	var b []byte
+	b = putU64(b, uint64(len(kv)))
+	for _, k := range sorted.Keys(kv) {
+		b = putBytes(b, []byte(k))
+		b = putBytes(b, []byte(kv[k]))
+	}
+	return b
+}
+
+func decodeKV(b []byte) (map[string]string, bool) {
+	n, b, ok := takeU64(b)
+	if !ok {
+		return nil, false
+	}
+	kv := make(map[string]string, n)
+	for range n {
+		var kb, vb []byte
+		kb, b, ok = takeBytes(b)
+		if !ok {
+			return nil, false
+		}
+		vb, b, ok = takeBytes(b)
+		if !ok {
+			return nil, false
+		}
+		kv[string(kb)] = string(vb)
+	}
+	return kv, true
+}
+
+// DecodeCommand exposes the command wire format to the harness, which builds an
+// independent model of the state machine to check snapshots against.
+//
+// Sharing the FORMAT is deliberate and sharing the SEMANTICS is not: the harness
+// re-implements what a put and a get do rather than calling into this package,
+// so a defect in applying commands cannot be cancelled out by the same defect on
+// both sides of the comparison.
+func DecodeCommand(data []byte) (op, key, value string) { return decodeCmd(data) }
+
 func encodeMessage(m raft.Message) []byte {
 	b := []byte{byte(m.Type)}
 	b = putU64(b, uint64(m.From))
@@ -103,6 +176,9 @@ func encodeMessage(m raft.Message) []byte {
 	b = putU64(b, uint64(m.LeaderCommit))
 	b = putU64(b, uint64(m.MatchIndex))
 	b = putU64(b, uint64(m.Hint))
+	b = putU64(b, uint64(m.SnapIndex))
+	b = putU64(b, uint64(m.SnapTerm))
+	b = putBytes(b, m.SnapData)
 	flags := byte(0)
 	if m.Granted {
 		flags |= 1
@@ -125,7 +201,7 @@ func decodeMessage(b []byte) (raft.Message, bool) {
 	var m raft.Message
 	m.Type = raft.MessageType(b[0])
 	b = b[1:]
-	var vals [10]uint64
+	var vals [12]uint64
 	for i := range vals {
 		v, rest, ok := takeU64(b)
 		if !ok {
@@ -143,6 +219,16 @@ func decodeMessage(b []byte) (raft.Message, bool) {
 	m.LeaderCommit = raft.Index(vals[7])
 	m.MatchIndex = raft.Index(vals[8])
 	m.Hint = raft.Index(vals[9])
+	m.SnapIndex = raft.Index(vals[10])
+	m.SnapTerm = raft.Term(vals[11])
+	sd, rest, ok := takeBytes(b)
+	if !ok {
+		return raft.Message{}, false
+	}
+	if len(sd) > 0 {
+		m.SnapData = sd
+	}
+	b = rest
 	if len(b) < 1 {
 		return raft.Message{}, false
 	}

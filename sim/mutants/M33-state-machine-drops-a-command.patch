@@ -1,0 +1,16 @@
+# id: M33-state-machine-drops-a-command
+# covering-test: TestSnapshotEquivalenceOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the state machine silently drops one command in seven, so every snapshot it takes is not the state its own committed log produces. The harness re-implements what a command DOES rather than calling into store, which is the only reason this cannot cancel out on both sides of the comparison
+--- a/store/node.go
++++ b/store/node.go
+@@ -421,7 +421,7 @@
+ 				op, k, v := "", "", ""
+ 				if len(e.Data) > 0 {
+ 					op, k, v = decodeCmd(e.Data)
+-					if op == "put" {
++					if op == "put" && e.Index%7 != 0 {
+ 						n.kv[k] = v
+ 					}
+ 				}

@@ -103,7 +103,7 @@ func TestOnlyCurrentTermCommitsByCounting(t *testing.T) {
 // TestRestoreIsTheRealRecoveryPath: recovery reads back what the engine kept.
 func TestRestoreIsTheRealRecoveryPath(t *testing.T) {
 	cfg := Config{ID: 1, Peers: []NodeID{1, 2, 3}, ElectionTimeout: 10, HeartbeatTimeout: 3}
-	r, err := Restore(cfg, HardState{Term: 7, Vote: 2}, []Entry{{Term: 7, Index: 1}})
+	r, err := Restore(cfg, HardState{Term: 7, Vote: 2}, SnapshotMeta{}, []Entry{{Term: 7, Index: 1}})
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRestoreIsTheRealRecoveryPath(t *testing.T) {
 		t.Fatalf("recovered state is wrong: term=%d vote=%d last=%d", r.term, r.vote, r.lastIndex())
 	}
 	// A gapped log is refused rather than silently accepted.
-	if _, err := Restore(cfg, HardState{}, []Entry{{Term: 1, Index: 2}}); err == nil {
+	if _, err := Restore(cfg, HardState{}, SnapshotMeta{}, []Entry{{Term: 1, Index: 2}}); err == nil {
 		t.Error("a log that is not a gapless prefix was accepted")
 	}
 }

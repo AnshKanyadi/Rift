@@ -30,24 +30,91 @@ import (
 // leaves a node that can send but not receive, so it campaigns, bumps terms, and
 // never learns it lost. That is where the interesting consensus bugs live, and
 // symmetric partitions never generate it.
+// RaftOptions are the A2 build parameters: what the cluster is, as opposed to
+// what happens to it.
+//
+// They are deliberately NOT plan entries. The pre-vote ablation runs the same
+// schedules with the round on and off, so pre-vote must not perturb the schedule
+// it is being measured against -- the same reason the toy carries its flaw in the
+// scenario rather than in the plan.
+type RaftOptions struct {
+	PreVote           bool
+	SnapshotThreshold raft.Index
+
+	// Transfers is how many leadership transfers the plan schedules.
+	Transfers int
+}
+
+// A2Options is what the sweep runs: snapshots on with a threshold small enough
+// that a 40-operation workload compacts several times, pre-vote on, and a
+// couple of leadership transfers.
+func A2Options() RaftOptions {
+	return RaftOptions{PreVote: true, SnapshotThreshold: 6, Transfers: 2}
+}
+
 func RaftGenConfig() plan.GenConfig {
 	cfg := plan.DefaultGenConfig()
 	cfg.Nodes = 3
-	cfg.Duration = 8 * time.Second
-	cfg.ClientOps = 40
-	cfg.Crashes = 2
-	cfg.Partitions = 3 // weighted up, and genFaults alternates so most are single cuts
+	cfg.Duration = 12 * time.Second
+	cfg.ClientOps = 60
+	cfg.Crashes = 4
+	cfg.Partitions = 5 // weighted up, and genFaults alternates so most are single cuts
 	cfg.Holds = 0      // A1 Raft has no clock-sensitive logic; holds land with leases
 	return cfg
 }
 
-// MaterializeRaft turns a seed into a prepared A1 plan.
+// MaterializeRaft turns a seed into a prepared plan with A2's options.
 func MaterializeRaft(seed uint64) (*plan.Plan, error) {
+	return MaterializeRaftWith(seed, A2Options())
+}
+
+// MaterializeRaftWith turns a seed into a prepared plan, adding the leadership
+// transfers the options ask for.
+//
+// The transfer entries are derived from the seed's own key stream, so a plan is
+// still a total repro and replay takes no live draw.
+func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 	p, err := plan.Materialize(seed, RaftGenConfig())
 	if err != nil {
 		return nil, fmt.Errorf("hunt: materialize: %w", err)
 	}
+	if opt.Transfers > 0 {
+		key, err := rng.ParseKey(p.Keys.Raft)
+		if err != nil {
+			return nil, fmt.Errorf("hunt: raft key: %w", err)
+		}
+		span := p.Config.DurationNS
+		for i := range opt.Transfers {
+			// Spread through the middle of the run: a transfer before anybody
+			// has been elected is a transfer of nothing.
+			at := span/4 + int64(key.Uint64N(1, uint64(i), 0, 0, uint64(span/2)))
+			target := int(key.Uint64N(2, uint64(i), 0, 0, uint64(p.Config.Nodes)))
+			p.Faults.Entries = append(p.Faults.Entries, plan.Entry{
+				AtNS: at, Action: "promote", Node: target,
+			})
+		}
+	}
 	return p, nil
+}
+
+// stateDigest is the harness's independent model of the state machine, handed to
+// the snapshot oracle.
+//
+// It re-implements what a command does. What it borrows from store is the
+// serialisation only, so a defect in APPLYING commands cannot cancel out on both
+// sides of the comparison -- which is the whole reason the oracle takes a
+// function instead of importing one.
+func stateDigest(entries []raft.Entry) uint64 {
+	kv := map[string]string{}
+	for _, e := range entries {
+		if len(e.Data) == 0 {
+			continue
+		}
+		if op, k, v := store.DecodeCommand(e.Data); op == "put" {
+			kv[k] = v
+		}
+	}
+	return store.StateDigest(kv)
 }
 
 // RaftResult is one Raft run.
@@ -78,6 +145,13 @@ type RaftResult struct {
 	// nothing.
 	DurabilityCrossChecks int
 
+	// SnapshotsTaken, SnapshotsApplied and TransfersAsked are A2's evidence that
+	// its three features ran at all. A sweep in which no snapshot was ever taken
+	// proves nothing about snapshots, however green it is.
+	SnapshotsTaken   int
+	SnapshotsApplied int
+	TransfersAsked   int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -97,6 +171,11 @@ const syncLatency = clock.Instant(12_000_000)
 // RunRaft builds a three-node Raft group on a plan, drives client traffic
 // against it, and checks the result.
 func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
+	return RunRaftWith(p, A2Options(), tr)
+}
+
+// RunRaftWith drives the group with explicit build options.
+func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, error) {
 	res := RaftResult{Seed: p.Provenance.Seed}
 	n := p.Config.Nodes
 
@@ -117,7 +196,7 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger))
+	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest))
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {
@@ -137,8 +216,10 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		d, err := store.New(store.Config{
 			ID: raft.NodeID(i + 1), Peers: peers, Ordinal: ord,
 			Election: 10, Heartbeat: 3,
-			SyncLatency: syncLatency,
-			Transport:   run.Transport, Ledger: ledger, History: hist,
+			PreVote:           opt.PreVote,
+			SnapshotThreshold: opt.SnapshotThreshold,
+			SyncLatency:       syncLatency,
+			Transport:         run.Transport, Ledger: ledger, History: hist,
 			ElectionJitter: func(term raft.Term) int {
 				return 10 + int(jitKey.Uint64N(0, uint64(ord), uint64(term), 0, 10))
 			},
@@ -148,6 +229,16 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		}
 		drivers[i] = d
 		nodes[i].(*lateBinder).inner = d
+	}
+
+	// A scheduled promote is A2's leadership transfer: whoever is leading hands
+	// off to the named node. The plan carries it as an action, so it replays.
+	run.OnPromote = func(target sim.NodeID) {
+		for _, d := range drivers {
+			if d.RequestTransfer(raft.NodeID(int(target) + 1)) {
+				break
+			}
+		}
 	}
 
 	// Client operations go to every node; only the leader answers. That is how a
@@ -185,6 +276,9 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		// see the field's own comment for why a drop is the guard working.
 		res.StaleEpochDrops += d.StaleEpochDrops()
 		res.DurabilityCrossChecks += d.DurabilityCrossChecks()
+		res.SnapshotsTaken += d.SnapshotsTaken()
+		res.SnapshotsApplied += d.SnapshotsApplied()
+		res.TransfersAsked += d.TransfersAsked()
 	}
 
 	// The fire-count assertion only means anything on a run that reached its
@@ -260,6 +354,13 @@ type RaftCensus struct {
 	SeedsWithNoLeader   int
 	SeedsWithContention int
 
+	// A2's evidence that its three features ran. A sweep that never took a
+	// snapshot, never installed one and never transferred leadership is green
+	// about A1, whatever else it says.
+	SnapshotsTaken   int
+	SnapshotsApplied int
+	TransfersAsked   int
+
 	FirstViolation     uint64
 	FoundAViolation    bool
 	InconclusiveCauses []string
@@ -283,6 +384,9 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		if uint64(r.Census.Terms) > c.Terms {
 			c.Terms = uint64(r.Census.Terms)
 		}
+		c.SnapshotsTaken += r.SnapshotsTaken
+		c.SnapshotsApplied += r.SnapshotsApplied
+		c.TransfersAsked += r.TransfersAsked
 		c.ElectionsStart += r.Census.ElectionsStart
 		c.ElectionsWon += r.Census.ElectionsWon
 		c.SplitVotes += r.Census.SplitVotes

@@ -61,12 +61,20 @@ func TestDurabilityGateSetIsPinned(t *testing.T) {
 		}
 	}
 
-	// The ungated case is a correctness argument and must stay stated.
-	if !strings.Contains(block, "MsgPreVoteResp is deliberately NOT gated") {
-		t.Error("the pre-vote non-gate lost its correctness argument; without it a future reader " +
-			"cannot tell a deliberate omission from a forgotten one")
+	// The ungated cases are correctness arguments and must stay stated. They are
+	// pinned individually rather than counted, because the failure mode is one
+	// of them quietly losing its argument while the others still have theirs.
+	nonGates := []string{
+		"MsgPreVoteResp is deliberately NOT gated",
+		"MsgTimeoutNow is deliberately NOT gated",
 	}
-	t.Logf("%d gates pinned, plus the pre-vote non-gate", len(got))
+	for _, ng := range nonGates {
+		if !strings.Contains(block, ng) {
+			t.Errorf("the non-gate %q lost its correctness argument; without it a future reader "+
+				"cannot tell a deliberate omission from a forgotten one", ng)
+		}
+	}
+	t.Logf("%d gates pinned, plus %d stated non-gates", len(got), len(nonGates))
 }
 
 // TestEveryGateHasACallSite keeps the enumeration and the code from drifting
