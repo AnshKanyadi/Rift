@@ -1,0 +1,16 @@
+# id: M17-vote-twice-in-one-term
+# covering-test: TestElectionSafetyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the one-vote-per-term rule is dropped, so a node that has already voted grants again and two candidates win the same term -- the canonical election safety failure
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -586,7 +586,7 @@
+ 	switch {
+ 	case m.Term < r.term:
+ 		// Stale candidate. Reply with our term so it steps down.
+-	case r.vote != 0 && r.vote != m.From:
++	case false:
+ 		// Already voted this term, for somebody else. One vote per term is the
+ 		// property that makes election safety hold at all.
+ 	case !r.logIsUpToDate(m.LastLogIndex, m.LastLogTerm):

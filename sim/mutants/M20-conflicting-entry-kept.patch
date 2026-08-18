@@ -1,0 +1,16 @@
+# id: M20-conflicting-entry-kept
+# covering-test: TestStateMachineSafetyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a follower keeps its own entry at a conflicting index instead of truncating from it, so two replicas apply different commands at the same log position
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -654,7 +654,7 @@
+ 	// log and does not un-persist anything.
+ 	for _, e := range m.Entries {
+ 		if e.Index <= r.lastIndex() {
+-			if r.termAt(e.Index) == e.Term {
++			if true {
+ 				continue
+ 			}
+ 			r.truncateFrom(e.Index)

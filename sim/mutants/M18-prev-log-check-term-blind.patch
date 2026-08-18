@@ -1,0 +1,16 @@
+# id: M18-prev-log-check-term-blind
+# covering-test: TestLogMatchingOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the append consistency check compares the previous INDEX and ignores its term, so a follower splices a leader's suffix onto a prefix that disagrees and two logs share an (index, term) while differing before it
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1183,7 +1183,7 @@
+ 	if idx > r.lastIndex() {
+ 		return false
+ 	}
+-	return r.termAt(idx) == term
++	return true
+ }
+ 
+ // logIsUpToDate implements the candidate-log check: a later term wins, and at

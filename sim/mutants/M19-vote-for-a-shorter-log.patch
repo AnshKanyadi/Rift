@@ -1,0 +1,16 @@
+# id: M19-vote-for-a-shorter-log
+# covering-test: TestLeaderCompletenessOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the candidate up-to-date check is dropped, so a node missing committed entries can win an election and those entries are overwritten -- leader completeness failing exactly as figure 8 predicts
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -589,7 +589,7 @@
+ 	case r.vote != 0 && r.vote != m.From:
+ 		// Already voted this term, for somebody else. One vote per term is the
+ 		// property that makes election safety hold at all.
+-	case !r.logIsUpToDate(m.LastLogIndex, m.LastLogTerm):
++	case false:
+ 		// A candidate whose log is behind must not win, or a committed entry
+ 		// could be overwritten -- leader completeness depends on this test.
+ 	default:
