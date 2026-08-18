@@ -26,9 +26,20 @@ build: ## Compile everything
 test: ## Go unit tests
 	$(GO) test ./...
 
+# RACE_SEEDS bounds the A1 exit run inside the race lane, and the number is
+# stated here rather than hidden in a skip.
+#
+# The race lane asks one question: does any cross-goroutine interaction reach
+# node state off the mailbox? That is answered by the real-mode driver's tests
+# and by a few hundred simulated seeds; it is not answered any better by ten
+# thousand. The instrumentation costs about 20x, so the default exit run takes
+# roughly ten hours under -race and about three minutes without it. Seed
+# coverage is `make test` and `make soak`, which run the full 10k uninstrumented.
+RACE_SEEDS ?= 200
+
 .PHONY: race
-race: ## Go unit tests under -race
-	$(GO) test -race ./...
+race: ## Go unit tests under -race (A1 exit run bounded to $(RACE_SEEDS) seeds; see the note above)
+	RAFT_SEEDS=$(RACE_SEEDS) $(GO) test -race ./...
 
 .PHONY: vet
 vet: ## Standard go vet

@@ -33,6 +33,9 @@ jobs:
       - run: make fmt-check
       - run: make tidy-check
       - run: make test
+      # The A1 exit run is bounded here, not skipped: the race lane asks whether
+      # anything reaches node state off the mailbox, which a few hundred seeds
+      # answer. Full seed coverage is the test and soak lanes.
       - run: make race
 
   determinism:
