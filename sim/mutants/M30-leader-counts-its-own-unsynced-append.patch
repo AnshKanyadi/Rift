@@ -1,0 +1,29 @@
+# id: M30-leader-counts-its-own-unsynced-append
+# covering-test: TestLeaderCountsItsOwnCopyOnlyWhenDurable
+# package: ./raft/
+# expect: killed
+# mutates: the leader advances its own match index on append instead of on durability, so it counts a copy it has not written toward the commit quorum -- DR-8's first gate with the leader on the other end of it, where the message is elided because the leader is talking to itself
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -546,11 +546,7 @@
+ 	}
+ 	e := Entry{Term: r.term, Index: r.lastIndex() + 1, ID: id, Data: append([]byte(nil), data...)}
+ 	r.appendEntries(e)
+-	// The leader's own match index is NOT advanced here. A leader counts its own
+-	// replication only once the entry is durable, and AckPersisted is where that
+-	// happens; setting it on append would count a copy the leader has not
+-	// written, which is the same ack-before-sync this package gates every
+-	// outbound message against.
++	r.matchIndex[r.peerIdx(r.id)] = e.Index
+ 	r.broadcastAppend()
+ 	return nil
+ }
+@@ -806,7 +802,7 @@
+ 		r.nextIndex[i] = last + 1
+ 		r.matchIndex[i] = 0
+ 	}
+-	r.matchIndex[r.peerIdx(r.id)] = r.tail.persisted
++	r.matchIndex[r.peerIdx(r.id)] = last
+ 	r.broadcastAppend()
+ }
+ 
