@@ -5,6 +5,7 @@
 //	              [--flaw NAME]           plant a known defect in the toy
 //	              [--placement NAME]      reactive | uniform crash targeting
 //	              [--failover]            crash the primary and promote a backup
+//	simctl run    --workload raft --seed N  drive the A1 Raft group on that seed
 //	simctl hunt   --from N --to M         sweep a seed range; bundle and triage the
 //	              [--workers W]           first violation before reporting it
 //	simctl replay --bundle DIR            re-execute a bundle and compare
@@ -75,6 +76,7 @@ import (
 const (
 	workloadNone = "none"
 	workloadToy  = "toy"
+	workloadRaft = "raft"
 )
 
 // Meta is what a bundle records beside its plan.
@@ -102,6 +104,43 @@ type Meta struct {
 	// with no violation is still useful -- it is a determinism artifact -- but a
 	// corpus entry is one of these with this field set.
 	Violation *ViolationMeta `json:"violation,omitempty"`
+
+	// Census is the election census for a raft-workload run.
+	//
+	// It is in the bundle because it is the only evidence that separates "the
+	// cluster behaved" from "the cluster did nothing and every checker agreed".
+	// BUG-001 is the case: a codec off-by-one meant no node ever became leader,
+	// every operation went unanswered, and the safety verdict was clean. A
+	// bundle carrying only the verdict would preserve the wrong half of that
+	// story.
+	Census *CensusMeta `json:"census,omitempty"`
+
+	// Mutant is the patch that reintroduces the defect this schedule exposed,
+	// for a bundle whose bug is already fixed.
+	//
+	// # Why a fixed bug's bundle records no violation
+	//
+	// The toy's flaw is a scenario flag carried in the plan, so a toy bundle
+	// replays its finding directly. Rift's defects are not flags -- raft/ has no
+	// flaw switch and must not grow one -- so once a bug is fixed, its schedule
+	// replays clean. The schedule is still exactly half of the reproduction, and
+	// the other half is the mutant, which is where this project preserves
+	// defects anyway under Amendment A2.
+	//
+	// So the bundle records the schedule and names the patch, and the two
+	// together reproduce the bug at any commit: apply the mutant, replay the
+	// bundle. Recording the violation instead would make the corpus lane fail
+	// against the fixed tree, which is the wrong way round -- the lane exists to
+	// notice rot, not to demand the bug back.
+	Mutant string `json:"mutant,omitempty"`
+}
+
+// CensusMeta is what the run's elections looked like.
+type CensusMeta struct {
+	Terms          uint64 `json:"terms"`
+	ElectionsStart int    `json:"elections_started"`
+	ElectionsWon   int    `json:"elections_won"`
+	SplitVotes     int    `json:"split_votes"`
 }
 
 // ScenarioMeta is the build the plan ran against, as opposed to the schedule.
@@ -159,13 +198,14 @@ func cmdRun(args []string) int {
 	seed := fs.Uint64("seed", 0, "seed to materialize a plan from")
 	out := fs.String("out", "", "directory to write the bundle into; empty writes nothing")
 	quiet := fs.Bool("quiet", false, "print only the trace hash")
-	wl := fs.String("workload", workloadNone, "what drives the run: none | toy")
+	wl := fs.String("workload", workloadNone, "what drives the run: none | toy | raft")
 	flawName := fs.String("flaw", "none", "toy flaw to plant: none | ack-before-sync | ack-before-replicate | dup-apply")
 	placeName := fs.String("placement", "reactive", "toy crash targeting: reactive | uniform")
 	failover := fs.Bool("failover", false, "crash the primary and promote a backup")
+	mutant := fs.String("mutant", "", "the sim/mutants patch that reintroduces the defect this schedule exposed")
 	_ = fs.Parse(args)
 
-	meta := Meta{Seed: *seed, Workload: *wl}
+	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
 	var p *plan.Plan
 	var hist *sim.History
 
@@ -194,6 +234,15 @@ func cmdRun(args []string) int {
 		meta.Scenario = &ScenarioMeta{
 			Flaw: sc.Flaw.String(), Placement: sc.Placement.String(),
 			Failover: sc.Failover, SyncLatencyNS: int64(sc.SyncLatency),
+		}
+
+	case workloadRaft:
+		// A1's workload. Like the toy's, the plan is materialized through the
+		// same call the sweep makes, so a bundle carries the plan that ran
+		// rather than one regenerated slightly differently later.
+		var err error
+		if p, err = hunt.MaterializeRaft(*seed); err != nil {
+			return fail("%v", err)
 		}
 
 	default:
@@ -288,15 +337,39 @@ func cmdReplay(args []string) int {
 		rc = 1
 	}
 
+	if recorded.Census != nil || got.Census != nil {
+		fmt.Printf("census   recorded %s\n", describeCensus(recorded.Census))
+		fmt.Printf("         replayed %s\n", describeCensus(got.Census))
+	}
+
 	// The trace hash says the run was reproduced. Whether the *finding* was
 	// reproduced is a separate claim, and it is the one a corpus entry makes.
-	if !violationsAgree(recorded.Violation, got.Violation) {
+	switch {
+	case violationsAgree(recorded.Violation, got.Violation):
+		if recorded.Violation != nil {
+			fmt.Printf("violation reproduced: %s\n", describeViolation(got.Violation))
+		}
+	case recorded.Violation == nil:
+		// The replay found something the recording did not. Said in that
+		// direction rather than as "not reproduced", because on a bundle whose
+		// defect has been reintroduced this is the SUCCESS case and the wording
+		// decides whether a reader reads it as one.
+		fmt.Println("THE REPLAY PRODUCED A VIOLATION THE RECORDING DID NOT")
+		fmt.Printf("  replayed: %s\n", describeViolation(got.Violation))
+		rc = 1
+	default:
 		fmt.Println("VIOLATION NOT REPRODUCED")
 		fmt.Printf("  recorded: %s\n", describeViolation(recorded.Violation))
 		fmt.Printf("  replayed: %s\n", describeViolation(got.Violation))
 		rc = 1
-	} else if recorded.Violation != nil {
-		fmt.Printf("violation reproduced: %s\n", describeViolation(got.Violation))
+	}
+
+	// A bundle whose defect is already fixed replays clean by design, and the
+	// half of the reproduction that is missing is named rather than left for a
+	// reader to go looking for.
+	if recorded.Violation == nil && recorded.Mutant != "" {
+		fmt.Printf("this schedule's defect is fixed; to see the finding, reintroduce it:\n")
+		fmt.Printf("  patch -p1 < %s && simctl replay --bundle %s\n", recorded.Mutant, *dir)
 	}
 	return rc
 }
@@ -347,6 +420,37 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 		}
 		return nil
 
+	case workloadRaft:
+		res, err := hunt.RunRaft(p, tr)
+		if err != nil {
+			return err
+		}
+		*hist = res.History
+		fillOutcome(meta, tr, res.Outcome)
+		meta.Census = &CensusMeta{
+			Terms: uint64(res.Census.Terms), ElectionsStart: res.Census.ElectionsStart,
+			ElectionsWon: res.Census.ElectionsWon, SplitVotes: res.Census.SplitVotes,
+		}
+
+		// The in-run oracle's finding takes precedence: it halted the run, so
+		// everything after it is unobserved and any end-of-run verdict is a
+		// verdict over a truncated history. An end-of-run violation is recorded
+		// only when no oracle fired.
+		if res.Violated != nil {
+			meta.Violation = &ViolationMeta{
+				Checker: res.Violated.Checker, Detail: res.Violated.Detail,
+				AtNS: int64(res.Violated.At), Step: res.Violated.Step, StepKnown: res.Violated.Step != 0,
+			}
+			return nil
+		}
+		for _, rep := range res.Reports {
+			if rep.Verdict == sim.VerdictViolation {
+				meta.Violation = violationMeta(rep, tr)
+				break
+			}
+		}
+		return nil
+
 	case workloadNone:
 		nodes := make([]sim.Node, p.Config.Nodes)
 		for i := range nodes {
@@ -394,6 +498,14 @@ func violationsAgree(a, b *ViolationMeta) bool {
 	return a.Checker == b.Checker && a.Detail == b.Detail && a.AtNS == b.AtNS
 }
 
+func describeCensus(c *CensusMeta) string {
+	if c == nil {
+		return "none recorded"
+	}
+	return fmt.Sprintf("terms=%d elections-started=%d elections-won=%d split-votes=%d",
+		c.Terms, c.ElectionsStart, c.ElectionsWon, c.SplitVotes)
+}
+
 func describeViolation(v *ViolationMeta) string {
 	if v == nil {
 		return "no violation"
@@ -431,6 +543,9 @@ func report(m Meta) {
 	}
 	fmt.Printf("outcome  %s at %d after %d steps\n", m.Outcome, m.OutcomeAtNS, m.Steps)
 	fmt.Printf("trace    %s\n", m.TraceHash)
+	if m.Census != nil {
+		fmt.Printf("census   %s\n", describeCensus(m.Census))
+	}
 	if m.Violation != nil {
 		fmt.Printf("VIOLATION %s\n", describeViolation(m.Violation))
 	}

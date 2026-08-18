@@ -3,6 +3,7 @@ package hunt_test
 import (
 	"testing"
 
+	"github.com/anshkanyadi/rift/sim"
 	"github.com/anshkanyadi/rift/sim/hunt"
 )
 
@@ -96,10 +97,54 @@ func TestLeaderCompletenessOracleReportsNothing(t *testing.T) {
 	assertOracleSilent(t, "leader-completeness", 50)
 }
 
+// TestPersistBeforeReplyOracleReportsNothing is the covering test for
+// M25-restart-recovers-unsynced-writes: a restart delivered to a node that is
+// not down rebuilds it from the engine's VISIBLE state, so it recovers writes no
+// crash would have kept and then answers for them.
+//
+// 500 seeds. The defect it induces first appeared at seed 92 when it was live,
+// so this is roughly five times the measured seeds-to-detection, the same margin
+// the four above use.
+func TestPersistBeforeReplyOracleReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "persist-before-reply", 500)
+}
+
 // TestStateMachineSafetyOracleReportsNothing is the covering test for
 // M20-conflicting-entry-kept: a follower keeps its own entry at a conflicting
 // index instead of truncating from it, so two nodes apply different commands at
 // the same log position.
 func TestStateMachineSafetyOracleReportsNothing(t *testing.T) {
 	assertOracleSilent(t, "state-machine-safety", 100)
+}
+
+// TestClientHistoryIsLinearizable is the end-of-run checker's covering test,
+// separate from the four in-run oracles above.
+//
+// The division of labour is the point and it is not redundancy: the safety
+// oracles watch the log, and porcupine watches what a client saw. BUG-004 is the
+// case that proves they are different questions -- the four oracles were green
+// and correctly green, because an entry overwritten by a later leader is legal
+// Raft, while the driver was telling a client its write had succeeded for a slot
+// somebody else's command occupied. Only the client history could see that.
+//
+// 100 seeds: BUG-004 produced 26 violations in 300 seeds when it was live, so
+// this is roughly an order of magnitude above the rate needed to catch it.
+func TestClientHistoryIsLinearizable(t *testing.T) {
+	const seeds = 100
+	for seed := uint64(0); seed < seeds; seed++ {
+		p, err := hunt.MaterializeRaft(seed)
+		if err != nil {
+			t.Fatalf("seed %d: materialize: %v", seed, err)
+		}
+		r, err := hunt.RunRaft(p, nil)
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		for _, rep := range r.Reports {
+			if rep.Verdict == sim.VerdictViolation {
+				t.Fatalf("seed %d: %s reported a violation the safety oracles did not see: %s",
+					seed, rep.Checker, rep.Detail)
+			}
+		}
+	}
 }

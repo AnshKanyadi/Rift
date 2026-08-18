@@ -1,0 +1,16 @@
+# id: M21-decode-off-by-one
+# covering-test: TestRaftSmoke
+# package: ./sim/hunt/
+# expect: killed
+# mutates: decodeMessage reads one uint64 more than encodeMessage writes, so no message decodes, no node becomes leader, and every client operation goes unanswered -- the shape of BUG-001, which no safety oracle could see and only the election census caught
+--- a/store/codec.go
++++ b/store/codec.go
+@@ -125,7 +125,7 @@
+ 	var m raft.Message
+ 	m.Type = raft.MessageType(b[0])
+ 	b = b[1:]
+-	var vals [10]uint64
++	var vals [11]uint64
+ 	for i := range vals {
+ 		v, rest, ok := takeU64(b)
+ 		if !ok {

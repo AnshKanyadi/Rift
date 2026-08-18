@@ -1,0 +1,18 @@
+# id: M24-answer-by-position
+# covering-test: TestClientHistoryIsLinearizable
+# package: ./sim/hunt/
+# expect: killed
+# mutates: an applied entry is matched to a client by POSITION in the outstanding list rather than by the proposal's own identifier, so a client is told its write succeeded for a slot somebody else's command occupies -- BUG-004's shape, which all four safety oracles were correctly green through because an entry overwritten by a later leader is legal Raft
+--- a/store/node.go
++++ b/store/node.go
+@@ -352,8 +352,8 @@
+ 		return
+ 	}
+ 	kept := n.inflight[:0]
+-	for _, c := range n.inflight {
+-		if c.id != e.ID {
++	for i, c := range n.inflight {
++		if i != 0 {
+ 			kept = append(kept, c)
+ 			continue
+ 		}

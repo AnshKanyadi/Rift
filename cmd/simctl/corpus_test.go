@@ -51,6 +51,7 @@ type bundleDir struct {
 		Commit    string `json:"commit"`
 		Workload  string `json:"workload"`
 		TraceHash string `json:"trace_hash"`
+		Mutant    string `json:"mutant"`
 		Violation *struct {
 			Checker string `json:"checker"`
 			Detail  string `json:"detail"`
@@ -214,10 +215,15 @@ func commitOrUnknown(c string) string {
 }
 
 func verdictOf(b bundleDir) string {
-	if b.meta.Violation == nil {
-		return "no violation recorded; a determinism artifact rather than a finding"
+	if b.meta.Violation != nil {
+		return b.meta.Violation.Checker + " -- " + b.meta.Violation.Detail
 	}
-	return b.meta.Violation.Checker + " -- " + b.meta.Violation.Detail
+	if b.meta.Mutant != "" {
+		// The schedule is preserved here and the defect is preserved in the
+		// mutant; neither half reproduces the bug alone.
+		return "schedule only; the defect it exposed is fixed and preserved as " + b.meta.Mutant
+	}
+	return "no violation recorded; a determinism artifact rather than a finding"
 }
 
 func indent(s string) string {

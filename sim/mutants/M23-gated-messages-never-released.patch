@@ -1,0 +1,17 @@
+# id: M23-gated-messages-never-released
+# covering-test: TestRaftSmoke
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a withheld message is never released, so the cluster stalls with every checker green -- the class behind BUG-003, where a mark that covered nothing was left open and everything gated on it waited forever. A message gated on a mark that is never acknowledged is indistinguishable from a message never generated, and AssertQuiescent is the only thing that can tell the difference
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -931,6 +931,9 @@
+ 
+ // releaseThrough closes any mark at or below m and releases what waited on it.
+ func (r *Raft) releaseThrough(m PersistMark) {
++	if true {
++		return
++	}
+ 	if m > r.persisted {
+ 		r.persisted = m
+ 	}

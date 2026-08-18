@@ -1,0 +1,17 @@
+# id: M25-restart-recovers-unsynced-writes
+# covering-test: TestPersistBeforeReplyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a restart delivered to a node that is not down skips the death half, so the node is rebuilt from the engine's visible state and recovers writes no crash would have kept -- the residue of BUG-005, a follower acking index 15 with 5 durable
+--- a/store/node.go
++++ b/store/node.go
+@@ -487,9 +487,6 @@
+ 	// "recovered" writes no crash would have kept. It then answered for them.
+ 	// That is the precise inverse of the fault being injected, and it is how a
+ 	// follower acked index 15 with 5 durable on seed 92 (BUG-005).
+-	if !n.down {
+-		n.crash()
+-	}
+ 
+ 	// A restart is a new incarnation too, not a continuation of the crashed
+ 	// one. Treating it as a continuation is how a second restart handed a fresh
