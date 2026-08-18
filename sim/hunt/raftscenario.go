@@ -52,16 +52,32 @@ func MaterializeRaft(seed uint64) (*plan.Plan, error) {
 
 // RaftResult is one Raft run.
 type RaftResult struct {
-	Ledger          *raftcheck.Ledger
-	History         *sim.History
+	Ledger  *raftcheck.Ledger
+	History *sim.History
+
+	// StaleEpochDrops is how many completions from a dead incarnation this run's
+	// nodes refused. It is EVIDENCE, not a verdict, and
+	// TestStaleDurabilityCompletionIsRefused is what asks for it: a nonzero
+	// count means the schedules are producing the crash-with-a-sync-in-flight
+	// race the guard exists for, and a zero count across a range means the test
+	// is proving nothing.
+	//
+	// sim.EpochGuard.Check is deliberately NOT called here. It reads any drop as
+	// a driver defect, which is right for a component that can decline to emit
+	// the completion and wrong for this one: the simulator owns the event queue,
+	// a durability event scheduled before a crash is delivered after the restart
+	// whatever the driver wants, and the stamp is the only thing that can tell it
+	// apart. Calling it would have failed 3 seeds in 200 for doing exactly what
+	// the guard is for. Collecting a verdict nobody consults is worse than not
+	// collecting it, so the field it was stored in is gone.
 	StaleEpochDrops int
-	EpochFailure    error
-	Seed            uint64
-	Outcome         sim.Outcome
-	Reports         []sim.Report
-	Census          raftcheck.Census
-	Violated        *sim.Violation
-	Err             error
+
+	Seed     uint64
+	Outcome  sim.Outcome
+	Reports  []sim.Report
+	Census   raftcheck.Census
+	Violated *sim.Violation
+	Err      error
 }
 
 // syncLatency is the modelled fsync for a Raft node's engine.
@@ -157,15 +173,11 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		if err := d.AssertQuiescent(); err != nil {
 			return res, fmt.Errorf("hunt: node %d: %w", i, err)
 		}
-		// A cross-epoch delivery is dropped rather than acted on, so it cannot
-		// corrupt the run -- but it means the driver let a dead incarnation's
-		// news reach a live component, which is the class this guard exists to
-		// make impossible rather than merely survivable.
+		// How often the schedule produced a completion that outlived the
+		// incarnation that asked for it. Collected as evidence, judged by
+		// TestStaleDurabilityCompletionIsRefused, and never by a verdict here --
+		// see the field's own comment for why a drop is the guard working.
 		res.StaleEpochDrops += d.StaleEpochDrops()
-		if err := d.CheckEpochs(); err != nil {
-			res.EpochFailure = err
-		}
-		_ = i
 	}
 
 	// The fire-count assertion only means anything on a run that reached its

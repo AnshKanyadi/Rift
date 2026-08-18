@@ -1,5 +1,5 @@
 # id: M14-epoch-check-removed
-# covering-test: TestRaftSmoke
+# covering-test: TestStaleDurabilityCompletionIsRefused
 # package: ./sim/hunt/
 # expect: killed
 # mutates: the epoch check is removed, so a completion from a dead incarnation reaches a live component -- the class behind TOY-003, the store restart bug and the durability panic

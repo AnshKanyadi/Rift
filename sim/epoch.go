@@ -48,9 +48,22 @@ func Stamp[T any](e Epoch, v T) Stamped[T] { return Stamped[T]{Epoch: e, Value: 
 
 // EpochGuard drops cross-epoch deliveries and counts them.
 //
-// The count is the observable. A driver that never lets a dead incarnation's
-// news reach a live component reports zero, so a nonzero count is a defect in
-// the driver rather than a fact about the schedule.
+// The count is the observable, and what it MEANS depends on whether the
+// component could have prevented the delivery:
+//
+//   - A component that emits its own completions can decline to emit one from a
+//     dead incarnation, so a nonzero count there is a defect in it. Check is for
+//     those, and reads any drop as a failure.
+//   - A component driven by the simulator's event queue cannot: a durability
+//     event scheduled before a crash is delivered after the restart no matter
+//     what, and the stamp is the only thing that can tell it apart. store.Node
+//     is one of these. There the count is a fact about the SCHEDULE, and the
+//     interesting failure is a count of zero, which means the race never
+//     occurred and any test resting on the guard proved nothing.
+//
+// Getting this backwards costs either a lane that fails for doing its job or a
+// mechanism nobody ever asks about. sim/hunt's
+// TestStaleDurabilityCompletionIsRefused asks in the second sense.
 type EpochGuard struct {
 	current Epoch
 	dropped int
