@@ -220,16 +220,34 @@ times. An inflated watermark does not make the persist-before-reply oracle noisy
 forward from the writes the engine completed and dropped wholesale on a crash, which is what §0 said
 in the first place. With the honest record the 300-seed sweep went from 2 violations to 257.
 
-**A mark's coverage is frozen at handover.** The original design had `dirty()` reuse the open mark
-until it was acknowledged, on the reasoning that at most one mark is then open at a time and one
-high-water index suffices. The premise is fine; the consequence is not. A reused mark's coverage
-*grows after the driver has started writing it*, so the acknowledgement means strictly less than the
-messages gated on that mark require — the driver reports batch one durable and raft releases an
-append response attesting to batch two. It is also a convoy: under a steady stream of appends a
-reused mark never stops growing and never completes, so everything gated on it waits forever. Each
-handover now takes its own mark, `tail.persisted` advances only on an acknowledgement that reaches
-the most recent handover, and there is still no per-mark span table — two scalars, `markLastIdx` and
+**A mark's coverage is frozen at handover.** *(Instructed otherwise; corrected; **ratified by Ansh**
+after the correction was reported.)*
+
+The instruction was that `dirty()` reuse the open mark until it is acknowledged, on the reasoning
+that at most one mark is then open at a time and one high-water index suffices. The premise is
+correct and the consequence is not, and the reason is durability-critical enough to write down rather
+than leave a future reader assuming the design was arbitrary:
+
+**A reused mark's coverage grows after the driver has already started writing it.** The driver
+submits batch one under mark *m* and begins its sync; more state is mutated; the same mark *m* now
+also covers batch two. When batch one completes, the driver reports *m* durable — truthfully, for
+everything it knew *m* covered when it wrote it — and raft releases an append response attesting to
+batch two, which is still in flight. That is BUG-006: 257 of 300 seeds, one entry acknowledged ahead
+of its own write.
+
+It is also a **convoy**. Under a steady stream of appends a reused mark never stops growing, so it
+never becomes fully durable, and every message gated on it waits behind writes that keep arriving.
+Safety and liveness fail together, which is unusual and is a sign the abstraction was wrong rather
+than the arithmetic.
+
+Each handover now takes its own mark, and anything mutated after it gets a new one. `tail.persisted`
+advances only on an acknowledgement that reaches the most recent handover, lagging conservatively
+rather than guessing. There is still no per-mark span table: two scalars, `markLastIdx` and
 `lastHandedMark`.
+
+The driver keeps an independent second defence — it acknowledges a mark only when *every* write
+issued under it is durable — and BUG-006 records the measurement showing that either one alone
+prevents the defect (0 of 300 each, 257 of 300 with both removed). That is why `M28` removes both.
 
 **Durable is not committed.** `truncateFrom` asserted that no truncation may reach at or below the
 durable watermark, on the reasoning that the driver would then have acknowledged an entry that later
@@ -247,6 +265,130 @@ verdict. What makes the coincidence checkable rather than assumed is the asserti
 index that is neither durable nor covered by an open mark has no gate to wait on, and that state is
 now refused where it is constructed. It becomes load-bearing when A2's snapshot stream gives
 `markFor` a second answer.
+
+---
+
+## 5c. The oracle was reading the engine's own account
+
+This is the most important result in A1 and it outranks the bug it was found under. It is written
+here at length because it is the strongest evidence this project has that its central discipline is
+load-bearing rather than decorative — and the evidence is that the discipline was **violated in the
+mechanism that exists to enforce it**, and nothing noticed for a whole sweep.
+
+### What was true
+
+`raft.tail.persisted` — the highest log index the driver has acknowledged durable — was assigned
+**nowhere**. `persistedIndex()` had been returning 0 since the line was written.
+
+The ledger that the persist-before-reply oracle judges every acknowledgement against was built by
+calling `store.readDurable()`, which reads the engine. An `engine.Engine` read returns the **visible**
+state, and the visible state includes batches that have been applied and not yet synced — that window
+is not an accident, it is the entire point of the model and DR-15 says so explicitly.
+
+So the oracle whose job is to catch a node claiming durability it does not have was comparing that
+node's claims against **the engine's own account of what it held**, one layer of indirection removed
+through the ledger.
+
+### Say the uncomfortable part
+
+§0 of this document records the ruling that shapes the whole phase:
+
+> *an oracle which interrogates the engine believes the lie.*
+
+That is exactly what happened, to the letter, in the mechanism the sentence was written to protect.
+Not a near miss and not a different failure that the rule would incidentally have covered: the
+recorded sentence names this failure, and the implementation committed it anyway, because the reach
+into the engine was one function call away from the oracle instead of inside it. Indirection was
+enough to hide it from everyone who read the code, including the person who wrote the ruling into the
+package comment directly above it.
+
+**And it was found by fixing an unrelated field.** Nobody audited their way to it. `tail.persisted`
+was corrected because a *different* defect needed a durability watermark that moved, and the moment
+it moved the oracle started disagreeing with the engine. If that unrelated fix had not been necessary,
+A1 would have shipped 10,000 green seeds over an oracle that could not fail.
+
+### What it cost, in numbers
+
+| measurement | value |
+|---|---|
+| times the read-back was ahead of true durability, 10,000 seeds | **44,911** |
+| violations on a 300-seed sweep, oracle reading the engine | 2 |
+| violations on the same 300 seeds, oracle reading what the driver recorded | **257** |
+
+An inflated durability watermark does not make an oracle noisy. It makes it **silent**: every
+acknowledgement looks covered. A checker that reports false violations is annoying and gets fixed in
+a day; a checker that reports nothing is indistinguishable from a system that is working, which is
+why this class costs so much more than it looks like it should.
+
+### Where it sits in the class
+
+The eighth, and the first inside an oracle. The register, so the count is checkable rather than
+rhetorical:
+
+| # | mechanism | what it reported | source |
+|---|---|---|---|
+| 1 | the loop marked a crashed node down without telling it | crashes injected: none, silently | `sim/hunt/floors.go` |
+| 2 | `Trigger` counted `Times` per condition, not per rule | a restart rule sharing a trigger never fired; detection ran at a sixth of its power | `floors.go`, checklist step 7 |
+| 3 | the fire-count machinery, broken four ways, including `Counters.Check()` never called | `min_fires` decorative from step 4 | `floors.go` |
+| 4 | `History.Validate`, written to reject an uncheckable history | called by nothing | `sim/oracle.go` |
+| 5 | `simctl` ran on `noopNode{}` | the gate hashed the loop, transport, plan and clock, and never the toy | checklist step 8(b) |
+| 6 | the minimum-operations floor counted operations *recorded* | 40 unanswered operations satisfied it; porcupine returned PASS | BUGS.md BUG-001 |
+| 7 | `StaleEpochDrops` and `EpochFailure`, collected every run | consulted by nothing; `M14` survived the suite | BUGS.md BUG-002 |
+| 8 | **the ledger's durability record, read back from the engine** | **the oracle compared the system against its own account, 44,911 times ahead of the truth** | this section |
+
+Seven of the eight were in the harness. The eighth was in a **verdict**, which is the difference
+between a machine that finds less than it should and a machine that certifies something false.
+
+### What was done about it
+
+The driver now **records** what it made durable — folded forward from the batches it submitted,
+promoted when the engine reports that sequence durable, dropped wholesale on a crash. That is what §0
+named as the ledger's second stream in the first place: *every write that reached the Engine, and
+when it became durable.* Reading the engine back was the shortcut.
+
+The rule the audit produced, which was not obvious before doing it: **a system-reported fact is not
+forbidden — it is forbidden as an input to a verdict that can come out green.** `AssertQuiescent`
+reads `r.gated`, which is node state, deliberately, and it can only make a run FAIL; a node that lied
+about its withheld queue would buy itself nothing. The ledger's durable record can make a run pass,
+and an engine that overstated what it held bought a green every time. The direction of the error is
+the whole distinction.
+
+So the two kinds of fact have two types. `internal/provenance` gives `Observed[T]` for a boundary
+observation and `Reported[T]` for the system's own account, `Ledger.Record*` accepts only the first,
+`store.readDurable` returns only the second, and the wiring that caused this is now a **compile
+error** — induced by `tools/provcheck/testdata/reported`, which is built and required to fail. Fifth
+instance of the house move, after Wall/Mono, the epoch stamp, the D5 conformance check and `markFor`'s
+refusal.
+
+It does not make laundering impossible; `Witness(x.Unverified())` compiles, exactly as `Wall(mono)`
+does. What the type buys is that laundering must be **written**, and `tools/provcheck` fails the build
+when anyone writes it.
+
+And because the durable record is now a *derivation* rather than a reading, it is checked against the
+engine's account on every durability completion at which the engine has nothing in flight — the one
+moment a read-back honestly is the durable state, and a comparison that can only fail. 36,912
+comparisons per 300 seeds, both directions induced (`M26`, `M27`).
+
+### The provenance of every oracle input, since the question has to be answerable
+
+Two primitive sources, and after the fix both are boundary observations:
+
+- **emitted output** — `Ready.Messages` and `Ready.Committed`, taken in `store.drain` as they cross
+  the node's boundary, before the transport and before the state machine.
+- **durable record** — the batch the driver submitted, promoted on the engine's completion.
+
+| oracle | reads | provenance |
+|---|---|---|
+| election safety | `ledIn`: term and node of an emitted `MsgApp` | emitted output |
+| log matching | `durableLog` per node | durable record |
+| leader completeness | `committed` (from `Ready.Committed`), `ledIn`, and the `durableLog` snapshot taken when a node first led | emitted output + durable record |
+| state machine safety | `applied` (from `Ready.Committed`) | emitted output |
+| persist-before-reply | `sent`, with `durableTerm`, `durableVote`, `durableLast` resolved from the durable record at send time | emitted output + durable record |
+
+`sim.View` exposes only `Now`, `Steps` and `Down`, and every oracle ignores both of `OnStep`'s
+parameters. `raftcheck` imports neither `engine`, nor `engine/model`, nor `store`, and never receives
+a `*raft.Raft`. None of the other four had the defect; the one that did is the one already fixed, and
+the value of having asked is that this table is now checkable rather than asserted.
 
 ---
 
@@ -280,9 +422,23 @@ Claude does not mark phases complete; this is evidence for a ruling, not a rulin
 | 3 | four oracles, in-run, halting at the first violation | `raftcheck.All`; each reads the ledger and nothing else |
 | 4 | each induced by a planted violation | `M17` election safety 146/300 · `M18` log matching 1/300 · `M19` leader completeness 228/300 · `M20` state machine safety 46/300 |
 | 5 | schedule mix weights the single-cut geometry | `RaftGenConfig`, §4 |
-| 6 | persist-before-reply structural inside `raft/`, checked from the ledger | DR-7 gated queue; the oracle is the outside confirmation, and `M25` induces it |
+| 6 | persist-before-reply structural inside `raft/`, checked from the ledger | DR-7 gated queue; the oracle is the outside confirmation, induced by `M25` and `M28`, and its ledger input is now typed by provenance (§5c) |
 | 7 | every persistent write through the `Engine`; recovery the real path | `store/node.go`; `Restore` runs on every injected restart |
 | 8 | elections observed contending | highest term 79, 111,790 started, 48,253 won, 43,442 split votes, 9,641 of 10,000 seeds contended, **0** seeds without a leader |
-| 9 | every bug in BUGS.md with its mutant-class answer | 5 entries, 5 mutant classes, 4 of them added because none existed |
+| 9 | every bug in BUGS.md with its mutant-class answer | 8 entries, 9 mutant classes, 8 of them added because none existed |
 
-Mutant suite alongside: 21 killed, 1 canary alive, 0 mismatched, 0 rotted.
+Mutant suite alongside: 25 killed, 1 canary alive, 0 mismatched, 0 rotted.
+
+### The scope of each number, stated so no summary can widen it
+
+- **10,000 seeds** is the uninstrumented exit run (`make test`, `make soak`). Every violation,
+  inconclusive and census figure above comes from it.
+- **200 seeds** is what runs under `-race`. `make race` sets `RACE_SEEDS=200` deliberately: the
+  instrumentation costs about twenty times, so the default exit run would put that lane at roughly
+  ten hours against three minutes without it. The race lane asks one question — does any
+  cross-goroutine interaction reach node state off the mailbox — and `node/`'s own tests plus a few
+  hundred simulated seeds answer it. **The race claim covers 200 seeds and not 10,000, and no summary
+  of this phase may say otherwise.** Bounded honestly is fine; silently narrower is not.
+- **2,000 seeds** is what the `UnknownDominatedPerMille` threshold was measured over, and **300** is
+  what most planted-violation detection rates are measured over. Each number carries its own range at
+  its own site, because a measurement quoted without its range is the same failure one level up.

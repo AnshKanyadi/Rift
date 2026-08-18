@@ -546,7 +546,11 @@ func (r *Raft) Propose(id ProposalID, data []byte) error {
 	}
 	e := Entry{Term: r.term, Index: r.lastIndex() + 1, ID: id, Data: append([]byte(nil), data...)}
 	r.appendEntries(e)
-	r.matchIndex[r.peerIdx(r.id)] = e.Index
+	// The leader's own match index is NOT advanced here. A leader counts its own
+	// replication only once the entry is durable, and AckPersisted is where that
+	// happens; setting it on append would count a copy the leader has not
+	// written, which is the same ack-before-sync this package gates every
+	// outbound message against.
 	r.broadcastAppend()
 	return nil
 }
@@ -802,7 +806,7 @@ func (r *Raft) becomeLeader() {
 		r.nextIndex[i] = last + 1
 		r.matchIndex[i] = 0
 	}
-	r.matchIndex[r.peerIdx(r.id)] = last
+	r.matchIndex[r.peerIdx(r.id)] = r.tail.persisted
 	r.broadcastAppend()
 }
 
@@ -918,9 +922,26 @@ func (r *Raft) AckPersisted(m PersistMark) {
 
 	r.releaseThrough(m)
 
-	// A leader counts its own replication only once it is durable. Pipelining
-	// depends on this being persistedIndex rather than lastIndex: without it a
-	// leader could commit on the strength of an append it has not yet written.
+	// # A leader counts its own replication only once it is durable
+	//
+	// This is the only place the leader's own match index advances, and that is
+	// the point. It used to be set optimistically in Propose and becomeLeader as
+	// well, so the durability-driven update here could never lower it and the
+	// comment above it was false: the leader counted a copy it had not written.
+	//
+	// The defect was LATENT rather than live, and the reason is worth recording
+	// because it is a property of the configuration and not of the code. A
+	// follower cannot acknowledge before its own fsync, and the leader's fsync
+	// starts no later than the append it is replicating, so on this schedule mix
+	// the leader's own copy is always durable before any follower's ack arrives.
+	// Removing the optimistic assignment is byte-identical: seed 92 produces the
+	// same trace hash, and 300 seeds produce the same census to the digit.
+	//
+	// It is fixed anyway. The equality holds because of a latency relationship
+	// nothing enforces -- a slower local disk, or a follower whose sync outruns
+	// the leader's, breaks it -- and a safety property resting on a timing
+	// coincidence is the shape this repository keeps finding at the bottom of
+	// its bugs.
 	if r.role == RoleLeader {
 		if i := r.peerIdx(r.id); i >= 0 && r.persistedIndex() > r.matchIndex[i] {
 			r.matchIndex[i] = r.persistedIndex()

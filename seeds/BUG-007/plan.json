@@ -1,0 +1,506 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "seed": 15,
+    "generator_version": 1
+  },
+  "config": {
+    "nodes": 3,
+    "duration_ns": 8000000000,
+    "tick_interval_ns": 10000000,
+    "max_offset_ns": 500000000,
+    "max_steps": 2000000
+  },
+  "keys": {
+    "net": "4304a4ea424ad1758f8ad719546b32f0",
+    "engine_sync": "6950538385535ee6374bdd3ef66e61f5",
+    "clock": "a0010da32d6ecfb6a8554bbe55253fdb",
+    "raft": "80bd443962dbebee8431a6e944b6b795"
+  },
+  "network": {
+    "links": [
+      {
+        "from": 0,
+        "to": 1,
+        "drop_per_mille": 23,
+        "dup_per_mille": 0,
+        "lat_min_ns": 127000,
+        "lat_max_ns": 5000000,
+        "tail_per_mille": 6,
+        "tail_max_ns": 59000000
+      },
+      {
+        "from": 0,
+        "to": 2,
+        "drop_per_mille": 18,
+        "dup_per_mille": 3,
+        "lat_min_ns": 422000,
+        "lat_max_ns": 4000000,
+        "tail_per_mille": 1,
+        "tail_max_ns": 55000000
+      },
+      {
+        "from": 1,
+        "to": 0,
+        "drop_per_mille": 14,
+        "dup_per_mille": 0,
+        "lat_min_ns": 260000,
+        "lat_max_ns": 1000000,
+        "tail_per_mille": 8,
+        "tail_max_ns": 89000000
+      },
+      {
+        "from": 1,
+        "to": 2,
+        "drop_per_mille": 6,
+        "dup_per_mille": 1,
+        "lat_min_ns": 344000,
+        "lat_max_ns": 4000000,
+        "tail_per_mille": 7,
+        "tail_max_ns": 94000000
+      },
+      {
+        "from": 2,
+        "to": 0,
+        "drop_per_mille": 9,
+        "dup_per_mille": 0,
+        "lat_min_ns": 411000,
+        "lat_max_ns": 5000000,
+        "tail_per_mille": 7,
+        "tail_max_ns": 73000000
+      },
+      {
+        "from": 2,
+        "to": 1,
+        "drop_per_mille": 2,
+        "dup_per_mille": 4,
+        "lat_min_ns": 132000,
+        "lat_max_ns": 6000000,
+        "tail_per_mille": 5,
+        "tail_max_ns": 104000000
+      }
+    ]
+  },
+  "clock": {
+    "epoch_ns": 1600000000000000000,
+    "nodes": [
+      {
+        "node": 0,
+        "skew": [
+          {
+            "start_ns": 0,
+            "off_ns": 0,
+            "slope_ppb": -111000
+          }
+        ]
+      },
+      {
+        "node": 1,
+        "skew": [
+          {
+            "start_ns": 0,
+            "off_ns": 0,
+            "slope_ppb": -131000
+          }
+        ]
+      },
+      {
+        "node": 2,
+        "skew": [
+          {
+            "start_ns": 0,
+            "off_ns": 0,
+            "slope_ppb": -40000
+          }
+        ]
+      }
+    ],
+    "holds": null
+  },
+  "faults": {
+    "entries": [
+      {
+        "at_ns": 168717993,
+        "action": "cut_both",
+        "from": 1,
+        "to": 2
+      },
+      {
+        "at_ns": 1100442584,
+        "action": "cut",
+        "to": 2
+      },
+      {
+        "at_ns": 2593696448,
+        "action": "heal_both",
+        "from": 1,
+        "to": 2
+      },
+      {
+        "at_ns": 3173966628,
+        "action": "heal",
+        "to": 2
+      },
+      {
+        "at_ns": 3344119330,
+        "action": "crash",
+        "node": 1
+      },
+      {
+        "at_ns": 3536927833,
+        "action": "crash"
+      },
+      {
+        "at_ns": 3686059365,
+        "action": "restart",
+        "node": 1
+      },
+      {
+        "at_ns": 4061525516,
+        "action": "restart"
+      },
+      {
+        "at_ns": 4246406958,
+        "action": "cut_both",
+        "to": 2
+      },
+      {
+        "at_ns": 5605620819,
+        "action": "heal_both",
+        "to": 2
+      }
+    ]
+  },
+  "workload": {
+    "ops": [
+      {
+        "at_ns": 8168082,
+        "client": 1,
+        "seq": 1,
+        "op": "put",
+        "k": "k07",
+        "v": "v18"
+      },
+      {
+        "at_ns": 25160136,
+        "client": 0,
+        "seq": 1,
+        "op": "get",
+        "k": "k05",
+        "v": "v18"
+      },
+      {
+        "at_ns": 273381240,
+        "client": 2,
+        "seq": 1,
+        "op": "put",
+        "k": "k03",
+        "v": "v77"
+      },
+      {
+        "at_ns": 431446457,
+        "client": 1,
+        "seq": 2,
+        "op": "get",
+        "k": "k03",
+        "v": "v71"
+      },
+      {
+        "at_ns": 730839500,
+        "client": 0,
+        "seq": 2,
+        "op": "get",
+        "k": "k03",
+        "v": "v7"
+      },
+      {
+        "at_ns": 1618258514,
+        "client": 1,
+        "seq": 3,
+        "op": "get",
+        "k": "k06",
+        "v": "v55"
+      },
+      {
+        "at_ns": 1731799377,
+        "client": 1,
+        "seq": 4,
+        "op": "get",
+        "k": "k06",
+        "v": "v33"
+      },
+      {
+        "at_ns": 2280827203,
+        "client": 2,
+        "seq": 2,
+        "op": "put",
+        "k": "k04",
+        "v": "v53"
+      },
+      {
+        "at_ns": 2555069867,
+        "client": 1,
+        "seq": 5,
+        "op": "put",
+        "k": "k04",
+        "v": "v93"
+      },
+      {
+        "at_ns": 2594808250,
+        "client": 0,
+        "seq": 3,
+        "op": "put",
+        "k": "k07",
+        "v": "v16"
+      },
+      {
+        "at_ns": 2942666819,
+        "client": 0,
+        "seq": 4,
+        "op": "get",
+        "k": "k05",
+        "v": "v0"
+      },
+      {
+        "at_ns": 3142588656,
+        "client": 1,
+        "seq": 6,
+        "op": "get",
+        "k": "k05",
+        "v": "v3"
+      },
+      {
+        "at_ns": 3254530546,
+        "client": 0,
+        "seq": 5,
+        "op": "get",
+        "k": "k05",
+        "v": "v30"
+      },
+      {
+        "at_ns": 3315905333,
+        "client": 0,
+        "seq": 6,
+        "op": "put",
+        "k": "k01",
+        "v": "v59"
+      },
+      {
+        "at_ns": 3443507621,
+        "client": 2,
+        "seq": 3,
+        "op": "put",
+        "k": "k03",
+        "v": "v74"
+      },
+      {
+        "at_ns": 3481083891,
+        "client": 2,
+        "seq": 4,
+        "op": "get",
+        "k": "k06",
+        "v": "v87"
+      },
+      {
+        "at_ns": 3530206905,
+        "client": 2,
+        "seq": 5,
+        "op": "get",
+        "k": "k05",
+        "v": "v93"
+      },
+      {
+        "at_ns": 3555086899,
+        "client": 0,
+        "seq": 7,
+        "op": "get",
+        "k": "k07",
+        "v": "v60"
+      },
+      {
+        "at_ns": 3998457126,
+        "client": 0,
+        "seq": 8,
+        "op": "get",
+        "k": "k03",
+        "v": "v24"
+      },
+      {
+        "at_ns": 4066028813,
+        "client": 2,
+        "seq": 6,
+        "op": "get",
+        "k": "k02",
+        "v": "v90"
+      },
+      {
+        "at_ns": 4397858718,
+        "client": 0,
+        "seq": 9,
+        "op": "get",
+        "k": "k05",
+        "v": "v22"
+      },
+      {
+        "at_ns": 4498171412,
+        "client": 1,
+        "seq": 7,
+        "op": "put",
+        "k": "k05",
+        "v": "v75"
+      },
+      {
+        "at_ns": 5141932384,
+        "client": 2,
+        "seq": 7,
+        "op": "get",
+        "k": "k06",
+        "v": "v71"
+      },
+      {
+        "at_ns": 5256002926,
+        "client": 1,
+        "seq": 8,
+        "op": "put",
+        "k": "k06",
+        "v": "v37"
+      },
+      {
+        "at_ns": 5713227228,
+        "client": 2,
+        "seq": 8,
+        "op": "put",
+        "k": "k06",
+        "v": "v20"
+      },
+      {
+        "at_ns": 5889338056,
+        "client": 1,
+        "seq": 9,
+        "op": "put",
+        "k": "k04",
+        "v": "v18"
+      },
+      {
+        "at_ns": 5988543313,
+        "client": 1,
+        "seq": 10,
+        "op": "get",
+        "k": "k01",
+        "v": "v97"
+      },
+      {
+        "at_ns": 6082210559,
+        "client": 1,
+        "seq": 11,
+        "op": "put",
+        "k": "k04",
+        "v": "v11"
+      },
+      {
+        "at_ns": 6128569122,
+        "client": 1,
+        "seq": 12,
+        "op": "put",
+        "k": "k03",
+        "v": "v16"
+      },
+      {
+        "at_ns": 6200358222,
+        "client": 0,
+        "seq": 10,
+        "op": "put",
+        "k": "k01",
+        "v": "v21"
+      },
+      {
+        "at_ns": 6329997117,
+        "client": 2,
+        "seq": 9,
+        "op": "get",
+        "k": "k04",
+        "v": "v39"
+      },
+      {
+        "at_ns": 6339820508,
+        "client": 0,
+        "seq": 11,
+        "op": "put",
+        "k": "k05",
+        "v": "v61"
+      },
+      {
+        "at_ns": 6418294480,
+        "client": 1,
+        "seq": 13,
+        "op": "put",
+        "k": "k03",
+        "v": "v60"
+      },
+      {
+        "at_ns": 6471673712,
+        "client": 0,
+        "seq": 12,
+        "op": "get",
+        "k": "k02",
+        "v": "v2"
+      },
+      {
+        "at_ns": 6664732552,
+        "client": 0,
+        "seq": 13,
+        "op": "put",
+        "k": "k07",
+        "v": "v87"
+      },
+      {
+        "at_ns": 6886641084,
+        "client": 2,
+        "seq": 10,
+        "op": "put",
+        "k": "k06",
+        "v": "v64"
+      },
+      {
+        "at_ns": 6926192449,
+        "client": 1,
+        "seq": 14,
+        "op": "put",
+        "k": "k03",
+        "v": "v36"
+      },
+      {
+        "at_ns": 7114498438,
+        "client": 1,
+        "seq": 15,
+        "op": "put",
+        "k": "k07",
+        "v": "v83"
+      },
+      {
+        "at_ns": 7504773314,
+        "client": 2,
+        "seq": 11,
+        "op": "put",
+        "k": "k02",
+        "v": "v21"
+      },
+      {
+        "at_ns": 7700744058,
+        "client": 1,
+        "seq": 16,
+        "op": "get",
+        "k": "k03",
+        "v": "v80"
+      }
+    ]
+  },
+  "assert": {
+    "min_fires": {
+      "crash": 2,
+      "partition": 4,
+      "restart": 2,
+      "sent": 1
+    }
+  }
+}

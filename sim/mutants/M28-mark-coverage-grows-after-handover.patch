@@ -1,0 +1,29 @@
+# id: M28-mark-coverage-grows-after-handover
+# covering-test: TestPersistBeforeReplyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a mark is reused after the driver has already started writing it, so its coverage grows and the acknowledgement means less than the messages gated on it require. BOTH defences are removed, because either alone prevents it: raft freezing coverage at handover, and the driver refusing to acknowledge a mark whose writes are not all durable. Removing one gives 0 of 300; removing both gives 257 of 300
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1095,7 +1095,7 @@
+ 	// It is also a liveness hazard on its own. Under a steady stream of appends
+ 	// a reused mark never stops growing, so it never becomes fully durable, and
+ 	// every message gated on it waits forever behind a convoy.
+-	if r.dirtyMark == 0 || r.markHandedOff {
++	if r.dirtyMark == 0 {
+ 		r.nextMark++
+ 		r.dirtyMark = r.nextMark
+ 		r.markHandedOff = false
+--- a/store/node.go
++++ b/store/node.go
+@@ -398,9 +398,7 @@
+ 	// driver's statement, not raft's, and the driver is the only side that knows
+ 	// what it has actually written. If a mark ever spans two batches again, this
+ 	// keeps the statement true instead of quietly making it a guess.
+-	if len(n.pending) > 0 && n.pending[0].mark != 0 && n.pending[0].mark <= mark {
+-		mark = n.pending[0].mark - 1
+-	}
++
+ 
+ 	// # The driver's record and the engine's own account, compared continuously
+ 	//

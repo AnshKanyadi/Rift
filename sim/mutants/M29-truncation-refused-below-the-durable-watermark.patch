@@ -1,0 +1,22 @@
+# id: M29-truncation-refused-below-the-durable-watermark
+# covering-test: TestStateMachineSafetyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the in-raft state machine safety assertion is weakened back to the false invariant it once held -- that no truncation may reach at or below the DURABLE watermark. Raft guarantees no such thing: a follower deletes a conflicting entry and everything after it, routinely from disk. The node kills itself on a correct protocol step
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1142,11 +1142,10 @@
+ 	// The false assertion sat here unreachable for as long as tail.persisted
+ 	// never moved -- which is the same defect twice: a claim nothing exercised,
+ 	// guarding a watermark nothing advanced.
+-	if r.commitIndex >= i {
++	if r.tail.persisted >= i {
+ 		panic(fmt.Sprintf(
+-			"raft: node %d truncated to %d with commit index %d; an entry this node was told "+
+-				"was committed is being overwritten, which is state machine safety failing",
+-			r.id, i, r.commitIndex))
++			"raft: node %d truncated to %d with %d already acknowledged durable; the driver "+
++				"acknowledged an entry that later vanished", r.id, i, r.tail.persisted))
+ 	}
+ 
+ 	r.log = r.log[:i-1]

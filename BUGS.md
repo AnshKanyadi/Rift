@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 5 entries, all A1. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 8 entries, all A1. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -306,12 +306,12 @@ exported surface, with `Advance` pinned as a required *absence*.
 |---|---|
 | **Found by** | sim — the **persist-before-reply** oracle |
 | **Phase** | A1 |
-| **Reproduce (plan)** | `patch -p1 < sim/mutants/M25-restart-recovers-unsynced-writes.patch && go run ./cmd/simctl replay --bundle seeds/BUG-005` (any commit) |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M25-restart-recovers-unsynced-writes.patch && go run ./cmd/simctl replay --bundle seeds/BUG-005` |
 | **Reproduce (seed)** | seed **92**, violating at instant **2592077256**, step 1086 |
 | **Invariant that caught it** | persist-before-reply, which is DR-8's **first enumerated gate** |
-| **Mutant class** | none existed — added `M25-restart-recovers-unsynced-writes` in this PR |
-| **Fix commit** | `f624c0a` (first half), `0c55e30` (the residue) |
-| **Minimized?** | no — same reason as BUG-002 |
+| **Mutant class** | none existed — added `M25-restart-recovers-unsynced-writes` |
+| **Fix commit** | `0c55e30` |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6); the bundle is the whole schedule |
 
 **Symptom, verbatim from the oracle:**
 
@@ -320,10 +320,9 @@ persist-before-reply at instant 2592077256, step 1086: node 2 acked index 15 at 
 with only 5 durable; the leader may commit an entry this node can still lose
 ```
 
-**This is the project's thesis, demonstrated end to end, and that is why this entry exists in the
-shape it does.** DESIGN-A0's DR-8 enumerated this exact failure, in prose, **before `raft/` had a
-single line in it**. It is the first gate in the enumeration, and the enumeration is reproduced
-verbatim in the `Ready.Messages` doc comment:
+**This is the project's thesis, demonstrated end to end, and it is why this entry keeps the number.**
+DESIGN-A0's DR-8 enumerated this exact failure, in prose, **before `raft/` had a single line in it**.
+It is the first gate in the enumeration, reproduced verbatim in the `Ready.Messages` doc comment:
 
 > **MsgAppResp (accept)** — gated on: the appended entries AND HardState.Term durable. Without it:
 > follower acks index i, leader counts it toward a quorum and commits; follower crashes, loses i,
@@ -333,78 +332,220 @@ verbatim in the `Ready.Messages` doc comment:
 An oracle was then built *from that enumeration*, and it found *precisely that failure* in the
 implementation, in a fault-injected run, reproducible from a single seed. **The enumerated gate and
 the found violation match.** A design document predicting a specific failure and a checker then
-finding exactly that failure is the entire argument this repository is making, and it is worth saying
-plainly rather than leaving to be inferred.
+finding exactly that failure is the entire argument this repository is making, and it is worth
+saying plainly rather than leaving to be inferred.
 
-**Root cause, first half (`f624c0a`).** `persistedIndex` derived durability from the *shape* of the
-unstable-entry slice: empty meant "everything is durable". But `Ready()` clears that slice on
-**handover**, not on acknowledgement. Between `Ready` and `AckPersisted` the state machine therefore
-believed everything it had just handed the driver was already on disk, and released an append
-response acking entries the driver had not yet written.
+**Root cause.** `store.restart` rebuilt the node by reading the engine, and an engine read returns
+the **visible** state, which by construction includes batches applied and not yet synced — that
+window is the whole point of the model (DR-15). A restart delivered to a node that was **not down**
+therefore produced a process that recovered its own unsynced writes and then answered for them: the
+precise inverse of the fault being injected. On seed 92 that is node 2 acking index 15 while the
+engine's durable prefix ended at 5.
 
-The error is not the arithmetic, it is the shape. **A fact inferred from an incidental property is a
-fact that silently becomes wrong the moment the property changes for an unrelated reason.** The slice
-emptied for a reason that had nothing to do with durability. Identifying a proposal by its log index
-was the same error one subsystem over (BUG-004). `logTail` now records `persisted` and `handed` in
-fields with different names, neither derived from the shape of anything else.
+A restart is a death followed by a recovery, and the death half is not optional. The plan can
+schedule a restart with no preceding crash, and a duplicated restart produces one too.
 
-**Root cause, residue (`0c55e30`).** Two violations survived that fix, and the residue was not in the
-gate at all.
-
-*A restart with no crash recovered writes no crash would have kept.* `store.restart` rebuilt the node
-by reading the engine, and an engine read returns the **visible** state, which by construction
-includes batches applied and not yet synced — that window is the whole point of the model (DR-15). A
-restart delivered to a node that was not down therefore produced a process that recovered its own
-unsynced writes and then answered for them. On seed 92 that is exactly the node acking index 15 with
-5 durable. A restart is a death followed by a recovery, and the death half is not optional.
-
-*A mark's coverage grew after handover.* `dirty()` reused an open mark after the driver had already
-started writing it, so the acknowledgement came to mean strictly less than the messages gated on it
-required: the driver reports batch one durable, raft releases an append response attesting to batch
-two. It is also a convoy — under a steady stream of appends a reused mark never stops growing and
-never completes. Coverage is now frozen at handover.
-
-*The engine kept the entries a conflicting append discarded.* A `Set` overwrites only the keys it
-names, so after a truncation the engine still held the dead branch's tail above the new last index,
-and recovery read back a new prefix spliced onto it — gapless by index, so `Restore` accepted it, and
-wrong in every entry above the cut. The batch now clears the suffix atomically, which is what
-`DeleteRange` is in the frozen interface for (Amendment A3).
-
-**Why the checkers caught it here and not earlier.** The gate needed a crash, a restart with a sync
-in flight, and a leader still replicating into the window — the single-cut schedule mix produces that
+**Why the checkers caught it here and not earlier.** The gate needs a crash, a restart with a sync in
+flight, and a leader still replicating into the window. The single-cut schedule mix produces that
 combination, and 12 ms of modelled fsync against a 6 ms worst-case link is what makes the window
 exist at all.
 
-**A harness defect the fix exposed, recorded here because it changes how much the earlier green was
-worth.** The ledger the persist-before-reply oracle reads was itself fed by that same visible-state
-read-back, so its durable watermark was inflated: across 10,000 seeds the read-back was ahead of
-durability **44,911 times**. An inflated watermark does not make the oracle noisy, it makes it
-**silent** — every ack looks covered. With the ledger corrected to record what the driver actually
-made durable, the 300-seed sweep went from 2 violations to 257, and all 257 were the mark-coverage
-defect above. Per DR-29 the harness defect itself is recorded in its fix commit rather than as an
-entry here, but the number belongs in this entry: the oracle that caught BUG-005 was weaker than it
-looked while it was catching it.
-
 **What this would have caused in production.** A lost acknowledged write, by the exact mechanism
-DR-8 wrote down. A follower acks an entry it has not written; the leader counts that ack toward a
+DR-8 wrote down. The follower acks an entry it has not written; the leader counts that ack toward a
 quorum and commits; the follower crashes, loses the entry, and comes back with a shorter log. If it
 then wins an election — and nothing stops it, because the up-to-date check compares against a log
 that no longer contains the entry — the committed entry is gone. "Committed is forever" fails, and
 the client was told the write succeeded.
 
-**Fix.** Beyond the four causes above, one structural refusal: `markFor` now **panics** when asked
-for the mark covering an index that is neither durable nor covered by an open mark. That state has no
-gate to wait on, so any message attesting to it would be released immediately — silently, and only on
-the schedules where the gap is reachable. Refusing it where it is constructed is the fourth time this
-project has fixed a class by making it unrepresentable rather than catchable, after Wall/Mono, the
-epoch stamp and the D5 conformance check.
+**Fix.** A restart takes the crash first. Replaying this bundle with `M25` applied no longer reaches
+the oracle at all: it is refused earlier, by `readDurable`'s precondition, which panics when the
+engine is asked for its durable state while a write is in flight. The finding moved from a checker to
+a structural refusal, which is the right direction.
 
-The truncation assertion was corrected in the same pass, and the correction is worth recording
-because it was a *false* invariant sitting in the code: it refused any truncation at or below the
-durable watermark, on the reasoning that the driver would then have acknowledged an entry that later
-vanished. That is a stronger claim than Raft makes. §5.3 has a follower delete a conflicting entry
-and everything after it, and those entries are routinely already on disk; a follower's persisted
-suffix being overwritten by a new leader is the protocol working. What may never be truncated is a
-**committed** entry, and that is what it asserts now. The false assertion was unreachable for exactly
-as long as the durable watermark never moved — the same defect twice over: a claim nothing exercised,
-guarding a watermark nothing advanced.
+**The first diagnosis was wrong, and the correction is worth keeping.** `f624c0a` attributed seed 92
+to `persistedIndex` deriving durability from the *shape* of the unstable-entry slice — empty meant
+"all durable", and `Ready()` clears that slice on **handover**, not on acknowledgement. That was a
+real defect and its fix stands: `logTail` now records `persisted` and `handed` in fields with
+different names, neither derived from the shape of anything else. It was not this bug. Seed 92
+violated identically after that fix, at step 1085 instead of 1086, and the sweep went 3 → 2 rather
+than to zero. **A fix that moves the number without reaching zero is a fix that has not been
+attributed**, and taking the residue seriously rather than declaring victory is what found the four
+defects this entry was split out of.
+
+---
+
+### BUG-006 — a follower acknowledged an index whose write was still in flight, because the durability token it waited on had grown
+
+| field | value |
+|---|---|
+| **Found by** | sim — the **persist-before-reply** oracle, once it stopped reading the engine's own account (see the harness note below) |
+| **Phase** | A1 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M28-mark-coverage-grows-after-handover.patch && go run ./cmd/simctl replay --bundle seeds/BUG-006` |
+| **Reproduce (seed)** | seed **0**, violating at instant **4201040044**, step 1971 |
+| **Invariant that caught it** | persist-before-reply |
+| **Mutant class** | none existed — added `M28-mark-coverage-grows-after-handover` |
+| **Fix commit** | `0c55e30` |
+| **Minimized?** | no — same reason as BUG-005 |
+
+**Symptom.** `node 2 acked index 16 at instant 4201040044 with only 15 durable`. One entry in flight,
+acknowledged. **257 of 300 seeds**, which is the largest single finding in A1.
+
+**Root cause.** A `PersistMark` names a durability point, and `dirty()` reused an open one until it
+was acknowledged. That is fine while nothing has been handed over; it stops being fine the moment the
+driver starts writing. A reused mark's coverage **grows after the driver has already submitted the
+first batch under it**, so the acknowledgement comes to mean strictly less than the messages gated on
+it require: the driver reports batch one durable, and raft releases an append response attesting to
+batch two.
+
+It is also a liveness hazard on its own. Under a steady stream of appends a reused mark never stops
+growing, so it never becomes fully durable, and every message gated on it waits behind a convoy that
+never drains.
+
+**Why the checkers caught it here and not earlier.** They could not, because the oracle was blind.
+See the harness note below: while the ledger's durability record was an engine read-back it reported
+15 as durable when 15 was merely *visible*, so the ack looked covered. This is the defect the silent
+oracle was hiding.
+
+**What this would have caused in production.** The same lost acknowledged write as BUG-005, reached
+by a different route, plus a stall under sustained write load.
+
+**Fix, and the measured redundancy that is worth recording.** A mark's coverage is now **frozen at
+handover**: each `Ready` that hands something over takes its own mark, and anything mutated afterwards
+gets a new one. Separately, the driver acknowledges a mark only when **every** write issued under it
+is durable — written as defence in depth and documented as never firing.
+
+It is not decorative. Measured over 300 seeds:
+
+| defence removed | detected |
+|---|---|
+| raft freezing coverage at handover | **0** of 300 |
+| the driver's all-writes-durable guard | **0** of 300 |
+| both | **257** of 300 |
+
+Either one alone prevents the defect entirely. `M28` therefore removes both, because a mutant that
+removes one is not a mutant: it plants a defect two independent mechanisms already stop. That the
+driver's guard turns out to be sufficient on its own is the interesting half — a comment saying "this
+never fires" now has a number behind it saying what it would catch if the other half regressed.
+
+---
+
+### BUG-007 — a follower killed itself on a correct protocol step
+
+| field | value |
+|---|---|
+| **Found by** | sim — the assertion fired on the first seed after the watermark it guarded started moving |
+| **Phase** | A1 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M29-truncation-refused-below-the-durable-watermark.patch && go run ./cmd/simctl replay --bundle seeds/BUG-007` |
+| **Reproduce (seed)** | seed **15**; 47 of 300 seeds reach it |
+| **Invariant that caught it** | `raft.truncateFrom`'s own assertion — a **false** one, which is the bug |
+| **Mutant class** | none existed — added `M29-truncation-refused-below-the-durable-watermark` |
+| **Fix commit** | `0c55e30` |
+| **Minimized?** | no — same reason as BUG-005 |
+
+**Symptom, verbatim:**
+
+```
+panic: raft: node 3 truncated to 13 with 13 already acknowledged durable; the driver
+acknowledged an entry that later vanished
+```
+
+A node crashing, with a message confidently blaming the driver for a defect the driver did not have.
+
+**Root cause. Durable is not committed.** The assertion refused *any* truncation reaching at or below
+the durable watermark, reasoning that the driver would then have acknowledged an entry that later
+vanished. That is a stronger claim than Raft makes and a false one. §5.3 of the paper has a follower
+delete a conflicting entry and everything that follows it, and those entries are routinely already on
+disk; a follower's persisted suffix being overwritten by a new leader is the protocol working, not
+failing. What Raft guarantees is that a **committed** entry is never overwritten, because the
+up-to-date check keeps a candidate missing one from ever winning.
+
+**Why the checkers caught it here and not earlier — and this is the part worth reading.** They could
+not, because the assertion was **unreachable**. `tail.persisted` was assigned nowhere in the package;
+`persistedIndex()` had been returning 0 since it was written. A guard on a watermark that never moves
+is a guard that never runs, and it sat in the tree looking like a safety property. It fired on the
+first seed after the watermark started moving, which is the only reason anyone found out it was
+false.
+
+That is the same defect twice in one place: **a claim nothing exercised, guarding a watermark nothing
+advanced.**
+
+**What this would have caused in production.** A follower that panics on a legal conflicting append —
+so it crash-loops precisely when a new leader is trying to bring it into line, which is exactly when
+the cluster cannot afford to lose it. Worse, the panic message would have sent whoever read it to
+look for a durability bug in the storage driver that was not there.
+
+**Fix.** The assertion now says what Raft actually guarantees: a truncation at or below `commitIndex`
+is a state machine safety failure and still panics. The gated queue is also swept on truncation — a
+withheld append response attesting to an index that no longer exists has become a lie, and dropping
+it is safe in a way that releasing it later is not.
+
+---
+
+### BUG-008 — recovery read back a log that was half one branch and half another
+
+| field | value |
+|---|---|
+| **Found by** | sim — the driver's durability record compared against the engine's own account |
+| **Phase** | A1 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M26-truncated-suffix-left-in-the-engine.patch && go run ./cmd/simctl replay --bundle seeds/BUG-008` |
+| **Reproduce (seed)** | seed **84**; 7 of 300 seeds reach it |
+| **Invariant that caught it** | **Storage recovery** — "after any crash, the engine recovers exactly the acknowledged-synced prefix" |
+| **Mutant class** | none existed — added `M26-truncated-suffix-left-in-the-engine`, and `M27-durable-record-ignores-a-clear` for the mirror direction |
+| **Fix commit** | `0c55e30`, with the continuous cross-check in `56e3c18` |
+| **Minimized?** | no — same reason as BUG-005 |
+
+**Symptom, verbatim:**
+
+```
+panic: store: node 3 has made durable something its own record disagrees with:
+recorded 19 durable entries, engine returned 20
+```
+
+**Root cause.** A `Set` overwrites only the keys it names. When a conflicting append truncated the log
+from index *i* and raft handed over replacement entries *i..k*, the driver wrote exactly those keys —
+and the engine went on holding the discarded branch's tail at *k+1..m*. Recovery then read back a new
+prefix spliced onto a dead branch's tail and called the result a log. It is **gapless by index**, so
+`raft.Restore`'s only structural check accepts it, and every entry above the cut belongs to a history
+the cluster abandoned.
+
+**Why the checkers caught it here and not earlier.** Nothing was watching. The engine's durable
+content had no independent witness: the ledger was fed by reading the engine, so the engine agreed
+with itself by construction. The checker that catches it did not exist until the driver started
+keeping its own record of what it had made durable, and it needs a truncation of *already durable*
+entries followed by the replacement becoming durable — measured at 53 clearing batches per 300 seeds,
+of which 7 actually truncate durable entries.
+
+**What this would have caused in production.** A replica that recovers a log it never had, passes
+every structural check on the way up, and then serves and replicates it. Log matching fails silently
+and the divergence is durable.
+
+**Fix.** The batch clears the discarded suffix in the same atomic write, which is what `DeleteRange`
+is in the frozen interface for (Amendment A3): the clear and the rewrite land together or not at all.
+
+**And a checker, because the fix alone would have been unwitnessed.** The driver's durability record
+is now compared against the engine's own account on **every** durability completion at which the
+engine has nothing in flight — the one moment a read-back honestly *is* the durable state, and a
+comparison that can only fail. 36,912 comparisons across 300 seeds. Moving it from recovery-only to
+every-completion took this defect's seeds-to-detection from **905 to 84**, which is the difference
+between a check that runs twice a run and one that runs whenever there is something to check.
+
+---
+
+## The harness defect these four were hiding
+
+Recorded here rather than as an entry, per DR-29 — it is a defect in the observer, not the observed.
+The number belongs beside these findings anyway, because it says what the earlier green was worth.
+
+The ledger that the persist-before-reply oracle judges every acknowledgement against was itself built
+by **reading the engine back**. An `engine.Engine` read returns the VISIBLE state, which by
+construction includes batches applied and not yet synced. So the oracle was comparing the system's
+claims against the system's own account of itself, one layer of indirection removed.
+
+It did not report false violations. It reported **nothing**: an inflated durability watermark makes
+every acknowledgement look covered. Across 10,000 seeds the read-back was ahead of true durability
+**44,911 times**. With the ledger corrected to record what the driver actually made durable, a
+300-seed sweep went from 2 violations to **257** — and those 257 are BUG-006.
+
+DESIGN-A1 §5c has the full account, including why this is the eighth instance of the vacuous-green
+class and the first one inside an oracle. `internal/provenance` and `tools/provcheck` are the part of
+the fix that a future change has to get past.
