@@ -1,6 +1,8 @@
 # DESIGN-A1: single-group Raft
 
-**Status:** proposed, code follows this document. **Author:** Claude. **Decider:** Ansh.
+**Status:** code has landed and this document has been amended to match it — see §5a and §5b, which
+record what the implementation taught and what it contradicted. Not signed off; Claude does not mark
+phases complete. **Author:** Claude. **Decider:** Ansh.
 **Phase:** A1. **Depends on:** A0, closed — the harness, oracles, mutant suite and real-mode driver.
 
 ---
@@ -61,16 +63,25 @@ take, and recovery is the real path: `raft.Restore` reads the engine back and re
 machine, so the restart path is exercised by every crash the harness injects rather than by a
 bespoke test.
 
-**The contract.** A `Ready` carries `HardState` and `Entries` to persist, and `Messages` to send. The
-driver must make the first durable before it sends the second. That ordering is:
+**The contract, as it actually landed.** An earlier draft of this section said the driver must make
+`HardState` and `Entries` durable before it sends `Messages`, and proposed an oracle to check that it
+had. That design makes persist-before-reply *conventional* and then guards the convention. **An
+oracle guarding a rule that should be structurally unbreakable is the weaker design wearing the
+stronger design's clothes**, and it passes review precisely because it has an oracle attached.
 
-- **stated** in the `Ready` doc comment as a requirement on the driver;
-- **checked** by an oracle, from the ledger, rather than trusted — for every message a node sent, the
-  hard state that message asserts (its term, its vote) must already have been durable at the instant
-  it was sent.
+Under DR-7 the property is structural instead. `raft` never places a message in `Ready.Messages`
+whose meaning depends on state that is not yet durable: gated messages are withheld inside the
+package and released when `AckPersisted` arrives. **The driver therefore has no ordering obligation
+at all** — it cannot send a message early, because it never holds one.
 
-Stating it makes it a convention. Checking it from the outside makes it a property, and the
-difference is the entire lesson of A0's audit.
+The oracle survives, demoted and stated as such. It no longer stands between the cluster and two
+leaders in one term; it confirms from outside that the interface behaved as its contract says, which
+is a different and much weaker claim, and it is worth keeping only because a structural guarantee
+nobody observes is a guarantee nobody would notice losing. It found BUG-005 in that reduced role,
+which is the argument for keeping it.
+
+The generalization is worth stating once: whenever a safety property can be discharged in the type
+system or the interface, an oracle for it is a consolation prize, not a defense.
 
 ---
 
@@ -125,6 +136,120 @@ case.** Nothing has, so far.
 
 ---
 
+## 5a. A safety oracle over an unknown-dominated history is vacuous
+
+This section exists because A1's first finding was not a Raft bug. It was a demonstration that the
+verification machinery could vouch, in full, for a system that was doing nothing at all.
+
+### What happened
+
+`store/codec.go`'s `decodeMessage` read eleven `uint64`s where `encodeMessage` wrote ten. Every frame
+failed to decode. **No message in the cluster was ever received.** No node ever became leader. All
+forty client operations in the run went unanswered.
+
+Porcupine returned **PASS**.
+
+The four safety oracles were green too, and correctly green: no node ever led, so election safety
+held; no log ever diverged, so log matching held; nothing was ever committed or applied, so leader
+completeness and state machine safety held vacuously. Total system failure, clean safety verdict.
+
+The only mechanism that saw anything was the **election census**, reporting zero elections won.
+
+### Why the checker was right to pass
+
+A history of unknowns is trivially linearizable. Every one of those forty operations was still in
+flight when the run ended, and an in-flight operation is a *free choice* for a linearizability
+checker — it may place the operation in whichever world satisfies the rest. With no decided
+operations there is nothing to satisfy, so the checker is free, and free means green.
+
+That is not a defect in porcupine and not a defect in the oracle framework. It is what
+linearizability means. The defect was in believing a green verdict over that history said something.
+
+### The rule
+
+> **A safety oracle over an unknown-dominated history is vacuous. Every safety claim in this project
+> is therefore paired with a liveness census proving the system did the thing whose safety is being
+> asserted.**
+
+"Zero safety violations across 10,000 seeds" and "the cluster never did anything on 10,000 seeds" are
+the same sentence unless something counts the elections. §6's criterion 8 was written for this reason
+and is not a nice-to-have: a mix that produces no contention is a mix that needs fixing, and that is
+invisible unless it is counted.
+
+### Where the rule lives now, so it is not a habit
+
+Two structural rules, from the two sides, each induced by its own mutant:
+
+| side | rule | verdict | mutant |
+|---|---|---|---|
+| client | a history below `sim.UnknownDominatedPerMille` **decided** operations | inconclusive | `M15-vacuity-rule-removed` |
+| cluster | a run that elected nobody | inconclusive | `M16-no-leader-banks-a-pass` |
+
+Neither is a pass, ever. Amendment A4 already forbade counting an inconclusive as a pass; these two
+say what else must be inconclusive.
+
+The threshold is 250 per mille, derived rather than chosen. Measured over 2000 A1 seeds, decided
+operations per mille of the history: min 0, p1 550, p5 700, p25 850, p50 900, p90 975, max 1000.
+The floor sits at roughly half the observed 1st percentile — the same margin rule the harness-power
+floors use — and flags 3 seeds per mille against a 30-per-mille inconclusive ceiling. The literal
+reading of "unknown-dominated", more unknowns than knowns at 500 per mille, was measured (7 per
+mille) and rejected: it spends a quarter of the ceiling on healthy runs, and a gate that fires on
+healthy runs is a gate somebody eventually loosens.
+
+Also note the shape of the original floor, because it is the same error one level down. Checklist
+step 6 put a minimum-operations floor in `CheckAll` so a checker that consumed nothing could not bank
+a green — and it counted operations **recorded**, which asks whether the harness produced traffic. It
+now counts operations **decided**, which asks whether the run produced evidence. The codec bug
+satisfied the first floor with forty operations and produced none of the second.
+
+---
+
+## 5b. Three corrections to this document, made while closing BUG-005
+
+Recorded here rather than in a commit message alone, because each contradicts something §2 or the
+`Ready` contract asserted, and a design document that quietly stops describing the code is worse than
+one that never existed.
+
+**The ledger's second stream cannot be an engine read-back.** §0 names it as *"every write that
+reached the Engine, and when it became durable"*, and the driver implemented it by reading the engine
+back. An `engine.Engine` read returns the **visible** state, which by construction includes batches
+applied and not yet synced — that window is the whole point of the model (DR-15). The ledger's durable
+watermark was therefore inflated: across 10,000 seeds the read-back was ahead of durability 44,911
+times. An inflated watermark does not make the persist-before-reply oracle noisy, it makes it
+**silent**, because every ack looks covered. The driver now *records* what it made durable, folded
+forward from the writes the engine completed and dropped wholesale on a crash, which is what §0 said
+in the first place. With the honest record the 300-seed sweep went from 2 violations to 257.
+
+**A mark's coverage is frozen at handover.** The original design had `dirty()` reuse the open mark
+until it was acknowledged, on the reasoning that at most one mark is then open at a time and one
+high-water index suffices. The premise is fine; the consequence is not. A reused mark's coverage
+*grows after the driver has started writing it*, so the acknowledgement means strictly less than the
+messages gated on that mark require — the driver reports batch one durable and raft releases an
+append response attesting to batch two. It is also a convoy: under a steady stream of appends a
+reused mark never stops growing and never completes, so everything gated on it waits forever. Each
+handover now takes its own mark, `tail.persisted` advances only on an acknowledgement that reaches
+the most recent handover, and there is still no per-mark span table — two scalars, `markLastIdx` and
+`lastHandedMark`.
+
+**Durable is not committed.** `truncateFrom` asserted that no truncation may reach at or below the
+durable watermark, on the reasoning that the driver would then have acknowledged an entry that later
+vanished. That is a stronger claim than Raft makes and a false one: §5.3 of the paper has a follower
+delete a conflicting entry and everything after it, and those entries are routinely already on disk.
+A follower's persisted suffix being overwritten by a new leader is the protocol working. What may
+never be truncated is a **committed** entry, which is what it asserts now. The false assertion was
+unreachable for exactly as long as the durable watermark never moved, and fired on the first seed
+after it did.
+
+One thing was *not* corrected, and the honest note matters more than the code: gating the accept
+response on the later of `markFor(last)` and the term mark is the correct general expression of the
+two gates DR-8 enumerates separately, and at A1 **the two provably coincide**, so it changed no
+verdict. What makes the coincidence checkable rather than assumed is the assertion in `markFor`: an
+index that is neither durable nor covered by an open mark has no gate to wait on, and that state is
+now refused where it is constructed. It becomes load-bearing when A2's snapshot stream gives
+`markFor` a second answer.
+
+---
+
 ## 6. Exit criteria
 
 All true before this is reported ready for sign-off:
@@ -143,3 +268,21 @@ All true before this is reported ready for sign-off:
    proves nothing, and a mix that produces one is a mix that needs fixing.
 9. Every bug found entering BUGS.md, each answering which mutant class would have caught it, with a
    new mutant landing in the same commit as the fix if none would have.
+
+### Status against those criteria
+
+Claude does not mark phases complete; this is evidence for a ruling, not a ruling.
+
+| # | criterion | evidence |
+|---|---|---|
+| 1 | 10k seeds, zero safety violations | 10,000 seeds: pass 9966, violation **0**, inconclusive 34, errors 0 |
+| 2 | porcupine, inconclusive tracked separately and never a pass | 34 inconclusive, 3.4 per mille against a 30 per mille ceiling, each with its cause printed |
+| 3 | four oracles, in-run, halting at the first violation | `raftcheck.All`; each reads the ledger and nothing else |
+| 4 | each induced by a planted violation | `M17` election safety 146/300 · `M18` log matching 1/300 · `M19` leader completeness 228/300 · `M20` state machine safety 46/300 |
+| 5 | schedule mix weights the single-cut geometry | `RaftGenConfig`, §4 |
+| 6 | persist-before-reply structural inside `raft/`, checked from the ledger | DR-7 gated queue; the oracle is the outside confirmation, and `M25` induces it |
+| 7 | every persistent write through the `Engine`; recovery the real path | `store/node.go`; `Restore` runs on every injected restart |
+| 8 | elections observed contending | highest term 79, 111,790 started, 48,253 won, 43,442 split votes, 9,641 of 10,000 seeds contended, **0** seeds without a leader |
+| 9 | every bug in BUGS.md with its mutant-class answer | 5 entries, 5 mutant classes, 4 of them added because none existed |
+
+Mutant suite alongside: 21 killed, 1 canary alive, 0 mismatched, 0 rotted.
