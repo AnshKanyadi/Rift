@@ -148,3 +148,50 @@ func TestClientHistoryIsLinearizable(t *testing.T) {
 		}
 	}
 }
+
+// TestDurableRecordAgreesWithTheEngine covers the one input to a green verdict
+// that the harness derives rather than reads.
+//
+// # What is actually being checked
+//
+// The ledger's durability record is what the persist-before-reply oracle judges
+// every acknowledgement against, and it cannot be an engine read-back: an engine
+// read returns the VISIBLE state, which includes writes a crash would take, and
+// feeding that to the oracle is what made it silent for the whole of A1's first
+// sweep. So the driver RECORDS what it made durable instead — folded forward
+// from the batches it submitted, promoted when the engine reports the sequence
+// durable.
+//
+// That record is a derivation, and a derivation can be wrong. The engine's own
+// account is a legitimate input to a check that can only FAIL, so the two are
+// compared on every durability completion at which the engine has nothing in
+// flight — the one moment a read-back honestly IS the durable state.
+//
+// Both directions matter and both are induced: M26 leaves a truncated suffix in
+// the engine (engine ahead of the record), M27 makes the fold ignore a clear
+// (record ahead of the engine). Measured at commit 4c1fd0b, each is caught on 7
+// of 300 seeds with seeds-to-detection 84 — against 905 when the comparison ran
+// only at recovery, which is the difference between a check that runs twice a
+// run and one that runs on every completion.
+//
+// 300 seeds, roughly three and a half times the measured seeds-to-detection.
+func TestDurableRecordAgreesWithTheEngine(t *testing.T) {
+	const seeds = 300
+	checks := 0
+	for seed := uint64(0); seed < seeds; seed++ {
+		p, err := hunt.MaterializeRaft(seed)
+		if err != nil {
+			t.Fatalf("seed %d: materialize: %v", seed, err)
+		}
+		r, err := hunt.RunRaft(p, nil)
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		checks += r.DurabilityCrossChecks
+	}
+	t.Logf("%d comparisons of the durability record against the engine across %d seeds", checks, seeds)
+	if checks == 0 {
+		t.Fatal("the durability record was never once compared against the engine, so this test " +
+			"asserts nothing and the oracle's one derived input is unverified")
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/raft"
 )
@@ -100,7 +101,21 @@ func NewLedger(n int) *Ledger {
 
 // RecordDurable records what a node made durable. entries is the node's full
 // persisted log prefix after the write.
-func (l *Ledger) RecordDurable(node int, hs raft.HardState, entries []raft.Entry, at clock.Instant) {
+//
+// # Why the parameters are typed
+//
+// This method took plain values, and what was passed to it was an engine
+// read-back: the system's own account of what it held, which includes writes a
+// crash would take. The oracle downstream then compared the system's
+// acknowledgements against the system's own claims and reported green 44,911
+// times over an inflated watermark.
+//
+// provenance.Observed is the fix, and it is a build failure rather than a
+// checker: what may be recorded here is what the harness WITNESSED crossing the
+// boundary — the batch the driver submitted, promoted when the engine reported
+// that sequence durable — and a provenance.Reported no longer fits.
+func (l *Ledger) RecordDurable(node int, hsO provenance.Observed[raft.HardState], entriesO provenance.Observed[[]raft.Entry], at clock.Instant) {
+	hs, entries := hsO.Fact(), entriesO.Fact()
 	l.durableHS = append(l.durableHS, hsRecord{node: node, hs: hs, at: at})
 	cp := make([]raft.Entry, len(entries))
 	copy(cp, entries)
@@ -108,7 +123,12 @@ func (l *Ledger) RecordDurable(node int, hs raft.HardState, entries []raft.Entry
 }
 
 // RecordSent records a released message alongside the sender's durable state.
-func (l *Ledger) RecordSent(node int, m raft.Message, at clock.Instant) {
+//
+// The message is Observed for the same reason the durable record is: it is a
+// value that crossed the node's boundary on its way to the transport, not an
+// answer to a question about what the node believes it sent.
+func (l *Ledger) RecordSent(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
+	m := mO.Fact()
 	hs := l.durableHardState(node)
 	l.sent = append(l.sent, sentRecord{
 		node: node, msg: m, at: at,
@@ -123,7 +143,13 @@ func (l *Ledger) RecordSent(node int, m raft.Message, at clock.Instant) {
 }
 
 // RecordApplied records entries a node applied.
-func (l *Ledger) RecordApplied(node int, entries []raft.Entry, at clock.Instant) {
+//
+// Observed: these are the entries the Ready handed over for application, taken
+// as they cross the boundary rather than read back out of the state machine
+// afterwards. Reading them back would ask the system what it applied, which is
+// the question the oracle exists to answer independently.
+func (l *Ledger) RecordApplied(node int, entriesO provenance.Observed[[]raft.Entry], at clock.Instant) {
+	entries := entriesO.Fact()
 	l.applied[node] = append(l.applied[node], entries...)
 	for _, e := range entries {
 		if !l.isCommitted(e.Index) {

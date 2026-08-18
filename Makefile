@@ -79,6 +79,10 @@ hatches: ## Assert HATCHES.txt matches the tree exactly (never rewrites it; -upd
 blind: ## Mutation-test the determinism pass itself; each blinded rule must fail its own test
 	@$(BLIND)
 
+.PHONY: provenance
+provenance: ## The ledger's inputs are harness-observed; a system-reported fact must not compile into a verdict
+	$(GO) test -count=1 ./tools/provcheck/
+
 .PHONY: corpus
 corpus: ## Replay every bundle in seeds/; a bundle that stops reproducing fails the build
 	$(GO) test -count=1 -run 'TestEveryStoredBundleReplays|TestCorpusLaneDetectsRot' ./cmd/simctl/
@@ -95,7 +99,7 @@ power: ## Harness-power floors: every planted flaw class must still be detected 
 lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions corpus smoke mutants ## Everything the push lane runs
+ci: build lint test race blind power assertions provenance corpus smoke mutants ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 
@@ -140,7 +144,7 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 .PHONY: lanes
 lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
-	@echo "       hatches blind power assertions corpus"
+	@echo "       hatches blind power assertions provenance corpus"
 	@echo "       smoke soak"
 	@echo "       mutants"
 	@echo "STUB : (none in A0)"

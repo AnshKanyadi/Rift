@@ -127,3 +127,18 @@ jobs:
       # moment the harness moves under it, in complete silence -- both A0
       # bundles had already rotted when the lane was written.
       - run: make corpus
+
+  provenance:
+    name: oracle input provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # The persist-before-reply oracle judged the system's acknowledgements
+      # against the system's own account of what it held, and reported nothing
+      # for a whole sweep. This lane requires that a system-reported fact fail to
+      # COMPILE into a verdict, and induces it against a fixture that tries.
+      - run: make provenance

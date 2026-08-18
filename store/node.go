@@ -23,6 +23,7 @@ import (
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
+	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
@@ -98,6 +99,12 @@ type Node struct {
 	// and it is the driver's to report.
 	durHS  raft.HardState
 	durLog []raft.Entry
+
+	// crossChecks counts how often the driver's durability record was compared
+	// against the engine's own account of what it holds. Reported so a lane can
+	// ask whether the check ran at all: a comparison that never happens is the
+	// family this repository has now found seven of.
+	crossChecks int
 
 	// writtenLast is the highest log index the driver has written to the engine.
 	// Recorded, because it is what says whether a Ready is a conflicting append
@@ -307,7 +314,7 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 		// 2. Send, in any order, at any time. Safety does not depend on this
 		//    happening after step 1, which is DR-7's entire point.
 		for _, m := range rd.Messages {
-			n.cfg.Ledger.RecordSent(n.cfg.Ordinal, m, at)
+			n.cfg.Ledger.RecordSent(n.cfg.Ordinal, provenance.Witness(m), at)
 			n.cfg.Transport.Send(sim.Envelope{
 				From: sim.NodeID(n.cfg.Ordinal),
 				To:   sim.NodeID(n.ordinalOf(m.To)),
@@ -329,7 +336,7 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 				}
 				n.answerAt(e, op, k, at)
 			}
-			n.cfg.Ledger.RecordApplied(n.cfg.Ordinal, rd.Committed, at)
+			n.cfg.Ledger.RecordApplied(n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
 			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
 		}
 	}
@@ -395,7 +402,29 @@ func (n *Node) onDurable(seq engine.SeqNum, at clock.Instant) {
 		mark = n.pending[0].mark - 1
 	}
 
-	n.cfg.Ledger.RecordDurable(n.cfg.Ordinal, n.durHS, n.durLog, at)
+	// # The driver's record and the engine's own account, compared continuously
+	//
+	// These are two independent derivations of one fact: what a crash would
+	// recover. The ledger is fed the first, because the second is an answer the
+	// system gives about itself and answers with its VISIBLE state.
+	//
+	// But the second is a legitimate input to a check that can only FAIL, and
+	// here is where it can be taken honestly: the engine has nothing in flight,
+	// so a read-back IS the durable state. Comparing them only at recovery left
+	// the check firing twice per run; comparing them here fires it on every
+	// completion, which took a planted defect's detection from seed 905 to the
+	// first seeds of the range.
+	if n.db.VisibleSeq() == n.db.DurableSeq() {
+		n.crossChecks++
+		rhs, rlog := n.readDurable()
+		if err := sameDurableState(n.durHS, n.durLog, rhs.Unverified(), rlog.Unverified()); err != nil {
+			panic(fmt.Sprintf("store: node %d has made durable something its own record disagrees with: %v",
+				n.cfg.ID, err))
+		}
+	}
+
+	n.cfg.Ledger.RecordDurable(n.cfg.Ordinal,
+		provenance.Witness(n.durHS), provenance.Witness(n.durLog), at)
 	if mark != 0 {
 		n.raft.AckPersisted(mark)
 	}
@@ -428,7 +457,7 @@ func (n *Node) fold(w pendingWrite) {
 // VISIBLE state; calling this while a write is in flight returns writes a crash
 // would take, and the one consumer that would be misled -- the ledger the
 // persist-before-reply oracle reads -- would be misled silently.
-func (n *Node) readDurable() (raft.HardState, []raft.Entry) {
+func (n *Node) readDurable() (provenance.Reported[raft.HardState], provenance.Reported[[]raft.Entry]) {
 	if v, d := n.db.VisibleSeq(), n.db.DurableSeq(); v != d {
 		panic(fmt.Sprintf(
 			"store: node %d read the engine back with sequence %d visible and only %d durable; "+
@@ -447,7 +476,7 @@ func (n *Node) readDurable() (raft.HardState, []raft.Entry) {
 		}
 	}
 	_ = it.Close()
-	return hs, out
+	return provenance.Claim(hs), provenance.Claim(out)
 }
 
 // crash takes the process down: volatile state goes, unsynced writes go.
@@ -498,7 +527,8 @@ func (n *Node) restart() {
 	n.pending = nil
 	n.inflight = nil
 
-	hs, entries := n.readDurable()
+	reportedHS, reportedLog := n.readDurable()
+	hs, entries := reportedHS.Unverified(), reportedLog.Unverified()
 
 	// The driver's record of what it made durable and the engine's read-back are
 	// two independent derivations of one fact, and recovery is the moment they
@@ -506,6 +536,7 @@ func (n *Node) restart() {
 	// is a question worth stopping for: everything the ledger asserts about
 	// persistence rests on the first, and everything the cluster does after a
 	// crash rests on the second.
+	n.crossChecks++
 	if err := sameDurableState(n.durHS, n.durLog, hs, entries); err != nil {
 		panic(fmt.Sprintf("store: node %d recovered a state its own durability record disagrees with: %v", n.cfg.ID, err))
 	}
@@ -551,6 +582,10 @@ func lastLogIndex(es []raft.Entry) raft.Index {
 	}
 	return es[len(es)-1].Index
 }
+
+// DurabilityCrossChecks is how often this node's durability record was compared
+// against the engine's own account of what it holds.
+func (n *Node) DurabilityCrossChecks() int { return n.crossChecks }
 
 // StaleEpochDrops is how many completions from a dead incarnation this node
 // refused.

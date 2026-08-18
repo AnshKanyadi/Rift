@@ -1,0 +1,16 @@
+# id: M26-truncated-suffix-left-in-the-engine
+# covering-test: TestDurableRecordAgreesWithTheEngine
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a conflicting append rewrites the entries it replaces but leaves the discarded branch's tail in the engine, so recovery reads a new prefix spliced onto a dead branch and calls the result a log -- gapless by index, so Restore accepts it
+--- a/store/node.go
++++ b/store/node.go
+@@ -293,7 +293,7 @@
+ 				// for (Amendment A3), and the batch is atomic, so the clear and
+ 				// the rewrite land together or not at all.
+ 				if rd.Entries[0].Index <= n.writtenLast {
+-					b.DeleteRange(logKey(last+1), logUpper)
++					_ = logUpper
+ 					w.clearAbove = last
+ 				}
+ 				for _, e := range rd.Entries {

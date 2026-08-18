@@ -1,0 +1,16 @@
+# id: M27-durable-record-ignores-a-clear
+# covering-test: TestDurableRecordAgreesWithTheEngine
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the driver's durability record keeps entries the engine cleared, so the record the persist-before-reply oracle judges against drifts ahead of what a crash would recover -- the mirror direction of M26, and the direction that would make the oracle wrong rather than the system
+--- a/store/node.go
++++ b/store/node.go
+@@ -444,7 +444,7 @@
+ 		}
+ 		n.durLog = append(n.durLog, e)
+ 	}
+-	if w.clearAbove > 0 && int(w.clearAbove) < len(n.durLog) {
++	if false {
+ 		n.durLog = n.durLog[:w.clearAbove]
+ 	}
+ }

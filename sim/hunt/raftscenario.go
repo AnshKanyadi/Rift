@@ -72,6 +72,12 @@ type RaftResult struct {
 	// collecting it, so the field it was stored in is gone.
 	StaleEpochDrops int
 
+	// DurabilityCrossChecks is how often a node's durability record was compared
+	// against the engine's own account. Evidence, like StaleEpochDrops: a count
+	// of zero means the comparison never ran and any test resting on it proved
+	// nothing.
+	DurabilityCrossChecks int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -178,6 +184,7 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 		// TestStaleDurabilityCompletionIsRefused, and never by a verdict here --
 		// see the field's own comment for why a drop is the guard working.
 		res.StaleEpochDrops += d.StaleEpochDrops()
+		res.DurabilityCrossChecks += d.DurabilityCrossChecks()
 	}
 
 	// The fire-count assertion only means anything on a run that reached its
