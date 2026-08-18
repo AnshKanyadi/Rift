@@ -110,6 +110,24 @@ func (h *History) End(i int, at clock.Instant, kind ResponseKind, value string) 
 	}
 }
 
+// Decided is the number of operations whose outcome a client actually observed.
+//
+// The rest are in flight: the client never heard back, so the operation may or
+// may not have happened. That is a legitimate thing for a client to experience
+// and it is not an error -- but it carries no evidence, because a checker is
+// free to place an unknown operation in whichever world satisfies it. A history
+// is only as strong as its decided operations, and Len() counts the wrong thing
+// for every question about strength.
+func (h *History) Decided() int {
+	n := 0
+	for _, e := range h.events {
+		if !e.InFlight() {
+			n++
+		}
+	}
+	return n
+}
+
 // Events returns the recorded events in call order.
 func (h *History) Events() []HistoryEvent { return h.events }
 

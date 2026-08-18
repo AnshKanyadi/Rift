@@ -193,7 +193,44 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 	res.History = hist
 	res.Ledger = ledger
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())
+
+	// # A run with no leader concluded nothing, whatever the checkers say
+	//
+	// sim.CheckAll enforces the vacuous-green rule from the client's side: a
+	// history that is mostly unknowns cannot bank a pass. This is the same rule
+	// from the cluster's side, and it is a separate fact rather than a
+	// restatement -- the checkers are told about operations, and "no node ever
+	// became leader" is not an operation.
+	//
+	// It is worth asserting on its own because it is the shape the codec
+	// off-by-one had: no leader, no answers, and a clean linearizability verdict
+	// over forty unknowns (BUGS.md BUG-001). A safety claim over a cluster that
+	// never did the thing whose safety is asserted is vacuous, so it is reported
+	// as inconclusive.
+	markVacuousIfNoLeader(res.Reports, res.Census)
 	return res, nil
+}
+
+// markVacuousIfNoLeader downgrades a pass to inconclusive on a run that never
+// elected anybody. Separated out so it can be induced directly: the condition is
+// rare enough in the schedule mix -- 0 of 10,000 seeds -- that a sweep is no
+// evidence at all that the rule works.
+//
+// A VIOLATION is never downgraded. A run that misbehaved without ever electing
+// anybody found something real, and turning that into "we cannot tell" would
+// lose it.
+func markVacuousIfNoLeader(reports []sim.Report, census raftcheck.Census) {
+	if census.ElectionsWon != 0 {
+		return
+	}
+	for i := range reports {
+		if reports[i].Verdict != sim.VerdictPass {
+			continue
+		}
+		reports[i].Verdict = sim.VerdictInconclusive
+		reports[i].Detail = "no node ever became leader in this run, so the cluster never did " +
+			"the thing whose safety this verdict asserts; a pass here is a statement about nothing"
+	}
 }
 
 // RaftCensus aggregates a sweep.

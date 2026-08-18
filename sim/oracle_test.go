@@ -212,3 +212,67 @@ func TestHaltedRunBanksNoSoakHours(t *testing.T) {
 		}
 	}
 }
+
+// TestUnknownDominatedHistoryIsInconclusive induces the client-side half of the
+// vacuous-green rule.
+//
+// A history of unknowns is trivially linearizable: every in-flight operation is
+// a free choice, so a checker can place it in whichever world satisfies the
+// decided ones. A run that answered almost nothing therefore produces a clean
+// verdict while proving nothing, and a codec off-by-one once made exactly that
+// happen -- no leader, forty unanswered operations, porcupine green (BUGS.md
+// BUG-001).
+//
+// Both directions are asserted. A history above the floor must still pass, or
+// the rule is a way to make every run inconclusive.
+func TestUnknownDominatedHistoryIsInconclusive(t *testing.T) {
+	build := func(total, decided int) *History {
+		h := NewHistory()
+		for i := 0; i < total; i++ {
+			idx := h.Begin(clock.Instant(i+1), 0, uint64(i), "put", "k", "v")
+			if i < decided {
+				h.End(idx, clock.Instant(i+2), RespOK, "")
+			}
+		}
+		return h
+	}
+
+	// Above the floor: an ordinary run answers most of its traffic.
+	h := build(40, 36)
+	if got := h.Decided(); got != 36 {
+		t.Fatalf("Decided() counted %d of 36", got)
+	}
+	rs := CheckAll(NewCounters(), h, alwaysPass{})
+	if rs[0].Verdict != VerdictPass {
+		t.Errorf("a history with %d of 40 decided reported %s: %s", h.Decided(), rs[0].Verdict, rs[0].Detail)
+	}
+
+	// Below it: eight of forty is 200 per mille, under the 250 floor.
+	h = build(40, 8)
+	rs = CheckAll(NewCounters(), h, alwaysPass{})
+	if rs[0].Verdict != VerdictInconclusive {
+		t.Fatalf("a history with 8 of 40 operations decided banked a %s; a green over a run that "+
+			"mostly did not answer is a statement about nothing", rs[0].Verdict)
+	}
+	if rs[0].Consumed != 8 {
+		t.Errorf("the report says it consumed %d operations, not the 8 that were decided", rs[0].Consumed)
+	}
+
+	// And the absolute floor still bites first when there is almost nothing at
+	// all, so the two rules do not overlap into one message.
+	h = build(40, 2)
+	rs = CheckAll(NewCounters(), h, alwaysPass{})
+	if rs[0].Verdict != VerdictInconclusive {
+		t.Errorf("2 decided operations banked a %s", rs[0].Verdict)
+	}
+}
+
+// alwaysPass is a checker that would return green over anything, which is the
+// point: what is under test is the floor, not the checker.
+type alwaysPass struct{}
+
+func (alwaysPass) Name() string { return "always-pass" }
+func (alwaysPass) MinOps() int  { return 3 }
+func (alwaysPass) Check(*History) Report {
+	return Report{Verdict: VerdictPass, Detail: "this checker passes anything"}
+}

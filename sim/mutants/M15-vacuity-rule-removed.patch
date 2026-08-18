@@ -1,0 +1,27 @@
+# id: M15-vacuity-rule-removed
+# covering-test: TestUnknownDominatedHistoryIsInconclusive
+# package: ./sim/
+# expect: killed
+# mutates: the unknown-dominated floor is removed, so a history that mostly went unanswered banks a pass -- the shape the codec off-by-one had, where porcupine returned green over 40 operations no node ever answered
+--- a/sim/oracle.go
++++ b/sim/oracle.go
+@@ -264,19 +264,6 @@
+ 			continue
+ 		}
+ 
+-		if perMille := decided * 1000 / total; perMille < UnknownDominatedPerMille {
+-			reports = append(reports, Report{
+-				Checker: c.Name(),
+-				Verdict: VerdictInconclusive,
+-				Detail: fmt.Sprintf(
+-					"only %d of %d operations were decided (%d per mille, floor %d): the history is "+
+-						"unknown-dominated, so a green over it is a statement about a run that mostly "+
+-						"did not answer", decided, total, perMille, UnknownDominatedPerMille),
+-				Consumed: decided,
+-				Min:      min,
+-			})
+-			continue
+-		}
+ 
+ 		r := c.Check(h)
+ 		r.Checker = c.Name()

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anshkanyadi/rift/sim"
 	"github.com/anshkanyadi/rift/sim/hunt"
 )
 
@@ -42,6 +43,8 @@ func TestRaftExitCriteria(t *testing.T) {
 		c.Terms, c.ElectionsStart, c.ElectionsWon, c.SplitVotes)
 	t.Logf("contention:   %d seeds contended, %d seeds never elected anybody",
 		c.SeedsWithContention, c.SeedsWithNoLeader)
+	t.Logf("vacuity:      a seed with no leader, or a history below %d per mille decided, is "+
+		"inconclusive and never a pass", sim.UnknownDominatedPerMille)
 	for _, why := range c.InconclusiveCauses {
 		t.Logf("inconclusive: %s", why)
 	}

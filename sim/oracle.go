@@ -159,6 +159,54 @@ type EndChecker interface {
 	Check(h *History) Report
 }
 
+// UnknownDominatedPerMille is the floor under the fraction of a history's
+// operations that must have been DECIDED before any verdict over it can be a
+// pass. Below it the run is reported inconclusive.
+//
+// # Why a fraction on top of the absolute floor
+//
+// The absolute floor (a checker's MinOps) answers "was there enough to check".
+// This answers a different question: "was what there mostly unknown". A history
+// of unknowns is trivially linearizable -- every in-flight operation is a free
+// choice, so the checker can place it in whichever world satisfies the decided
+// ones -- and a run where almost nothing was answered therefore produces a clean
+// verdict while proving nothing.
+//
+// That is not hypothetical. A codec off-by-one meant no node in the cluster ever
+// became leader, every client operation went unanswered, and porcupine returned
+// PASS over 40 operations. Total system failure, clean safety verdict. The
+// election census caught it; no safety oracle could have (BUGS.md BUG-001).
+//
+// # The threshold, and where 250 comes from
+//
+// Measured over 2000 A1 seeds at commit e3d6af4, decided operations per mille of
+// the history: min 0, p1 550, p5 700, p10 750, p25 850, p50 900, p90 975, max
+// 1000. Ordinary runs answer the large majority of their traffic; the low tail
+// is thin.
+//
+// The floor is set at roughly half the observed 1st percentile, which is the
+// same margin rule the harness-power floors use: wide enough to absorb ordinary
+// drift in the schedule mix, narrow enough that a collapse fails the build.
+// Measured flag rates at candidate thresholds, out of those 2000 seeds:
+//
+//	100 per mille   3 seeds  (1 per mille)
+//	250 per mille   7 seeds  (3 per mille)   <- chosen
+//	500 per mille  14 seeds  (7 per mille)
+//	600 per mille  28 seeds  (14 per mille)
+//
+// The literal reading of "unknown-dominated" -- more unknowns than knowns, 500
+// per mille -- was measured and rejected. It flags 7 per mille of ordinary seeds
+// and would spend a quarter of the 30-per-mille inconclusive ceiling on healthy
+// runs. A gate that fires on healthy runs is a gate somebody eventually loosens,
+// and Amendment A4 forbids loosening this one for any reason. 250 spends 3 per
+// mille and still fails any run where three quarters of the clients never heard
+// back, which is far above the vacuous case it exists to catch.
+//
+// Re-measure when the schedule mix or the workload changes: like every other
+// measured floor in this repository, this one expires when the machinery under
+// it moves.
+const UnknownDominatedPerMille = 250
+
 // CheckAll runs every end-of-run checker and returns the reports in the order
 // the checkers were given.
 //
@@ -194,16 +242,37 @@ func CheckAll(c *Counters, h *History, checkers ...EndChecker) []Report {
 		if min < 1 {
 			min = 1
 		}
-		if h == nil || h.Len() < min {
-			got := 0
-			if h != nil {
-				got = h.Len()
-			}
+		decided, total := 0, 0
+		if h != nil {
+			decided, total = h.Decided(), h.Len()
+		}
+
+		// The floor counts DECIDED operations. Counting recorded ones asks
+		// whether the harness produced traffic; counting decided ones asks
+		// whether the run produced evidence, and only the second is what a
+		// verdict rests on.
+		if h == nil || decided < min {
 			reports = append(reports, Report{
-				Checker:  c.Name(),
-				Verdict:  VerdictInconclusive,
-				Detail:   fmt.Sprintf("history of %d operations is below this checker's floor of %d; it concluded nothing and must not be banked as a pass", got, min),
-				Consumed: got,
+				Checker: c.Name(),
+				Verdict: VerdictInconclusive,
+				Detail: fmt.Sprintf(
+					"%d of %d operations were decided, below this checker's floor of %d; it concluded "+
+						"nothing and must not be banked as a pass", decided, total, min),
+				Consumed: decided,
+				Min:      min,
+			})
+			continue
+		}
+
+		if perMille := decided * 1000 / total; perMille < UnknownDominatedPerMille {
+			reports = append(reports, Report{
+				Checker: c.Name(),
+				Verdict: VerdictInconclusive,
+				Detail: fmt.Sprintf(
+					"only %d of %d operations were decided (%d per mille, floor %d): the history is "+
+						"unknown-dominated, so a green over it is a statement about a run that mostly "+
+						"did not answer", decided, total, perMille, UnknownDominatedPerMille),
+				Consumed: decided,
 				Min:      min,
 			})
 			continue

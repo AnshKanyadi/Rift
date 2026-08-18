@@ -5,15 +5,15 @@
 # mutates: the operation floor is ignored, so a checker that consumed nothing reports pass
 --- a/sim/oracle.go
 +++ b/sim/oracle.go
-@@ -194,7 +194,7 @@
- 		if min < 1 {
- 			min = 1
- 		}
--		if h == nil || h.Len() < min {
+@@ -251,7 +251,7 @@
+ 		// whether the harness produced traffic; counting decided ones asks
+ 		// whether the run produced evidence, and only the second is what a
+ 		// verdict rests on.
+-		if h == nil || decided < min {
 +		if false {
- 			got := 0
- 			if h != nil {
- 				got = h.Len()
+ 			reports = append(reports, Report{
+ 				Checker: c.Name(),
+ 				Verdict: VerdictInconclusive,
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go
 @@ -150,7 +150,7 @@

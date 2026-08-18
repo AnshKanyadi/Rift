@@ -1,0 +1,16 @@
+# id: M16-no-leader-banks-a-pass
+# covering-test: TestNoLeaderIsInconclusiveNotPass
+# package: ./sim/hunt/
+# expect: killed
+# mutates: a run that never elected a leader keeps its pass, so a safety verdict is banked over a cluster that never did the thing whose safety is asserted
+--- a/sim/hunt/raftscenario.go
++++ b/sim/hunt/raftscenario.go
+@@ -220,7 +220,7 @@
+ // anybody found something real, and turning that into "we cannot tell" would
+ // lose it.
+ func markVacuousIfNoLeader(reports []sim.Report, census raftcheck.Census) {
+-	if census.ElectionsWon != 0 {
++	if true {
+ 		return
+ 	}
+ 	for i := range reports {
