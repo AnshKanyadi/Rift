@@ -64,10 +64,34 @@ func (r Role) String() string {
 	return "unknown"
 }
 
+// ProposalID identifies a client proposal independently of where it lands in the
+// log.
+//
+// # Why a log index is not a proposal identity
+//
+// This is the frozen shape from DESIGN-A0 D5, and dropping it produced BUG-004.
+// A driver that matched a client's outstanding proposal against an applied entry
+// by log index alone told the client its write had succeeded when a later leader
+// had overwritten that index with somebody else's command. The index was reused;
+// the proposal was not.
+//
+// Zero is "no proposal", so a forgotten identifier is refused by Propose rather
+// than defaulting into a value that happens to match -- the same derived-field
+// discipline as the plan's nonzero wall epoch, clock.Hold's unset realization
+// and sim.Epoch 0.
+type ProposalID struct {
+	Node NodeID
+	Seq  uint64
+}
+
+// Zero reports whether the identifier is unset.
+func (p ProposalID) Zero() bool { return p.Node == 0 && p.Seq == 0 }
+
 // Entry is one log entry.
 type Entry struct {
 	Term  Term
 	Index Index
+	ID    ProposalID
 	Data  []byte
 }
 
@@ -449,15 +473,24 @@ func (r *Raft) Tick() {
 }
 
 // Propose appends a client command on the leader.
-func (r *Raft) Propose(data []byte) (Index, error) {
-	if r.role != RoleLeader {
-		return 0, ErrNotLeader
+//
+// The signature is DESIGN-A0 D5's, and the identifier is the point: a caller
+// tracks its proposal by the id it supplied, never by the index the entry
+// happened to receive, because a later leader may put a different command at
+// that index. Returning the index was the shape that produced BUG-004.
+func (r *Raft) Propose(id ProposalID, data []byte) error {
+	if id.Zero() {
+		return fmt.Errorf("raft: a proposal needs an identifier; the zero value is refused so a " +
+			"caller cannot fall back to matching on log index, which is not a proposal identity")
 	}
-	e := Entry{Term: r.term, Index: r.lastIndex() + 1, Data: append([]byte(nil), data...)}
+	if r.role != RoleLeader {
+		return ErrNotLeader
+	}
+	e := Entry{Term: r.term, Index: r.lastIndex() + 1, ID: id, Data: append([]byte(nil), data...)}
 	r.appendEntries(e)
 	r.matchIndex[r.peerIdx(r.id)] = e.Index
 	r.broadcastAppend()
-	return e.Index, nil
+	return nil
 }
 
 // Step feeds one message in.

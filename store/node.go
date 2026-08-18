@@ -82,6 +82,10 @@ type Node struct {
 	// kv is the replicated state machine: applied entries land here.
 	kv map[string]string
 
+	// propSeq numbers this node's proposals. Combined with the node id it makes
+	// a ProposalID unique across the cluster.
+	propSeq uint64
+
 	// answered tracks client ops already responded to, by history index.
 	inflight []clientOp
 
@@ -89,7 +93,7 @@ type Node struct {
 }
 
 type clientOp struct {
-	index   raft.Index
+	id      raft.ProposalID
 	histIdx int
 	value   string
 	op      string
@@ -199,12 +203,13 @@ func (n *Node) onClient(ev sim.Event) {
 	// The cheap fix is read index (A7): confirm leadership with a quorum, then
 	// read locally. That is not A1's scope, so A1 pays the honest price and
 	// replicates reads. BENCHMARKS.md will state that cost when A7 removes it.
-	idx, err := n.raft.Propose(encodeCmd(req.Op, req.Key, req.Value))
-	if err != nil {
+	n.propSeq++
+	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
+	if err := n.raft.Propose(id, encodeCmd(req.Op, req.Key, req.Value)); err != nil {
 		return
 	}
 	n.inflight = append(n.inflight, clientOp{
-		index: idx, histIdx: req.HistIdx, key: req.Key, value: req.Value, op: req.Op,
+		id: id, histIdx: req.HistIdx, key: req.Key, value: req.Value, op: req.Op,
 	})
 }
 
@@ -265,10 +270,23 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 
 // answerAt completes the client operation whose entry has just been applied,
 // reading the state machine at exactly that log position.
+//
+// Matching is on the proposal's own identifier, never on the log index. A log
+// index is not a proposal identity: a later leader may place a different command
+// at the same index, and answering on an index match tells the client its write
+// succeeded when the slot was taken by somebody else (BUG-004).
+//
+// A proposal whose entry was overwritten is simply never answered, and that is
+// the correct outcome rather than a gap. The client genuinely does not know
+// whether its write happened, so the history leaves it in flight and the checker
+// treats it as may-or-may-not-have-happened -- the honest answer.
 func (n *Node) answerAt(e raft.Entry, op, key string, at clock.Instant) {
+	if e.ID.Zero() {
+		return
+	}
 	kept := n.inflight[:0]
 	for _, c := range n.inflight {
-		if c.index != e.Index {
+		if c.id != e.ID {
 			kept = append(kept, c)
 			continue
 		}

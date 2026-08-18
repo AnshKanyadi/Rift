@@ -58,6 +58,8 @@ func decodeHardState(b []byte) raft.HardState {
 func encodeEntry(e raft.Entry) []byte {
 	b := putU64(nil, uint64(e.Term))
 	b = putU64(b, uint64(e.Index))
+	b = putU64(b, uint64(e.ID.Node))
+	b = putU64(b, e.ID.Seq)
 	return putBytes(b, e.Data)
 }
 
@@ -70,11 +72,23 @@ func decodeEntry(b []byte) (raft.Entry, bool) {
 	if !ok {
 		return raft.Entry{}, false
 	}
+	pn, b, ok := takeU64(b)
+	if !ok {
+		return raft.Entry{}, false
+	}
+	ps, b, ok := takeU64(b)
+	if !ok {
+		return raft.Entry{}, false
+	}
 	d, _, ok := takeBytes(b)
 	if !ok {
 		return raft.Entry{}, false
 	}
-	return raft.Entry{Term: raft.Term(t), Index: raft.Index(i), Data: d}, true
+	return raft.Entry{
+		Term: raft.Term(t), Index: raft.Index(i),
+		ID:   raft.ProposalID{Node: raft.NodeID(pn), Seq: ps},
+		Data: d,
+	}, true
 }
 
 func encodeMessage(m raft.Message) []byte {
