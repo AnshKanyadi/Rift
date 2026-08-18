@@ -1,0 +1,16 @@
+# id: M11-halt-on-last
+# covering-test: TestOracleHaltsAtTheFirstViolation
+# package: ./sim/
+# expect: killed
+# mutates: the loop keeps running after a violation, so it records the last rather than the first
+--- a/sim/loop.go
++++ b/sim/loop.go
+@@ -199,7 +199,7 @@
+ 			return l.outcome(OutcomeStepLimit, l.now), nil
+ 		}
+ 		l.step()
+-		if l.halted != nil {
++		if false {
+ 			l.closed = true
+ 			return l.outcome(OutcomeHalted, l.now), nil
+ 		}

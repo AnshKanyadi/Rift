@@ -1,0 +1,16 @@
+# id: canary-mispointed
+# covering-test: TestLinearizableHistoryPasses
+# package: ./sim/checker/
+# expect: alive
+# mutates: the timeout-as-pass mutation, declared against a test that does not cover it
+--- a/sim/checker/porcupine.go
++++ b/sim/checker/porcupine.go
+@@ -142,7 +142,7 @@
+ 			}
+ 		case porcupine.Unknown:
+ 			return sim.Report{
+-				Verdict:  sim.VerdictInconclusive,
++				Verdict:  sim.VerdictPass,
+ 				Detail:   fmt.Sprintf("key %q did not finish checking within %s over %d operations; this is not a pass, and the fix is a smaller problem rather than a longer timeout", kh.Key, c.Timeout, len(ops)),
+ 				Consumed: consumed,
+ 			}

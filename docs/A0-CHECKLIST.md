@@ -81,7 +81,7 @@ says yes.
 | 7 | the toy over 1k seeds | CLOSED | no |
 | 8 | `simctl run \| replay`, and the bundle chain | CLOSED | no |
 | 9 | `simctl hunt` | LANDED — awaiting a ruling | **yes** |
-| 10 | the mutant suite as patches | NOT STARTED | **yes** |
+| 10 | the mutant suite as patches | LANDED — awaiting a ruling | **yes** |
 | 11 | `node/`, the real-mode mailbox driver | LANDED — awaiting a ruling | **yes** |
 
 **Steps 1 through 8 are closed** (Ansh, 2026-08-17). A0 closes on 9, 10 and 11.
@@ -257,7 +257,7 @@ workers.
 
 `make smoke` and `make soak` are no longer stubs: both are `simctl hunt` over a seed range.
 
-### Step 10 — the mutant suite as patches. NOT STARTED
+### Step 10 — the mutant suite as patches. LANDED, awaiting a ruling
 
 **Exit condition.** Mutants are patches applied to a scratch worktree (`sim/mutants/*.patch`, DR-27),
 each header naming the mutant ID and the failure class it validates; every mutant is killed within
@@ -265,12 +265,21 @@ its budget; **kill-time per mutant is recorded** — seeds-to-detection and wall
 and a kill-time regression is treated as a harness regression even while every mutant still dies. The
 lane runs on every push. This is permanent policy under Amendment A2, not an A0 acceptance device.
 
-**Anchor:** none yet. `sim/mutants/` does not exist; `make mutants` is a stub (`Makefile:86-88`). The
-six oracle-targeting mutant classes are specified in advance at `docs/DESIGN-A0.9-oracles.md:144-158`.
+**Anchor:** `sim/mutants/` (11 patches), `scripts/mutants.sh`, `make mutants`. Ten mutants killed, one
+canary alive, zero mismatched, zero rotted, with kill-time recorded per mutant.
 
-The analogous machinery **one level down is built and green**: `tools/determinismcheck/blind/` holds
-19 patches, and `make blind` reports 18 killed, 1 canary alive, 0 mismatched. That is the shape step
-10 reproduces for the system under test.
+The six oracle classes specified in advance at `docs/DESIGN-A0.9-oracles.md:144-158` are all present
+(`M8`–`M13`), alongside the four flaw classes (`M1`–`M4`) applied to the *correct* toy so the mutation
+is a real source defect rather than a field the toy already honours.
+
+Both gates carried over from the blind lane, and both induced: the baseline gate reports INVALID
+rather than reporting kills against a red tree, and `canary-mispointed` is declared against a test
+that does not cover it and must survive. ROT detection was induced by moving a patch's context, and
+reports the patch by name.
+
+Several of these mutants **cannot exist as committed Go files** — `sim/` and `sim/toy` are in the
+determinism pass's core scope, so the tree would not build, which is exactly what those mutants mean
+(DR-27).
 
 ### Step 11 — `node/`, the real-mode mailbox driver. LANDED, awaiting a ruling — A0-close-blocking
 

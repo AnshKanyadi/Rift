@@ -1,0 +1,16 @@
+# id: M9-timeout-as-pass
+# covering-test: TestTimeoutIsInconclusiveNotPass
+# package: ./sim/checker/
+# expect: killed
+# mutates: a checker timeout is scored as a pass rather than inconclusive
+--- a/sim/checker/porcupine.go
++++ b/sim/checker/porcupine.go
+@@ -142,7 +142,7 @@
+ 			}
+ 		case porcupine.Unknown:
+ 			return sim.Report{
+-				Verdict:  sim.VerdictInconclusive,
++				Verdict:  sim.VerdictPass,
+ 				Detail:   fmt.Sprintf("key %q did not finish checking within %s over %d operations; this is not a pass, and the fix is a smaller problem rather than a longer timeout", kh.Key, c.Timeout, len(ops)),
+ 				Consumed: consumed,
+ 			}

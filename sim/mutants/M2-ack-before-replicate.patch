@@ -1,0 +1,16 @@
+# id: M2-ack-before-replicate
+# covering-test: TestFailoverDoesNotManufactureViolations
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the primary acknowledges before the backups have the write
+--- a/sim/toy/toy.go
++++ b/sim/toy/toy.go
+@@ -637,7 +637,7 @@
+ 		return
+ 	}
+ 	needDurable := n.Flaw != FlawAckBeforeSync
+-	needAcks := n.Flaw != FlawAckBeforeReplicate
++	needAcks := false
+ 
+ 	if needDurable && !p.durable {
+ 		return

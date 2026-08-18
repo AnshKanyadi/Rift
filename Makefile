@@ -8,6 +8,7 @@ GO           ?= go
 STUB         := ./scripts/lane-stub.sh
 TOOLING_ONLY := ./scripts/tooling-only.sh
 BLIND        := ./scripts/blind-analyzer.sh
+MUTANTS      := ./scripts/mutants.sh
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -92,8 +93,8 @@ soak: ## $(SOAK_SEEDS)-seed nightly soak
 	$(GO) run ./cmd/simctl hunt --from 0 --to $(SOAK_SEEDS) --workers $(WORKERS)
 
 .PHONY: mutants
-mutants: ## [STUB->A0.12] Mutant suite; must kill every mutant within budget, records kill-time
-	@$(STUB) mutants A0.12 "sim/toy/mutants; kill-time per mutant recorded (CLAUDE.md A2)"
+mutants: ## Mutant suite: every planted defect must be caught by its declared test
+	@$(MUTANTS)
 
 .PHONY: bench
 bench: ## [STUB->B5/I2] Benchmark smoke with regression tracking
@@ -126,7 +127,8 @@ lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
 	@echo "       hatches blind power assertions"
 	@echo "       smoke soak"
-	@echo "STUB : mutants(A0.12)"
+	@echo "       mutants"
+	@echo "STUB : (none in A0)"
 	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
 	@echo "       killpoints(B4) differential(B4)"
 	@echo

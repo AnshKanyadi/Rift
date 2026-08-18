@@ -1,0 +1,16 @@
+# id: M1-ack-before-sync
+# covering-test: TestToySurvivesOneThousandSeeds
+# package: ./sim/hunt/
+# expect: killed
+# mutates: the primary acknowledges a write before it is durable
+--- a/sim/toy/toy.go
++++ b/sim/toy/toy.go
+@@ -636,7 +636,7 @@
+ 	if p.answered {
+ 		return
+ 	}
+-	needDurable := n.Flaw != FlawAckBeforeSync
++	needDurable := false
+ 	needAcks := n.Flaw != FlawAckBeforeReplicate
+ 
+ 	if needDurable && !p.durable {

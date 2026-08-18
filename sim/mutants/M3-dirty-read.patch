@@ -1,0 +1,16 @@
+# id: M3-dirty-read
+# covering-test: TestToySurvivesOneThousandSeeds
+# package: ./sim/hunt/
+# expect: killed
+# mutates: reads are served from engine-visible state instead of committed state
+--- a/sim/toy/toy.go
++++ b/sim/toy/toy.go
+@@ -510,7 +510,7 @@
+ 		// difference is a write this replica is still holding speculatively,
+ 		// and letting a client see one is a read of something that can still
+ 		// un-happen. FlawDirtyRead is that bug, kept reachable.
+-		if n.Flaw == FlawDirtyRead {
++		if true {
+ 			val, err := n.db.Get([]byte(req.Key))
+ 			if err != nil {
+ 				n.hist.End(req.HistIdx, ev.At, sim.RespOK, "")

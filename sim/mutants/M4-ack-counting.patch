@@ -1,0 +1,16 @@
+# id: M4-ack-counting
+# covering-test: TestFailoverDoesNotManufactureViolations
+# package: ./sim/hunt/
+# expect: killed
+# mutates: acknowledgements are counted rather than attributed, so a duplicate satisfies the quorum
+--- a/sim/toy/toy.go
++++ b/sim/toy/toy.go
+@@ -652,7 +652,7 @@
+ // FlawAckCounting -- how many acknowledgements arrived, which is not the same
+ // number the moment the transport duplicates one.
+ func (n *Node) ackedPeers(p *pending) int {
+-	if n.Flaw == FlawAckCounting {
++	if true {
+ 		return p.acks
+ 	}
+ 	return len(p.acked)

@@ -1,0 +1,16 @@
+# id: M13-dump-without-plan
+# covering-test: TestPlantedViolationHaltsTheRun
+# package: ./sim/
+# expect: killed
+# mutates: the violation dump omits the plan reference, so a finding names no reproduction
+--- a/sim/loop.go
++++ b/sim/loop.go
+@@ -313,7 +313,7 @@
+ 		return ""
+ 	}
+ 	return fmt.Sprintf("VIOLATION %s\n  plan:   %s\n  at:     instant %d, step %d\n  census: %s",
+-		l.halted.Detail, planRefOr(l.cfg.PlanRef), int64(l.halted.At), l.halted.Step, l.census)
++		l.halted.Detail, "", int64(l.halted.At), l.halted.Step, l.census)
+ }
+ 
+ func planRefOr(s string) string {

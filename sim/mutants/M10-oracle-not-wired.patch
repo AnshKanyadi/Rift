@@ -1,0 +1,16 @@
+# id: M10-oracle-not-wired
+# covering-test: TestPlantedViolationHaltsTheRun
+# package: ./sim/
+# expect: killed
+# mutates: OnStep violations are discarded by the loop, so no oracle can ever halt a run
+--- a/sim/loop.go
++++ b/sim/loop.go
+@@ -293,7 +293,7 @@
+ 		if v := o.OnStep(l, ev); v != nil {
+ 			v.At = l.now
+ 			v.Step = l.steps
+-			l.halted = v
++			_ = v
+ 			return
+ 		}
+ 	}
