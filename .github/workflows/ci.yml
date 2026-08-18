@@ -109,3 +109,18 @@ jobs:
       # other lane stayed green. This one fails when a planted flaw class stops
       # being found at its standing floor.
       - run: make power
+
+  corpus:
+    name: corpus replays
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # "Every bug ever found replays from a single seed" is a published claim,
+      # and nothing enforced it until this lane. A bundle stops reproducing the
+      # moment the harness moves under it, in complete silence -- both A0
+      # bundles had already rotted when the lane was written.
+      - run: make corpus

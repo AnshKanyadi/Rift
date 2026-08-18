@@ -58,7 +58,9 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/sim"
@@ -77,7 +79,17 @@ const (
 
 // Meta is what a bundle records beside its plan.
 type Meta struct {
-	Seed        uint64        `json:"seed"`
+	Seed uint64 `json:"seed"`
+
+	// Commit is the revision the bundle was recorded at.
+	//
+	// seeds/README.md has claimed since A0 that meta.json carries it, and it did
+	// not. It matters for exactly one reason: the trace hash is a property of
+	// the HARNESS, not of the plan, so a hash that no longer matches means
+	// either corpus rot or a deliberate harness change -- and without the commit
+	// there is no way to tell which, or to go and look.
+	Commit string `json:"commit"`
+
 	Workload    string        `json:"workload"`
 	Scenario    *ScenarioMeta `json:"scenario,omitempty"`
 	TraceHash   string        `json:"trace_hash"`
@@ -199,6 +211,7 @@ func cmdRun(args []string) int {
 	}
 
 	if *out != "" {
+		meta.Commit = headCommit()
 		if err := writeBundle(*out, p, meta, hist); err != nil {
 			return fail("writing bundle: %v", err)
 		}
@@ -251,7 +264,11 @@ func cmdReplay(args []string) int {
 		return fail("replay: %v", err)
 	}
 
-	fmt.Printf("recorded %s\n", recorded.TraceHash)
+	at := recorded.Commit
+	if at == "" {
+		at = "a commit the bundle does not record"
+	}
+	fmt.Printf("recorded %s (at %s)\n", recorded.TraceHash, at)
 	fmt.Printf("replayed %s\n", got.TraceHash)
 
 	if *strip {
@@ -425,6 +442,19 @@ type noopNode struct{}
 
 func (noopNode) Handle(sim.Event, sim.Scheduler) {}
 
+// headCommit is the revision a bundle is being recorded at, or a stated unknown.
+//
+// A missing sha is written as "unknown" rather than left empty: an empty string
+// reads as "the field was not part of the format", and the whole point of the
+// field is to say where the recorded hash came from.
+func headCommit() string {
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func writeBundle(dir string, p *plan.Plan, meta Meta, hist *sim.History) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -567,6 +597,7 @@ func cmdHunt(args []string) int {
 	fmt.Printf("         %s\n", describeViolation(meta.Violation))
 
 	if *out != "" {
+		meta.Commit = headCommit()
 		if err := writeBundle(*out, p, meta, hist); err != nil {
 			return fail("writing bundle: %v", err)
 		}

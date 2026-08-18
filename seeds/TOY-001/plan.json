@@ -135,7 +135,7 @@
         "node": 2
       },
       {
-        "at_ns": 6138619891,
+        "at_ns": 4958032072,
         "action": "restart",
         "node": 2
       }
@@ -402,7 +402,7 @@
   "assert": {
     "min_fires": {
       "crash": 1,
-      "partition": 1,
+      "partition": 2,
       "restart": 1,
       "sent": 1
     }

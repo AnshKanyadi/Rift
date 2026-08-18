@@ -57,8 +57,8 @@ what changes — never the checker.
 | **Found by** | sim — 1000-seed sweep of the *correct* toy, with no flaw planted |
 | **Phase** | A0 (checklist step 7) |
 | **Reproduce (seed)** | `simctl run --seed 103 --workload toy --flaw none` at the commit that contained the bug |
-| **Reproduce (plan)** | `simctl replay --bundle seeds/BUG-001` (any commit; the bundle plants `--flaw dirty-read`, which is the bug preserved as a mutant) |
-| **Triage verdict** | `simctl replay --bundle seeds/BUG-001 --strip-faults` → **VIOLATION DID NOT SURVIVE**; the finding is fault-dependent, so it is the toy rather than the harness or the workload |
+| **Reproduce (plan)** | `simctl replay --bundle seeds/TOY-001` (any commit; the bundle plants `--flaw dirty-read`, which is the bug preserved as a mutant) |
+| **Triage verdict** | `simctl replay --bundle seeds/TOY-001 --strip-faults` → **VIOLATION DID NOT SURVIVE**; the finding is fault-dependent, so it is the toy rather than the harness or the workload |
 | **Invariant that caught it** | Linearizability of single-key reads and writes (porcupine, per key) |
 | **Mutant class** | none existed — added `toy.FlawDirtyRead` in the same change, per Amendment A2 |
 | **Fix commit** | *(recorded on landing; see the commit titled "BUG fixes: the dirty read and the counted acknowledgement")* |
@@ -121,8 +121,8 @@ overlapped.
 | **Found by** | sim — 1000-seed sweep of the *correct* toy under failover, with no flaw planted |
 | **Phase** | A0 (checklist step 7) |
 | **Reproduce (seed)** | `simctl run --seed 153 --workload toy --flaw none --failover` at the commit that contained the bug |
-| **Reproduce (plan)** | `simctl replay --bundle seeds/BUG-002` (any commit; the bundle plants `--flaw ack-counting`) |
-| **Triage verdict** | `simctl replay --bundle seeds/BUG-002 --strip-faults` → **VIOLATION DID NOT SURVIVE**; fault-dependent, so the toy rather than the harness |
+| **Reproduce (plan)** | `simctl replay --bundle seeds/TOY-002` (any commit; the bundle plants `--flaw ack-counting`) |
+| **Triage verdict** | `simctl replay --bundle seeds/TOY-002 --strip-faults` → **VIOLATION DID NOT SURVIVE**; fault-dependent, so the toy rather than the harness |
 | **Invariant that caught it** | Linearizability of single-key reads and writes (porcupine, per key) |
 | **Mutant class** | none existed — added `toy.FlawAckCounting` in the same change, per Amendment A2 |
 | **Fix commit** | *(recorded on landing; same commit as TOY-001)* |
