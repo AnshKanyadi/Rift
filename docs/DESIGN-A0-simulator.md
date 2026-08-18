@@ -345,7 +345,7 @@ This is the most consequential interface in the repo; A1–A10 all live behind i
 (a) is simplest and proven, but it serializes fsync against replication: with only one outstanding
 `Ready`, a follower cannot be appending batch *n+1* while batch *n* is in flight to disk. That caps
 throughput at `1/fsync_latency` proposals per node, which directly undercuts the A9/I2 latency and
-throughput claims. It also puts the persist-before-reply invariant in the *driver's* hands: the
+throughput claims. ~~A9~~ `[A6]` It also puts the persist-before-reply invariant in the *driver's* hands: the
 driver is told "persist these, send those" and must remember the ordering rule. Drivers forget.
 
 (c) is the most flexible and is where etcd landed, but it turns storage into an in-band protocol
@@ -446,6 +446,27 @@ expect to need it.
 **Rejected:** (a) — one outstanding `Ready` serializes fsync with replication and pushes the
 persist-before-reply rule onto the driver. (c) — correct but a larger surface than A1 should carry;
 (b) is a strict subset with the same safety property.
+
+#### [Amended — Ansh, 2026-08-17] DR-7 survives on the safety argument alone
+
+Raised by Claude at the start of A1, against its own draft, before writing code against a stale
+justification.
+
+**The A9 clause above is struck** under Amendment A6: parallel commits moved to STRETCH.md, so half
+of the throughput rationale no longer refers to anything this project ships. **I2 still wants
+pipelining**, so the throughput argument is diminished rather than gone.
+
+The original text is left in place, struck rather than deleted, because *the record of what we
+believed when we decided is part of the decision*. Nothing is renumbered.
+
+**DR-7 is re-affirmed on its safety half, which never depended on throughput:** gating inside
+`raft/`, with no ordering obligation on the driver. That half stands on its own and needs no citation
+to A9 or I2. It is also the load-bearing half — the throughput argument would justify pipelining, but
+only the safety argument justifies *where the gate lives*, and where the gate lives is the decision.
+
+**No scope trim.** Full disaggregation is implemented in A1 rather than deferred to I2. Trimming it
+would be optimizing against measurements that do not exist, and since the disaggregated shape *is*
+the safety shape, building the simpler thing first means building the safety-critical seam twice.
 
 ---
 

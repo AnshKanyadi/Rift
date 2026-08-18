@@ -141,6 +141,10 @@ func NewLoop(cfg Config) (*Loop, error) {
 	return l, nil
 }
 
+// SetOracles attaches oracles after construction, for drivers that build the
+// loop through a plan and then construct the nodes the oracles watch.
+func (l *Loop) SetOracles(os []Oracle) { l.cfg.Oracles = os }
+
 // SetTrace attaches a trace after construction, for drivers that build the loop
 // through a plan and want its identity recorded.
 func (l *Loop) SetTrace(t *Trace) { l.cfg.Trace = t }

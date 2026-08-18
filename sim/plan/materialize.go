@@ -179,6 +179,18 @@ func genClocks(p *Plan, r rng.Rand, cfg GenConfig) {
 func genFaults(p *Plan, r rng.Rand, cfg GenConfig) {
 	dur := p.Config.DurationNS
 
+	// cutLinks tracks the distinct directed links this plan cuts, because that
+	// -- not the number of partition entries -- is what the transport can
+	// actually fire.
+	//
+	// SimTransport.Cut is idempotent: cutting an already-cut link injects
+	// nothing, since the link is already down. Overlapping partitions are a
+	// schedule worth keeping (a node cut off from two peers at once is exactly
+	// the interesting geometry), so the fix is the assertion rather than the
+	// physics: the floor is the number of distinct directed links, which is a
+	// true lower bound and still fails if the partition injector stops working.
+	cutLinks := make(map[[2]int]bool)
+
 	// The floor is the number of entries planned, not one.
 	//
 	// It was one, set inside this loop, so a plan with two crashes asserted that
@@ -236,15 +248,18 @@ func genFaults(p *Plan, r rng.Rand, cfg GenConfig) {
 			Entry{AtNS: at, Action: cut, From: a, To: b},
 			Entry{AtNS: at + width, Action: heal, From: a, To: b},
 		)
-		// A symmetric cut is two directed cuts and counts as two, because that is
-		// what the transport actually does. The heal is not counted: it removes a
-		// fault rather than injecting one, and a partition that outlives the run
-		// is a legitimate schedule.
+		// A symmetric cut is two directed cuts; a single cut is one. Counted as
+		// distinct links, because Cut is idempotent and a repeat injects
+		// nothing. The heal is not counted: it removes a fault rather than
+		// injecting one, and a partition that outlives the run is a legitimate
+		// schedule.
+		cutLinks[[2]int{a, b}] = true
 		if cut == "cut_both" {
-			p.Assert.MinFires["partition"] += 2
-		} else {
-			p.Assert.MinFires["partition"] += 1
+			cutLinks[[2]int{b, a}] = true
 		}
+	}
+	if n := len(cutLinks); n > 0 {
+		p.Assert.MinFires["partition"] = uint64(n)
 	}
 
 	sortEntries(p.Faults.Entries)
