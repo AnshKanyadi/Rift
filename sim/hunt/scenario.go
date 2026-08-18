@@ -92,6 +92,7 @@ func RunToy(p *plan.Plan, sc toy.Scenario, tr *sim.Trace) (Result, error) {
 			Transport:      run.Transport,
 			History:        hist,
 			Flaw:           sc.Flaw,
+			Counters:       run.Counters,
 			SyncLatency:    sc.SyncLatency,
 			ReplicationRTT: rtt,
 		})
@@ -161,7 +162,7 @@ func RunToy(p *plan.Plan, sc toy.Scenario, tr *sim.Trace) (Result, error) {
 
 	return Result{
 		Outcome:  out,
-		Reports:  sim.CheckAll(hist, checker.NewLinearizability()),
+		Reports:  sim.CheckAll(run.Counters, hist, checker.NewLinearizability()),
 		History:  hist,
 		Counters: run.Counters,
 	}, nil

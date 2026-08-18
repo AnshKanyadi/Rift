@@ -67,6 +67,10 @@ hatches: ## Assert HATCHES.txt matches the tree exactly (never rewrites it; -upd
 blind: ## Mutation-test the determinism pass itself; each blinded rule must fail its own test
 	@$(BLIND)
 
+.PHONY: assertions
+assertions: ## Every declared every-run assertion mechanism must actually be invoked
+	$(GO) test -count=1 -run 'TestEveryAssertionMechanismIsInvoked|TestAssertionRegistryIsWellFormed' ./sim/hunt/
+
 .PHONY: power
 power: ## Harness-power floors: every planted flaw class must still be detected at its floor
 	$(GO) test -count=1 -run 'TestHarnessPower|TestEveryObservableFlawHasAFloor' ./sim/hunt/
@@ -75,7 +79,7 @@ power: ## Harness-power floors: every planted flaw class must still be detected 
 lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power smoke mutants ## Everything the push lane runs
+ci: build lint test race blind power assertions smoke mutants ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 
@@ -120,7 +124,7 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 .PHONY: lanes
 lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
-	@echo "       hatches blind power"
+	@echo "       hatches blind power assertions"
 	@echo "       smoke soak"
 	@echo "STUB : mutants(A0.12)"
 	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"

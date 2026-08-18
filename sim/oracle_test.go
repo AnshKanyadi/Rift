@@ -174,7 +174,7 @@ func TestCheckerWithNoVerdictIsInconclusive(t *testing.T) {
 	i := h.Begin(0, 1, 1, "put", "a", "1")
 	h.End(i, 10, RespOK, "")
 
-	reports := CheckAll(h, forgetful{})
+	reports := CheckAll(NewCounters(), h, forgetful{})
 	if reports[0].Verdict != VerdictInconclusive {
 		t.Errorf("a checker returning no verdict was reported %v", reports[0].Verdict)
 	}

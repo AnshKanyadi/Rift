@@ -47,9 +47,12 @@ type Run struct {
 // what makes deleting one fault entry leave every other dice outcome
 // bit-identical, the property ddmin's validity rests on.
 func Build(p *Plan, nodes []sim.Node) (*Run, error) {
+	counts := sim.NewCounters()
+
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	counts.Asserted("plan.Plan.Validate")
 	if len(nodes) != p.Config.Nodes {
 		return nil, fmt.Errorf("plan: plan wants %d nodes, got %d", p.Config.Nodes, len(nodes))
 	}
@@ -58,13 +61,13 @@ func Build(p *Plan, nodes []sim.Node) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	// clock.NewSim cannot return without Timeline.Validate having run.
+	counts.Asserted("clock.Timeline.Validate")
 
 	netKey, err := rng.ParseKey(p.Keys.Net)
 	if err != nil {
 		return nil, fmt.Errorf("plan: net key: %w", err)
 	}
-
-	counts := sim.NewCounters()
 
 	loop, err := sim.NewLoop(sim.Config{
 		Nodes:        nodes,

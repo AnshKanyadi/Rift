@@ -167,7 +167,27 @@ type EndChecker interface {
 // silent-success failure the count-not-presence rule exists to catch — and it
 // would poison the soak ledger from the first banked hour, because nothing
 // distinguishes "checked and found nothing wrong" from "checked nothing".
-func CheckAll(h *History, checkers ...EndChecker) []Report {
+func CheckAll(c *Counters, h *History, checkers ...EndChecker) []Report {
+	c.Asserted("sim.CheckAll")
+
+	// History.Validate was written to "reject a history that cannot be checked,
+	// so a malformed one fails loudly rather than being handed to a checker that
+	// returns green" -- and it was called by nothing. Fourth instance of the
+	// family: an assertion that exists and never runs.
+	//
+	// A malformed history is a harness failure, not a violation, so it is
+	// reported as an inconclusive rather than folded into either verdict.
+	c.Asserted("sim.History.Validate")
+	if h != nil {
+		if err := h.Validate(); err != nil {
+			return []Report{{
+				Checker: "history",
+				Verdict: VerdictInconclusive,
+				Detail:  fmt.Sprintf("the history is not checkable: %v", err),
+			}}
+		}
+	}
+
 	reports := make([]Report, 0, len(checkers))
 	for _, c := range checkers {
 		min := c.MinOps()

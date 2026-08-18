@@ -32,7 +32,7 @@ func TestLinearizableHistoryPasses(t *testing.T) {
 	put(h, 1, 2, "a", "two", 40, 50)
 	get(h, 2, 2, "a", "two", 60, 70)
 
-	reports := sim.CheckAll(h, checker.NewLinearizability())
+	reports := sim.CheckAll(sim.NewCounters(), h, checker.NewLinearizability())
 	if len(reports) != 1 {
 		t.Fatalf("got %d reports, want 1", len(reports))
 	}
@@ -59,7 +59,7 @@ func TestNonLinearizableHistoryIsAViolation(t *testing.T) {
 	put(h, 1, 2, "a", "two", 20, 30)
 	get(h, 2, 1, "a", "one", 40, 50) // stale read of an overwritten value
 
-	reports := sim.CheckAll(h, checker.NewLinearizability())
+	reports := sim.CheckAll(sim.NewCounters(), h, checker.NewLinearizability())
 	if reports[0].Verdict != sim.VerdictViolation {
 		t.Fatalf("a stale read after two completed writes was reported %v: %s",
 			reports[0].Verdict, reports[0].Detail)
@@ -95,7 +95,7 @@ func TestEmptyHistoryIsInconclusiveNeverPass(t *testing.T) {
 			return h
 		}()},
 	} {
-		reports := sim.CheckAll(tc.h, checker.NewLinearizability())
+		reports := sim.CheckAll(sim.NewCounters(), tc.h, checker.NewLinearizability())
 		if reports[0].Verdict != sim.VerdictInconclusive {
 			t.Errorf("%s: verdict %v, want inconclusive", tc.name, reports[0].Verdict)
 		}
@@ -125,7 +125,7 @@ func TestUnavailabilityIsNotAViolation(t *testing.T) {
 	// A later read sees either value, and both worlds are legal.
 	get(h, 2, 2, "a", "one", 60, 70)
 
-	reports := sim.CheckAll(h, checker.NewLinearizability())
+	reports := sim.CheckAll(sim.NewCounters(), h, checker.NewLinearizability())
 	if reports[0].Verdict == sim.VerdictViolation {
 		t.Errorf("unavailability was scored as a safety violation: %s", reports[0].Detail)
 	}
@@ -146,7 +146,7 @@ func TestTimeoutIsInconclusiveNotPass(t *testing.T) {
 
 	c := checker.NewLinearizability()
 	c.Timeout = 1 // one nanosecond: the search cannot complete
-	reports := sim.CheckAll(h, c)
+	reports := sim.CheckAll(sim.NewCounters(), h, c)
 
 	if reports[0].Verdict.CountsAsPass() {
 		t.Errorf("a timed-out check counted as a pass: %s", reports[0].Detail)

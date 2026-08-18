@@ -418,6 +418,11 @@ type Config struct {
 	// DefaultSyncLatency, whose argument lives at its definition.
 	SyncLatency clock.Instant
 
+	// Counters censuses that the window gate actually ran. Nil is tolerated for
+	// callers outside a plan-built run; the lane asserts the run path supplies
+	// it, which is the path that matters.
+	Counters *sim.Counters
+
 	// ReplicationRTT is the round trip the window is validated against, and it
 	// has **no default on purpose**.
 	//
@@ -461,6 +466,7 @@ func New(cfg Config) (*Node, error) {
 	if err := ValidateWindow(sync, cfg.ReplicationRTT); err != nil {
 		return nil, err
 	}
+	cfg.Counters.Asserted("toy.ValidateWindow")
 
 	return &Node{
 		ID: cfg.ID, Primary: cfg.Primary, Peers: cfg.Peers, Flaw: cfg.Flaw,

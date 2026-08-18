@@ -109,6 +109,9 @@ func InjectorByName(s string) (Injector, bool) {
 type Counters struct {
 	fired    [numInjectors]uint64
 	minFires map[Injector]uint64
+
+	// asserted censuses which assertion mechanisms actually ran this run.
+	asserted map[string]uint64
 }
 
 // NewCounters returns an empty set with no minimums configured.
@@ -168,7 +171,51 @@ func (s Shortfall) String() string {
 // failing so that a hunt can report all shortfalls at once rather than the
 // first, and so that the envelope mode -- where some injectors are deliberately
 // off -- can decide for itself.
+// Asserted records that a named assertion mechanism ran during this run.
+//
+// # Why this exists
+//
+// This repository has now shipped three assertion mechanisms that were never
+// invoked: ValidateWindow, called by nothing; Counters.Check, called by nothing;
+// and InjClockHold, required by every plan with a hold and fired by nothing.
+// **A check that is never invoked is indistinguishable from a check that always
+// passes**, and nothing in the tree could tell the difference.
+//
+// So invocation is censused rather than inspected. The census is per run and
+// carried on the object already threaded everywhere the harness reaches; there
+// is no package-level counter, which core scope could not hold anyway.
+//
+// The lane this feeds answers "was it called". Whether a mechanism that was
+// called still *catches* anything is the mutant suite's question, and the two
+// are deliberately separate instruments.
+func (c *Counters) Asserted(name string) {
+	if c == nil {
+		return
+	}
+	if c.asserted == nil {
+		c.asserted = make(map[string]uint64)
+	}
+	c.asserted[name]++
+}
+
+// AssertionCensus is the sorted list of mechanisms that ran.
+func (c *Counters) AssertionCensus() []string {
+	if c == nil {
+		return nil
+	}
+	return sorted.Keys(c.asserted)
+}
+
+// AssertionCount is how many times a named mechanism ran.
+func (c *Counters) AssertionCount(name string) uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.asserted[name]
+}
+
 func (c *Counters) Check() []Shortfall {
+	c.Asserted("sim.Counters.Check")
 	var out []Shortfall
 	for _, i := range sorted.Keys(c.minFires) {
 		if got := c.Count(i); got < c.minFires[i] {

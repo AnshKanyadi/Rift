@@ -470,6 +470,14 @@ rather than the observed, and every one made the machinery appear stronger than 
 
 Not one was a wrong answer. Every one was an **unasked question**, and each reported green.
 
+### The sentence that carries it
+
+**Defect 6 would have caught defects 4 and 5 the day either was written, and it could not, because
+it was the thing that was broken.**
+
+Six defects total, four of them inside the mechanism designated as the defence against the class the
+other two belong to. **The guard rail was never installed.**
+
 ### The part that matters
 
 Defects 4, 5 and 6 are all in the fire-count machinery — **the mechanism designated as the defence
@@ -550,3 +558,60 @@ the change of default is visible rather than inferred.
 `ack-before-replicate under failover` from 32. The floor *values* are unchanged because the reasoning
 that set them is unchanged — half the measured rate for the strong class, detected-at-all for the two
 weak ones — and both remain comfortably above their floors.
+
+---
+
+## 9. The standing rule A0 owes: assertion mechanisms must be proven to run
+
+**A check that is never invoked is indistinguishable from a check that always passes.**
+
+This repository has shipped five of them. Three were fixed in the last two cycles; the audit the
+ruling asked for found two more that were still live:
+
+| mechanism | what it refuses | state when found |
+|---|---|---|
+| `toy.ValidateWindow` | a regime where the planted flaws cannot manifest | declared, tested, called by nothing |
+| `sim.Counters.Check` | a run that injected less than its plan asserts | required by every plan, called by nothing |
+| `sim.InjClockHold` | — | required by every plan, **fired by nothing anywhere** |
+| **`sim.History.Validate`** | a history that cannot be checked being handed to a checker that returns green | **written for the oracle path, called by nothing** |
+| **`clock.Check`** | (computes the exact skew envelope) | **called by no run path** |
+
+Five instances is a pattern. Every one looked identical from the outside: a function that exists, with
+its own passing test, that no production path reaches. Reading the source and satisfying oneself the
+call is there is exactly how this was missed five times over.
+
+### The mechanism
+
+`sim/assertions.go` is a checked-in registry, in the shape `HATCHES.txt` already proved works: an
+exemption is a conscious edit to a reviewed list rather than an omission nobody sees. Every mechanism
+is classified, and the unset kind is **rejected** rather than defaulted — a mechanism nobody
+classified must not default into being exempt, which is precisely how the five got there.
+
+- **every-run** (7): asserted by census. Each records into the run's own `Counters` when it executes,
+  and the lane runs an ordinary seed and requires each to appear. Per-run, not a package-level
+  counter, which core scope could not hold anyway.
+- **diagnostic** (1): `clock.Check`, invoked by the skew tests and by the envelope experiment when
+  A8's successor is built. It is an analysis over a pair of timelines, not a per-run gate — maxOffset
+  uniformity is the per-run property and is asserted separately. Being uninvoked-by-default is now a
+  written decision with a reason.
+
+`sim.History.Validate` is fixed rather than merely registered: `CheckAll` now calls it before any
+checker sees the history, and a malformed history reports **inconclusive** — a harness failure, not a
+verdict.
+
+### Induced
+
+Removing the `Counters.Check` call site fails the lane, naming the mechanism, what it refuses, and who
+was supposed to invoke it:
+
+```
+ASSERTION NEVER INVOKED: sim.Counters.Check ran zero times on an ordinary run.
+  refuses:    a run that injected less than its plan asserts
+  invoked by: hunt.RunToy, after the run
+```
+
+### Two instruments, deliberately not one
+
+This lane answers **was it called**. Whether a mechanism that was called still *catches* anything is
+the mutant suite's question. Conflating them is how a repository ends up with checks that run and
+prove nothing, which is the failure one level along from the one this lane closes.

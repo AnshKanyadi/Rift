@@ -132,6 +132,7 @@ func NewLoop(cfg Config) (*Loop, error) {
 	if err := clock.AssertUniformMaxOffset(cs...); err != nil {
 		return nil, err
 	}
+	cfg.Counters.Asserted("clock.AssertUniformMaxOffset")
 
 	l := &Loop{cfg: cfg, down: make([]bool, len(cfg.Nodes))}
 	for i := range cfg.Nodes {
