@@ -330,12 +330,20 @@ type Raft struct {
 	// inferred from the shape of anything.
 	tail logTail
 
-	// markLastIdx is the highest index handed over under the currently open
-	// mark. At most one mark is open at a time -- dirty() reuses the open one
-	// until it is acknowledged -- so this is one field rather than a table of
-	// spans keyed by mark. A second bookkeeping structure that must stay
-	// consistent with the log under truncation is the thing to avoid.
-	markLastIdx Index
+	// markLastIdx is the highest index handed over under the most recently
+	// handed mark, and lastHandedMark is that mark.
+	//
+	// Two scalars, not a table of spans keyed by mark. At most one mark is OPEN
+	// -- issued and not yet handed over -- at a time, so there is only ever one
+	// coverage window being built; once handed, a mark's coverage is frozen and
+	// only the newest one can still be growing. tail.persisted therefore
+	// advances on an acknowledgement that reaches lastHandedMark, and lags
+	// conservatively otherwise, which costs a message a little extra time in the
+	// gated queue and costs safety nothing. A span table is a second bookkeeping
+	// structure that has to stay consistent with the log under truncation, which
+	// is what broke the first attempt at this.
+	markLastIdx    Index
+	lastHandedMark PersistMark
 
 	// hardStateDirty is set when (term, vote) changed and has not yet been
 	// handed to the driver in a Ready.
@@ -471,6 +479,16 @@ func Restore(cfg Config, hs HardState, entries []Entry) (*Raft, error) {
 			return nil, fmt.Errorf("raft: recovered log entry %d claims index %d; the log is not a gapless prefix", i, e.Index)
 		}
 	}
+	// Everything the engine gave back is durable by definition, and it is
+	// RECORDED as such here. Leaving the watermark at zero would leave a
+	// recovered node believing nothing it holds is durable, which is not a
+	// conservative error: markFor would then hand back the open mark for an
+	// index that needs no gate, and the recovered log would be handed to the
+	// driver a second time under a mark nobody ever acknowledges.
+	last := r.lastIndex()
+	r.tail.persisted = last
+	r.tail.handed = last
+	r.markLastIdx = last
 	return r, nil
 }
 
@@ -652,11 +670,27 @@ func (r *Raft) stepApp(m Message) {
 	// durable. Without it a follower acks index i, the leader commits on that
 	// ack, the follower crashes and loses i, and a committed entry is lost.
 	//
-	// Gated on the mark covering the index being ACKED, not merely on whatever
-	// this Step dirtied. A duplicate append adds no new entries and so dirties
-	// nothing, while the entries it acks may still be in flight -- which is
-	// exactly how BUG-005 released an ack for index 15 with 5 durable.
-	r.sendGated(Message{
+	// **The gate is the LATER of two marks, not either one alone.** An accept
+	// attests to two different pieces of persistent state and DR-8 enumerates
+	// them as separate gates:
+	//
+	//	the entries through `last`  -> markFor(last)
+	//	this responder's term       -> whatever this Step dirtied
+	//
+	// Gating on the term alone releases an ack for entries still in flight: a
+	// duplicate append adds no entries and so dirties nothing, while the
+	// entries it acks may not be durable. That was BUG-005, index 15 acked with
+	// 5 durable. Gating on the index alone releases a response that reveals a
+	// term bump that is not durable yet -- the same amnesia MsgVoteResp is
+	// gated against, and the first attempt at this fix regressed to 24
+	// violations by making exactly that trade.
+	//
+	// Taking the later of the two is the only choice that discharges both.
+	gate := r.markFor(last)
+	if r.dirtyMark > gate {
+		gate = r.dirtyMark
+	}
+	r.sendGatedOn(gate, Message{
 		Type: MsgAppResp, From: r.id, To: m.From, Term: r.term,
 		Success: true, MatchIndex: last,
 	})
@@ -828,36 +862,36 @@ func (r *Raft) Ready() Ready {
 	}
 
 	if rd.HardState != nil || len(rd.Entries) > 0 {
+		// The mark names THIS handover, and from here its coverage is frozen:
+		// anything mutated after this point gets a mark of its own (see dirty).
 		r.markHandedOff = true
-	}
-	if n := len(rd.Entries); n > 0 {
-		// Handed over, not durable. The two are recorded separately, in fields
-		// with different names, and never compared as if they were one fact.
-		r.tail.handed = rd.Entries[n-1].Index
-		if rd.Mark != 0 {
+		r.lastHandedMark = rd.Mark
+		if n := len(rd.Entries); n > 0 {
+			// Handed over, not durable. The two are recorded separately, in
+			// fields with different names, and never compared as one fact.
+			r.tail.handed = rd.Entries[n-1].Index
 			r.markLastIdx = r.tail.handed
 		}
+	} else {
+		// A mark that covers nothing is satisfied by definition. If the driver
+		// has never been handed anything to persist under it -- because a
+		// conflicting append truncated the entries that opened it -- then
+		// waiting for an acknowledgement waits forever, so it is closed here
+		// and its gated messages are released.
+		//
+		// AssertQuiescent is what turned this from a silent stall into a
+		// failure.
+		if rd.Mark != 0 && !r.markHandedOff {
+			r.releaseThrough(rd.Mark)
+		}
+		// A Ready that hands nothing over names no durability point, even while
+		// an earlier mark is still in flight. Reporting one the driver cannot
+		// act on invites it to acknowledge a write it never made.
+		rd.Mark = 0
 	}
 
 	r.msgs = nil
 	r.hardStateDirty = false
-
-	// A mark that covers nothing is satisfied by definition. If the driver has
-	// never been handed anything to persist under it -- because a conflicting
-	// append truncated the entries that opened it -- then waiting for a
-	// durability acknowledgement waits forever, so it is closed here and its
-	// gated messages are released.
-	//
-	// AssertQuiescent is what turned this from a silent stall into a failure.
-	if rd.Mark != 0 && !r.markHandedOff {
-		mark := rd.Mark
-		rd.Mark = 0
-		r.releaseThrough(mark)
-	}
-
-	// Otherwise the mark stays open until the driver acknowledges it: it is the
-	// token the gated queue is keyed on, and clearing it here would release
-	// every withheld message on the next mutation.
 	return rd
 }
 
@@ -872,6 +906,16 @@ func (r *Raft) AckPersisted(m PersistMark) {
 		return
 	}
 	r.persisted = m
+
+	// The persisted INDEX watermark moves here and nowhere else, and it moves
+	// only on an acknowledgement that reaches the most recent handover. An
+	// earlier mark going durable says nothing about where the log's durable
+	// prefix now ends, because a later handover may have carried it further; so
+	// this lags rather than guesses, and a lagging watermark only over-gates.
+	if r.lastHandedMark != 0 && m >= r.lastHandedMark && r.markLastIdx > r.tail.persisted {
+		r.tail.persisted = r.markLastIdx
+	}
+
 	r.releaseThrough(m)
 
 	// A leader counts its own replication only once it is durable. Pipelining
@@ -922,9 +966,33 @@ func (r *Raft) persistedIndex() Index { return r.tail.persisted }
 
 // markFor returns the mark that must be durable before index idx may be
 // attested to, or zero if it already is.
+//
+// It rests on one invariant: **every log index above tail.persisted is covered
+// by the currently open mark.** Entries are appended only through
+// appendEntries, which opens a mark; the mark stays open until it is
+// acknowledged, and the acknowledgement is what moves tail.persisted. So an
+// index that is not yet durable is either already handed over under the open
+// mark or was appended under it moments ago, and in both cases the open mark is
+// the point that must become durable first.
 func (r *Raft) markFor(idx Index) PersistMark {
 	if idx <= r.tail.persisted {
 		return 0
+	}
+	if r.dirtyMark == 0 {
+		// The invariant above has broken. An index that is neither durable nor
+		// covered by an open mark has no gate to wait on, so any message
+		// attesting to it would be released immediately -- silently, and only
+		// on the schedules where the gap is reachable.
+		//
+		// This is the house move rather than a checker: the state is refused
+		// where it is constructed instead of being caught downstream by an
+		// oracle, some seeds and one instant later. Restore forgetting to
+		// record what the engine gave back lands exactly here, and so does an
+		// acknowledgement that never moves the persisted watermark.
+		panic(fmt.Sprintf(
+			"raft: node %d was asked for the mark covering index %d with %d durable and no mark "+
+				"open; the index is neither durable nor pending, so nothing would gate a message "+
+				"that attests to it", r.id, idx, r.tail.persisted))
 	}
 	return r.dirtyMark
 }
@@ -993,9 +1061,23 @@ func (r *Raft) sendGatedOn(mark PersistMark, m Message) {
 // dirty opens (or extends) the pending durability point. Called by every
 // mutation of persistent state, so a mark exists to gate against.
 func (r *Raft) dirty() {
-	if r.dirtyMark == 0 {
+	// # A mark's coverage is frozen at handover
+	//
+	// Reusing a mark that has already been handed over lets its coverage grow
+	// after the driver started writing it, so the acknowledgement means strictly
+	// less than the messages gated on that mark require: the driver reports the
+	// first batch durable, raft releases an append response attesting to the
+	// second, and a follower acks index N with N-1 on disk. That was the whole
+	// residue of BUG-005 once the oracle stopped reading the engine's visible
+	// state and started reading what was actually durable.
+	//
+	// It is also a liveness hazard on its own. Under a steady stream of appends
+	// a reused mark never stops growing, so it never becomes fully durable, and
+	// every message gated on it waits forever behind a convoy.
+	if r.dirtyMark == 0 || r.markHandedOff {
 		r.nextMark++
 		r.dirtyMark = r.nextMark
+		r.markHandedOff = false
 	}
 }
 
@@ -1024,23 +1106,58 @@ func (r *Raft) truncateFrom(i Index) {
 	if i < 1 || i > r.lastIndex() {
 		return
 	}
+	// # What may never be truncated is COMMITTED, not durable
+	//
+	// The assertion that stood here refused any truncation at or below the
+	// durable watermark, on the reasoning that the driver would then have
+	// acknowledged an entry that later vanished. That is a stronger claim than
+	// Raft makes, and it is false: §5.3 has a follower delete a conflicting
+	// entry and everything after it, and those entries are routinely already on
+	// disk. A follower's persisted suffix being overwritten by a new leader is
+	// the protocol working. What Raft guarantees is that a COMMITTED entry is
+	// never overwritten, because the up-to-date check keeps a candidate missing
+	// one from ever winning.
+	//
+	// The false assertion sat here unreachable for as long as tail.persisted
+	// never moved -- which is the same defect twice: a claim nothing exercised,
+	// guarding a watermark nothing advanced.
+	if r.commitIndex >= i {
+		panic(fmt.Sprintf(
+			"raft: node %d truncated to %d with commit index %d; an entry this node was told "+
+				"was committed is being overwritten, which is state machine safety failing",
+			r.id, i, r.commitIndex))
+	}
+
 	r.log = r.log[:i-1]
 
-	// A durable entry cannot be truncated away. If it ever were, the driver
-	// acknowledged something that later vanished, which is a different bug
-	// entirely and must not be papered over by lowering the watermark.
+	// Durability is a fact about a POSITION, and these positions no longer hold
+	// what was written to them. All three watermarks come back to the cut --
+	// recorded, like every other durability fact here, rather than left to be
+	// inferred from a log that no longer contains the entries.
 	if r.tail.persisted >= i {
-		panic(fmt.Sprintf(
-			"raft: node %d truncated to %d with %d already acknowledged durable; the driver "+
-				"acknowledged an entry that later vanished", r.id, i, r.tail.persisted))
+		r.tail.persisted = i - 1
 	}
-	// Handed-but-unacknowledged entries at or past the cut were never real.
 	if r.tail.handed >= i {
 		r.tail.handed = i - 1
 	}
 	if r.markLastIdx >= i {
 		r.markLastIdx = i - 1
 	}
+
+	// A withheld append response that attests to a truncated index has become a
+	// lie, and releasing it later would tell a leader this node holds an entry
+	// it has just deleted -- a stale ack that can be counted toward a quorum.
+	// Dropping it is safe in a way that sending it is not: Raft tolerates lost
+	// messages and the leader retries, so the cost is a round trip and the
+	// alternative is a phantom acknowledgement.
+	kept := r.gated[:0]
+	for _, g := range r.gated {
+		if g.msg.Type == MsgAppResp && g.msg.Success && g.msg.MatchIndex >= i {
+			continue
+		}
+		kept = append(kept, g)
+	}
+	r.gated = kept
 }
 
 func (r *Raft) lastIndex() Index {

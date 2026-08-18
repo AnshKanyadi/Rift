@@ -74,10 +74,35 @@ type Node struct {
 	// live one. See sim.Epoch for the class and its three instances.
 	epoch *sim.EpochGuard
 
-	// pending maps an engine sequence to the persist mark it carries, so a
-	// durability completion can be turned into the right AckPersisted.
-	pendingSeq  []engine.SeqNum
-	pendingMark []raft.PersistMark
+	// pending is every write handed to the engine that the engine has not yet
+	// reported durable, in issue order.
+	pending []pendingWrite
+
+	// durHS and durLog are what this node has ACTUALLY made durable: folded
+	// forward from pending as each write completes, dropped wholesale on a
+	// crash. This, and not a read-back, is what the ledger is told.
+	//
+	// # Why the ledger cannot be fed by reading the engine
+	//
+	// engine.Engine reads return the VISIBLE state, which by construction
+	// includes batches that have been applied and not yet synced -- that window
+	// is the whole point of the model (DR-15). Feeding the ledger a read-back
+	// therefore reports writes a crash would take as persisted, and the
+	// persist-before-reply oracle compares its acks against exactly that record.
+	// An inflated durability watermark does not make that oracle noisy, it makes
+	// it SILENT: every ack looks covered. Measured across 10k seeds, the
+	// read-back was ahead of durability 44,911 times.
+	//
+	// DESIGN-A1 §0 names the ledger's second stream as "every write that reached
+	// the Engine, and when it became durable". That is what the driver knows,
+	// and it is the driver's to report.
+	durHS  raft.HardState
+	durLog []raft.Entry
+
+	// writtenLast is the highest log index the driver has written to the engine.
+	// Recorded, because it is what says whether a Ready is a conflicting append
+	// and the engine is still holding a discarded suffix.
+	writtenLast raft.Index
 
 	// kv is the replicated state machine: applied entries land here.
 	kv map[string]string
@@ -90,6 +115,21 @@ type Node struct {
 	inflight []clientOp
 
 	down bool
+}
+
+// pendingWrite is one batch in flight to the engine, kept until it is durable
+// so that durability can be RECORDED when it arrives rather than read back from
+// an engine that cannot distinguish durable from merely visible.
+type pendingWrite struct {
+	seq  engine.SeqNum
+	mark raft.PersistMark
+
+	hs      *raft.HardState
+	entries []raft.Entry
+
+	// clearAbove is nonzero when this batch also cleared the log above that
+	// index, which is how a conflicting append is expressed on disk.
+	clearAbove raft.Index
 }
 
 type clientOp struct {
@@ -222,16 +262,43 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 		//    takes exactly what a crash should take.
 		if rd.HardState != nil || len(rd.Entries) > 0 {
 			b := engine.NewBatch()
+			w := pendingWrite{mark: rd.Mark}
 			if rd.HardState != nil {
-				b.Set(keyHardState, encodeHardState(*rd.HardState))
+				hs := *rd.HardState
+				b.Set(keyHardState, encodeHardState(hs))
+				w.hs = &hs
 			}
-			for _, e := range rd.Entries {
-				b.Set(logKey(e.Index), encodeEntry(e))
+			if k := len(rd.Entries); k > 0 {
+				last := rd.Entries[k-1].Index
+
+				// # A conflicting append must clear the discarded suffix
+				//
+				// A Ready whose first entry lands at or below an index already
+				// written means raft truncated: the entries it is handing over
+				// replace ones the engine still holds, and the engine also still
+				// holds everything ABOVE the new last index, because a Set only
+				// overwrites the keys it names.
+				//
+				// Without the clear, recovery reads back a new prefix spliced
+				// onto a dead branch's tail and calls the result a log -- gapless
+				// by index, so Restore accepts it, and wrong in every entry above
+				// the cut. This is what DeleteRange is in the frozen interface
+				// for (Amendment A3), and the batch is atomic, so the clear and
+				// the rewrite land together or not at all.
+				if rd.Entries[0].Index <= n.writtenLast {
+					b.DeleteRange(logKey(last+1), logUpper)
+					w.clearAbove = last
+				}
+				for _, e := range rd.Entries {
+					b.Set(logKey(e.Index), encodeEntry(e))
+				}
+				w.entries = append(w.entries, rd.Entries...)
+				n.writtenLast = last
 			}
 			seq, err := n.db.Apply(b, true)
 			if err == nil {
-				n.pendingSeq = append(n.pendingSeq, seq)
-				n.pendingMark = append(n.pendingMark, rd.Mark)
+				w.seq = seq
+				n.pending = append(n.pending, w)
 				s.At(at+n.cfg.SyncLatency, sim.KindDurable, sim.NodeID(n.cfg.Ordinal),
 					sim.Stamp(n.epoch.Current(), seq))
 			}
@@ -305,31 +372,69 @@ func (n *Node) onDurable(seq engine.SeqNum, at clock.Instant) {
 	n.db.AdvanceDurable(seq)
 
 	var mark raft.PersistMark
-	kept := n.pendingSeq[:0]
-	keptMarks := n.pendingMark[:0]
-	for i, s := range n.pendingSeq {
-		if s <= seq {
-			if n.pendingMark[i] > mark {
-				mark = n.pendingMark[i]
+	kept := n.pending[:0]
+	for _, w := range n.pending {
+		if w.seq <= seq {
+			n.fold(w)
+			if w.mark > mark {
+				mark = w.mark
 			}
 			continue
 		}
-		kept = append(kept, s)
-		keptMarks = append(keptMarks, n.pendingMark[i])
+		kept = append(kept, w)
 	}
-	n.pendingSeq, n.pendingMark = kept, keptMarks
+	n.pending = kept
 
-	hs, entries := n.readDurable()
-	n.cfg.Ledger.RecordDurable(n.cfg.Ordinal, hs, entries, at)
+	// A mark may be acknowledged only when EVERY write issued under it is
+	// durable. raft freezes a mark's coverage at handover, so today that is one
+	// batch per mark and this never fires -- but the acknowledgement is the
+	// driver's statement, not raft's, and the driver is the only side that knows
+	// what it has actually written. If a mark ever spans two batches again, this
+	// keeps the statement true instead of quietly making it a guess.
+	if len(n.pending) > 0 && n.pending[0].mark != 0 && n.pending[0].mark <= mark {
+		mark = n.pending[0].mark - 1
+	}
+
+	n.cfg.Ledger.RecordDurable(n.cfg.Ordinal, n.durHS, n.durLog, at)
 	if mark != 0 {
 		n.raft.AckPersisted(mark)
 	}
 }
 
-// readDurable reads back what the engine holds. This is the same code recovery
-// uses, so the read-back path is exercised on every sync rather than only after
-// a crash.
+// fold applies one completed write to the durable record. It is the only place
+// that record moves forward, and it moves on the engine's completion rather than
+// on the driver's intention.
+func (n *Node) fold(w pendingWrite) {
+	if w.hs != nil {
+		n.durHS = *w.hs
+	}
+	for _, e := range w.entries {
+		if int(e.Index) <= len(n.durLog) {
+			n.durLog[e.Index-1] = e
+			continue
+		}
+		n.durLog = append(n.durLog, e)
+	}
+	if w.clearAbove > 0 && int(w.clearAbove) < len(n.durLog) {
+		n.durLog = n.durLog[:w.clearAbove]
+	}
+}
+
+// readDurable reads the engine back. It is the recovery path and only the
+// recovery path: after a crash the engine has discarded everything unsynced, so
+// what it returns is durable by construction.
+//
+// That precondition is asserted rather than assumed. An engine read is of the
+// VISIBLE state; calling this while a write is in flight returns writes a crash
+// would take, and the one consumer that would be misled -- the ledger the
+// persist-before-reply oracle reads -- would be misled silently.
 func (n *Node) readDurable() (raft.HardState, []raft.Entry) {
+	if v, d := n.db.VisibleSeq(), n.db.DurableSeq(); v != d {
+		panic(fmt.Sprintf(
+			"store: node %d read the engine back with sequence %d visible and only %d durable; "+
+				"the result would report as persisted writes that a crash would take",
+			n.cfg.ID, v, d))
+	}
 	var hs raft.HardState
 	if v, err := n.db.Get(keyHardState); err == nil {
 		hs = decodeHardState(v)
@@ -353,7 +458,12 @@ func (n *Node) crash() {
 	n.db.Crash()
 	n.down = true
 	n.inflight = nil
-	n.pendingSeq, n.pendingMark = nil, nil
+
+	// These writes never became durable, so they never enter the durable record
+	// -- and the engine has just reverted to it, so what the driver has written
+	// comes back to the durable log's own end.
+	n.pending = nil
+	n.writtenLast = lastLogIndex(n.durLog)
 }
 
 // restart rebuilds the node from the engine. This is the real recovery path:
@@ -365,14 +475,41 @@ func (n *Node) crash() {
 // acknowledges a mark that instance never issued, which closes nothing and
 // leaves every message gated on its real mark withheld forever. BUG-001.
 func (n *Node) restart() {
+	// # A restart is a death followed by a recovery, and the death is not optional
+	//
+	// A restart delivered to a node that is NOT down still ends the running
+	// incarnation -- that is what the word means -- so the unsynced writes go
+	// exactly as they would in a crash. The plan can schedule a restart without
+	// a preceding crash, and a duplicated restart produces one too.
+	//
+	// Without this the node was rebuilt from whatever the engine had VISIBLE,
+	// which includes batches that were applied and never synced: a process that
+	// "recovered" writes no crash would have kept. It then answered for them.
+	// That is the precise inverse of the fault being injected, and it is how a
+	// follower acked index 15 with 5 durable on seed 92 (BUG-005).
+	if !n.down {
+		n.crash()
+	}
+
 	// A restart is a new incarnation too, not a continuation of the crashed
 	// one. Treating it as a continuation is how a second restart handed a fresh
 	// Raft an acknowledgement for a mark it never issued (BUG-002).
 	n.epoch.Advance()
-	n.pendingSeq, n.pendingMark = nil, nil
+	n.pending = nil
 	n.inflight = nil
 
 	hs, entries := n.readDurable()
+
+	// The driver's record of what it made durable and the engine's read-back are
+	// two independent derivations of one fact, and recovery is the moment they
+	// can be compared. A disagreement means one of them is wrong, and which one
+	// is a question worth stopping for: everything the ledger asserts about
+	// persistence rests on the first, and everything the cluster does after a
+	// crash rests on the second.
+	if err := sameDurableState(n.durHS, n.durLog, hs, entries); err != nil {
+		panic(fmt.Sprintf("store: node %d recovered a state its own durability record disagrees with: %v", n.cfg.ID, err))
+	}
+
 	r, err := raft.Restore(raft.Config{
 		ID: n.cfg.ID, Peers: n.cfg.Peers,
 		ElectionTimeout: n.cfg.Election, HeartbeatTimeout: n.cfg.Heartbeat,
@@ -385,7 +522,34 @@ func (n *Node) restart() {
 	n.raft = r
 	n.kv = map[string]string{}
 	n.down = false
+	n.writtenLast = lastLogIndex(n.durLog)
 	n.jitter()
+}
+
+// sameDurableState compares the driver's durability record with what the engine
+// gave back.
+func sameDurableState(recHS raft.HardState, recLog []raft.Entry, gotHS raft.HardState, gotLog []raft.Entry) error {
+	if recHS != gotHS {
+		return fmt.Errorf("hard state recorded %+v, engine returned %+v", recHS, gotHS)
+	}
+	if len(recLog) != len(gotLog) {
+		return fmt.Errorf("recorded %d durable entries, engine returned %d", len(recLog), len(gotLog))
+	}
+	for i := range recLog {
+		a, b := recLog[i], gotLog[i]
+		if a.Index != b.Index || a.Term != b.Term || a.ID != b.ID || string(a.Data) != string(b.Data) {
+			return fmt.Errorf("entry %d recorded as index %d term %d, engine returned index %d term %d",
+				i+1, a.Index, a.Term, b.Index, b.Term)
+		}
+	}
+	return nil
+}
+
+func lastLogIndex(es []raft.Entry) raft.Index {
+	if len(es) == 0 {
+		return 0
+	}
+	return es[len(es)-1].Index
 }
 
 // StaleEpochDrops is how many completions from a dead incarnation this node
@@ -409,7 +573,7 @@ func (n *Node) CheckEpochs() error {
 // A crashed node is exempt for the same reason: its in-flight writes died with
 // it, and the gated messages died with the Raft that made them.
 func (n *Node) AssertQuiescent() error {
-	if n.down || len(n.pendingSeq) > 0 {
+	if n.down || len(n.pending) > 0 {
 		return nil
 	}
 	return n.raft.AssertQuiescent()

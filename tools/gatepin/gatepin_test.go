@@ -77,16 +77,38 @@ func TestEveryGateHasACallSite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading raft.go: %v", err)
 	}
-	n := strings.Count(string(src), "// GATE:")
+	text := string(src)
+	n := strings.Count(text, "// GATE:")
 	if n == 0 {
 		t.Fatal("no call site is marked with a GATE comment, so the enumeration describes nothing")
 	}
-	// Every gated send must go through sendGated; a plain send of a message that
-	// attests to persistent state would be the whole bug.
-	if got := strings.Count(string(src), "r.sendGated("); got < n {
-		t.Errorf("%d GATE comments but only %d sendGated call sites", n, got)
+
+	// Every gated send must go through a gating helper. A plain r.send() of a
+	// message that attests to persistent state would be the whole bug, so the
+	// check is per call site rather than a count: for each GATE comment, the
+	// first send that follows it must be a withholding one.
+	//
+	// Both helpers count. sendGated withholds against whatever the current Step
+	// made dirty; sendGatedOn withholds against a named mark, which is what an
+	// append response needs -- it attests to the entries it acks as well as to
+	// the term it carries, and those are separate gates in the enumeration
+	// above. Counting only sendGated would have made the stronger call site look
+	// like a missing one.
+	send := regexp.MustCompile(`r\.send(Gated|GatedOn|)\(`)
+	rest := text
+	for i := 0; i < n; i++ {
+		k := strings.Index(rest, "// GATE:")
+		rest = rest[k+len("// GATE:"):]
+		m := send.FindStringSubmatchIndex(rest)
+		if m == nil {
+			t.Fatalf("GATE comment %d is followed by no send at all", i+1)
+		}
+		if kind := rest[m[2]:m[3]]; kind == "" {
+			t.Errorf("GATE comment %d is discharged by a plain r.send(), which releases the message "+
+				"immediately; a gate that does not withhold is a comment", i+1)
+		}
 	}
-	t.Logf("%d gated call sites", n)
+	t.Logf("%d gated call sites, each discharged by a withholding send", n)
 }
 
 func docBlock(t *testing.T, src string) string {
