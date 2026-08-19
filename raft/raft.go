@@ -2184,20 +2184,33 @@ func (r *Raft) releaseThrough(m PersistMark) {
 //
 // So an empty mark releases only what is gated on exactly it, and it does not
 // move the persisted watermark, because it is not evidence about any write.
+//
+// # The satisfaction is RECORDED, not swept
+//
+// A message can carry a constraint in both streams, and the two land
+// independently. The first version of this fix released, in one pass, every
+// message gated on m whose snapshot constraint was ALSO already met -- and left
+// the rest gated on a mark that no longer exists. When their snapshot constraint
+// landed a moment later, release() checked `g.mark <= persisted`, found the
+// empty mark still above the watermark, and withheld them forever. Twelve seeds
+// in two hundred stalled exactly there, which is the liveness half of the branch
+// the safety half came from.
+//
+// So the mark is STRUCK from the messages it gated -- an empty mark constrains
+// nothing, which is what "satisfied" means here -- and release() then decides on
+// whatever constraints are actually left. A fact is recorded, never re-derived
+// from a sweep that has already happened.
 func (r *Raft) closeEmptyMark(m PersistMark) {
 	if r.dirtyMark == m {
 		r.dirtyMark = 0
 		r.markHandedOff = false
 	}
-	kept := r.gated[:0]
-	for _, g := range r.gated {
-		if g.mark == m && g.snapMark <= r.persistedSnap {
-			r.msgs = append(r.msgs, g.msg)
-			continue
+	for i := range r.gated {
+		if r.gated[i].mark == m {
+			r.gated[i].mark = 0
 		}
-		kept = append(kept, g)
 	}
-	r.gated = kept
+	r.release()
 }
 
 // release moves out every withheld message whose durability points have all
@@ -2315,6 +2328,17 @@ func (r *Raft) AssertConfConsistent() error {
 //
 // So the driver calls this at every quiescent point and at run end, and a
 // non-empty queue is a failure rather than silence.
+// QuiesceDebug reports the mark bookkeeping behind a stall.
+//
+// It exists because "a message is withheld forever" is not a diagnosis: the
+// question is always WHICH mark, whether the driver was ever handed it, and
+// whether it was acknowledged. Those three numbers turned a long hunt into one
+// run.
+func (r *Raft) QuiesceDebug() string {
+	return fmt.Sprintf("persisted=%d persistedSnap=%d dirtyMark=%d lastHanded=%d handedOff=%v nextMark=%d gated=%d",
+		r.persisted, r.persistedSnap, r.dirtyMark, r.lastHandedMark, r.markHandedOff, r.nextMark, len(r.gated))
+}
+
 func (r *Raft) AssertQuiescent() error {
 	if len(r.gated) == 0 {
 		return nil

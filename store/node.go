@@ -247,6 +247,7 @@ type Replica struct {
 
 	// gcProposed, gcApplied and versionsCollected say whether collection ran at
 	// all. A sweep that never collected is green about a mark that never moved.
+	gcPending         bool
 	gcProposed        int
 	gcApplied         int
 	versionsCollected int
@@ -399,6 +400,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 	}()
 	for n.raft.HasReady() {
 		rd := n.raft.Ready()
+		wroteMark := false
 
 		// 1. Persist. Everything goes through the engine interface, so a crash
 		//    takes exactly what a crash should take.
@@ -439,6 +441,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 		}
 
 		if rd.HardState != nil || len(rd.Entries) > 0 {
+			wroteMark = true
 			b := engine.NewBatch()
 			w := pendingWrite{mark: rd.Mark}
 
@@ -518,6 +521,26 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			})
 		}
 
+		// # A mark the driver was handed and did not write is a mark nobody can
+		// # acknowledge
+		//
+		// raft reports Ready.Mark as the durability point this handover has to
+		// clear. If it names a mark and the driver writes nothing under it, the
+		// mark is never acknowledged and every message gated on it waits
+		// forever -- a stall that looks exactly like a partition and keeps every
+		// checker green.
+		//
+		// raft is supposed to make this unreachable: a Ready that hands nothing
+		// over reports Mark zero. The assertion is here anyway, on the driver
+		// side, because that guarantee is a property of ONE branch in Ready and
+		// this is the only place that can see whether it held.
+		if rd.Mark != 0 && !wroteMark {
+			panic(fmt.Sprintf(
+				"store: node %d range %d was handed mark %d with nothing to persist under it; "+
+					"nothing will ever acknowledge that mark and every message gated on it is lost",
+				n.cfg.ID, n.rng, rd.Mark))
+		}
+
 		// 3. Apply, answering each client operation at the instant its own entry
 		//    is applied so a read observes exactly the state at its log
 		//    position.
@@ -588,6 +611,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 						// this range's history, and the range applies it whole.
 						n.flushApply(mb)
 						b := engine.NewBatch()
+						n.gcPending = false
 						removed, err := n.mvcc.AdvanceGCInto(b, cmdTS)
 						if err == nil {
 							n.flushApply(b)
@@ -975,19 +999,35 @@ func (n *Replica) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 // entry. Every replica applies the same mark at the same index. That is the
 // same sentence as the split key and the command timestamp, for the third time
 // (DESIGN-A5 section 7).
+// # Throttled to one collection in flight, and to a mark that has moved
+//
+// The first version proposed whenever the retention window had passed, which
+// after the first collection is true on essentially every apply -- so it wrote a
+// collection entry per applied entry. That is not a performance detail: it is a
+// log made mostly of bookkeeping, and it slowed a 200-seed sweep to the point
+// where a 10,000-seed exit run would have taken most of a day. A workload the
+// harness cannot afford to run is a workload the harness does not check.
+//
+// So: one collection in flight per range, and the mark must move by a
+// meaningful fraction of the window before another is worth an entry. Both are
+// what a real collector does, for the same reason.
 func (n *Replica) maybeGC() {
-	if n.cfg.GCRetention == 0 || !n.IsLeader() {
+	if n.cfg.GCRetention == 0 || n.gcPending || !n.IsLeader() {
 		return
 	}
 	now := n.hlc.Now()
 	to := hlc.Timestamp{Wall: now.Wall.Add(-n.cfg.GCRetention)}
-	if !n.mvcc.GCMark().Less(to) || !to.IsSet() {
+	if !to.IsSet() {
+		return
+	}
+	if !n.mvcc.GCMark().Wall.Add(n.cfg.GCRetention / 4).Before(to.Wall) {
 		return
 	}
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
 	if err := n.raft.Propose(id, encodeCmd(opGC, "", "", to)); err == nil {
 		n.gcProposed++
+		n.gcPending = true
 	}
 }
 
@@ -1535,7 +1575,10 @@ func (n *Replica) AssertQuiescent() error {
 	if len(n.pending) > 0 {
 		return nil
 	}
-	return n.raft.AssertQuiescent()
+	if err := n.raft.AssertQuiescent(); err != nil {
+		return fmt.Errorf("%w [%s]", err, n.raft.QuiesceDebug())
+	}
+	return nil
 }
 
 // Request is a client operation carried as an event payload.
