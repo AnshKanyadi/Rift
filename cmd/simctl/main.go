@@ -154,6 +154,14 @@ type RaftMeta struct {
 	Learners          int    `json:"learners"`
 	ConfChanges       int    `json:"conf_changes"`
 	PromotionLag      uint64 `json:"promotion_lag"`
+
+	// A4's two build parameters. A bundle that did not carry them would replay
+	// a single-range cluster against a schedule recorded on a split one, which
+	// is the "bundle that does not pin its build" failure this struct exists to
+	// prevent -- and it would do it silently, since the plan is identical either
+	// way.
+	SplitThreshold int `json:"split_threshold"`
+	Rebalances     int `json:"rebalances"`
 }
 
 // CensusMeta is what the run's elections looked like.
@@ -230,6 +238,8 @@ func cmdRun(args []string) int {
 	learners := fs.Int("learners", 1, "raft workload: how many nodes start as learners")
 	confChanges := fs.Int("conf-changes", 4, "raft workload: membership steps the plan schedules")
 	promotionLag := fs.Uint64("promotion-lag", 8, "raft workload: how far behind a learner may be and still be promoted")
+	splitEvery := fs.Int("split-threshold", 4, "raft workload: keys a range may hold before its leader proposes a split; 0 disables")
+	rebalances := fs.Int("rebalances", 12, "raft workload: manual replica-movement orders the plan schedules")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
@@ -274,11 +284,14 @@ func cmdRun(args []string) int {
 			Learners:          *learners,
 			ConfChanges:       *confChanges,
 			PromotionLag:      raft.Index(*promotionLag),
+			SplitThreshold:    *splitEvery,
+			Rebalances:        *rebalances,
 		}
 		meta.Raft = &RaftMeta{
 			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
 			Transfers: opt.Transfers, Learners: opt.Learners,
 			ConfChanges: opt.ConfChanges, PromotionLag: uint64(opt.PromotionLag),
+			SplitThreshold: opt.SplitThreshold, Rebalances: opt.Rebalances,
 		}
 		var err error
 		if p, err = hunt.MaterializeRaftWith(*seed, opt); err != nil {
@@ -313,7 +326,12 @@ func cmdReplay(args []string) int {
 	fs := flag.NewFlagSet("replay", flag.ExitOnError)
 	dir := fs.String("bundle", "", "bundle directory to replay")
 	strip := fs.Bool("strip-faults", false, "replay with every fault entry removed")
+	rerecord := fs.Bool("rerecord", false, "overwrite the bundle's recorded trace with this run's, keeping its plan")
 	_ = fs.Parse(args)
+
+	if *rerecord && *strip {
+		return fail("--rerecord with --strip-faults would record a trace from a schedule the bundle does not carry")
+	}
 
 	if *dir == "" {
 		return fail("replay needs --bundle")
@@ -362,6 +380,29 @@ func cmdReplay(args []string) int {
 	}
 	fmt.Printf("recorded %s (at %s)\n", recorded.TraceHash, at)
 	fmt.Printf("replayed %s\n", got.TraceHash)
+
+	// # Re-recording, which is the documented resolution and not an escape hatch
+	//
+	// A moved trace hash is never a non-event: it means the corpus and the code
+	// have diverged. The discipline seeds/README.md states is to regenerate the
+	// bundle IN THE SAME COMMIT that moved it, and this is the tool that does it.
+	//
+	// What it rewrites is the OBSERVATION -- the trace hash, the step hashes, the
+	// step count, the outcome, the census, and the commit the run was recorded
+	// at. What it never touches is the bundle's PLAN, because the plan is the
+	// finding: the schedule is what reproduces the bug, and regenerating it from
+	// the seed would silently substitute whatever schedule today's generator
+	// produces for the one that found something.
+	if *rerecord {
+		got.Seed = recorded.Seed
+		got.Mutant = recorded.Mutant
+		got.Commit = headCommit()
+		if err := writeBundle(*dir, p, got, hist); err != nil {
+			return fail("re-recording bundle: %v", err)
+		}
+		fmt.Printf("re-recorded at %s: the plan is unchanged, the observation is this commit's\n", got.Commit)
+		return 0
+	}
 
 	if *strip {
 		// A stripped replay is a different run by construction, so its hash is
@@ -473,6 +514,8 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 				Learners:          meta.Raft.Learners,
 				ConfChanges:       meta.Raft.ConfChanges,
 				PromotionLag:      raft.Index(meta.Raft.PromotionLag),
+				SplitThreshold:    meta.Raft.SplitThreshold,
+				Rebalances:        meta.Raft.Rebalances,
 			}
 		}
 		res, err := hunt.RunRaftWith(p, opt, tr)

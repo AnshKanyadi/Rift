@@ -701,7 +701,7 @@ instances of it before the phase closed.
 |---|---|
 | **Found by** | inspection, while diagnosing BUG-011 — the model disagreed with every node at once |
 | **Phase** | A4 |
-| **Reproduce (plan)** | `go run ./cmd/simctl replay --bundle seeds/BUG-012` with the model's split rule reverted |
+| **Reproduce (plan)** | `go run ./cmd/simctl replay --bundle seeds/BUG-012` with the model's split rule reverted; the bundle carries the schedule, and the defect is in `sim/hunt`'s model rather than in a patchable source line |
 | **Reproduce (seed)** | seed **2**, range 1 |
 | **Invariant that caught it** | none — this is a defect in the checker, not the system |
 | **Mutant class** | covered by `M42-a-split-child-is-born-one-key-wide`, which fails if the model stops modelling splits faithfully |
@@ -804,7 +804,7 @@ this survive is a loud failure instead of a slow divergence.
 | **Found by** | sim — a raft refusal, seed 9595 of the A4 exit sweep |
 | **Phase** | A4 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M46-split-inherits-the-appended-configuration.patch && go run ./cmd/simctl replay --bundle seeds/BUG-015` |
-| **Reproduce (seed)** | seed **9595**, range 4 |
+| **Reproduce (seed)** | found at seed **9595** of the 10,000-seed exit sweep; the bundle uses seed **215**, the first of 3000 that reaches it |
 | **Invariant that caught it** | none — a refusal, from `ApplyConfEntry` declining an illegal transition |
 | **Mutant class** | none existed — added `M46-split-inherits-the-appended-configuration` |
 | **Fix commit** | ebea8c5 |
@@ -843,7 +843,7 @@ second caller that needed it. The split path asks for the configuration **at the
 |---|---|
 | **Found by** | the rebalance oracle, firing on 252 of 300 seeds and then on seed 103 |
 | **Phase** | A4 |
-| **Reproduce (plan)** | `go run ./cmd/simctl replay --bundle seeds/BUG-016` with the attribution window removed |
+| **Reproduce (plan)** | `go run ./cmd/simctl replay --bundle seeds/BUG-016` with the attribution window removed; the bundle carries the two-moves-one-source schedule |
 | **Reproduce (seed)** | seed **103**, range 1 |
 | **Invariant that caught it** | none — this is a defect in the checker |
 | **Mutant class** | covered by `M41-rebalance-removes-before-it-adds`, which the corrected oracle still kills at 192 of 300 |
