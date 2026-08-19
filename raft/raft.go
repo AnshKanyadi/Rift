@@ -2065,7 +2065,7 @@ func (r *Raft) Ready() Ready {
 		// AssertQuiescent is what turned this from a silent stall into a
 		// failure.
 		if rd.Mark != 0 && !r.markHandedOff {
-			r.releaseThrough(rd.Mark)
+			r.closeEmptyMark(rd.Mark)
 		}
 		// A Ready that hands nothing over names no durability point, even while
 		// an earlier mark is still in flight. Reporting one the driver cannot
