@@ -412,3 +412,81 @@ func TestAnEmptyMarkDoesNotReleaseAnEarlierOne(t *testing.T) {
 	}
 	t.Fatal("the response never came out after its mark was acknowledged; the gate is now a stall")
 }
+
+// TestATermStaysGatedAfterALaterMarkClosesEmpty is the covering test for
+// M56-term-gated-only-on-what-is-dirty-now, and it is BUG-017's second half.
+//
+// # Two different questions, answered by one field
+//
+// `dirtyMark` says "there is persistent state pending right now". A message that
+// reveals this node's term needs a different question answered: "is this node's
+// term on disk". They coincide until a mark stops being current without becoming
+// durable -- which is exactly what closing an empty later mark does.
+//
+//	the hard state is handed over under mark 1 and the write is in flight; a
+//	mutation opens mark 2; a Ready hands nothing, so mark 2 closes empty and
+//	takes dirtyMark to zero. The next message to reveal the term finds nothing to
+//	wait on, because the thing it should have waited on stopped being current
+//	without becoming durable.
+//
+// The first half of the fix made `persisted` honest, which is what exposed this:
+// while an empty mark released THROUGH itself, the watermark was inflated and
+// the wrong belief was at least self-consistent.
+func TestATermStaysGatedAfterALaterMarkClosesEmpty(t *testing.T) {
+	r := threeNode(t, 2)
+
+	// 1. A vote at a higher term. The hard state goes out under mark 1 and the
+	//    driver does NOT acknowledge it: that write is in flight throughout.
+	if err := r.Step(Message{Type: MsgVote, From: 1, To: 2, Term: 7, LastLogIndex: 0}); err != nil {
+		t.Fatalf("step vote: %v", err)
+	}
+	rd := r.Ready()
+	if rd.HardState == nil || rd.HardState.Term != 7 || rd.Mark == 0 {
+		t.Fatalf("the term bump handed over no hard state under a mark: %+v mark=%d", rd.HardState, rd.Mark)
+	}
+
+	// 2. An append opens a second mark with entries under it, and a snapshot
+	//    then discards them, so that mark covers nothing and closes.
+	if err := r.Step(Message{
+		Type: MsgApp, From: 1, To: 2, Term: 7,
+		PrevLogIndex: 0, PrevLogTerm: 0, Entries: []Entry{{Index: 1, Term: 7}},
+	}); err != nil {
+		t.Fatalf("step append: %v", err)
+	}
+	if err := r.Step(Message{
+		Type: MsgSnap, From: 1, To: 2, Term: 7,
+		SnapIndex: 10, SnapTerm: 7,
+		SnapConf: EncodeConfiguration(Configuration{Voters: []NodeID{1, 2, 3}}),
+	}); err != nil {
+		t.Fatalf("step snapshot: %v", err)
+	}
+	rd = r.Ready() // the empty mark closes here, and the snapshot goes out
+	if rd.Snapshot == nil || rd.SnapMark == 0 {
+		t.Fatalf("expected a snapshot handover: %+v snapMark=%d", rd.Snapshot, rd.SnapMark)
+	}
+	// The SNAPSHOT is acknowledged, so the snapshot stream constrains nothing.
+	// Without this the next response is withheld on the snapshot mark and the
+	// test passes for a reason that has nothing to do with the term -- which is
+	// how the first version of it let the mutant live.
+	r.AckSnapshot(rd.SnapMark)
+
+	// 3. Now a plain append the node can accept without persisting anything new.
+	//    Its response reveals term 7 -- which is still in flight.
+	if err := r.Step(Message{
+		Type: MsgApp, From: 1, To: 2, Term: 7,
+		PrevLogIndex: 10, PrevLogTerm: 7,
+	}); err != nil {
+		t.Fatalf("step second append: %v", err)
+	}
+	rd = r.Ready()
+	for _, m := range rd.Messages {
+		if m.Type == MsgAppResp {
+			t.Fatalf("an append response advertising term %d was released with the term's own "+
+				"HardState write still in flight. A later mark closed empty and took dirtyMark to "+
+				"zero, and the term's durability went with it", m.Term)
+		}
+	}
+	if r.PendingGated() == 0 {
+		t.Fatal("nothing is withheld, so nothing is waiting for the term to reach the disk")
+	}
+}

@@ -912,6 +912,12 @@ type Raft struct {
 	// when nothing is pending.
 	dirtyMark PersistMark
 
+	// hsMark is the mark the current HardState was handed over under, or zero
+	// once acknowledged. It answers "is this node's term on disk", which
+	// dirtyMark does NOT: dirtyMark is about what is pending right now, and a
+	// mark can stop being current without becoming durable (BUG-017).
+	hsMark PersistMark
+
 	// markHandedOff records whether the driver has actually been given
 	// something to persist under the current mark.
 	//
@@ -964,6 +970,19 @@ type gatedMessage struct {
 	msg      Message
 	mark     PersistMark // log stream; zero means no constraint
 	snapMark PersistMark // snapshot stream; zero means no constraint
+
+	// termMark is the mark carrying the HARD STATE this message's term claim
+	// rests on. It is a log-stream mark like `mark`, and it is kept separately
+	// for one reason: the two can be satisfied by different events.
+	//
+	// Collapsing them with a max was the second half of BUG-017. A message
+	// gated on max(index mark 2, term mark 1) waits on 2; when mark 2 closes
+	// EMPTY -- covering nothing, satisfied by definition -- the collapsed field
+	// is struck and the message goes out, still advertising a term whose write
+	// is in flight under mark 1. Two constraints satisfied by two events cannot
+	// share one field, which is the same sentence as "a message attesting to
+	// two independent streams waits for both" (A2), one constraint further on.
+	termMark PersistMark
 }
 
 // ErrNotLeader is returned by Propose on a node that is not the leader.
@@ -1400,9 +1419,6 @@ func (r *Raft) stepSnap(m Message) {
 		// GATE: MsgAppResp (accept), on whatever covers the index being acked.
 		last := r.lastIndex()
 		lm, sm := r.marksFor(last)
-		if r.dirtyMark > lm {
-			lm = r.dirtyMark
-		}
 		r.sendGatedOn(lm, sm, Message{
 			Type: MsgAppResp, From: r.id, To: m.From, Term: r.term,
 			Success: true, MatchIndex: last,
@@ -1762,9 +1778,6 @@ func (r *Raft) stepApp(m Message) {
 	//
 	// Taking the later of the two is the only choice that discharges both.
 	lm, sm := r.marksFor(last)
-	if r.dirtyMark > lm {
-		lm = r.dirtyMark
-	}
 	r.sendGatedOn(lm, sm, Message{
 		Type: MsgAppResp, From: r.id, To: m.From, Term: r.term,
 		Success: true, MatchIndex: last,
@@ -2029,6 +2042,19 @@ func (r *Raft) Ready() Ready {
 	if r.hardStateDirty {
 		hs := HardState{Term: r.term, Vote: r.vote}
 		rd.HardState = &hs
+		// # The mark the TERM is riding on, remembered until it is acknowledged
+		//
+		// dirtyMark says "there is state pending right now". It is not the same
+		// question as "is this node's term on disk", and conflating them is a
+		// hole with a schedule: the hard state is handed over under mark m, a
+		// later mark opens and closes empty -- taking dirtyMark to zero -- and
+		// the next message to reveal the term finds nothing to wait on, because
+		// the thing it should wait on stopped being *current* without becoming
+		// *durable*.
+		//
+		// So the mark carrying the hard state is remembered separately and
+		// cleared only by an acknowledgement (BUG-017's second half).
+		r.hsMark = rd.Mark
 	}
 	for i := r.appliedIdx + 1; i <= r.commitIndex && i <= r.lastIndex(); i++ {
 		e, ok := r.at(i)
@@ -2089,6 +2115,9 @@ func (r *Raft) AckPersisted(m PersistMark) {
 		return
 	}
 	r.persisted = m
+	if r.hsMark != 0 && r.hsMark <= m {
+		r.hsMark = 0
+	}
 
 	// The persisted INDEX watermark moves here and nowhere else, and it moves
 	// only on an acknowledgement that reaches the most recent handover. An
@@ -2206,8 +2235,14 @@ func (r *Raft) closeEmptyMark(m PersistMark) {
 		r.markHandedOff = false
 	}
 	for i := range r.gated {
+		// Struck from whichever constraint names it, and from no other. The two
+		// are separate fields precisely so that satisfying one leaves the other
+		// standing.
 		if r.gated[i].mark == m {
 			r.gated[i].mark = 0
+		}
+		if r.gated[i].termMark == m {
+			r.gated[i].termMark = 0
 		}
 	}
 	r.release()
@@ -2219,7 +2254,7 @@ func (r *Raft) closeEmptyMark(m PersistMark) {
 func (r *Raft) release() {
 	kept := r.gated[:0]
 	for _, g := range r.gated {
-		if g.mark <= r.persisted && g.snapMark <= r.persistedSnap {
+		if g.mark <= r.persisted && g.termMark <= r.persisted && g.snapMark <= r.persistedSnap {
 			r.msgs = append(r.msgs, g.msg)
 			continue
 		}
@@ -2371,16 +2406,53 @@ func (r *Raft) send(m Message) { r.msgs = append(r.msgs, m) }
 //
 // Every call site names the gate it is discharging, so the enumeration on
 // Ready.Messages and the code cannot drift apart silently.
-func (r *Raft) sendGated(m Message) { r.sendGatedOn(r.dirtyMark, 0, m) }
+func (r *Raft) sendGated(m Message) { r.sendGatedOn(0, 0, m) }
+
+// termMark is what a message revealing this node's term must wait for: whatever
+// is dirty now, and the mark the hard state was handed over under if that has
+// not been acknowledged yet.
+//
+// The two differ exactly when a mark has been handed to the driver and a later
+// mark has come and gone. dirtyMark is about the present; the term's durability
+// is about a write that may still be in flight from the past.
+// termMark is the mark that must be durable before this node's TERM may be
+// revealed to anybody.
+//
+// Two states, and both are about the hard state and nothing else:
+//
+//	dirty and not yet handed over -- it will go out under the current mark, so
+//	that is what to wait for;
+//	handed over and not yet acknowledged -- it went out under hsMark, which
+//	stays outstanding even after the current mark has moved on.
+//
+// Anything else means the term is already on disk. It is deliberately NOT
+// max(dirtyMark, hsMark) unconditionally: an append's mark is not evidence about
+// the term, and gating the term on it would make the term's constraint
+// disappear the moment that unrelated mark was satisfied.
+func (r *Raft) termMark() PersistMark {
+	m := r.hsMark
+	if r.hardStateDirty && r.dirtyMark > m {
+		m = r.dirtyMark
+	}
+	return m
+}
 
 // sendGatedOn withholds a message until BOTH named marks are durable. A zero
 // mark is no constraint from that stream.
+// sendGatedOn withholds a message until every named mark is durable.
+//
+// The TERM's mark is added here rather than at each call site, because every
+// message that leaves this node carries r.term and therefore makes the same
+// claim about it. A call site that forgot would be a gate missing from one
+// message type, which is precisely how the first fix for BUG-017 covered two of
+// the three paths that emit an append response.
 func (r *Raft) sendGatedOn(mark, snapMark PersistMark, m Message) {
-	if mark == 0 && snapMark == 0 {
+	tm := r.termMark()
+	if mark == 0 && snapMark == 0 && tm == 0 {
 		r.msgs = append(r.msgs, m)
 		return
 	}
-	r.gated = append(r.gated, gatedMessage{msg: m, mark: mark, snapMark: snapMark})
+	r.gated = append(r.gated, gatedMessage{msg: m, mark: mark, snapMark: snapMark, termMark: tm})
 }
 
 // dirty opens (or extends) the pending durability point. Called by every

@@ -881,9 +881,9 @@ destination was already there", and the second is not a move at all.
 | **Found by** | sim — persist-before-reply, seed 16 of the first A5 sweep |
 | **Phase** | found in A5; **the defect has been present since A2** |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M53-empty-mark-releases-through.patch && go test -run TestAnEmptyMarkDoesNotReleaseAnEarlierOne ./raft/` |
-| **Reproduce (seed)** | seed **16**; 1 of the first 60 A5 seeds |
+| **Reproduce (seed)** | seed **16** of the unthrottled-collector shape for the first half; seed **6425** of the 10,000-seed exit run for the third |
 | **Invariant that caught it** | persist-before-reply — term, vote and log durable before replying to any RPC |
-| **Mutant class** | none existed — added `M53-empty-mark-releases-through` |
+| **Mutant class** | none existed — added `M53-empty-mark-releases-through` and `M56-term-gated-only-on-what-is-dirty-now` |
 | **Fix commit** | *(this commit)* |
 | **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
 
@@ -940,6 +940,38 @@ nothing, and `release()` then decides on whatever constraints are actually left.
 the opposite pair** — it kept liveness by releasing through the mark, which is the unsound half.
 Neither spelling is right alone, and the correction is not "release less" but "record that the
 constraint is gone".
+
+### The third half, found by the 10,000-seed exit run
+
+The 2,000-seed mid-phase sweep was clean. The exit run found the same symptom again on **2 of 10,000
+seeds**, first at seed 6425, and the state at the send says exactly what was wrong:
+
+```
+persisted=0 persistedSnap=0 dirtyMark=0 lastHanded=1 handedOff=false nextMark=2 gated=1
+```
+
+The hard state was handed over under mark 1 and never acknowledged (`lastHanded=1, persisted=0`), and
+`dirtyMark` was **zero** — because a later mark 2 had opened and closed empty. Every gate on a term
+claim was computed from `dirtyMark`, so a message created after that point found nothing to wait on.
+
+**`dirtyMark` answers "is anything pending right now". A term claim needs "is this node's term on
+disk", and those are different questions.** They coincide until a mark stops being current without
+becoming durable — which is precisely what closing an empty mark does. The first half of this fix is
+what exposed it: while an empty mark released *through* itself it also inflated `persisted`, so the
+wrong belief was at least self-consistent.
+
+The fix is `termMark()`, which names the hard state's own mark — the current one while the state is
+dirty and unhanded, `hsMark` while it is handed and unacknowledged, zero when it is on disk.
+
+**And that alone was not enough either, which is the part worth reading.** Collapsing the term's mark
+into the index's with a `max` puts two constraints in one field, and they are satisfied by different
+events: a message gated on `max(index mark 2, term mark 1)` waits on 2, and when mark 2 closes *empty*
+the collapsed field is struck and the message leaves with the term still in flight under mark 1. So
+`gatedMessage` carries the term's mark **separately**, and `closeEmptyMark` strikes only the field
+that names it.
+
+That is A2's rule — *a message attesting to state in two independent streams waits for both* — one
+constraint further on. There are three, not two: the log, the snapshot, and the hard state.
 
 **And the lesson, which is about the shape of the mistake.** Both spellings are one line and both look
 like "this mark is satisfied". The difference is whether the satisfaction is evidence about other

@@ -1,0 +1,17 @@
+# id: M56-term-gated-only-on-what-is-dirty-now
+# covering-test: TestATermStaysGatedAfterALaterMarkClosesEmpty
+# package: ./raft/
+# expect: killed
+# power: n/a -- the same schedule M53 needs, and unreachable for the same measured reason: the throttled collector does not produce a mark that opens and closes empty while an earlier handed mark is outstanding. Found at seed 6425 of the 10,000-seed exit run, which is the only shape that has ever reached it, and induced directly instead
+# mutates: a message revealing this node's term is gated on what is dirty NOW rather than on the mark the hard state was handed over under. The two differ exactly when a mark stops being current without becoming durable -- a later mark closing empty -- and the term's durability goes with it (BUG-017, second half)
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -2430,7 +2430,7 @@
+ // the term, and gating the term on it would make the term's constraint
+ // disappear the moment that unrelated mark was satisfied.
+ func (r *Raft) termMark() PersistMark {
+-	m := r.hsMark
++	m := PersistMark(0)
+ 	if r.hardStateDirty && r.dirtyMark > m {
+ 		m = r.dirtyMark
+ 	}
