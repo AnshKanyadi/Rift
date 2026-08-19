@@ -3,7 +3,10 @@ package store
 import (
 	"encoding/binary"
 
+	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/sorted"
+	"github.com/anshkanyadi/rift/kv"
 	"github.com/anshkanyadi/rift/raft"
 )
 
@@ -145,7 +148,8 @@ func decodeSnapshot(b []byte) (raft.SnapshotMeta, []byte, bool) {
 	return raft.SnapshotMeta{Index: raft.Index(idx), Term: raft.Term(term), Conf: conf}, data, true
 }
 
-// encodeMachine serialises the WHOLE state machine: the extent and the keys.
+// encodeMachine serialises the WHOLE state machine: the extent, the
+// garbage-collection mark, and every version.
 //
 // # Why the extent is in here and not beside it
 //
@@ -159,29 +163,80 @@ func decodeSnapshot(b []byte) (raft.SnapshotMeta, []byte, bool) {
 // adopts a state machine without its extent has adopted half of one. That is not
 // hypothetical: a follower that installed a snapshot kept its own stale extent,
 // refused the next split entry for naming an extent it could not see, and
-// diverged from every replica that applied it (BUG-013). Because it is here, the
-// extent now travels on the wire with the snapshot, is restored by recovery at
-// the index it belongs to, and is covered by the digest snapshot equivalence
-// compares -- so the same defect is a caught violation rather than a silence.
-func encodeMachine(desc RangeDescriptor, kv map[string]string) []byte {
+// diverged from every replica that applied it (BUG-013).
+//
+// # A5 adds the GC mark for exactly the same reason
+//
+// The mark decides whether a read is answerable, it advances by an applied
+// command, and it is therefore applied state too. A snapshot that carried
+// versions without the mark would hand a follower a state machine whose history
+// has been collected and whose record of that collection has not -- so it would
+// answer reads below the mark from a history that is no longer there, which is
+// the silently-wrong read the mark exists to prevent.
+func encodeMachine(desc RangeDescriptor, mark hlc.Timestamp, vs []kv.Version) []byte {
 	b := putBytes(nil, encodeDesc(desc))
-	return append(b, encodeKV(kv)...)
+	b = putU64(b, uint64(mark.Wall))
+	b = putU64(b, uint64(mark.Logical))
+	b = putU64(b, uint64(len(vs)))
+	for _, v := range vs {
+		b = putBytes(b, v.Key)
+		b = putU64(b, uint64(v.At.Wall))
+		b = putU64(b, uint64(v.At.Logical))
+		b = putBytes(b, v.Value)
+	}
+	return b
 }
 
-func decodeMachine(b []byte) (RangeDescriptor, map[string]string, bool) {
+func decodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+	var zero RangeDescriptor
 	descRaw, b, ok := takeBytes(b)
 	if !ok {
-		return RangeDescriptor{}, nil, false
+		return zero, hlc.Timestamp{}, nil, false
 	}
 	desc, ok := decodeDesc(descRaw)
 	if !ok {
-		return RangeDescriptor{}, nil, false
+		return zero, hlc.Timestamp{}, nil, false
 	}
-	kv, ok := decodeKV(b)
+	mw, b, ok := takeU64(b)
 	if !ok {
-		return RangeDescriptor{}, nil, false
+		return zero, hlc.Timestamp{}, nil, false
 	}
-	return desc, kv, true
+	ml, b, ok := takeU64(b)
+	if !ok {
+		return zero, hlc.Timestamp{}, nil, false
+	}
+	mark := hlc.Timestamp{Wall: clock.NewWall(int64(mw)), Logical: uint32(ml)}
+	n, b, ok := takeU64(b)
+	if !ok {
+		return zero, hlc.Timestamp{}, nil, false
+	}
+	vs := make([]kv.Version, 0, n)
+	for range n {
+		var kb, vb []byte
+		kb, b, ok = takeBytes(b)
+		if !ok {
+			return zero, hlc.Timestamp{}, nil, false
+		}
+		var w, l uint64
+		w, b, ok = takeU64(b)
+		if !ok {
+			return zero, hlc.Timestamp{}, nil, false
+		}
+		l, b, ok = takeU64(b)
+		if !ok {
+			return zero, hlc.Timestamp{}, nil, false
+		}
+		vb, b, ok = takeBytes(b)
+		if !ok {
+			return zero, hlc.Timestamp{}, nil, false
+		}
+		vs = append(vs, kv.Version{
+			Key:   kb,
+			At:    hlc.Timestamp{Wall: clock.NewWall(int64(w)), Logical: uint32(l)},
+			Value: vb,
+		})
+	}
+	return desc, mark, vs, true
 }
 
 // encodeKV serialises the state machine.
@@ -222,14 +277,14 @@ func decodeKV(b []byte) (map[string]string, bool) {
 	return kv, true
 }
 
-// DecodeMachine decodes a state machine for the harness's model: the extent it
-// holds and the keys it holds.
+// DecodeMachine decodes a state machine for the harness's model: the extent, the
+// garbage-collection mark, and every version.
 //
 // It reports false rather than returning an empty state on undecodable input.
 // The model cannot judge a range whose starting extent it does not know, and
 // quietly substituting a zero one is how a checker comes out green on a state
 // nobody ever had.
-func DecodeMachine(b []byte) (RangeDescriptor, map[string]string, bool) {
+func DecodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
 	return decodeMachine(b)
 }
 
@@ -240,7 +295,7 @@ func DecodeMachine(b []byte) (RangeDescriptor, map[string]string, bool) {
 // re-implements what a put and a get do rather than calling into this package,
 // so a defect in applying commands cannot be cancelled out by the same defect on
 // both sides of the comparison.
-func DecodeCommand(data []byte) (op, key, value string) { return decodeCmd(data) }
+func DecodeCommand(data []byte) (op, key, value string, at hlc.Timestamp) { return decodeCmd(data) }
 
 func encodeMessage(m raft.Message) []byte {
 	b := []byte{byte(m.Type)}
@@ -342,24 +397,46 @@ func decodeMessage(b []byte) (raft.Message, bool) {
 	return m, true
 }
 
-func encodeCmd(op, key, value string) []byte {
+// # A command carries its TIMESTAMP, and the leader stamps it at propose time
+//
+// The alternative is each replica stamping when it applies, and that is not a
+// near miss -- it is a guaranteed divergence. Two replicas apply the same entry
+// at different wall times, so they would write the same value at two different
+// timestamps and every subsequent read would see different history depending on
+// which replica served it.
+//
+// So the leader reads its HLC once, at propose, and the timestamp travels in the
+// entry. Every replica then applies a fact derived at a position, which is A4's
+// class in A5's dimension (DESIGN-A5 section 7) and the same reasoning that put
+// the split key in the split entry rather than re-deriving it per replica.
+func encodeCmd(op, key, value string, at hlc.Timestamp) []byte {
 	b := putBytes(nil, []byte(op))
 	b = putBytes(b, []byte(key))
-	return putBytes(b, []byte(value))
+	b = putBytes(b, []byte(value))
+	b = putU64(b, uint64(at.Wall))
+	return putU64(b, uint64(at.Logical))
 }
 
-func decodeCmd(b []byte) (string, string, string) {
+func decodeCmd(b []byte) (string, string, string, hlc.Timestamp) {
 	o, b, ok := takeBytes(b)
 	if !ok {
-		return "", "", ""
+		return "", "", "", hlc.Timestamp{}
 	}
 	k, b, ok := takeBytes(b)
 	if !ok {
-		return "", "", ""
+		return "", "", "", hlc.Timestamp{}
 	}
-	v, _, ok := takeBytes(b)
+	v, b, ok := takeBytes(b)
 	if !ok {
-		return "", "", ""
+		return "", "", "", hlc.Timestamp{}
 	}
-	return string(o), string(k), string(v)
+	w, b, ok := takeU64(b)
+	if !ok {
+		return "", "", "", hlc.Timestamp{}
+	}
+	l, _, ok := takeU64(b)
+	if !ok {
+		return "", "", "", hlc.Timestamp{}
+	}
+	return string(o), string(k), string(v), hlc.Timestamp{Wall: clock.NewWall(int64(w)), Logical: uint32(l)}
 }

@@ -8,8 +8,9 @@ import (
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
+	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/provenance"
-	"github.com/anshkanyadi/rift/internal/sorted"
+	"github.com/anshkanyadi/rift/kv"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
@@ -71,7 +72,7 @@ func New(cfg Config) (*Node, error) {
 	// assume from a missing entry. Every machine records the same constant, which
 	// is the point: the model reads a fact rather than a default.
 	cfg.Ledger.RecordRangeBase(uint64(FirstRange),
-		provenance.Witness(encodeMachine(first, map[string]string{})),
+		provenance.Witness(encodeMachine(first, hlc.Timestamp{}, nil)),
 		provenance.Witness(raft.EncodeConfiguration(initialConf(cfg))))
 	return m, nil
 }
@@ -107,6 +108,25 @@ func (m *Node) newReplicaFor(d RangeDescriptor) (*Replica, error) {
 	}
 	r.rng, r.desc = d.ID, d.Clone()
 	r.db, r.epoch, r.machine = m.db, m.epoch, m
+
+	// The MVCC store lives inside this range's engine-key namespace, so a
+	// range's versions are part of the contiguous keyspace A4 gave it: written,
+	// cleared and recovered without touching another range's.
+	store, err := kv.NewStore(m.db, rangePrefix(d.ID))
+	if err != nil {
+		return nil, err
+	}
+	r.mvcc = store
+
+	// One HLC per range over the machine's ONE physical clock. Two ranges on a
+	// node share a clock and not a logical counter, so a busy range cannot
+	// inflate a quiet one's timestamps -- and both are bounded by the same
+	// maxOffset, which is what makes the cluster-wide argument work.
+	h, err := hlc.New(m.cfg.Clock)
+	if err != nil {
+		return nil, err
+	}
+	r.hlc = h
 	return r, nil
 }
 
@@ -159,7 +179,7 @@ func (m *Node) Handle(ev sim.Event, s sim.Scheduler) {
 		if err != nil {
 			return
 		}
-		id, body, ok := takeRange(env.Body)
+		id, senderTS, body, ok := takeRange(env.Body)
 		if !ok {
 			return
 		}
@@ -174,6 +194,15 @@ func (m *Node) Handle(ev sim.Event, s sim.Scheduler) {
 			// not been created here yet -- and dropping it is what a real node
 			// would do.
 			return
+		}
+		// Fold the sender's timestamp in BEFORE stepping, so anything this
+		// replica stamps as a consequence of the message orders after it. After
+		// stepping would be a receive that can be stamped before its own send.
+		if err := r.hlc.Update(senderTS); err != nil {
+			// Beyond the envelope. The message is still processed: refusing to
+			// step it would turn one node's bad clock into a partition, which is
+			// a bigger failure than the timestamp it carried.
+			r.envelopeRefusals++
 		}
 		m.cfg.Ledger.RecordReceived(uint64(id), m.cfg.Ordinal, provenance.Witness(msg), ev.At)
 		_ = r.raft.Step(msg)
@@ -298,8 +327,17 @@ func (m *Node) restart() {
 		m.addReplica(r)
 	}
 	m.down = false
-	for _, r := range m.replicas {
-		r.restart()
+
+	// Read every replica's durable state BEFORE rebuilding any of them. One
+	// engine serves every replica on this machine, so a rebuild writes to the
+	// engine another replica has not read yet -- and the read-back assertion
+	// (BUG-005's fix) fires on those writes, correctly. See Replica.readRecovered.
+	states := make([]provenance.Reported[recovered], len(m.replicas))
+	for i, r := range m.replicas {
+		states[i] = r.readRecovered()
+	}
+	for i, r := range m.replicas {
+		r.restartFrom(states[i])
 	}
 }
 
@@ -370,17 +408,36 @@ func (m *Node) AssertQuiescent() error {
 // group -- and it says so explicitly rather than by any property of the message,
 // because a routing decision inferred from content is a routing decision that
 // changes when the content does.
-func putRange(id RangeID, body []byte) []byte {
-	b := make([]byte, 8, 8+len(body))
+// # Every message carries the sender's timestamp, and that is what makes
+// # causality hold across the cluster rather than within one node
+//
+// An HLC that only stamped local events would give each node a private order
+// that never reconciles with anyone else's. The property that matters -- if a
+// happens before b then ts(a) < ts(b) -- has a cross-node half, and a send/receive
+// pair is the only place that half is observable. So the timestamp rides on the
+// envelope and the receiver folds it in before stepping the message.
+//
+// It is on the STORE's framing rather than inside a raft message: raft has no
+// business knowing what a timestamp is, exactly as it has no business knowing
+// what a range is (D-A4-3). The two facts the store adds to an envelope -- which
+// range, and when -- sit together here.
+func putRange(id RangeID, at hlc.Timestamp, body []byte) []byte {
+	b := make([]byte, 20, 20+len(body))
 	binary.BigEndian.PutUint64(b, uint64(id))
+	binary.BigEndian.PutUint64(b[8:], uint64(at.Wall))
+	binary.BigEndian.PutUint32(b[16:], at.Logical)
 	return append(b, body...)
 }
 
-func takeRange(b []byte) (RangeID, []byte, bool) {
-	if len(b) < 8 {
-		return 0, nil, false
+func takeRange(b []byte) (RangeID, hlc.Timestamp, []byte, bool) {
+	if len(b) < 20 {
+		return 0, hlc.Timestamp{}, nil, false
 	}
-	return RangeID(binary.BigEndian.Uint64(b)), b[8:], true
+	at := hlc.Timestamp{
+		Wall:    clock.NewWall(int64(binary.BigEndian.Uint64(b[8:]))),
+		Logical: binary.BigEndian.Uint32(b[16:]),
+	}
+	return RangeID(binary.BigEndian.Uint64(b)), at, b[20:], true
 }
 
 var _ = raft.EntryNormal
@@ -543,19 +600,29 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 	// exactly one of them. A key in neither means the range was holding a key it
 	// did not own, which is BUG-014's shape: it is asserted rather than tolerated,
 	// because tolerating it is precisely how that bug survived a whole phase.
-	rightKV := map[string]string{}
-	for _, k := range sorted.Keys(left.kv) {
+	// A split moves VERSIONS, not values: the right range inherits the whole
+	// history of every key it takes, because a read at an old timestamp against
+	// the new range must answer what it would have answered against the old one.
+	// Moving only the newest version would make a split silently truncate
+	// history, and the read that noticed would be one at a timestamp before the
+	// split -- which is exactly the read a snapshot-isolated transaction makes.
+	var leftKept, rightVs []kv.Version
+	for _, v := range left.versions() {
 		switch {
-		case spec.Right.Contains([]byte(k)):
-			rightKV[k] = left.kv[k]
-			delete(left.kv, k)
-		case spec.Left.Contains([]byte(k)):
+		case spec.Right.Contains(v.Key):
+			rightVs = append(rightVs, v)
+		case spec.Left.Contains(v.Key):
+			leftKept = append(leftKept, v)
 		default:
 			panic(fmt.Sprintf(
 				"store: node %d splitting range %d holds key %q, which neither %s nor %s covers",
-				m.cfg.ID, left.rng, k, spec.Left, spec.Right))
+				m.cfg.ID, left.rng, v.Key, spec.Left, spec.Right))
 		}
 	}
+	// The mark travels with the versions. A right range born with a zero mark
+	// would answer reads its parent had already collected the history for.
+	mark := left.mvcc.GCMark()
+	left.ingest(leftKept, mark)
 	left.desc = spec.Left.Clone()
 
 	if existing := m.replicaOf(spec.Right.ID); existing != nil {
@@ -566,7 +633,7 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 	if err != nil {
 		panic(fmt.Sprintf("store: node %d cannot create range %d: %v", m.cfg.ID, spec.Right.ID, err))
 	}
-	r.kv = rightKV
+	r.ingest(rightVs, mark)
 
 	// The right range starts from a snapshot at index zero carrying its derived
 	// state and the configuration it inherits. A range born with no log and no
@@ -587,7 +654,7 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 			m.cfg.ID, left.rng, confErr))
 	}
 	snapMeta := raft.SnapshotMeta{Index: 0, Term: 0, Conf: conf}
-	data := encodeMachine(spec.Right, rightKV)
+	data := encodeMachine(spec.Right, mark, rightVs)
 
 	// Only the RIGHT range's descriptor is written, and it is a discovery
 	// record: it tells a restarting machine that this range exists here. The
@@ -606,7 +673,7 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 
 	m.cfg.Ledger.RecordRangeBase(uint64(spec.Right.ID),
 		provenance.Witness(data), provenance.Witness(raft.EncodeConfiguration(conf)))
-	r.adoptSnapshot(snapMeta, rightKV)
+	r.adoptSnapshot(snapMeta, rightVs, mark)
 	m.addReplica(r)
 	m.splits++
 }

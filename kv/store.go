@@ -41,6 +41,11 @@ var ErrUnsetTimestamp = errors.New("kv: timestamp is unset")
 type Store struct {
 	db engine.Engine
 
+	// ns is this store's engine-key namespace: the range's prefix. Every key
+	// this store writes, reads or collects is inside it, so a range's versions
+	// are a contiguous keyspace like the rest of its state (A4).
+	ns []byte
+
 	// gcMark is the low-water mark. Versions at or below it may have been
 	// collected, so reads at or below it are refused.
 	//
@@ -64,12 +69,15 @@ type Store struct {
 }
 
 // NewStore builds an MVCC store over an engine.
-func NewStore(db engine.Engine) (*Store, error) {
+func NewStore(db engine.Engine, ns []byte) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("kv: no engine")
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, ns: append([]byte(nil), ns...)}, nil
 }
+
+// Namespace is the engine-key prefix this store owns.
+func (s *Store) Namespace() []byte { return append([]byte(nil), s.ns...) }
 
 // PutInto stages a versioned write into a batch.
 //
@@ -88,7 +96,7 @@ func (s *Store) PutInto(b *engine.Batch, key []byte, ts hlc.Timestamp, value []b
 		// may have.
 		return fmt.Errorf("%w: write at %s is at or below the mark %s", ErrBelowGCMark, ts, s.gcMark)
 	}
-	b.Set(EncodeKey(key, ts), value)
+	b.Set(EncodeKey(s.ns, key, ts), value)
 	s.versionsWrote++
 	return nil
 }
@@ -111,16 +119,16 @@ func (s *Store) ReadAt(key []byte, ts hlc.Timestamp) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("%w: read at %s, mark at %s", ErrBelowGCMark, ts, s.gcMark)
 	}
 
-	prefix := KeyPrefix(key)
+	prefix := KeyPrefix(s.ns, key)
 	it := s.db.NewIter(engine.IterOptions{Lower: prefix, Upper: prefixEnd(prefix)})
 	defer func() { _ = it.Close() }()
 
 	// Versions sort newest-first within a key, so the first record at or after
 	// the encoding of (key, ts) is the newest version at or before ts.
-	if !it.SeekGE(EncodeKey(key, ts)) {
+	if !it.SeekGE(EncodeKey(s.ns, key, ts)) {
 		return nil, false, it.Error()
 	}
-	gotKey, gotTS, ok := DecodeKey(it.Key())
+	gotKey, gotTS, ok := DecodeKey(s.ns, it.Key())
 	if !ok || string(gotKey) != string(key) {
 		return nil, false, it.Error()
 	}
@@ -160,7 +168,8 @@ func (s *Store) AdvanceGCInto(b *engine.Batch, to hlc.Timestamp) (int, error) {
 	}
 
 	removed := 0
-	it := s.db.NewIter(engine.IterOptions{Lower: []byte{dataPrefix}, Upper: []byte{dataPrefix + 1}})
+	lo := append(append([]byte(nil), s.ns...), dataPrefix)
+	it := s.db.NewIter(engine.IterOptions{Lower: lo, Upper: prefixEnd(lo)})
 	defer func() { _ = it.Close() }()
 
 	// Walk every version, keeping the newest one at or before `to` for each key
@@ -169,7 +178,7 @@ func (s *Store) AdvanceGCInto(b *engine.Batch, to hlc.Timestamp) (int, error) {
 	var cur []byte
 	kept := false
 	for ok := it.First(); ok; ok = it.Next() {
-		key, ts, ok := DecodeKey(it.Key())
+		key, ts, ok := DecodeKey(s.ns, it.Key())
 		if !ok {
 			continue
 		}
@@ -223,4 +232,76 @@ func prefixEnd(p []byte) []byte {
 		}
 	}
 	return nil // all 0xFF: unbounded above
+}
+
+// Version is one record: a user key, the timestamp it was written at, and its
+// value.
+type Version struct {
+	Key   []byte
+	At    hlc.Timestamp
+	Value []byte
+}
+
+// Versions enumerates everything this store holds, in engine order: by key, and
+// newest-first within a key.
+//
+// It is the whole state of the machine, and it is what snapshots serialise,
+// splits partition, and the digest covers. Ordering is the engine's, which is
+// deterministic and identical on every replica -- a map range here would be the
+// classic determinism leak, and it would leak into a snapshot digest, which is
+// the one place it would look like a real divergence.
+func (s *Store) Versions() ([]Version, error) {
+	lo := append(append([]byte(nil), s.ns...), dataPrefix)
+	it := s.db.NewIter(engine.IterOptions{Lower: lo, Upper: prefixEnd(lo)})
+	defer func() { _ = it.Close() }()
+
+	var out []Version
+	for ok := it.First(); ok; ok = it.Next() {
+		key, ts, ok := DecodeKey(s.ns, it.Key())
+		if !ok {
+			continue
+		}
+		out = append(out, Version{
+			Key:   append([]byte(nil), key...),
+			At:    ts,
+			Value: append([]byte(nil), it.Value()...),
+		})
+	}
+	return out, it.Error()
+}
+
+// IngestInto stages a whole state into a batch: everything this store's
+// namespace holds is cleared and replaced.
+//
+// Clear-then-ingest in ONE batch is why DeleteRange is in the frozen engine
+// interface (Amendment A3). A best-effort clear followed by a separate write
+// would leave a window where the range holds a mixture of two states, and a
+// crash in that window recovers into it.
+func (s *Store) IngestInto(b *engine.Batch, vs []Version, mark hlc.Timestamp) {
+	lo := append(append([]byte(nil), s.ns...), dataPrefix)
+	b.DeleteRange(lo, prefixEnd(lo))
+	for _, v := range vs {
+		b.Set(EncodeKey(s.ns, v.Key, v.At), v.Value)
+	}
+	s.gcMark = mark
+}
+
+// Keys is the distinct user keys this store holds, in order.
+//
+// A split cuts at the median of these, not of the versions: cutting at the
+// median VERSION would put the cut wherever the write traffic was heaviest
+// rather than in the middle of the key space, and a hot key would split a range
+// into one holding it and one holding everything else.
+func (s *Store) Keys() ([][]byte, error) {
+	vs, err := s.Versions()
+	if err != nil {
+		return nil, err
+	}
+	var out [][]byte
+	for _, v := range vs {
+		if len(out) == 0 || string(out[len(out)-1]) != string(v.Key) {
+			out = append(out, v.Key)
+		}
+	}
+	return out, nil
 }

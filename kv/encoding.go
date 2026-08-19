@@ -42,9 +42,15 @@ const (
 	tsBytes      = wallBytes + logicalBytes
 )
 
-// EncodeKey renders (key, ts) as an engine key.
-func EncodeKey(key []byte, ts hlc.Timestamp) []byte {
-	b := make([]byte, 0, 1+lenBytes+len(key)+tsBytes)
+// EncodeKey renders (key, ts) as an engine key under a namespace.
+//
+// The namespace is the range's engine-key prefix. A4 gave every range a
+// contiguous keyspace so a replica's state can be written, cleared and recovered
+// without touching another's; MVCC versions live inside it for the same reason,
+// and DeleteRange over the namespace still means "everything this range holds".
+func EncodeKey(ns, key []byte, ts hlc.Timestamp) []byte {
+	b := make([]byte, 0, len(ns)+1+lenBytes+len(key)+tsBytes)
+	b = append(b, ns...)
 	b = append(b, dataPrefix)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(key)))
 	b = append(b, key...)
@@ -56,8 +62,9 @@ func EncodeKey(key []byte, ts hlc.Timestamp) []byte {
 // It is the seek bound a scan of one key's chain stops at, and it is exact
 // rather than a "starts with" test: the length prefix means no other key's
 // encoding can share it.
-func KeyPrefix(key []byte) []byte {
-	b := make([]byte, 0, 1+lenBytes+len(key))
+func KeyPrefix(ns, key []byte) []byte {
+	b := make([]byte, 0, len(ns)+1+lenBytes+len(key))
+	b = append(b, ns...)
 	b = append(b, dataPrefix)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(key)))
 	return append(b, key...)
@@ -75,11 +82,13 @@ func appendInvertedTS(b []byte, ts hlc.Timestamp) []byte {
 	return binary.BigEndian.AppendUint32(b, ^ts.Logical)
 }
 
-// DecodeKey reads an engine key back into its user key and timestamp.
-func DecodeKey(b []byte) (key []byte, ts hlc.Timestamp, ok bool) {
-	if len(b) < 1+lenBytes || b[0] != dataPrefix {
+// DecodeKey reads an engine key back into its user key and timestamp, given the
+// namespace it was written under.
+func DecodeKey(ns, b []byte) (key []byte, ts hlc.Timestamp, ok bool) {
+	if len(b) < len(ns)+1+lenBytes || string(b[:len(ns)]) != string(ns) || b[len(ns)] != dataPrefix {
 		return nil, hlc.Timestamp{}, false
 	}
+	b = b[len(ns):]
 	n := int(binary.BigEndian.Uint32(b[1 : 1+lenBytes]))
 	if n < 0 || len(b) != 1+lenBytes+n+tsBytes {
 		return nil, hlc.Timestamp{}, false
@@ -94,8 +103,9 @@ func DecodeKey(b []byte) (key []byte, ts hlc.Timestamp, ok bool) {
 // MetaKey is where a key's non-versioned bookkeeping lives. A5 has none; A6's
 // lock and write records land here, and the prefix is reserved now so that
 // adding them is not a change to how data keys sort.
-func MetaKey(key []byte) []byte {
-	b := make([]byte, 0, 1+lenBytes+len(key))
+func MetaKey(ns, key []byte) []byte {
+	b := make([]byte, 0, len(ns)+1+lenBytes+len(key))
+	b = append(b, ns...)
 	b = append(b, 'm')
 	b = binary.BigEndian.AppendUint32(b, uint32(len(key)))
 	return append(b, key...)

@@ -3,12 +3,14 @@ package hunt
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/internal/rng"
-	"github.com/anshkanyadi/rift/internal/sorted"
+	"github.com/anshkanyadi/rift/kv"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
@@ -216,10 +218,10 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 // onSplit is called for every split entry with the model's verdict on whether it
 // takes effect, so the two oracles that need splits and the one that needs the
 // final state all read the same replay rather than three drifting copies of it.
-func replay(base []byte, entries []raft.Entry, onSplit func(raft.Index, bool, store.SplitSpec)) (store.RangeDescriptor, map[string]string, bool) {
-	desc, kv, ok := store.DecodeMachine(base)
+func replay(base []byte, entries []raft.Entry, onSplit func(raft.Index, bool, store.SplitSpec)) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+	desc, mark, vs, ok := store.DecodeMachine(base)
 	if !ok {
-		return desc, nil, false
+		return desc, mark, nil, false
 	}
 	for _, e := range entries {
 		if len(e.Data) == 0 {
@@ -252,36 +254,69 @@ func replay(base []byte, entries []raft.Entry, onSplit func(raft.Index, bool, st
 			// short way made the model quietly repair a range that was holding a
 			// key it did not own, and the oracle went green on a state no
 			// replica ever had (BUG-014).
-			for _, k := range sorted.Keys(kv) {
-				if !spec.Left.Contains([]byte(k)) {
-					delete(kv, k)
+			kept := vs[:0]
+			for _, v := range vs {
+				if spec.Left.Contains(v.Key) {
+					kept = append(kept, v)
 				}
 			}
+			vs = kept
 			desc = spec.Left
 			continue
 		}
 		// A command for a key outside the extent at this position is refused,
 		// exactly as the replicas refuse it. Restated, not shared.
-		if op, k, v := store.DecodeCommand(e.Data); op == "put" && desc.Contains([]byte(k)) {
-			kv[k] = v
+		//
+		// A write at or below the mark is refused too, for the reason the store
+		// refuses it: the version would be one no read may ever see, and whether
+		// it survived would depend on when garbage collection next ran, which is
+		// not a property a state machine may have.
+		op, k, v, at := store.DecodeCommand(e.Data)
+		if op != "put" || !desc.Contains([]byte(k)) || at.LessEq(mark) {
+			continue
 		}
+		vs = insertVersion(vs, kv.Version{Key: []byte(k), At: at, Value: []byte(v)})
 	}
-	return desc, kv, true
+	return desc, mark, vs, true
+}
+
+// insertVersion places a version in engine order: by key ascending, and by
+// timestamp DESCENDING within a key.
+//
+// The order is the encoding's, restated. It is not a tidiness choice: the
+// snapshot digest is over these bytes, so a model that ordered versions
+// differently from the store would report a divergence on every seed that
+// wrote twice to one key.
+func insertVersion(vs []kv.Version, v kv.Version) []kv.Version {
+	i := sort.Search(len(vs), func(i int) bool {
+		if c := bytes.Compare(vs[i].Key, v.Key); c != 0 {
+			return c >= 0
+		}
+		return !v.At.Less(vs[i].At)
+	})
+	if i < len(vs) && bytes.Equal(vs[i].Key, v.Key) && vs[i].At == v.At {
+		vs[i].Value = v.Value // a second write at one timestamp overwrites, as Set does
+		return vs
+	}
+	vs = append(vs, kv.Version{})
+	copy(vs[i+1:], vs[i:])
+	vs[i] = v
+	return vs
 }
 
 // stateDigest is raftcheck.StateAt.
 func stateDigest(base []byte, entries []raft.Entry) uint64 {
-	desc, kv, ok := replay(base, entries, nil)
+	desc, mark, vs, ok := replay(base, entries, nil)
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
 	}
-	return store.StateDigest(desc, kv)
+	return store.StateDigest(desc, mark, vs)
 }
 
 // splitSteps is raftcheck.SplitsAt.
 func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
 	var out []raftcheck.SplitStep
-	_, _, ok := replay(base, entries, func(idx raft.Index, applies bool, spec store.SplitSpec) {
+	_, _, _, ok := replay(base, entries, func(idx raft.Index, applies bool, spec store.SplitSpec) {
 		out = append(out, raftcheck.SplitStep{
 			Index: idx, Applied: applies,
 			Child:      uint64(spec.Right.ID),
@@ -298,7 +333,7 @@ func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
 
 // extentOf is raftcheck.ExtentOf.
 func extentOf(base []byte) (start, end []byte, epoch uint64, ok bool) {
-	desc, _, ok := store.DecodeMachine(base)
+	desc, _, _, ok := store.DecodeMachine(base)
 	if !ok {
 		return nil, nil, 0, false
 	}
@@ -452,6 +487,10 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
 			Transport:         run.Transport, Ledger: ledger, History: hist,
+			// The node's own clock, with its own timeline: skew between nodes
+			// is what the HLC exists to reconcile, so handing every node the
+			// same clock would make A5's whole property vacuous.
+			Clock: run.Clocks[ord],
 			ElectionJitter: func(term raft.Term) int {
 				return 10 + int(jitKey.Uint64N(0, uint64(ord), uint64(term), 0, 10))
 			},

@@ -24,8 +24,9 @@ import (
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
+	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/provenance"
-	"github.com/anshkanyadi/rift/internal/sorted"
+	"github.com/anshkanyadi/rift/kv"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
@@ -70,8 +71,14 @@ type Config struct {
 	SyncLatency clock.Instant
 
 	Transport sim.Transport
-	Ledger    *raftcheck.Ledger
-	History   *sim.History
+
+	// Clock is this machine's physical clock. It is per MACHINE, not per range:
+	// one node has one oscillator, and modelling each range with its own would
+	// let the simulator produce skew between two replicas that share a process,
+	// which is the harness lying in the system's favour.
+	Clock   clock.Clock
+	Ledger  *raftcheck.Ledger
+	History *sim.History
 
 	// Learners are the peers that start as learners rather than voters.
 	Learners []raft.NodeID
@@ -167,8 +174,16 @@ type Replica struct {
 	// and the engine is still holding a discarded suffix.
 	writtenLast raft.Index
 
-	// kv is the replicated state machine: applied entries land here.
-	kv map[string]string
+	// mvcc is the replicated state machine: applied entries land here as
+	// versions keyed by the timestamp their entry carried.
+	mvcc *kv.Store
+
+	// hlc is this replica's timestamp source. It is per RANGE rather than per
+	// machine, which is worth stating: two ranges on one node share a physical
+	// clock but not a logical counter, so a busy range cannot inflate a quiet
+	// one's timestamps. What ties them together is that both read the same
+	// clock.Wall, which is what maxOffset bounds.
+	hlc hlc.Source
 
 	// durSnap is the snapshot this node has durable, and snapPending is one
 	// handed to the engine and not yet acknowledged. durLog holds only the
@@ -214,6 +229,18 @@ type Replica struct {
 	// outside this range's extent at that log position (BUG-014).
 	outOfExtent int
 
+	// writesRefused and readsRefused count commands the MVCC store declined for
+	// naming a timestamp at or below the garbage-collection mark. Both are
+	// asserted somewhere: a count nobody asserts on is decoration that looks
+	// like evidence (DESIGN-A4 section 9.4b).
+	writesRefused int
+	readsRefused  int
+
+	// envelopeRefusals counts peers whose timestamp was beyond maxOffset ahead.
+	// Zero in a bounded run is the bound holding; nonzero in a skew run is the
+	// check being reachable. Both directions are asserted.
+	envelopeRefusals int
+
 	down bool
 }
 
@@ -234,8 +261,9 @@ type pendingWrite struct {
 	// through AckSnapshot rather than AckPersisted.
 	snapMark raft.PersistMark
 
-	snap   *raft.SnapshotMeta
-	snapKV map[string]string
+	snap         *raft.SnapshotMeta
+	snapVersions []kv.Version
+	snapMarkTS   hlc.Timestamp
 
 	// clearAllLog is an install, which discards every entry; clearBelow is a
 	// local compaction, which discards only the prefix the snapshot covers.
@@ -272,7 +300,7 @@ func newReplica(cfg Config) (*Replica, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Replica{cfg: cfg, raft: r, db: model.New(), kv: map[string]string{}, epoch: sim.NewEpochGuard()}
+	n := &Replica{cfg: cfg, raft: r, db: model.New(), epoch: sim.NewEpochGuard()}
 	n.jitter()
 	return n, nil
 }
@@ -309,9 +337,14 @@ func (n *Replica) onClient(req Request) {
 	// The cheap fix is read index (A7): confirm leadership with a quorum, then
 	// read locally. That is not A1's scope, so A1 pays the honest price and
 	// replicates reads. BENCHMARKS.md will state that cost when A7 removes it.
+	// The leader stamps HERE, once, and the timestamp travels in the entry.
+	// Every replica then applies a fact derived at a position rather than
+	// re-deriving it from its own clock, which would give the same value two
+	// different timestamps on two replicas (store/codec.go).
+	at := n.hlc.Now()
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
-	if err := n.raft.Propose(id, encodeCmd(req.Op, req.Key, req.Value)); err != nil {
+	if err := n.raft.Propose(id, encodeCmd(req.Op, req.Key, req.Value, at)); err != nil {
 		return
 	}
 	n.inflight = append(n.inflight, clientOp{
@@ -348,7 +381,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 		//    them in one batch -- or on one mark -- would let an acknowledgement
 		//    of either stand for both.
 		if rd.Snapshot != nil {
-			desc, kv, ok := decodeMachine(rd.Snapshot.Data)
+			desc, mark, vs, ok := decodeMachine(rd.Snapshot.Data)
 			if !ok {
 				panic(fmt.Sprintf("store: node %d was handed a snapshot it cannot decode", n.cfg.ID))
 			}
@@ -360,7 +393,8 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			sb.DeleteRange(n.logPrefix(), n.logUpper())
 			if seq, err := n.db.Apply(sb, true); err == nil {
 				n.pending = append(n.pending, pendingWrite{
-					seq: seq, snapMark: rd.SnapMark, snap: &meta, snapKV: kv, clearAllLog: true,
+					seq: seq, snapMark: rd.SnapMark, snap: &meta, snapVersions: vs, snapMarkTS: mark,
+					clearAllLog: true,
 				})
 				s.At(at+n.cfg.SyncLatency, sim.KindDurable, sim.NodeID(n.cfg.Ordinal),
 					sim.Stamp(n.epoch.Current(), seq))
@@ -370,7 +404,8 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			// one here is BUG-013: the node adopts a state machine that has
 			// split and an extent that has not, then refuses the split entry
 			// that would reconcile them.
-			n.kv, n.desc = kv, desc
+			n.ingest(vs, mark)
+			n.desc = desc
 			n.snapshotsApplied++
 			n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
 				Index: meta.Index, Term: meta.Term, Digest: digest(rd.Snapshot.Data),
@@ -442,7 +477,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			n.cfg.Ledger.RecordSent(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(m), at)
 			n.cfg.Transport.Send(sim.Envelope{
 				From: sim.NodeID(n.cfg.Ordinal), To: sim.NodeID(n.ordinalOf(to)),
-				Kind: 1, Body: putRange(n.rng, encodeMessage(m)),
+				Kind: 1, Body: putRange(n.rng, n.hlc.Now(), encodeMessage(m)),
 			})
 		}
 
@@ -453,7 +488,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			n.cfg.Transport.Send(sim.Envelope{
 				From: sim.NodeID(n.cfg.Ordinal),
 				To:   sim.NodeID(n.ordinalOf(m.To)),
-				Kind: 1, Body: putRange(n.rng, encodeMessage(m)),
+				Kind: 1, Body: putRange(n.rng, n.hlc.Now(), encodeMessage(m)),
 			})
 		}
 
@@ -461,18 +496,45 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 		//    is applied so a read observes exactly the state at its log
 		//    position.
 		if len(rd.Committed) > 0 {
+			// # Every command in a Ready applies in ONE batch
+			//
+			// A state machine that applied each entry as its own engine write
+			// would let a crash between two entries of one Ready leave the
+			// machine at a position no log index names. The batch makes the
+			// whole apply atomic against a crash, which is the same argument
+			// A4's split rests on -- and the batch is written UNSYNCED, because
+			// the state machine is derived state: it is rebuilt by replay, and
+			// what must be durable is the log, not the derivation.
+			mb := engine.NewBatch()
 			for _, e := range rd.Committed {
 				op, k, v, owned := "", "", "", true
+				var cmdTS hlc.Timestamp
 				switch {
 				case isSplitCommand(e.Data):
 					// A split is a command to the state machine like any other,
 					// and raft has no business knowing what a range is.
+					//
+					// # The staged writes are flushed FIRST, and the order is
+					// # not a preference
+					//
+					// A split reads the range's whole version set and rewrites
+					// it. Writes staged earlier in this same Ready are still in
+					// the batch, so a split that ran before the flush would
+					// partition a state that is missing them -- and then the
+					// flush would land them back afterwards, including keys the
+					// split had just given away.
+					//
+					// It fired immediately: a range whose extent was [,k02)
+					// holding k02, so the next split cut at k02 and produced an
+					// EMPTY right range. Found by applySplit's own partition
+					// assertion, which A4 added for exactly this shape.
+					n.flushApply(mb)
 					if spec, ok := decodeSplitCommand(e.Data); ok {
 						n.machine.applySplit(n, spec, e.Index, at, s)
 						n.splitPending = false
 					}
 				case len(e.Data) > 0:
-					op, k, v = decodeCmd(e.Data)
+					op, k, v, cmdTS = decodeCmd(e.Data)
 					// # The extent is checked HERE, at the log position, and
 					// # the check at arrival cannot stand in for it
 					//
@@ -496,15 +558,35 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 					// what the arrival check cannot do and never could.
 					owned = n.desc.Contains([]byte(k))
 					if owned && op == "put" {
-						n.kv[k] = v
+						if err := n.mvcc.PutInto(mb, []byte(k), cmdTS, []byte(v)); err != nil {
+							// A write the state machine refuses is not a crash:
+							// below the GC mark it is a command the cluster has
+							// collectively decided is unanswerable, and every
+							// replica refuses it identically because the mark is
+							// applied state.
+							n.writesRefused++
+							owned = false
+						}
 					}
 				}
 				if owned {
-					n.answerAt(e, op, k, at)
+					// A read must see every write at a lower index, including
+					// ones staged into this same batch. Flushing before the
+					// answer costs the batching on read-heavy traffic and buys
+					// the only thing that matters: a read at a log position sees
+					// the state that position produces. A read answered from a
+					// batch that had not landed would return the value from
+					// before its own predecessor -- a stale read manufactured by
+					// the driver rather than by the protocol.
+					if op == "get" {
+						n.flushApply(mb)
+					}
+					n.answerAt(e, op, k, cmdTS, at)
 				} else {
 					n.rerouteAt(e, op, k, v, at, s)
 				}
 			}
+			n.flushApply(mb)
 			n.cfg.Ledger.RecordApplied(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
 			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
 			n.maybeSnapshot(at, s)
@@ -525,7 +607,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 // the correct outcome rather than a gap. The client genuinely does not know
 // whether its write happened, so the history leaves it in flight and the checker
 // treats it as may-or-may-not-have-happened -- the honest answer.
-func (n *Replica) answerAt(e raft.Entry, op, key string, at clock.Instant) {
+func (n *Replica) answerAt(e raft.Entry, op, key string, readTS hlc.Timestamp, at clock.Instant) {
 	if e.ID.Zero() {
 		return
 	}
@@ -535,13 +617,48 @@ func (n *Replica) answerAt(e raft.Entry, op, key string, at clock.Instant) {
 			kept = append(kept, c)
 			continue
 		}
+		// # The read is answered AT ITS OWN TIMESTAMP
+		//
+		// Not at the newest version, and not at the leader's clock now. The
+		// entry carries the timestamp the read was stamped with at propose, and
+		// the answer is the version visible there -- which is what makes the
+		// answer a function of the log rather than of when this replica got
+		// round to applying it (DESIGN-A5 section 7).
 		val := ""
 		if op == "get" {
-			val = n.kv[key]
+			v, ok, err := n.mvcc.ReadAt([]byte(key), readTS)
+			switch {
+			case err != nil:
+				// A refused read is an outcome, not an answer. Ending it as OK
+				// with an empty value would tell the linearizability checker
+				// the key was absent, which is a claim about history rather
+				// than about answerability.
+				n.readsRefused++
+				n.cfg.History.End(c.histIdx, at, sim.RespError, "")
+				continue
+			case ok:
+				val = string(v)
+			}
 		}
 		n.cfg.History.End(c.histIdx, at, sim.RespOK, val)
 	}
 	n.inflight = kept
+}
+
+// flushApply writes a staged apply batch and empties it.
+//
+// Unsynced, because the state machine is DERIVED state: it is rebuilt from the
+// snapshot plus the log on every restart, so what must be durable is the log.
+// Syncing here would pay an fsync per apply for a guarantee nothing needs.
+func (n *Replica) flushApply(b *engine.Batch) {
+	if b.Empty() {
+		return
+	}
+	if _, err := n.db.Apply(b, false); err != nil {
+		panic(fmt.Sprintf("store: node %d cannot apply range %d's committed batch: %v",
+			n.cfg.ID, n.rng, err))
+	}
+	b.Reset()
 }
 
 // rerouteAt answers a command applied outside this range's extent by sending the
@@ -689,15 +806,15 @@ func (n *Replica) readDurable() provenance.Reported[recovered] {
 			n.cfg.ID, v, d))
 	}
 	var st recovered
-	st.kv = map[string]string{}
+
 	if v, err := n.db.Get(n.keyHardState()); err == nil {
 		st.hs = decodeHardState(v)
 	}
 	if v, err := n.db.Get(n.keySnapshot()); err == nil {
 		if meta, data, ok := decodeSnapshot(v); ok {
 			st.snap = meta
-			if desc, kv, ok := decodeMachine(data); ok {
-				st.desc, st.haveDesc, st.kv = desc, true, kv
+			if desc, mark, vs, ok := decodeMachine(data); ok {
+				st.desc, st.haveDesc, st.versions, st.mark = desc, true, vs, mark
 			}
 		}
 	}
@@ -715,10 +832,11 @@ func (n *Replica) readDurable() provenance.Reported[recovered] {
 // state machine restarts from, the log tail above it, and the state machine that
 // snapshot decodes to.
 type recovered struct {
-	hs      raft.HardState
-	snap    raft.SnapshotMeta
-	entries []raft.Entry
-	kv      map[string]string
+	hs       raft.HardState
+	snap     raft.SnapshotMeta
+	entries  []raft.Entry
+	versions []kv.Version
+	mark     hlc.Timestamp
 
 	// desc is the range extent the snapshot carried. haveDesc distinguishes "the
 	// snapshot said the range is empty" from "there was no snapshot", which a
@@ -765,7 +883,7 @@ func (n *Replica) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 		return
 	}
 	meta := raft.SnapshotMeta{Index: applied, Term: term, Conf: conf}
-	data := encodeMachine(n.desc, n.kv)
+	data := encodeMachine(n.desc, n.mvcc.GCMark(), n.versions())
 
 	b := engine.NewBatch()
 	b.Set(n.keySnapshot(), encodeSnapshot(meta, data))
@@ -796,10 +914,15 @@ func (n *Replica) maybeSplit(at clock.Instant) {
 	if n.cfg.SplitThreshold == 0 || n.splitPending || !n.IsLeader() {
 		return
 	}
-	if len(n.kv) < n.cfg.SplitThreshold {
+	keys, err := n.mvcc.Keys()
+	if err != nil || len(keys) < n.cfg.SplitThreshold {
 		return
 	}
-	key, ok := splitKeyFor(sorted.Keys(n.kv))
+	// The cut is the median USER KEY, not the median version. Cutting at the
+	// median version would put the split wherever write traffic was heaviest
+	// rather than in the middle of the key space, so a hot key would split a
+	// range into one holding it and one holding everything else.
+	key, ok := splitKeyFor(strs(keys))
 	if !ok {
 		return
 	}
@@ -852,7 +975,7 @@ func (n *Replica) SnapshotsTaken() int   { return n.snapshotsTaken }
 func (n *Replica) SnapshotsApplied() int { return n.snapshotsApplied }
 
 // adoptSnapshot installs a derived initial state on a newly created replica.
-func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, kv map[string]string) {
+func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, vs []kv.Version, mark hlc.Timestamp) {
 	r, err := raft.Restore(raft.Config{
 		ID: n.cfg.ID, Peers: n.cfg.Peers,
 		ElectionTimeout: n.cfg.Election, HeartbeatTimeout: n.cfg.Heartbeat,
@@ -863,9 +986,32 @@ func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, kv map[string]string) {
 		panic(fmt.Sprintf("store: node %d cannot start range %d: %v", n.cfg.ID, n.rng, err))
 	}
 	n.raft = r
-	n.kv = kv
+	n.ingest(vs, mark)
 	n.durSnap = meta
 	n.jitter()
+}
+
+// ingest replaces this replica's whole state machine in one batch.
+//
+// Clear-then-ingest is atomic because the engine interface has DeleteRange
+// (Amendment A3): a best-effort clear followed by a separate write would leave a
+// window holding a mixture of two states, and a crash in that window recovers
+// into it.
+func (n *Replica) ingest(vs []kv.Version, mark hlc.Timestamp) {
+	b := engine.NewBatch()
+	n.mvcc.IngestInto(b, vs, mark)
+	if _, err := n.db.Apply(b, false); err != nil {
+		panic(fmt.Sprintf("store: node %d cannot ingest range %d's state: %v", n.cfg.ID, n.rng, err))
+	}
+}
+
+// versions is everything this replica's state machine holds.
+func (n *Replica) versions() []kv.Version {
+	vs, err := n.mvcc.Versions()
+	if err != nil {
+		panic(fmt.Sprintf("store: node %d cannot read range %d's own state back: %v", n.cfg.ID, n.rng, err))
+	}
+	return vs
 }
 
 // IsLeader is the driver's own routing question, not a safety judgement.
@@ -1037,8 +1183,8 @@ func (n *Replica) ConfCrossChecks() int { return n.confCrossChecks }
 // The harness re-implements what a command DOES and shares only the
 // serialisation, so a defect in applying commands cannot cancel out on both
 // sides of the snapshot comparison.
-func StateDigest(desc RangeDescriptor, kv map[string]string) uint64 {
-	return digest(encodeMachine(desc, kv))
+func StateDigest(desc RangeDescriptor, mark hlc.Timestamp, vs []kv.Version) uint64 {
+	return digest(encodeMachine(desc, mark, vs))
 }
 
 // crash takes the process down: volatile state goes, unsynced writes go.
@@ -1085,7 +1231,31 @@ func (n *Replica) restart() {
 	n.pending = nil
 	n.inflight = nil
 
-	st := n.readDurable().Unverified()
+	n.restartFrom(n.readDurable())
+}
+
+// readRecovered is the pure half of a restart: it reads the engine and returns
+// what recovery will be built from, without writing anything.
+//
+// # Why the read is separated from the rebuild
+//
+// A machine hosts many replicas over ONE engine (A4), and rebuilding a replica's
+// state machine writes to that engine. So a rebuild-as-you-go loop has replica 1
+// writing before replica 2 reads -- and replica 2's read-back assertion, the one
+// that says the engine must not report as persisted what a crash would take,
+// fires on writes replica 1 made a microsecond earlier.
+//
+// The assertion is right and the loop was wrong. Every replica reads first, then
+// every replica rebuilds. A5 found this the moment the state machine stopped
+// living in a Go map and started living in the engine.
+func (n *Replica) readRecovered() provenance.Reported[recovered] {
+	n.pending = nil
+	n.inflight = nil
+	return n.readDurable()
+}
+
+func (n *Replica) restartFrom(stR provenance.Reported[recovered]) {
+	st := stR.Unverified()
 
 	// The driver's record of what it made durable and the engine's read-back are
 	// two independent derivations of one fact, and recovery is the moment they
@@ -1139,7 +1309,7 @@ func (n *Replica) restart() {
 	// above it sits in the log tail and comes back through Ready.Committed once a
 	// leader confirms it -- which is the "snapshot plus tail" half of the
 	// equivalence this phase has to prove.
-	n.kv = st.kv
+	n.ingest(st.versions, st.mark)
 
 	// # The extent is applied state, and it is recovered only from an index
 	//
@@ -1304,3 +1474,19 @@ func (n *Replica) ordinalOf(id raft.NodeID) int {
 	}
 	return 0
 }
+
+// strs renders byte keys as strings for splitKeyFor, which works in the same
+// space the client does.
+func strs(bs [][]byte) []string {
+	out := make([]string, len(bs))
+	for i, b := range bs {
+		out[i] = string(b)
+	}
+	return out
+}
+
+// WritesRefused and ReadsRefused report commands the MVCC store declined for
+// naming a timestamp at or below the garbage-collection mark.
+func (n *Replica) WritesRefused() int    { return n.writesRefused }
+func (n *Replica) EnvelopeRefusals() int { return n.envelopeRefusals }
+func (n *Replica) ReadsRefused() int     { return n.readsRefused }

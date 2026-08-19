@@ -2,6 +2,9 @@ package store
 
 import (
 	"testing"
+
+	"github.com/anshkanyadi/rift/engine"
+	"github.com/anshkanyadi/rift/hlc"
 	"time"
 
 	"github.com/anshkanyadi/rift/clock"
@@ -55,6 +58,7 @@ func TestASupersededSplitIsRefused(t *testing.T) {
 		ID: 1, Peers: []raft.NodeID{1}, Ordinal: 0,
 		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
 		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
+		Clock: mustSimClock(t),
 		Nodes: 1, SplitThreshold: 0,
 	})
 	if err != nil {
@@ -64,8 +68,27 @@ func TestASupersededSplitIsRefused(t *testing.T) {
 	if left == nil {
 		t.Fatal("the machine was born without its first range")
 	}
-	for _, k := range []string{"a", "b", "c", "d"} {
-		left.kv[k] = k
+	for i, k := range []string{"a", "b", "c", "d"} {
+		b := engine.NewBatch()
+		at := hlc.Timestamp{Wall: clock.NewWall(int64(100 + i))}
+		if err := left.mvcc.PutInto(b, []byte(k), at, []byte(k)); err != nil {
+			t.Fatalf("put %s: %v", k, err)
+		}
+		if _, err := m.db.Apply(b, false); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+	}
+	holds := func(r *Replica, k string) bool {
+		vs, err := r.mvcc.Versions()
+		if err != nil {
+			t.Fatalf("versions: %v", err)
+		}
+		for _, v := range vs {
+			if string(v.Key) == k {
+				return true
+			}
+		}
+		return false
 	}
 
 	// The first split: cut at "c", against the extent the range actually has.
@@ -82,7 +105,7 @@ func TestASupersededSplitIsRefused(t *testing.T) {
 	if got := len(m.replicas); got != 2 {
 		t.Fatalf("the first split produced %d ranges, want 2", got)
 	}
-	if _, ok := left.kv["c"]; ok {
+	if holds(left, "c") {
 		t.Fatal("the first split left key \"c\" in the range that gave it away")
 	}
 	if left.desc.Epoch != 2 {
@@ -114,7 +137,18 @@ func TestASupersededSplitIsRefused(t *testing.T) {
 	if string(left.desc.End) != "c" || left.desc.Epoch != 2 {
 		t.Errorf("the superseded split moved the extent to %s; it must stay at [,c)@2", left.desc)
 	}
-	if _, ok := left.kv["b"]; !ok {
+	if !holds(left, "b") {
 		t.Error("the superseded split moved key \"b\" out of a range that still owns it")
 	}
+}
+
+// mustSimClock is a flat, drift-free timeline. This test is about a split's
+// extent arithmetic; skew is the HLC's business and lives in hlc/.
+func mustSimClock(t *testing.T) clock.Clock {
+	t.Helper()
+	c, err := clock.NewSim(clock.Flat(), time.Second)
+	if err != nil {
+		t.Fatalf("clock: %v", err)
+	}
+	return c
 }

@@ -20,7 +20,7 @@ func ts(wall int64, logical uint32) hlc.Timestamp {
 func newStore(t *testing.T) (*kv.Store, *model.DB) {
 	t.Helper()
 	db := model.New()
-	s, err := kv.NewStore(db)
+	s, err := kv.NewStore(db, []byte("r/7/"))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
