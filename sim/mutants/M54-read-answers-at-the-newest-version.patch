@@ -1,0 +1,20 @@
+# id: M54-read-answers-at-the-newest-version
+# covering-test: TestMVCCReadCorrectnessOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 20
+# power-measured: PENDING
+# mutates: a read at a timestamp seeks to the key's prefix instead of to the timestamp, so it answers with the NEWEST version rather than the one visible where it asked. Every read at now still returns the right value, which is why a workload without snapshot reads cannot see this at all: it is the defect that makes an MVCC store indistinguishable from a single-version one
+--- a/kv/store.go
++++ b/kv/store.go
+@@ -125,7 +125,7 @@
+ 
+ 	// Versions sort newest-first within a key, so the first record at or after
+ 	// the encoding of (key, ts) is the newest version at or before ts.
+-	if !it.SeekGE(EncodeKey(s.ns, key, ts)) {
++	if !it.SeekGE(prefix) {
+ 		return nil, false, it.Error()
+ 	}
+ 	gotKey, gotTS, ok := DecodeKey(s.ns, it.Key())

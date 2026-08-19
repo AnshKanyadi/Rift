@@ -253,3 +253,98 @@ Ansh's, verbatim.
 7. Power floors with rate and kill-time under A5's shape.
 8. Every new oracle induced, every bug in BUGS.md with its mutant class, corpus green or deliberately
    regenerated, 10k seeds zero violations with inconclusive explained.
+
+---
+
+## 11. What the implementation taught
+
+### 11.1 The log-position class in A5's dimension, and the four instances it caught early
+
+§7 wrote the class down before the code: *anything derived from a timestamp must be derived AT that
+timestamp*. Writing it down first is the point of the exercise, and it is checkable — every one of
+these is a line that would otherwise have been the obvious spelling:
+
+| the fact | the obvious spelling | what §7 forced |
+|---|---|---|
+| a command's timestamp | each replica stamps when it applies | the **leader** stamps at propose; the timestamp travels in the entry |
+| a read's answer | the newest version | the newest version **at or before the read's timestamp** |
+| the collection mark | advanced by a timer | advanced by an **applied command**, so every replica refuses the same read |
+| a range's inherited mark | the child starts at zero | the mark **travels with the versions** a split moves |
+
+A replica stamping at apply is not a near miss: two replicas apply the same entry at different wall
+times, so the same value gets two timestamps and every subsequent read sees different history
+depending on who served it. A mark advanced by a timer is the same failure in the answerability
+dimension — one replica refuses a read another answers, which surfaces as a client error rather than
+as a divergence, and is the hardest kind to attribute.
+
+**None of these became a bug.** That is what the preemptive section was for, and it is the only
+evidence available that writing it down was worth anything: the phase that found six instances of the
+class after the fact found zero of them this time, in a dimension that offers just as many.
+
+### 11.2 The three defects A5 did produce, and every one was caught by an assertion this project already had
+
+- **A machine hosts many replicas over one engine**, so rebuilding one replica's state machine wrote
+  to the engine another had not read yet — and the read-back assertion behind BUG-005 fired on it,
+  correctly. Every replica now reads before any replica rebuilds.
+- **A split reads the range's whole version set and rewrites it**, so writes staged earlier in the
+  same Ready had to be flushed first. Caught by `applySplit`'s partition assertion, which A4 added for
+  exactly this shape: a range whose extent was `[,k02)` holding `k02`, so the next split cut at `k02`
+  and produced an empty range.
+- **A read must see writes staged at lower indices in the same batch.** Otherwise the driver
+  manufactures a stale read the protocol never produced.
+
+The pattern is worth naming: **the state machine moving from a Go map into the engine turned three
+latent ordering assumptions into engine-visible facts**, and every one of them landed on an assertion
+written for a different reason two phases earlier.
+
+### 11.3 BUG-017 was in `raft/`, and A5 only changed the traffic
+
+The one real protocol defect this phase found has nothing to do with MVCC (BUGS.md BUG-017). It is a
+branch in `Ready()` that has been there since A2. What A5 changed is the shape of the traffic that
+reaches it.
+
+Both halves of the correction are recorded in BUGS.md, and the second is the one worth repeating
+here: **a constraint that has been satisfied must be recorded as satisfied, not swept once.** A sweep
+answers the question at one instant; anything whose *other* constraint arrives later never asks again.
+That is A4's "a fact is recorded, never inferred" arriving in the gate rather than in the ledger.
+
+### 11.4 The collection throttle bought a 30x runtime and cost a reachability
+
+The first collector proposed whenever the retention window had passed, which after the first
+collection is true on essentially every apply. A 200-seed sweep took **25 minutes**; throttled to one
+collection in flight and a mark that has moved by a quarter of the window, it takes **49 seconds**.
+A 10,000-seed exit run went from most of a day to viable.
+
+**The throttle cost something, and the number is recorded rather than the intention.** M53 plants
+BUG-017's defect. Measured with the unthrottled collector: **1 detection in 60 seeds**. With the
+throttle: **0 in 300**. The class that found the phase's only protocol bug is no longer reachable in
+the shape the sweep runs.
+
+That is the standing lesson from A2's M34, arriving from the other side: *a schedule mix is a claim
+about reachability, not a configuration detail.* The mutant is opted out of the rate lane with that
+measurement as its reason, and it is killed by a targeted raft test instead — which is the honest
+arrangement when a class is unreachable by argument rather than by luck.
+
+---
+
+## 12. Limitations, recorded
+
+1. **UNEXERCISED: a write below the collection mark.** Every write in A5's workload is stamped at
+   propose, so its timestamp is above the mark by construction. A6's transactions write at a timestamp
+   chosen when the transaction began, which can fall behind the mark while the transaction is in
+   flight — which is precisely what the refusal exists for. Exercised by
+   `kv.TestWritingBelowTheMarkIsRefused`, asserted at **zero** in the sweep, and bidirectional: the
+   day a workload reaches it, the exit run says the record is stale.
+2. **Snapshot reads are outside the linearizability history.** A read at a past timestamp is not a
+   linearizable operation on the current value, and feeding one to porcupine as if it were would
+   manufacture violations out of correct behaviour. They are judged by `mvcc-read-correctness`
+   instead. The consequence, stated: the history the linearizability checker sees is **smaller** than
+   the workload, by the share of reads that are snapshot reads (400 per mille of gets).
+3. **The envelope refusal is unexercised by construction.** The schedule mix keeps skew inside
+   `maxOffset`, so no peer is ever refused; the count is asserted at zero and the refusal is exercised
+   by `hlc.TestATimestampBeyondTheEnvelopeIsRefused`. Deliberately exceeding `maxOffset` is the
+   envelope experiment, which is STRETCH (Amendment A6).
+4. **One HLC per range, not per node.** Two ranges on a node share a physical clock and not a logical
+   counter. Nothing depends on the counters being shared, and keeping them separate stops a busy range
+   inflating a quiet one's timestamps — but it does mean a node's timestamps are not totally ordered
+   across ranges, which A6 must not assume.

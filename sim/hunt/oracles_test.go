@@ -498,3 +498,22 @@ func TestSplitInheritsTheConfigurationAtItsIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestMVCCReadCorrectnessOracleReportsNothing is the covering test for
+// M54-read-answers-at-the-newest-version and
+// M55-collection-takes-the-version-a-read-still-needs.
+//
+// The first makes a read answer with the newest version instead of the one
+// visible where it asked. The second makes collection remove the version a read
+// at the mark's successor still needs. Both are silently wrong reads: the answer
+// is a plausible value, and nothing downstream can question it.
+//
+// # What this oracle needs from the workload, and why the workload changed for it
+//
+// Neither defect is visible to a read at "now". A workload whose every read
+// names the newest timestamp cannot tell an MVCC store from a single-version
+// one, so A5 added snapshot reads at remembered timestamps -- and this test is
+// the reason they exist rather than a nicety.
+func TestMVCCReadCorrectnessOracleReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "mvcc-read-correctness", 60)
+}

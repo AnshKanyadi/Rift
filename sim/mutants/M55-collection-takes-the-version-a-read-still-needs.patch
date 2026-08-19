@@ -1,0 +1,23 @@
+# id: M55-collection-takes-the-version-a-read-still-needs
+# covering-test: TestMVCCReadCorrectnessOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 20
+# power-measured: PENDING
+# mutates: collection removes EVERY version below the mark, including the newest one at or below it -- which is the version a read at the mark's successor still needs. The mark refuses reads at or below itself, so the first answerable timestamp then returns nothing where it should return a value. Off by one here is a silently wrong read, which is the exact failure the mark exists to prevent
+--- a/kv/store.go
++++ b/kv/store.go
+@@ -189,10 +189,7 @@
+ 		if to.LessEq(ts) {
+ 			continue // above the mark: live
+ 		}
+-		if !kept {
+-			kept = true // the newest version at or below `to`: the one a read at to.Next() needs
+-			continue
+-		}
++		_ = kept
+ 		b.Delete(append([]byte(nil), it.Key()...))
+ 		removed++
+ 	}
