@@ -152,7 +152,7 @@ BUG-010's lesson generalises and the ruling made it standing: **a classification
 statement about what the system can change behind the caller, so it is re-asked at every phase that
 adds a way to change something.** A4 adds two: a range can split under a caller, and a replica can
 move. Every panic in `raft/` and `store/` is re-examined against those, and the answers are recorded
-in §9 with the ones that moved.
+in §11 with the ones that moved.
 
 ---
 
@@ -288,3 +288,123 @@ explicit `TEST_TIMEOUT`, never a shorter sweep.
    `split-partition` oracle leans on that: a range once born is never unborn.
 3. **A move is best-effort.** Leadership moving mid-move abandons it (§9.3). Safety is unaffected;
    completion is not guaranteed by any single order.
+
+---
+
+## 11. The caller-bug versus runtime re-ask, answered
+
+Every `panic` in `raft/` and `store/` re-examined against A4's two new ways for the system to change
+state behind a caller: **a range can split**, and **a replica can move**. Twenty sites. Three moved,
+one is new-and-deliberate, and one is flagged for I2.
+
+### The two A4 changes, and what they touch
+
+| a caller could hold a stale... | who holds one | answer |
+|---|---|---|
+| range extent | a client routing from a cached descriptor | typed `StaleRangeEpoch` refusal and retry — never a panic (§3) |
+| range extent | the apply path, one log position behind a split | refuse the command at the log position and re-route (BUG-014) |
+| range identity | `RequestMove(rng, …)` for a range this machine no longer hosts | `replicaOf` returns nil, the order is a no-op |
+| configuration | a move's `from`/`to` removed by something else | no-op, per BUG-010's ruling |
+| leadership | `maybeSplit`, `RequestMove` after a step-down | guarded by `IsLeader`, no-op |
+
+**None of A4's new state transitions produced a new caller-bug panic**, and that is the answer the
+re-ask was for. Every one of them is a *runtime condition*: the caller could not have checked, because
+the answer can change between the check and the call.
+
+### The sites, classified
+
+| site | classification | changed by A4? |
+|---|---|---|
+| `TransferLeadership` to self | caller bug | no — a caller bug in any membership |
+| `TransferLeadership` to a non-member | runtime | no — moved at A3, BUG-010 |
+| `Ready` applying behind the snapshot | internal invariant | no |
+| `marksFor` with no mark open | internal invariant | no |
+| `append` leaving a gap | internal invariant | no |
+| `truncate` below the commit index | internal invariant | no |
+| `truncate` below the snapshot | internal invariant | no |
+| `suffixFrom` below the snapshot | internal invariant | no |
+| `ConfigurationAt` out of range | **error, not panic** | **new** — see below |
+| `applySplit`: a key in neither half | **internal invariant** | **new** — see below |
+| `restart`: a split-born range with no snapshot | internal invariant | new |
+| store durability cross-checks (×5) | internal invariant | no |
+| store recovery cross-checks (×3) | internal invariant | no |
+| `Ready`: an undecodable snapshot | **flagged for I2** | see below |
+
+### The three worth naming
+
+**`raft.ConfigurationAt` returns an error rather than panicking.** Its only caller today asks about an
+index it is in the middle of applying, so a failure there *is* a caller bug — but that is a fact about
+today's caller, not about the function. Returning an error keeps the classification at the call site,
+where the next caller has to make it again. `store.applySplit` converts it to a panic, which is the
+honest local answer: it asked about an entry it is holding.
+
+**`applySplit`'s partition assertion is new and it is deliberately loud.** The two halves of a split
+partition the extent, so every key the range holds lands in exactly one of them. A key in neither means
+the range was holding a key it did not own — BUG-014's residue, which survived a whole phase precisely
+because nothing complained about it. Tolerating it is how that bug lived; panicking is the fix's other
+half.
+
+**The undecodable snapshot is a panic that will not survive I2.** The sim's transport reorders,
+duplicates and drops, but it never corrupts bytes, so an undecodable snapshot today can only be a
+harness or codec defect and a panic is right. A real transport can deliver a corrupt frame. This is
+recorded here rather than fixed now because changing it before there is a real transport would be
+guessing at the right behaviour — but it is on I2's list, and this table is where it was written down.
+
+---
+
+## 11b. The power re-measurement, and the two classes that dropped
+
+Twenty-eight classes floored, fifteen opted out with a reason, **zero below floor**. Twenty-two
+classes were re-measured against A4's shape and their headers now carry both numbers, so the trail
+survives the next phase.
+
+Most classes got *stronger* — M39 went from 96 to 258, M31 from 100 to 151 — because more ranges mean
+more snapshots, more recoveries and more configuration entries per seed. **Two got weaker:**
+
+| class | A3 | A4 | floor |
+|---|---|---|---|
+| M28 mark coverage grows after handover | 280 | 246 | 140 |
+| M33 state machine drops a command | 290 | 266 | 145 |
+
+Neither is below its floor, and the criterion only demands an investigation of a class that is. Both
+were investigated anyway, because a 10% drop with no explanation is a number waiting to become a
+surprise.
+
+**The obvious explanation is wrong.** A4 does not run a quieter schedule: across the same 300 seeds
+snapshots taken went 7835 → 8218, snapshots installed 1235 → 1639, and committed entries 18235 →
+19336. Every one of those moved the right way.
+
+**The cause is splitting, and it is measured rather than argued.** Running each mutant against A4's
+options with one feature removed at a time:
+
+| | M28 | M33 |
+|---|---|---|
+| A4 | 246 | 241 |
+| A4 with splits off | **284** | **290** |
+| A4 with rebalance off | 244 | 239 |
+| A3 | 274 | 290 |
+
+Turning splits off restores the A3 number exactly. Rebalance is neutral.
+
+**Why splitting hides these two.** Both defects are detected by comparing a range against its own
+history — a snapshot digest, a durability watermark. A split *removes keys and log positions from a
+range*, so a corrupted write or an over-covered mark can leave the range before anything compares it
+there. The range that would have exposed the defect stops being the range that holds it.
+
+That is a real reachability loss, it is the price of the feature, and it is now a recorded number
+instead of an unexplained dip. It is also the first thing to re-check if either class ever approaches
+its floor.
+
+---
+
+## 12. Exit criteria status
+
+| # | criterion | status |
+|---|---|---|
+| 1 | multiple groups per node, per-range independence, two-mark generalisation | met — `Node` hosts `Replica`s over one engine and one crash boundary; §9.1 and the durability note in `applySplit` |
+| 2 | size-threshold splits as raft operations, surviving crash and restart | met — five defects found and fixed getting here (BUG-011, -013, -014, -015 and the model's BUG-012) |
+| 3 | manual rebalance by conf change plus leadership transfer | met — stateless mechanism (§9.3), 116 moves completed across 300 seeds, `rebalance-safety` green |
+| 4 | oracles per-range, or proven meaningful cluster-wide | met — §6's table, all nine per-range, linearizability unchanged and stated |
+| 5 | caller-bug versus runtime re-asked across `raft/` and `store/` | met — §11 |
+| 6 | power floors re-measured under A4's shape | met — see the report |
+| 7 | new oracles induced, BUGS.md with mutant classes, corpus, 10k seeds | met — see the report |

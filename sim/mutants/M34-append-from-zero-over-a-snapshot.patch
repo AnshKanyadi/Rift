@@ -5,7 +5,7 @@
 # power-seeds: 3000
 # power-config: a2
 # power-floor: 1
-# power-measured: 2 at commit c1a1f6c+A3
+# power-measured: 2 of 3000, first at seed 2065, at commit 34b284d+A4; was 2 at commit c1a1f6c+A3
 # mutates: a node whose applied prefix is already in a snapshot accepts an append starting at index 1, because the consistency check treats PrevLogIndex 0 as agreeable to everybody. It then overwrites entries it has already applied and told the cluster were committed
 --- a/raft/raft.go
 +++ b/raft/raft.go

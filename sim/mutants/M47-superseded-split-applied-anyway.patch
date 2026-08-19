@@ -1,0 +1,19 @@
+# id: M47-superseded-split-applied-anyway
+# covering-test: TestASupersededSplitIsRefused
+# package: ./store/
+# expect: killed
+# power: n/a -- the sweep cannot produce this schedule. Raft's figure-8 rule serialises it: a new leader must commit an entry of its own before it can commit the previous term's split, and committing it means applying it, which moves the extent before a second split can be proposed from it. Zero firings in 300 A4 seeds, recorded in DESIGN-A4 section 10 as an unexercised path rather than as evidence. The guard is induced directly instead, which is what a floor could not have told us
+# mutates: the extent guard requires ALL THREE mismatches instead of any one, so a split superseded by an earlier one is applied anyway. A split superseded by an earlier one then moves the left range's End BACKWARDS past the first cut and mints a range overlapping the one already there, so two ranges claim the same keys and their replicas disagree about which entry is at index one of a range born twice
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -517,8 +517,8 @@
+ 	//
+ 	// Found by state machine safety on the first A4 sweep: two nodes applying
+ 	// different commands at index 1 of a range born from a split.
+-	if spec.Left.Epoch != left.desc.Epoch+1 ||
+-		!bytes.Equal(spec.Left.Start, left.desc.Start) ||
++	if spec.Left.Epoch != left.desc.Epoch+1 &&
++		!bytes.Equal(spec.Left.Start, left.desc.Start) &&
+ 		!bytes.Equal(spec.Right.End, left.desc.End) {
+ 		left.staleSplits++
+ 		return

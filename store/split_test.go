@@ -1,0 +1,120 @@
+package store
+
+import (
+	"testing"
+	"time"
+
+	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/raft"
+	"github.com/anshkanyadi/rift/raftcheck"
+	"github.com/anshkanyadi/rift/sim"
+)
+
+// nullTransport drops everything. This test never lets a message matter.
+type nullTransport struct{}
+
+func (nullTransport) Send(sim.Envelope) {}
+
+// nullScheduler swallows the durability events applySplit schedules. The split
+// itself is synchronous; only its persistence is not, and persistence is not
+// what is under test here.
+type nullScheduler struct{}
+
+func (nullScheduler) At(clock.Instant, sim.Kind, sim.NodeID, any)    {}
+func (nullScheduler) After(time.Duration, sim.Kind, sim.NodeID, any) {}
+func (nullScheduler) Now() clock.Instant                             { return 0 }
+
+// TestASupersededSplitIsRefused is the covering test for
+// M47-superseded-split-applied-anyway, and it exists because the sweep cannot
+// produce this schedule.
+//
+// # Why this is a direct induction and not a seed range
+//
+// Two leaders can each propose a split from the same extent, and both entries
+// can commit at different indices. Applying the second would move the left
+// range's End BACK past the first split, so two ranges would claim the same keys
+// and their replicas would disagree about which entry is at index one of a range
+// born twice. The epoch guard in applySplit exists for exactly that.
+//
+// Across 300 A4 seeds the guard fires **zero** times, and the reason is Raft's
+// own figure-8 rule rather than luck: a new leader cannot commit a previous
+// term's entry by counting, so it must append and commit an entry of its own
+// first -- which commits the earlier split, which it then applies, which moves
+// its extent before it can propose a second one. The race needs the first split
+// committed but not yet applied, which is a narrow window the current schedule
+// mix has never hit.
+//
+// A mechanism that is declared, wired and never invoked is the vacuous-green
+// class this project has now recorded ten instances of, and "the sweep never
+// reached it" is not a reason to leave the eleventh. So the schedule is built by
+// hand: the guard is shown refusing a superseded split, and the mutant that
+// removes it is killed here rather than by seed search. The sweep's count of
+// zero is recorded in DESIGN-A4 §10 as an unexercised path, not as evidence.
+func TestASupersededSplitIsRefused(t *testing.T) {
+	m, err := New(Config{
+		ID: 1, Peers: []raft.NodeID{1}, Ordinal: 0,
+		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
+		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
+		Nodes: 1, SplitThreshold: 0,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	left := m.replicaOf(FirstRange)
+	if left == nil {
+		t.Fatal("the machine was born without its first range")
+	}
+	for _, k := range []string{"a", "b", "c", "d"} {
+		left.kv[k] = k
+	}
+
+	// The first split: cut at "c", against the extent the range actually has.
+	first := SplitSpec{
+		Key:   []byte("c"),
+		Left:  RangeDescriptor{ID: FirstRange, Start: nil, End: []byte("c"), Epoch: 2},
+		Right: RangeDescriptor{ID: 2, Start: []byte("c"), End: nil, Epoch: 1},
+	}
+	// Index 0: this replica's log is empty, and the only thing applySplit reads
+	// the index for is the configuration in effect there. At 0 that is the
+	// configuration the range was born with, which is what a hand-built schedule
+	// can honestly say.
+	m.applySplit(left, first, 0, 0, nullScheduler{})
+	if got := len(m.replicas); got != 2 {
+		t.Fatalf("the first split produced %d ranges, want 2", got)
+	}
+	if _, ok := left.kv["c"]; ok {
+		t.Fatal("the first split left key \"c\" in the range that gave it away")
+	}
+	if left.desc.Epoch != 2 {
+		t.Fatalf("the left range is at epoch %d after one split, want 2", left.desc.Epoch)
+	}
+
+	// The second split was computed against the SAME extent by a leader that
+	// could not see the first. Applying it would move End from "c" back to "b"
+	// and mint range 3 covering [b,∞) -- overlapping range 2 for everything at
+	// or above "c".
+	superseded := SplitSpec{
+		Key:   []byte("b"),
+		Left:  RangeDescriptor{ID: FirstRange, Start: nil, End: []byte("b"), Epoch: 2},
+		Right: RangeDescriptor{ID: 3, Start: []byte("b"), End: nil, Epoch: 1},
+	}
+	before := left.StaleSplits()
+	m.applySplit(left, superseded, 0, 0, nullScheduler{})
+
+	if got := left.StaleSplits(); got != before+1 {
+		t.Errorf("the superseded split was not counted as stale: %d refusals, want %d", got, before+1)
+	}
+	if got := len(m.replicas); got != 2 {
+		t.Errorf("the superseded split created a range: %d ranges, want 2", got)
+	}
+	if m.replicaOf(3) != nil {
+		t.Error("range 3 exists; a split every replica must refuse created a range that only " +
+			"the replicas which applied it can see")
+	}
+	if string(left.desc.End) != "c" || left.desc.Epoch != 2 {
+		t.Errorf("the superseded split moved the extent to %s; it must stay at [,c)@2", left.desc)
+	}
+	if _, ok := left.kv["b"]; !ok {
+		t.Error("the superseded split moved key \"b\" out of a range that still owns it")
+	}
+}

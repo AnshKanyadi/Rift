@@ -4,7 +4,7 @@
 # expect: killed
 # power-seeds: 300
 # power-floor: 48
-# power-measured: 96 at commit c1a1f6c+A3
+# power-measured: 117 of 300, first at seed 3, at commit 34b284d+A4; was 96 at commit c1a1f6c+A3
 # mutates: the one-vote-per-term rule is dropped, so a node that has already voted grants again and two candidates win the same term -- the canonical election safety failure
 --- a/raft/raft.go
 +++ b/raft/raft.go
