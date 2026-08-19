@@ -153,8 +153,26 @@ func TestLogMatchingOracleReportsNothing(t *testing.T) {
 // So the range is sized to the new rate, at roughly six times the measured
 // seeds-to-detection, and the drop is recorded here rather than absorbed into a
 // number nobody re-derives.
+// # A4 moved it again, and the mutant lane is what noticed
+//
+// 500 seeds stopped being enough. M19 came back ALIVE against this test, and the
+// cause is a harness change made on purpose one commit earlier: every client
+// request now routes from a stale descriptor cache, so a request for a moved key
+// takes an extra round through the epoch refusal before it lands. That shifts
+// every schedule after the first split.
+//
+// Measured with M19 planted at commit 20ebf9d: leader-completeness fires on **26
+// of 4000 seeds, first at seed 553** -- was first at seed 145. The RATE barely
+// moved (10 to 7 per 1500, floor 4). The seeds-to-detection more than tripled,
+// which is precisely the regression Amendment A2 says to treat as a harness
+// regression even while every mutant is still killed -- and the count-based power
+// floor could not see it, because the count was fine.
+//
+// The range is now 2000, comfortably past the measured 553 with several
+// detections inside it. The number moved because a deliberate change moved it,
+// and it is recorded rather than absorbed.
 func TestLeaderCompletenessOracleReportsNothing(t *testing.T) {
-	assertOracleSilent(t, "leader-completeness", 500)
+	assertOracleSilent(t, "leader-completeness", 2000)
 }
 
 // TestPersistBeforeReplyOracleReportsNothing is the covering test for

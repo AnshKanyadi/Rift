@@ -732,6 +732,9 @@ func (o *SplitPartition) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
+	if v := o.everyRangeWasBorn(); v != nil {
+		return v
+	}
 	return o.eachRange(func(id uint64, rl *rangeLedger) *sim.Violation {
 		for _, st := range o.splits(rl.base, rl.Committed()) {
 			child := o.l.rangeByID(st.Child)
@@ -772,6 +775,57 @@ func (o *SplitPartition) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 		return nil
 	})
 }
+
+// everyRangeWasBorn: no range exists that no committed log ever created.
+//
+// # The two streams a split stands on, and the check that they stayed ordered
+//
+// A split writes its effects on TWO durability streams: the left range's log
+// holds the entry, and the right range's birth snapshot is a separate batch on
+// a separate range's keys. A2's rule for a message attesting to state in two
+// independent streams is that it waits for BOTH -- and the honest answer for a
+// split is that these two are NOT independent. The log entry is written first
+// and durability advances in engine sequence order, so the effect cannot be
+// durable while the entry that justifies it is not.
+//
+// That is an argument, and it stands on a property of the engine. This is the
+// check that fires if the argument ever stops holding: a crash that kept the
+// right range's birth snapshot and lost the left's split entry leaves a range
+// that no committed log created, claiming keys the left range still claims.
+//
+// Nothing else would see it. The child is internally consistent -- it has a
+// birth state and a log of its own -- and the parent is internally consistent
+// too, because after recovery its log simply has no split in it. Both look
+// perfect from inside; only the pair is wrong.
+func (o *SplitPartition) everyRangeWasBorn() *sim.Violation {
+	created := map[uint64]bool{}
+	for _, rl := range o.l.ranges {
+		for _, st := range o.splits(rl.base, rl.Committed()) {
+			if st.Applied {
+				created[st.Child] = true
+			}
+		}
+	}
+	for _, rl := range o.l.ranges {
+		if rl.id == firstRangeID || rl.base == nil || created[rl.id] {
+			continue
+		}
+		return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+			"range %d exists -- some replica wrote its birth state -- and no committed log anywhere "+
+				"contains the split that created it. Its keys are claimed by it and by whatever range "+
+				"still believes it owns them, and no oracle that judges one range at a time can see "+
+				"that, because both of them are perfectly consistent with their own histories",
+			rl.id)}
+	}
+	return nil
+}
+
+// firstRangeID is the range every machine is born hosting. It is the one range
+// no split creates, so it is the one exception to everyRangeWasBorn.
+//
+// Duplicated from store rather than imported: this package takes value types
+// from raft and nothing from the system it judges.
+const firstRangeID = 1
 
 // --- rebalance safety ---------------------------------------------------------
 

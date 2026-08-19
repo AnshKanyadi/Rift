@@ -269,6 +269,60 @@ Two fixes, neither of which is a loosened check:
 The reason this is written down at length is the rate. A checker that reports 252 false violations in
 300 seeds is worse than no checker: it is a checker people learn to override.
 
+### 9.4b The eleventh vacuous-green instance was predicted in the right class and the wrong place
+
+§6 named the two oracles that would go *weaker, silently* over many ranges and called them "the
+eleventh vacuous-green instance waiting to happen". Making the ledger per-range fixed both before
+they could be.
+
+The eleventh happened somewhere else entirely. The 10,000-seed exit run reported **0 requests refused
+for a stale descriptor epoch** — not a low number, zero — because the sweep's clients carried no
+routing at all, so the check was skipped on every request they ever made. The mechanism was declared,
+wired, tested by nothing, and guarding an invariant CLAUDE.md names by name.
+
+It was visible the whole time. The exit run *printed* the number and nothing *asserted* it, which is
+the difference between a report and a lane. Three assertions now exist — stale-epoch refusals,
+out-of-extent refusals, and completed moves must all be nonzero — and the third is the one worth
+naming: **a stalled move is safe**, so the rebalance oracle is perfectly green over a sweep in which
+every single move stalled.
+
+Every request now routes the way a client with a cold cache does: believing the whole key space is
+the first range at epoch one. After a split, requests for moved keys name a range that no longer owns
+them and requests for kept keys name an epoch that has moved on. 55,154 refusals across 300 seeds,
+zero violations. Induced: reverting the routing fails the run with the epoch message.
+
+**The lesson is about where to look, not about this mechanism.** The audit that found the two
+silently-weaker oracles was looking at oracles, because that is where the previous ten instances
+were. The eleventh was in a mechanism the oracles depend on, one layer below where anybody was
+checking.
+
+### 9.4c Criterion 1's two-stream question, answered
+
+A2's rule is that a message attesting to state in two independent streams waits
+for **both**. A4's candidate pair is a split: the left range's log holds the entry, and the right
+range's birth snapshot is a separate batch under a different range's keys.
+
+**The honest answer is that they are not independent.** The log entry is written first and the
+engine advances durability in sequence order, so the right range's birth state cannot be durable
+while the entry that justifies it is not. There is no second mark to wait on, because there is no
+second stream — there is one stream with an ordering guarantee.
+
+That is an argument standing on a property of the engine, so it gets a check rather than a comment.
+`split-partition` gained a third clause: **every range that exists was created by a split entry in
+some committed log**. If the ordering ever fails — a crash that keeps the birth snapshot and loses
+the entry — a range exists that no log created, claiming keys the left range still claims. Nothing
+else would see it: the child is consistent with its own history and the parent is consistent with
+its own, and only the pair is wrong.
+
+**The clause is redundant against every mutation this system admits, and that is recorded rather
+than hidden.** M48 plants exactly the defect — the leader creates the right-hand range out of band,
+candidate design (1) from §4 — and is caught on 276 of 300 seeds, never by this clause. An
+out-of-band range derives its birth state at a different moment from every other replica's, so
+snapshot equivalence reports the divergence first. So the clause is induced directly, against a
+hand-built ledger, in `raftcheck/splitpartition_test.go`; the reasoning is written there. It is kept
+because "something else gets there first" is a coincidence of how ranges derive state, and one pass
+over the ledger is cheap insurance against that coincidence ending.
+
 ### 9.5 The mutant lane's baseline gate fired, and it was right
 
 The lane reported `INVALID` and refused to attribute a single kill. The cause was mundane — A4's

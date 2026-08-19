@@ -1,0 +1,70 @@
+# id: M48-the-right-range-is-created-out-of-band
+# covering-test: TestSnapshotEquivalenceOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 130
+# power-measured: 276 of 300, first at seed 0, at commit 20ebf9d+A4
+# mutates: the leader creates the right-hand range out of band as well as by applying the entry, which is candidate design (1) in DESIGN-A4 section 4 -- the one the design rejected for having no agreed point at which the split happened. Caught on 276 of 300 seeds, and caught as a STATE DIVERGENCE rather than as an orphan range: the out-of-band range's birth state is derived at a different moment from every other replica's, so snapshot equivalence reaches it long before anything notices that a range exists which no committed log created. That is why split-partition's orphan clause is induced directly instead (raftcheck/splitpartition_test.go)
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -517,6 +517,9 @@
+ 	//
+ 	// Found by state machine safety on the first A4 sweep: two nodes applying
+ 	// different commands at index 1 of a range born from a split.
++	if m.proposedSplit(left, spec, index, at, s) {
++		return
++	}
+ 	if spec.Left.Epoch != left.desc.Epoch+1 ||
+ 		!bytes.Equal(spec.Left.Start, left.desc.Start) ||
+ 		!bytes.Equal(spec.Right.End, left.desc.End) {
+@@ -559,6 +562,10 @@
+ 	left.desc = spec.Left.Clone()
+ 
+ 	if existing := m.replicaOf(spec.Right.ID); existing != nil {
++		if existing.raft.AppliedIndex() == 0 && len(existing.kv) == 0 {
++			existing.kv = rightKV
++			existing.adoptSnapshot(existing.durSnap, rightKV)
++		}
+ 		return
+ 	}
+ 
+@@ -611,6 +618,38 @@
+ 	m.splits++
+ }
+ 
++// proposedSplit is the rejected design from DESIGN-A4 section 4: the leader
++// creates the right-hand range when it PROPOSES, out of band, instead of every
++// replica deriving it when the entry applies.
++func (m *Node) proposedSplit(left *Replica, spec SplitSpec, index raft.Index, at clock.Instant, s sim.Scheduler) bool {
++	if !left.IsLeader() || m.replicaOf(spec.Right.ID) != nil {
++		return false
++	}
++	r, err := m.newReplicaFor(spec.Right)
++	if err != nil {
++		return false
++	}
++	conf, confErr := left.raft.ConfigurationAt(index)
++	if confErr != nil {
++		return false
++	}
++	snapMeta := raft.SnapshotMeta{Index: 0, Term: 0, Conf: conf}
++	data := encodeMachine(spec.Right, map[string]string{})
++	b := engine.NewBatch()
++	b.Set(keyDescOf(spec.Right.ID), encodeDesc(spec.Right))
++	b.Set(keySnapshotOf(spec.Right.ID), encodeSnapshot(snapMeta, data))
++	if seq, err := m.db.Apply(b, true); err == nil {
++		r.durSnap = snapMeta
++		s.At(at+m.cfg.SyncLatency, sim.KindDurable, sim.NodeID(m.cfg.Ordinal),
++			sim.Stamp(m.epoch.Current(), seq))
++	}
++	m.cfg.Ledger.RecordRangeBase(uint64(spec.Right.ID),
++		provenance.Witness(data), provenance.Witness(raft.EncodeConfiguration(conf)))
++	r.adoptSnapshot(snapMeta, map[string]string{})
++	m.addReplica(r)
++	return false
++}
++
+ // nextRangeID mints an identifier for a new range.
+ //
+ // Stepped by the number of machines from a per-machine seed, so two machines
