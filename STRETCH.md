@@ -33,6 +33,25 @@ not to change in one atomic step.
 Single-node changes still carry the interesting cases: learner catch-up before promotion,
 configuration carried across a snapshot, and a leader removing itself.
 
+**The API shape survives; the capability does not.** DESIGN-A0 D5 froze
+`ProposeConfChange(id ProposalID, cc ConfChangeV2) error`, and `ConfChangeV2` is the name of the type
+that *supports* joint consensus. A3 kept that shape rather than narrowing it — narrowing a frozen
+type to match a narrower scope is the frozen-interface mistake this project has already made twice —
+so `ConfChangeJointImplicit` and `ConfChangeJointExplicit` exist in the source today.
+
+They are **refused**, and refused at every point where a configuration entry becomes a configuration:
+`ProposeConfChange` for a caller, and `ApplyConfEntry` for one that arrives by replication. A
+follower that applied whatever reached it would make the refusal a local courtesy rather than a rule,
+and the unreachable path would become reachable the moment one peer disagreed about what it was
+allowed to send.
+
+`tools/d5conform`'s `TestJointFieldsArePresentButRefused` pins both halves: the transitions must
+exist, and both funnels must test against `ConfChangeSimple`. Deleting a refusal fails the build.
+Enabling joint consensus is therefore a deliberate act with a ruling behind it, which is the only way
+a cut item should ever come back — and reading `ConfChangeJointExplicit` in the source is not evidence
+that joint consensus is implemented. **It is evidence of the opposite: the name exists so the refusal
+has something to name.**
+
 ### Parallel commits (was A9)
 
 **Cut to:** Percolator-style two-phase commit only.

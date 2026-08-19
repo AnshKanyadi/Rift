@@ -352,6 +352,35 @@ func (c Configuration) String() string {
 	return fmt.Sprintf("voters=%v learners=%v", c.Voters, c.Learners)
 }
 
+// ApplyConfEntry applies one configuration ENTRY -- the whole ConfChangeV2, not
+// a single change -- refusing anything A3 does not accept.
+//
+// # The refusal is here, not only at the proposer
+//
+// ProposeConfChange refuses joint transitions, but a proposer is not the only way
+// a configuration entry reaches a log: replication is. A follower that applied
+// whatever arrived would make the refusal a local courtesy rather than a rule,
+// and the unreachable path would become reachable the moment one peer disagreed
+// about what it was allowed to send.
+//
+// So every place a configuration entry turns into a configuration goes through
+// here, and a joint-shaped entry is refused wherever it came from.
+func ApplyConfEntry(c Configuration, data []byte) (Configuration, error) {
+	cc, ok := DecodeConfChange(data)
+	if !ok {
+		return c, fmt.Errorf("raft: a configuration entry did not decode")
+	}
+	if cc.Transition != ConfChangeSimple {
+		return c, fmt.Errorf("raft: a configuration entry carries a %s transition, which Amendment "+
+			"A6 cut; the overlapping-quorum argument in DESIGN-A3 §4 does not cover it", cc.Transition)
+	}
+	if len(cc.Changes) != 1 {
+		return c, fmt.Errorf("raft: a configuration entry carries %d servers; two configurations "+
+			"differing by more than one need not have intersecting majorities", len(cc.Changes))
+	}
+	return c.apply(cc.Changes[0])
+}
+
 // ApplyConfChange returns the configuration after one single change, or an
 // error. Exported so a checker can derive a configuration independently from the
 // same bytes the node read.
@@ -744,6 +773,11 @@ type Raft struct {
 
 	// promotionLag bounds how far behind a learner may be and still be promoted.
 	promotionLag Index
+
+	// confRefusal latches the first configuration entry this node declined to
+	// apply. Reaching one means a peer proposed something this build refuses,
+	// which is a protocol disagreement rather than a local error.
+	confRefusal error
 
 	// Persistent, and durable before it is acted upon.
 	term Term
@@ -1482,12 +1516,8 @@ func (r *Raft) Compact(index Index) (Term, Configuration, error) {
 		if x.Type != EntryConfChange {
 			continue
 		}
-		if cc, ok := DecodeConfChange(x.Data); ok {
-			for _, ch := range cc.Changes {
-				if next, err := conf.apply(ch); err == nil {
-					conf = next
-				}
-			}
+		if next, err := ApplyConfEntry(conf, x.Data); err == nil {
+			conf = next
 		}
 	}
 
@@ -2173,20 +2203,19 @@ func (r *Raft) PendingGated() int { return len(r.gated) }
 // This is a check that can only fail, which is the side of the provenance rule
 // where a node's own state is a permitted input.
 func (r *Raft) AssertConfConsistent() error {
+	if r.confRefusal != nil {
+		return fmt.Errorf("raft: %w", r.confRefusal)
+	}
 	want := r.baseConf.Clone()
 	for _, e := range r.log {
 		if e.Type != EntryConfChange {
 			continue
 		}
-		cc, ok := DecodeConfChange(e.Data)
-		if !ok {
+		next, err := ApplyConfEntry(want, e.Data)
+		if err != nil {
 			continue
 		}
-		for _, ch := range cc.Changes {
-			if next, err := want.apply(ch); err == nil {
-				want = next
-			}
-		}
+		want = next
 	}
 	if r.conf.Equal(want) {
 		return nil
@@ -2542,15 +2571,20 @@ func (r *Raft) recomputeConf() {
 		if e.Type != EntryConfChange {
 			continue
 		}
-		cc, ok := DecodeConfChange(e.Data)
-		if !ok {
+		next, err := ApplyConfEntry(conf, e.Data)
+		if err != nil {
+			// A configuration entry this node will not apply. It cannot have
+			// come from a correct proposer, so it came from a peer that is not
+			// running this code -- and applying it would be worse than refusing
+			// it. Latched rather than panicked: the run should report it, not
+			// vanish.
+			if r.confRefusal == nil {
+				r.confRefusal = fmt.Errorf("node %d refused the configuration entry at index %d: %w",
+					r.id, e.Index, err)
+			}
 			continue
 		}
-		for _, ch := range cc.Changes {
-			if next, err := conf.apply(ch); err == nil {
-				conf = next
-			}
-		}
+		conf = next
 	}
 	r.setConf(conf)
 }

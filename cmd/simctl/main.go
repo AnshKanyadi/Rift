@@ -464,7 +464,7 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 		return nil
 
 	case workloadRaft:
-		opt := hunt.A3Options()
+		opt := hunt.CurrentOptions()
 		if meta.Raft != nil {
 			opt = hunt.RaftOptions{
 				PreVote:           meta.Raft.PreVote,

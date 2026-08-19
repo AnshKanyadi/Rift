@@ -946,14 +946,8 @@ func derivedConf(st recovered) (raft.Configuration, bool) {
 		if e.Type != raft.EntryConfChange {
 			continue
 		}
-		cc, ok := raft.DecodeConfChange(e.Data)
-		if !ok {
-			continue
-		}
-		for _, ch := range cc.Changes {
-			if next, err := raft.ApplyConfChange(conf, ch); err == nil {
-				conf = next
-			}
+		if next, err := raft.ApplyConfEntry(conf, e.Data); err == nil {
+			conf = next
 		}
 	}
 	return conf, true

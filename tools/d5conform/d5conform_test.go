@@ -165,3 +165,70 @@ func render(fset *token.FileSet, src []byte, ft *ast.FuncType) string {
 	hi := fset.Position(ft.End()).Offset
 	return strings.TrimSpace(string(src[lo:hi]))
 }
+
+// TestJointFieldsArePresentButRefused pins ConfChangeV2's joint shape.
+//
+// # Present and refused are two different claims, and only pinning both is safe
+//
+// D5 froze `ProposeConfChange(id ProposalID, cc ConfChangeV2) error`, and
+// ConfChangeV2 is etcd's name for the type that SUPPORTS joint consensus --
+// which Amendment A6 cut. Narrowing the type to match the narrower scope would
+// be the frozen-interface mistake this project has already made twice, so the
+// general shape stays and A3 refuses the joint values.
+//
+// That leaves a shape whose unreachable half could quietly become reachable: a
+// future edit that drops a refusal enables joint consensus with no ruling behind
+// it, and nothing would say so. So this pins both halves. The joint transitions
+// must EXIST, and every place a configuration entry becomes a configuration must
+// REFUSE them -- not only the proposer, because replication is an entry point
+// too and a follower that applied whatever arrived would make the refusal a
+// local courtesy rather than a rule.
+func TestJointFieldsArePresentButRefused(t *testing.T) {
+	src, err := os.ReadFile("../../raft/raft.go")
+	if err != nil {
+		t.Fatalf("reading raft.go: %v", err)
+	}
+	text := string(src)
+
+	// Present: the shape D5 froze.
+	for _, want := range []string{
+		"type ConfChangeV2 struct",
+		"Transition ConfChangeTransition",
+		"ConfChangeJointImplicit",
+		"ConfChangeJointExplicit",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("ConfChangeV2's frozen shape lost %q. Narrowing a frozen type to match a "+
+				"narrower scope is the mistake that cost this project BUG-004 and an Advance "+
+				"method; the shape stays and the values are refused.", want)
+		}
+	}
+
+	// Refused, at every entry point. ApplyConfEntry is the funnel every
+	// configuration entry passes through -- proposed or replicated -- and
+	// ProposeConfChange is the one a caller reaches directly.
+	funnels := map[string]bool{"func ApplyConfEntry": false, "func (r *Raft) ProposeConfChange": false}
+	for fn := range funnels {
+		i := strings.Index(text, fn)
+		if i < 0 {
+			t.Errorf("%s is gone; a configuration entry now becomes a configuration somewhere "+
+				"this pin does not watch", fn)
+			continue
+		}
+		body := text[i:]
+		if j := strings.Index(body[len(fn):], "\nfunc "); j >= 0 {
+			body = body[:len(fn)+j]
+		}
+		if !strings.Contains(body, "ConfChangeSimple") {
+			t.Errorf("%s does not test the transition against ConfChangeSimple. A joint-shaped "+
+				"value reaching it unrefused enables joint consensus with no ruling behind it", fn)
+			continue
+		}
+		funnels[fn] = true
+	}
+	for fn, ok := range funnels {
+		if ok {
+			t.Logf("%s refuses non-simple transitions", fn)
+		}
+	}
+}

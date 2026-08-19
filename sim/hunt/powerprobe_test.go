@@ -53,7 +53,7 @@ func TestPowerProbe(t *testing.T) {
 	// options, which schedule no membership changes at all, and reported that
 	// three A3 mutants were undetectable. They were undetectable in a
 	// configuration that never exercised them.
-	opt := hunt.A3Options()
+	opt := hunt.CurrentOptions()
 	switch os.Getenv("POWER_CONFIG") {
 	case "a1":
 		opt = hunt.RaftOptions{PreVote: false, SnapshotThreshold: 0, Transfers: 0}

@@ -51,15 +51,21 @@ import (
 // assertOracleSilent sweeps the configuration the sweep runs and fails only when
 // the named oracle reports.
 //
-// The default follows the phase. It lagged once -- it was still A2's options
-// after A3 landed, so the membership oracles were induced against a
-// configuration that schedules no membership changes at all, and five mutants
-// reported ALIVE against tests that could not have caught them. An induction run
-// in a configuration that cannot produce the defect proves the same nothing as
-// no induction.
+// # The default follows the phase, and now it cannot lag
+//
+// It lagged once. It was still A2's options after A3 landed, so the membership
+// oracles were induced against a configuration that schedules ZERO membership
+// changes, and five mutants reported ALIVE against tests that could not have
+// caught them -- with the blame pointing at the oracles. An induction run in a
+// configuration that cannot produce the defect proves the same nothing as no
+// induction, and it proves it while looking like evidence.
+//
+// What prevents it now is not vigilance: hunt.CurrentOptions is the single
+// source of truth, read by the sweep, by these inductions and by the power
+// probe. They cannot disagree, because there is only one of them.
 func assertOracleSilent(t *testing.T, oracle string, seeds uint64) {
 	t.Helper()
-	assertOracleSilentWith(t, oracle, seeds, hunt.A3Options())
+	assertOracleSilentWith(t, oracle, seeds, hunt.CurrentOptions())
 }
 
 // assertOracleSilentWith is the same with explicit build options, for an oracle

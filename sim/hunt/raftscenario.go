@@ -63,6 +63,22 @@ func A2Options() RaftOptions {
 	return RaftOptions{PreVote: true, SnapshotThreshold: 6, Transfers: 2}
 }
 
+// CurrentOptions is the configuration the sweep runs, and it is the SINGLE
+// source of truth for it.
+//
+// # Why this is one function rather than a default in each place
+//
+// A2's options lingered as the default inside the oracle inductions after A3
+// landed, so five mutants were induced against a configuration that schedules
+// zero membership changes: tests that could not have killed them, reporting the
+// oracles as at fault. A mutant is only as honest as the configuration its
+// covering test runs under.
+//
+// The sweep, the oracle inductions and the power probe now all read this, so
+// they cannot disagree. Advancing a phase is one edit here, and every instrument
+// moves with it.
+func CurrentOptions() RaftOptions { return A3Options() }
+
 // A3Options adds membership churn: a four-node cluster with one learner, and
 // enough scheduled changes that the cycle runs several times per seed.
 func A3Options() RaftOptions {
@@ -86,7 +102,7 @@ func RaftGenConfig() plan.GenConfig {
 
 // MaterializeRaft turns a seed into a prepared plan with A2's options.
 func MaterializeRaft(seed uint64) (*plan.Plan, error) {
-	return MaterializeRaftWith(seed, A3Options())
+	return MaterializeRaftWith(seed, CurrentOptions())
 }
 
 // MaterializeRaftWith turns a seed into a prepared plan, adding the leadership
@@ -216,7 +232,7 @@ const syncLatency = clock.Instant(12_000_000)
 // RunRaft builds a three-node Raft group on a plan, drives client traffic
 // against it, and checks the result.
 func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
-	return RunRaftWith(p, A3Options(), tr)
+	return RunRaftWith(p, CurrentOptions(), tr)
 }
 
 // RunRaftWith drives the group with explicit build options.

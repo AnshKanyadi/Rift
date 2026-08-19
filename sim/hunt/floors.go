@@ -68,6 +68,23 @@ import "github.com/anshkanyadi/rift/sim/toy"
 // as a harness regression even while every mutant is still killed" -- and the
 // mutant lane recorded wall-clock seconds. Seconds measure the machine. Seeds
 // measure the harness.
+//
+// # A schedule mix is a claim about reachability, not a configuration detail
+//
+// The standing demonstration, and it is one number. M34 plants the defect behind
+// BUG-009. Measured with the mix A2 ran: **1 detection in 3000 seeds**. Measured
+// with A1's narrower mix: **0 in 3000**.
+//
+// So BUG-009 -- a replica overwriting entries it had already applied and reported
+// committed -- would not have been findable at all one phase earlier. Widening
+// the mix did not make the numbers look better; it made a real defect reachable.
+// Every fault count and duration in RaftGenConfig is therefore a claim about
+// which defects this project can find, and changing one silently changes that
+// claim.
+//
+// A3 said the same thing again from the other side: its shape dropped M34 back to
+// zero, so M34's floor is pinned to the A2 shape where it stays reachable --
+// measured, not assumed.
 
 // Floor is one flaw class's standing power requirement.
 //
