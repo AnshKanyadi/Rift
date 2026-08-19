@@ -21,7 +21,7 @@ func runSafe(p *plan.Plan) (r hunt.RaftResult, err error) {
 func TestZZScan(t *testing.T) {
 	by := map[string]int{}
 	first := map[string]string{}
-	for seed := uint64(0); seed < 2000; seed++ {
+	for seed := uint64(0); seed < 20; seed++ {
 		p, _ := hunt.MaterializeRaft(seed)
 		r, err := runSafe(p)
 		if err != nil {

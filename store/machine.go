@@ -378,6 +378,20 @@ func (m *Node) OutOfExtentRefusals() int {
 	return m.sum(func(r *Replica) int { return r.OutOfExtentRefusals() })
 }
 
+// A5's counters, summed over this machine's replicas.
+func (m *Node) GCProposed() int { return m.sum(func(r *Replica) int { return r.GCProposed() }) }
+func (m *Node) GCApplied() int  { return m.sum(func(r *Replica) int { return r.GCApplied() }) }
+func (m *Node) VersionsCollected() int {
+	return m.sum(func(r *Replica) int { return r.VersionsCollected() })
+}
+func (m *Node) MVCCReadsRefused() int { return m.sum(func(r *Replica) int { return r.ReadsRefused() }) }
+func (m *Node) MVCCWritesRefused() int {
+	return m.sum(func(r *Replica) int { return r.WritesRefused() })
+}
+func (m *Node) EnvelopeRefusals() int {
+	return m.sum(func(r *Replica) int { return r.EnvelopeRefusals() })
+}
+
 // StaleEpochRefusals is how many requests this machine refused for arriving
 // under a descriptor the range has moved past.
 func (m *Node) StaleEpochRefusals() int { return m.staleEpochs }

@@ -2065,7 +2065,7 @@ func (r *Raft) Ready() Ready {
 		// AssertQuiescent is what turned this from a silent stall into a
 		// failure.
 		if rd.Mark != 0 && !r.markHandedOff {
-			r.releaseThrough(rd.Mark)
+			r.closeEmptyMark(rd.Mark)
 		}
 		// A Ready that hands nothing over names no durability point, even while
 		// an earlier mark is still in flight. Reporting one the driver cannot
@@ -2157,6 +2157,47 @@ func (r *Raft) releaseThrough(m PersistMark) {
 		r.markHandedOff = false
 	}
 	r.release()
+}
+
+// closeEmptyMark satisfies a mark that covers nothing, and satisfies NOTHING
+// ELSE.
+//
+// # Why this is not releaseThrough, which is what it used to be
+//
+// A durability acknowledgement is monotone: the driver reporting mark m durable
+// implies every earlier mark, because writes reach the disk in order. An empty
+// mark has not earned that implication. It is satisfied because there is nothing
+// to wait for -- a statement about ITSELF, and about no other mark.
+//
+// Releasing *through* an empty mark therefore releases messages gated on earlier
+// marks whose writes are still in flight. The sequence, and it is not exotic:
+//
+//	mark 1 opens on a term bump, Ready hands the HardState to the driver, the
+//	write is in flight; something mutates and opens mark 2; the next Ready has
+//	nothing to hand over, so mark 2 is empty and closes -- and takes mark 1's
+//	gated append response with it. The follower advertises a term that is not on
+//	its disk, and a crash there is the amnesia the whole gate exists to prevent.
+//
+// Found by A5, on the first sweep after the state machine started writing to the
+// engine (BUG-017). Nothing about the sequence needs MVCC; what MVCC changed was
+// the traffic pattern that reaches it.
+//
+// So an empty mark releases only what is gated on exactly it, and it does not
+// move the persisted watermark, because it is not evidence about any write.
+func (r *Raft) closeEmptyMark(m PersistMark) {
+	if r.dirtyMark == m {
+		r.dirtyMark = 0
+		r.markHandedOff = false
+	}
+	kept := r.gated[:0]
+	for _, g := range r.gated {
+		if g.mark == m && g.snapMark <= r.persistedSnap {
+			r.msgs = append(r.msgs, g.msg)
+			continue
+		}
+		kept = append(kept, g)
+	}
+	r.gated = kept
 }
 
 // release moves out every withheld message whose durability points have all

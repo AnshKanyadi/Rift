@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/sim"
 )
@@ -506,7 +507,7 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // is the honest behaviour for a caller that has no model -- a checker with no
 // expectation cannot conclude anything, and pretending otherwise is the
 // vacuous-green class again.
-func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf) []sim.Oracle {
+func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt) []sim.Oracle {
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -518,6 +519,7 @@ func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf) []sim.Oracl
 		NewSingleServerChange(l),
 		NewRebalanceSafety(l),
 		NewSplitPartition(l, splits, extent),
+		NewMVCCReadCorrectness(l, reads),
 	}
 }
 
@@ -1066,6 +1068,96 @@ func (o *SingleServerChange) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// --- MVCC read correctness -----------------------------------------------------
+
+// ReadExpectation is what the harness's own model says a read at a log position
+// should have returned.
+type ReadExpectation struct {
+	Index   raft.Index
+	Key     string
+	At      hlc.Timestamp
+	Value   string
+	Found   bool
+	Refused bool
+}
+
+// ReadsAt is supplied by the harness: given a range's birth state and its
+// committed entries, what every read entry in that log should have answered.
+//
+// It is injected for the same reason StateAt is, and the reason is sharper here.
+// The whole claim of A5 is "a read at a timestamp returns the version visible at
+// that timestamp". If the oracle asked the store what was visible, it would be
+// checking that the store agrees with itself. So the harness replays the
+// committed log -- writes, collections and splits -- and answers the read from
+// its own model, and the two answers are compared.
+type ReadsAt func(base []byte, entries []raft.Entry) []ReadExpectation
+
+// MVCCReadCorrectness: every answer a client got is the version visible at the
+// timestamp it asked for.
+//
+// # Both directions, because one of them is how a store passes by refusing
+//
+// An answer must match the model's value. A REFUSAL must match the model's
+// refusal: a read at or below the collection mark is unanswerable, and a store
+// that refused everything would sail past a checker that only inspected wrong
+// answers. The second direction is the one that makes this oracle worth having.
+type MVCCReadCorrectness struct {
+	base
+	reads ReadsAt
+}
+
+func NewMVCCReadCorrectness(l *Ledger, reads ReadsAt) *MVCCReadCorrectness {
+	return &MVCCReadCorrectness{base: base{l: l, name: "mvcc-read-correctness"}, reads: reads}
+}
+
+func (o *MVCCReadCorrectness) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
+	if !o.stale() {
+		return nil
+	}
+	// One expectation table per range, keyed by log index.
+	want := map[uint64]map[raft.Index]ReadExpectation{}
+	for _, rl := range o.l.ranges {
+		m := map[raft.Index]ReadExpectation{}
+		for _, e := range o.reads(rl.base, rl.Committed()) {
+			m[e.Index] = e
+		}
+		want[rl.id] = m
+	}
+
+	for _, got := range o.l.reads {
+		exp, ok := want[got.Range][got.Index]
+		if !ok {
+			// The harness has no expectation for this position, which means the
+			// entry is not in the committed set the ledger observed. That is a
+			// timing artefact of when the oracle runs, not a verdict.
+			continue
+		}
+		switch {
+		case got.Refused && !exp.Refused:
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d index %d: node %d refused a read of %q at %s, and the committed log says "+
+					"that timestamp is above the collection mark. A refusal the history does not "+
+					"justify is a store answering by declining",
+				got.Range, got.Index, got.Node, got.Key, got.At)}
+		case !got.Refused && exp.Refused:
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d index %d: node %d answered a read of %q at %s with %q, and the committed "+
+					"log says the versions visible there were collected. That answer is a state the "+
+					"database no longer holds, and it is indistinguishable from a correct one",
+				got.Range, got.Index, got.Node, got.Key, got.At, got.Value)}
+		case got.Refused:
+			// Both refused, and for the same reason.
+		case got.Found != exp.Found || got.Value != exp.Value:
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d index %d: node %d read %q at %s and got (%q, found=%v); the committed log "+
+					"says the version visible at that timestamp is (%q, found=%v)",
+				got.Range, got.Index, got.Node, got.Key, got.At, got.Value, got.Found,
+				exp.Value, exp.Found)}
 		}
 	}
 	return nil

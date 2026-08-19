@@ -320,3 +320,95 @@ func TestPromotedLearnerCannotWinWithoutTheCommittedEntries(t *testing.T) {
 		}
 	}
 }
+
+// TestAnEmptyMarkDoesNotReleaseAnEarlierOne is the covering test for
+// M53-empty-mark-releases-through, and it is A5's own bug (BUGS.md BUG-017).
+//
+// # The sequence, built by hand because a seed search took 16 tries to find it
+//
+// A durability acknowledgement is monotone: the driver reporting mark m durable
+// implies every earlier mark, because writes reach the disk in order. An EMPTY
+// mark -- one whose Ready handed the driver nothing to persist -- has not earned
+// that implication. It is satisfied because there is nothing to wait for, which
+// is a statement about itself and about no other mark.
+//
+// So:
+//
+//	a term bump opens mark 1 and its HardState goes to the driver, whose write
+//	is still in flight; a later mutation opens mark 2; the next Ready has
+//	nothing to hand over, so mark 2 is empty and closes -- and releasing
+//	*through* it takes mark 1's gated response with it.
+//
+// The follower then advertises a term that is not on its disk. A crash there is
+// exactly the amnesia the gate exists to prevent: the leader counted an
+// acknowledgement from a node that will come back not knowing it ever gave one.
+func TestAnEmptyMarkDoesNotReleaseAnEarlierOne(t *testing.T) {
+	r := threeNode(t, 2)
+
+	// 1. A vote request bumps the term and opens the first mark. The grant is
+	//    gated on it, and the HardState goes out for persistence. The driver
+	//    does NOT acknowledge: that write is in flight for the rest of the test.
+	if err := r.Step(Message{Type: MsgVote, From: 1, To: 2, Term: 5, LastLogIndex: 0}); err != nil {
+		t.Fatalf("step vote: %v", err)
+	}
+	rd := r.Ready()
+	if rd.HardState == nil || rd.Mark == 0 {
+		t.Fatalf("the term bump handed over no state under a mark: %+v mark=%d", rd.HardState, rd.Mark)
+	}
+	first := rd.Mark
+	if r.PendingGated() != 1 {
+		t.Fatalf("the vote grant was not gated: %d withheld", r.PendingGated())
+	}
+
+	// 2. An append opens a SECOND mark and puts entries under it. Its coverage
+	//    is not frozen, because this Ready has not happened yet.
+	if err := r.Step(Message{
+		Type: MsgApp, From: 1, To: 2, Term: 5,
+		PrevLogIndex: 0, PrevLogTerm: 0,
+		Entries: []Entry{{Index: 1, Term: 5}},
+	}); err != nil {
+		t.Fatalf("step append: %v", err)
+	}
+
+	// 3. A snapshot arrives covering more than the log holds, so the entries
+	//    that opened mark 2 are discarded before anybody was handed them.
+	//    Mark 2 now covers NOTHING -- which is the case the release exists for.
+	if err := r.Step(Message{
+		Type: MsgSnap, From: 1, To: 2, Term: 5,
+		SnapIndex: 10, SnapTerm: 5,
+		SnapConf: EncodeConfiguration(Configuration{Voters: []NodeID{1, 2, 3}}),
+	}); err != nil {
+		t.Fatalf("step snapshot: %v", err)
+	}
+
+	rd = r.Ready()
+	if rd.HardState != nil || len(rd.Entries) > 0 {
+		t.Fatalf("this Ready was supposed to hand over no LOG state: hs=%+v entries=%d",
+			rd.HardState, len(rd.Entries))
+	}
+
+	// Mark 1's write is still in flight, so its message must still be withheld.
+	// Releasing *through* the empty mark is what let it out.
+	for _, m := range rd.Messages {
+		if m.Type == MsgVoteResp {
+			t.Fatalf("a vote response for term %d was released while mark %d -- the write carrying "+
+				"that very term -- was still in flight. An empty later mark released it, borrowing "+
+				"a monotonicity only a durability acknowledgement has",
+				m.Term, first)
+		}
+	}
+	if r.PendingGated() == 0 {
+		t.Fatalf("every gated message was released while mark %d was still in flight", first)
+	}
+
+	// And once the driver DOES acknowledge, it comes out: the fix must not turn
+	// the gate into a stall.
+	r.AckPersisted(first)
+	rd = r.Ready()
+	for _, m := range rd.Messages {
+		if m.Type == MsgVoteResp {
+			return
+		}
+	}
+	t.Fatal("the response never came out after its mark was acknowledged; the gate is now a stall")
+}

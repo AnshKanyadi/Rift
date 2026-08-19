@@ -22,6 +22,7 @@ import (
 	"sort"
 
 	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/raft"
@@ -50,6 +51,10 @@ type Ledger struct {
 	nodes int
 	rev   uint64
 
+	// reads is every answer a replica gave a client, in the order the harness
+	// observed them leaving the nodes.
+	reads []ReadRecord
+
 	// moves is every replica movement the HARNESS commanded, in the order it
 	// commanded them.
 	//
@@ -66,6 +71,39 @@ type Ledger struct {
 	// takes from the system is whether the order was CARRIED OUT; that it reads
 	// from the committed log like every other verdict.
 	moves []MoveRecord
+}
+
+// ReadRecord is one answer a replica gave a client, taken as it crossed the
+// boundary out of the node.
+//
+// # What is observed here, and what is not
+//
+// The KEY, the TIMESTAMP the read named, and the ANSWER: these are the bytes
+// leaving the node, which is exactly where the ledger takes everything else.
+// What is NOT taken is any statement by the store about what it believes was
+// visible -- that is the thing under test, and an oracle that consumed it would
+// be asking the system to grade itself.
+//
+// Refused says the store declined the read because the timestamp was at or below
+// the collection mark. It is a first-class outcome and not an error: the oracle
+// checks BOTH directions, because a store that refused everything would pass a
+// checker that only looked at wrong answers.
+type ReadRecord struct {
+	Range uint64
+	Node  int
+
+	// Index is the log position of the entry this answer came from. It is what
+	// lets the oracle compare an answer against the state THAT POSITION
+	// produces, rather than against the state at some wall-clock moment nobody
+	// can reconstruct.
+	Index raft.Index
+
+	Key     string
+	At      hlc.Timestamp
+	Value   string
+	Found   bool
+	Refused bool
+	When    clock.Instant
 }
 
 // MoveRecord is one replica movement the harness ordered.
@@ -190,6 +228,28 @@ func (l *Ledger) Ranges() []*rangeLedger { return l.ranges }
 func (l *Ledger) RecordMove(mO provenance.Observed[MoveRecord]) {
 	l.rev++
 	l.moves = append(l.moves, mO.Fact())
+}
+
+// RecordRead records an answer a replica gave a client.
+//
+// Observed: the bytes crossing the boundary out of the node.
+func (l *Ledger) RecordRead(r provenance.Observed[ReadRecord]) {
+	l.rev++
+	l.reads = append(l.reads, r.Fact())
+}
+
+// Reads is every answer the harness observed.
+func (l *Ledger) Reads() []ReadRecord { return l.reads }
+
+// ReadsRefused counts the answers that were refusals.
+func (l *Ledger) ReadsRefused() int {
+	n := 0
+	for _, r := range l.reads {
+		if r.Refused {
+			n++
+		}
+	}
+	return n
 }
 
 // Moves is every replica movement the harness ordered.

@@ -1,0 +1,20 @@
+# id: M53-empty-mark-releases-through
+# covering-test: TestAnEmptyMarkDoesNotReleaseAnEarlierOne
+# package: ./raft/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 80
+# power-measured: PENDING
+# mutates: a mark that covers nothing releases everything THROUGH it instead of only itself. An empty mark is satisfied because there is nothing to wait for, which is a statement about that mark alone -- it has not earned the monotonicity a durability acknowledgement has. Releasing through it frees messages gated on an earlier mark whose write is still in flight, so a follower advertises a term that is not on its disk (BUG-017)
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -2065,7 +2065,7 @@
+ 		// AssertQuiescent is what turned this from a silent stall into a
+ 		// failure.
+ 		if rd.Mark != 0 && !r.markHandedOff {
+-			r.closeEmptyMark(rd.Mark)
++			r.releaseThrough(rd.Mark)
+ 		}
+ 		// A Ready that hands nothing over names no durability point, even while
+ 		// an earlier mark is still in flight. Reporting one the driver cannot

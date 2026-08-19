@@ -46,6 +46,17 @@ type RaftOptions struct {
 	PreVote           bool
 	SnapshotThreshold raft.Index
 
+	// GCRetention is how far behind its clock a leader collects. Zero disables.
+	GCRetention time.Duration
+
+	// SnapshotReadPerMille is how many client reads name a REMEMBERED timestamp
+	// rather than "now", in parts per thousand.
+	//
+	// Without these, every read names a timestamp above every version and the
+	// MVCC read path is exercised in the one shape that cannot tell it from a
+	// single-version store -- and the collection mark refuses nothing, ever.
+	SnapshotReadPerMille uint64
+
 	// Rebalances is how many manual replica movements the plan orders. Each is
 	// ONE step of a move, so a move needs several: the mechanism is stateless by
 	// design and finishes by being asked again (store.Replica.RequestMove).
@@ -91,7 +102,7 @@ func A2Options() RaftOptions {
 // The sweep, the oracle inductions and the power probe now all read this, so
 // they cannot disagree. Advancing a phase is one edit here, and every instrument
 // moves with it.
-func CurrentOptions() RaftOptions { return A4Options() }
+func CurrentOptions() RaftOptions { return A5Options() }
 
 // A3Options adds membership churn: a four-node cluster with one learner, and
 // enough scheduled changes that the cycle runs several times per seed.
@@ -113,6 +124,18 @@ func A4Options() RaftOptions {
 	// fixed move, because a stateless move advances one step per order. Three
 	// moves per seed, each with enough orders to finish.
 	o.Rebalances = 12
+	return o
+}
+
+// A5Options adds MVCC: collection with a retention window, and a share of reads
+// at remembered timestamps.
+func A5Options() RaftOptions {
+	o := A4Options()
+	// Two seconds against a fourteen-second run: long enough that collection
+	// happens several times per seed, short enough that a remembered timestamp
+	// from early in the run falls behind the mark and the refusal path runs.
+	o.GCRetention = 2 * time.Second
+	o.SnapshotReadPerMille = 400
 	return o
 }
 
@@ -218,7 +241,10 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 // onSplit is called for every split entry with the model's verdict on whether it
 // takes effect, so the two oracles that need splits and the one that needs the
 // final state all read the same replay rather than three drifting copies of it.
-func replay(base []byte, entries []raft.Entry, onSplit func(raft.Index, bool, store.SplitSpec)) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+func replay(base []byte, entries []raft.Entry,
+	onSplit func(raft.Index, bool, store.SplitSpec),
+	onRead func(raftcheck.ReadExpectation),
+) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
 	desc, mark, vs, ok := store.DecodeMachine(base)
 	if !ok {
 		return desc, mark, nil, false
@@ -272,12 +298,76 @@ func replay(base []byte, entries []raft.Entry, onSplit func(raft.Index, bool, st
 		// it survived would depend on when garbage collection next ran, which is
 		// not a property a state machine may have.
 		op, k, v, at := store.DecodeCommand(e.Data)
-		if op != "put" || !desc.Contains([]byte(k)) || at.LessEq(mark) {
-			continue
+		switch op {
+		case store.OpGC:
+			// Collection restated: everything strictly below the new mark goes,
+			// EXCEPT the newest version at or below it for each key -- which is
+			// the version a read at the mark's successor still needs. Getting
+			// that one off by one is a silently lossy read, so the model says it
+			// out loud rather than calling the store's collector.
+			if !mark.Less(at) {
+				continue
+			}
+			mark = at
+			var kept []kv.Version
+			var lastKey string
+			seen := false
+			for _, ver := range vs {
+				if string(ver.Key) != lastKey {
+					lastKey, seen = string(ver.Key), false
+				}
+				if !ver.At.Less(mark) {
+					kept = append(kept, ver)
+					continue
+				}
+				if !seen {
+					seen = true
+					kept = append(kept, ver)
+				}
+			}
+			vs = kept
+
+		case "get":
+			if onRead != nil {
+				val, found := readModel(vs, k, at)
+				onRead(raftcheck.ReadExpectation{
+					Index: e.Index, Key: k, At: at,
+					Value: val, Found: found, Refused: at.LessEq(mark),
+				})
+			}
+
+		case "put":
+			// A command for a key outside the extent at this position is
+			// refused, exactly as the replicas refuse it. Restated, not shared.
+			//
+			// A write at or below the mark is refused too, for the reason the
+			// store refuses it: the version would be one no read may ever see,
+			// and whether it survived would depend on when collection next ran,
+			// which is not a property a state machine may have.
+			if !desc.Contains([]byte(k)) || at.LessEq(mark) {
+				continue
+			}
+			vs = insertVersion(vs, kv.Version{Key: []byte(k), At: at, Value: []byte(v)})
 		}
-		vs = insertVersion(vs, kv.Version{Key: []byte(k), At: at, Value: []byte(v)})
 	}
 	return desc, mark, vs, true
+}
+
+// readModel answers a read from the model's own version list: the newest version
+// of key at or before at.
+//
+// Versions are newest-first within a key, so the first match is the answer --
+// the same order the encoding produces, restated rather than shared.
+func readModel(vs []kv.Version, key string, at hlc.Timestamp) (string, bool) {
+	for _, v := range vs {
+		if string(v.Key) != key {
+			continue
+		}
+		if v.At.LessEq(at) {
+			return string(v.Value), true
+		}
+	}
+	return "", false
 }
 
 // insertVersion places a version in engine order: by key ascending, and by
@@ -306,7 +396,7 @@ func insertVersion(vs []kv.Version, v kv.Version) []kv.Version {
 
 // stateDigest is raftcheck.StateAt.
 func stateDigest(base []byte, entries []raft.Entry) uint64 {
-	desc, mark, vs, ok := replay(base, entries, nil)
+	desc, mark, vs, ok := replay(base, entries, nil, nil)
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
 	}
@@ -324,6 +414,18 @@ func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
 			ChildEnd:   spec.Right.End,
 			ChildEpoch: spec.Right.Epoch,
 		})
+	}, nil)
+	if !ok {
+		panic("hunt: a range was replayed with no birth state recorded")
+	}
+	return out
+}
+
+// readExpectations is raftcheck.ReadsAt.
+func readExpectations(base []byte, entries []raft.Entry) []raftcheck.ReadExpectation {
+	var out []raftcheck.ReadExpectation
+	_, _, _, ok := replay(base, entries, nil, func(e raftcheck.ReadExpectation) {
+		out = append(out, e)
 	})
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
@@ -407,6 +509,16 @@ type RaftResult struct {
 	// zero, and the exit run fails if it is not. DESIGN-A4 section 10.
 	MovesRacingChurn int
 
+	// A5's evidence. Every one of these is asserted in the exit run: a count
+	// nobody asserts on is decoration that looks like evidence.
+	GCProposed        int
+	GCApplied         int
+	VersionsCollected int
+	MVCCReadsRefused  int
+	MVCCWritesRefused int
+	EnvelopeRefusals  int
+	SnapshotReads     int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -451,7 +563,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf))
+	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations))
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {
@@ -483,6 +595,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			Learners:          learners,
 			PromotionLag:      opt.PromotionLag,
 			SplitThreshold:    opt.SplitThreshold,
+			GCRetention:       opt.GCRetention,
 			PreVote:           opt.PreVote,
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
@@ -623,8 +736,27 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	// Client operations go to every node; only the leader answers. That is how a
 	// request reaches a leader whose identity is not known until the run
 	// produces it -- the same routing the toy uses under failover.
+	snapshotReads := 0
+	readKey, err := rng.ParseKey(p.Keys.Raft)
+	if err != nil {
+		return res, fmt.Errorf("hunt: raft key: %w", err)
+	}
 	for _, op := range p.Workload.Ops {
-		idx := hist.Begin(clock.Instant(op.AtNS), op.Client, op.Seq, op.Kind, op.Key, op.Value)
+		// A share of reads name a REMEMBERED timestamp: see the comment below.
+		// Decided first, because such a read never enters the linearizability
+		// history at all -- it is not an operation on the current value, and
+		// Begin-then-cancel would leave a hole in a record that is supposed to
+		// be append-only.
+		snapshotRead := op.Kind == "get" && opt.SnapshotReadPerMille > 0 &&
+			readKey.Uint64N(8, uint64(op.Seq), uint64(op.Client), 0, 1000) < opt.SnapshotReadPerMille
+		if snapshotRead {
+			snapshotReads++
+		}
+
+		idx := -1
+		if !snapshotRead {
+			idx = hist.Begin(clock.Instant(op.AtNS), op.Client, op.Seq, op.Kind, op.Key, op.Value)
+		}
 		// # Every request routes from a descriptor cache, and the cache is stale
 		//
 		// This carried no routing at all -- Range and Epoch zero, "unrouted" --
@@ -652,6 +784,35 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			Client: op.Client, Seq: op.Seq, Op: op.Kind,
 			Key: op.Key, Value: op.Value, HistIdx: idx,
 			Range: store.FirstRange, Epoch: 1,
+		}
+
+		// # A share of reads name a REMEMBERED timestamp
+		//
+		// The client asks for the value as of a point in the past, which is what
+		// a snapshot read is and what A6's transactions will do for real. The
+		// timestamp is a wall reading from earlier in this run, taken off a
+		// node's own timeline, so it is a time the cluster actually passed
+		// through rather than a number invented by the harness.
+		//
+		// The lookback deliberately straddles the retention window: some land
+		// above the collection mark and are answered from history, some land
+		// below it and must be REFUSED. Both are checked, because a store that
+		// refused everything would pass a checker that only inspected wrong
+		// answers.
+		//
+		// These reads are excluded from the linearizability history, and that is
+		// not a dodge: a read at a past timestamp is not a linearizable
+		// operation on the current value, and feeding it to porcupine as one
+		// would manufacture violations out of correct behaviour. Their
+		// correctness is judged by mvcc-read-correctness instead, which is the
+		// oracle that knows what timestamp they named.
+		if snapshotRead {
+			back := time.Duration(readKey.Uint64N(9, uint64(op.Seq), uint64(op.Client), 0, uint64(4*time.Second)))
+			when := clock.Instant(op.AtNS) - clock.Instant(back)
+			if when < 0 {
+				when = 0
+			}
+			req.ReadTS = hlc.Timestamp{Wall: run.Clocks[0].Timeline().Wall(when)}
 		}
 		for i := range nodes {
 			run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, sim.NodeID(i), req)
@@ -692,6 +853,12 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.StaleEpochRefusals += d.StaleEpochRefusals()
 		res.StaleSplits += d.StaleSplits()
 		res.OutOfExtentRefusals += d.OutOfExtentRefusals()
+		res.GCProposed += d.GCProposed()
+		res.GCApplied += d.GCApplied()
+		res.VersionsCollected += d.VersionsCollected()
+		res.MVCCReadsRefused += d.MVCCReadsRefused()
+		res.MVCCWritesRefused += d.MVCCWritesRefused()
+		res.EnvelopeRefusals += d.EnvelopeRefusals()
 		if c := d.RangeCount(); c > res.Ranges {
 			res.Ranges = c
 		}
@@ -712,6 +879,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	res.MovesOrdered = len(ledger.Moves())
 	res.MovesCompleted = ledger.MovesCompleted()
 	res.MovesRacingChurn = ledger.MovesRacingUnrelatedChanges()
+	res.SnapshotReads = snapshotReads
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())
 
 	// # A run with no leader concluded nothing, whatever the checkers say
@@ -798,6 +966,14 @@ type RaftCensus struct {
 	MovesCompleted      int
 	MovesRacingChurn    int
 
+	GCProposed        int
+	GCApplied         int
+	VersionsCollected int
+	MVCCReadsRefused  int
+	MVCCWritesRefused int
+	EnvelopeRefusals  int
+	SnapshotReads     int
+
 	FirstViolation     uint64
 	FoundAViolation    bool
 	InconclusiveCauses []string
@@ -836,6 +1012,13 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.MovesOrdered += r.MovesOrdered
 		c.MovesCompleted += r.MovesCompleted
 		c.MovesRacingChurn += r.MovesRacingChurn
+		c.GCProposed += r.GCProposed
+		c.GCApplied += r.GCApplied
+		c.VersionsCollected += r.VersionsCollected
+		c.MVCCReadsRefused += r.MVCCReadsRefused
+		c.MVCCWritesRefused += r.MVCCWritesRefused
+		c.EnvelopeRefusals += r.EnvelopeRefusals
+		c.SnapshotReads += r.SnapshotReads
 		if r.Ranges > c.Ranges {
 			c.Ranges = r.Ranges
 		}

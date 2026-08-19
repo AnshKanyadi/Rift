@@ -409,6 +409,15 @@ func decodeMessage(b []byte) (raft.Message, bool) {
 // entry. Every replica then applies a fact derived at a position, which is A4's
 // class in A5's dimension (DESIGN-A5 section 7) and the same reasoning that put
 // the split key in the split entry rather than re-deriving it per replica.
+// opGC is the collection command's opcode. It is a command like put and get so
+// that it travels the log and applies at a position, which is the only way every
+// replica can agree on what is still answerable.
+const opGC = "gc"
+
+// OpGC exposes the collection opcode to the harness, which restates what the
+// command does rather than calling into this package.
+const OpGC = opGC
+
 func encodeCmd(op, key, value string, at hlc.Timestamp) []byte {
 	b := putBytes(nil, []byte(op))
 	b = putBytes(b, []byte(key))

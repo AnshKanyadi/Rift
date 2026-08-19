@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 16 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 17 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4, 1 from A5. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -872,6 +872,67 @@ it ordered rather than from anything the cluster says.
 The mechanism gained something too: `RequestMove` takes an explicit `begin`, because a stateless move
 cannot otherwise tell "the destination is already a voter because I just added it" from "the
 destination was already there", and the second is not a move at all.
+
+
+### BUG-017 — a follower advertised a term that was not on its disk, because an empty durability mark released an earlier one
+
+| field | value |
+|---|---|
+| **Found by** | sim — persist-before-reply, seed 16 of the first A5 sweep |
+| **Phase** | found in A5; **the defect has been present since A2** |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M53-empty-mark-releases-through.patch && go test -run TestAnEmptyMarkDoesNotReleaseAnEarlierOne ./raft/` |
+| **Reproduce (seed)** | seed **16**; 1 of the first 60 A5 seeds |
+| **Invariant that caught it** | persist-before-reply — term, vote and log durable before replying to any RPC |
+| **Mutant class** | none existed — added `M53-empty-mark-releases-through` |
+| **Fix commit** | *(this commit)* |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Symptom, verbatim:**
+
+```
+range 2: node 3 sent a app-resp advertising term 2 at instant 10410736157 while only term 1 was durable
+```
+
+**Root cause.** `Ready()` has a branch for a mark that covers nothing:
+
+```go
+if rd.Mark != 0 && !r.markHandedOff {
+    r.releaseThrough(rd.Mark)     // the defect
+}
+```
+
+A mark can be opened by a mutation and then be left covering nothing — a conflicting append truncates
+the entries away, or a snapshot install replaces the log under them. Waiting for an acknowledgement
+that will never come would stall every message gated on it, so the mark is closed here. That much is
+right.
+
+`releaseThrough` is not. **A durability acknowledgement is monotone** — the driver reporting mark *m*
+durable implies every earlier mark, because writes reach the disk in order. **An empty mark has not
+earned that implication.** It is satisfied because there is nothing to wait for, which is a statement
+about *itself* and about no other mark.
+
+So closing an empty mark 2 also released everything gated on mark 1 — whose write was in flight,
+carrying the very term the released message advertised.
+
+**Why it took until A5.** Nothing in the sequence needs MVCC. What A5 changed is the traffic: the
+collection command proposes on every apply once the retention window has passed, so a mark is opened,
+handed over, and followed by a second mark far more often. Measured: A5's shape reaches it on 1 seed
+in 60; A5 with collection disabled, **0 in 60**. The defect was reachable since A2 and nothing had
+gone looking down that particular corridor.
+
+**What this would have caused in production.** The leader counts an append acknowledgement from a
+follower that will come back from a crash not knowing it ever gave one — which is precisely the
+amnesia the whole gating design exists to prevent, arriving through the one door left open.
+
+**Fix.** `closeEmptyMark` replaces `releaseThrough` at that call site. An empty mark releases only
+messages gated on *exactly* it, and it does not move the persisted watermark, because it is not
+evidence about any write.
+
+**And the lesson, which is about the shape of the mistake.** Both spellings are one line and both look
+like "this mark is satisfied". The difference is whether the satisfaction is evidence about other
+marks, and the answer depends on *why* it is satisfied — durable, or empty. **A predicate that is true
+for two different reasons does not license the same conclusion from both**, and the two reasons here
+were separated by nothing but a function name.
 
 
 ---

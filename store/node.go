@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
@@ -93,6 +94,14 @@ type Config struct {
 	// SplitThreshold is how many keys a range may hold before its leader
 	// proposes a split. Zero disables splitting.
 	SplitThreshold int
+
+	// GCRetention is how far behind its own clock a leader proposes to collect.
+	// Zero disables collection.
+	//
+	// It is a DURATION rather than a version count, because the thing a read
+	// names is a timestamp: "keep the last N versions" cannot answer whether a
+	// read at T is answerable, and answering that is the mark's whole job.
+	GCRetention time.Duration
 
 	// PreVote turns on the extra election round. It is a build parameter rather
 	// than a plan entry: the ablation runs the same schedules with it on and off,
@@ -236,6 +245,12 @@ type Replica struct {
 	writesRefused int
 	readsRefused  int
 
+	// gcProposed, gcApplied and versionsCollected say whether collection ran at
+	// all. A sweep that never collected is green about a mark that never moved.
+	gcProposed        int
+	gcApplied         int
+	versionsCollected int
+
 	// envelopeRefusals counts peers whose timestamp was beyond maxOffset ahead.
 	// Zero in a bounded run is the bound holding; nonzero in a skew run is the
 	// check being reachable. Both directions are asserted.
@@ -281,6 +296,10 @@ type clientOp struct {
 	value   string
 	op      string
 	key     string
+
+	// readTS is the remembered timestamp a snapshot read named, kept so a
+	// reroute reissues the same question rather than a fresher one.
+	readTS hlc.Timestamp
 }
 
 // newReplica builds one group's driver.
@@ -341,7 +360,13 @@ func (n *Replica) onClient(req Request) {
 	// Every replica then applies a fact derived at a position rather than
 	// re-deriving it from its own clock, which would give the same value two
 	// different timestamps on two replicas (store/codec.go).
+	// A read at a remembered timestamp keeps that timestamp; everything else is
+	// stamped now. The HLC is still advanced either way, because the request is
+	// an event on this node and the clock's order has to include it.
 	at := n.hlc.Now()
+	if req.ReadTS.IsSet() && req.Op == "get" {
+		at = req.ReadTS
+	}
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
 	if err := n.raft.Propose(id, encodeCmd(req.Op, req.Key, req.Value, at)); err != nil {
@@ -349,6 +374,7 @@ func (n *Replica) onClient(req Request) {
 	}
 	n.inflight = append(n.inflight, clientOp{
 		id: id, histIdx: req.HistIdx, key: req.Key, value: req.Value, op: req.Op,
+		readTS: req.ReadTS,
 	})
 }
 
@@ -556,6 +582,21 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 					// This check is at the log position, so every replica
 					// reaches the same verdict from the same state. That is
 					// what the arrival check cannot do and never could.
+					if op == opGC {
+						// Collection is not owned by any key, so the extent
+						// check does not apply to it: it is a statement about
+						// this range's history, and the range applies it whole.
+						n.flushApply(mb)
+						b := engine.NewBatch()
+						removed, err := n.mvcc.AdvanceGCInto(b, cmdTS)
+						if err == nil {
+							n.flushApply(b)
+							n.gcApplied++
+							n.versionsCollected += removed
+						}
+						n.answerAt(e, "", "", cmdTS, at)
+						continue
+					}
 					owned = n.desc.Contains([]byte(k))
 					if owned && op == "put" {
 						if err := n.mvcc.PutInto(mb, []byte(k), cmdTS, []byte(v)); err != nil {
@@ -587,6 +628,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 				}
 			}
 			n.flushApply(mb)
+			n.maybeGC()
 			n.cfg.Ledger.RecordApplied(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
 			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
 			n.maybeSnapshot(at, s)
@@ -627,6 +669,10 @@ func (n *Replica) answerAt(e raft.Entry, op, key string, readTS hlc.Timestamp, a
 		val := ""
 		if op == "get" {
 			v, ok, err := n.mvcc.ReadAt([]byte(key), readTS)
+			n.cfg.Ledger.RecordRead(provenance.Witness(raftcheck.ReadRecord{
+				Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: e.Index, Key: key, At: readTS,
+				Value: string(v), Found: ok && err == nil, Refused: err != nil, When: at,
+			}))
 			switch {
 			case err != nil:
 				// A refused read is an outcome, not an answer. Ending it as OK
@@ -634,13 +680,22 @@ func (n *Replica) answerAt(e raft.Entry, op, key string, readTS hlc.Timestamp, a
 				// the key was absent, which is a claim about history rather
 				// than about answerability.
 				n.readsRefused++
-				n.cfg.History.End(c.histIdx, at, sim.RespError, "")
+				if c.histIdx >= 0 {
+					n.cfg.History.End(c.histIdx, at, sim.RespError, "")
+				}
 				continue
 			case ok:
 				val = string(v)
 			}
 		}
-		n.cfg.History.End(c.histIdx, at, sim.RespOK, val)
+		// A snapshot read carries no history index: a read at a past timestamp
+		// is not a linearizable operation on the current value, and handing one
+		// to porcupine as if it were would manufacture violations out of
+		// correct behaviour. It is judged by mvcc-read-correctness, which is the
+		// oracle that knows which timestamp it named.
+		if c.histIdx >= 0 {
+			n.cfg.History.End(c.histIdx, at, sim.RespOK, val)
+		}
 	}
 	n.inflight = kept
 }
@@ -680,7 +735,11 @@ func (n *Replica) rerouteAt(e raft.Entry, op, key, value string, at clock.Instan
 			continue
 		}
 		s.At(at+staleRetryDelay, sim.KindClient, sim.NodeID(n.cfg.Ordinal),
-			Request{Op: op, Key: key, Value: value, HistIdx: c.histIdx})
+			// The remembered timestamp survives the reroute. Dropping it would
+			// silently turn a snapshot read into a read at now, and the oracle
+			// would then be comparing an answer against a timestamp the client
+			// never asked for.
+			Request{Op: op, Key: key, Value: value, HistIdx: c.histIdx, ReadTS: c.readTS})
 	}
 	n.inflight = kept
 }
@@ -899,6 +958,37 @@ func (n *Replica) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 	n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
 		Index: meta.Index, Term: meta.Term, Digest: digest(data), Taken: true,
 	}), at)
+}
+
+// maybeGC proposes a collection mark once the leader's clock has moved past the
+// retention window.
+//
+// # Why the mark is proposed rather than applied
+//
+// Collection is a state machine transition like any other: it changes what reads
+// are answerable, so every replica must do it at the same log position or two
+// replicas disagree about whether a read can be served -- which surfaces as an
+// error on one node and an answer on another, the hardest kind of divergence to
+// attribute.
+//
+// So the leader picks the mark from ITS clock, once, and the mark travels in the
+// entry. Every replica applies the same mark at the same index. That is the
+// same sentence as the split key and the command timestamp, for the third time
+// (DESIGN-A5 section 7).
+func (n *Replica) maybeGC() {
+	if n.cfg.GCRetention == 0 || !n.IsLeader() {
+		return
+	}
+	now := n.hlc.Now()
+	to := hlc.Timestamp{Wall: now.Wall.Add(-n.cfg.GCRetention)}
+	if !n.mvcc.GCMark().Less(to) || !to.IsSet() {
+		return
+	}
+	n.propSeq++
+	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
+	if err := n.raft.Propose(id, encodeCmd(opGC, "", "", to)); err == nil {
+		n.gcProposed++
+	}
 }
 
 // maybeSplit proposes a split once this range holds more keys than its
@@ -1457,6 +1547,24 @@ type Request struct {
 	Value   string
 	HistIdx int
 
+	// ReadTS, when set, is the timestamp this read names: a SNAPSHOT READ at a
+	// point the client remembers rather than at whatever "now" is.
+	//
+	// # Why the sim needs these at all
+	//
+	// Without them every read is stamped at propose, so every read names a
+	// timestamp above every version, and "the version visible at that timestamp"
+	// is only ever tested at one timestamp: the newest. The MVCC read path would
+	// be exercised in exactly the shape that cannot distinguish it from a
+	// single-version store, and the garbage-collection mark would never refuse
+	// anything -- a mechanism declared and never invoked, which is the class
+	// this project has now counted eleven instances of.
+	//
+	// A6's snapshot-isolated transactions read this way for real. A5 issues them
+	// from the workload so the path is exercised before the phase that depends
+	// on it.
+	ReadTS hlc.Timestamp
+
 	// Range and Epoch are what the client BELIEVED when it routed this request.
 	// They are the client's claim, not the cluster's fact, and the replica
 	// checks them against its own descriptor -- which is the entire point of a
@@ -1487,6 +1595,9 @@ func strs(bs [][]byte) []string {
 
 // WritesRefused and ReadsRefused report commands the MVCC store declined for
 // naming a timestamp at or below the garbage-collection mark.
-func (n *Replica) WritesRefused() int    { return n.writesRefused }
-func (n *Replica) EnvelopeRefusals() int { return n.envelopeRefusals }
-func (n *Replica) ReadsRefused() int     { return n.readsRefused }
+func (n *Replica) WritesRefused() int     { return n.writesRefused }
+func (n *Replica) GCProposed() int        { return n.gcProposed }
+func (n *Replica) GCApplied() int         { return n.gcApplied }
+func (n *Replica) VersionsCollected() int { return n.versionsCollected }
+func (n *Replica) EnvelopeRefusals() int  { return n.envelopeRefusals }
+func (n *Replica) ReadsRefused() int      { return n.readsRefused }
