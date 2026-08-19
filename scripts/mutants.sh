@@ -63,21 +63,34 @@ printf '  ----------------------------------------------------------\n'
 
 # ---------------------------------------------------------------- baseline
 copy_tree "$scratch/baseline"
+# # The baseline runs exactly the COVERING TESTS, not their packages
+#
+# It used to run the whole package each patch names. That is a broader check and
+# a weaker one: it validates tests no kill is ever attributed to, and it drags in
+# whatever else lives there -- by A5 that meant the phase's entire 10,000-seed
+# exit sweep, inside a lane whose question is "does this test pass on an
+# unpatched tree". The baseline crossed an hour and was about to fail on its own
+# timeout with nothing wrong.
+#
+# So the gate is now exactly the union of the tests kills are attributed to. Every
+# test a kill can be blamed on is watched passing first, which is the whole point
+# of a baseline, and nothing else is.
 baseline_pkgs=$(sed -n 's/^# package: *//p' "$PATCHDIR"/*.patch | sort -u | tr '\n' ' ')
+baseline_tests=$(sed -n 's/^# covering-test: *//p' "$PATCHDIR"/*.patch | sort -u | paste -sd'|' -)
 # An explicit timeout, because Go's default 10 minutes is a number chosen for
 # unit tests and this lane runs seed sweeps. A4's exit sweep alone is five
 # minutes; the baseline crossed ten and the lane reported INVALID, which is the
 # gate working -- it refused to attribute anything to a tree it could not first
 # see pass. The remedy is to give it enough time, never to shorten the sweeps.
 TEST_TIMEOUT=${TEST_TIMEOUT:-3600s}
-if ! (cd "$scratch/baseline" && $GO test -count=1 -timeout "$TEST_TIMEOUT" $baseline_pkgs >"$scratch/baseline.log" 2>&1); then
+if ! (cd "$scratch/baseline" && $GO test -count=1 -timeout "$TEST_TIMEOUT" -run "^($baseline_tests)\$" $baseline_pkgs >"$scratch/baseline.log" 2>&1); then
   printf '   INVALID  the unpatched tree does not pass the packages these mutants target.\n\n'
   sed 's/^/     /' "$scratch/baseline.log" | head -30
   printf '\n  Every failure below would be unattributable, so no kills are reported.\n'
   printf '  A lane has to be able to fail honestly before its green means anything.\n\n'
   exit 2
 fi
-printf '   baseline ok: unpatched tree passes every targeted package\n'
+printf '   baseline ok: unpatched tree passes every covering test\n'
 
 killed=0
 canaries=0

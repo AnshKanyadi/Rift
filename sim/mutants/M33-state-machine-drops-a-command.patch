@@ -9,12 +9,12 @@
 # mutates: the state machine silently drops one command in seven, so every snapshot it takes is not the state its own committed log produces. The harness re-implements what a command DOES rather than calling into store, which is the only reason this cannot cancel out on both sides of the comparison
 --- a/store/node.go
 +++ b/store/node.go
-@@ -495,7 +495,7 @@
- 					// reaches the same verdict from the same state. That is
- 					// what the arrival check cannot do and never could.
+@@ -636,7 +636,7 @@
+ 						continue
+ 					}
  					owned = n.desc.Contains([]byte(k))
 -					if owned && op == "put" {
 +					if owned && op == "put" && e.Index%7 != 0 {
- 						n.kv[k] = v
- 					}
- 				}
+ 						if err := n.mvcc.PutInto(mb, []byte(k), cmdTS, []byte(v)); err != nil {
+ 							// A write the state machine refuses is not a crash:
+ 							// below the GC mark it is a command the cluster has

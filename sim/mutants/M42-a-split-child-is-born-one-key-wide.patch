@@ -9,14 +9,14 @@
 # mutates: a range born from a split starts one key above where the split entry says it does. The parent gives away everything at or above the cut point and the child claims everything above it, so the cut key itself belongs to neither. Both ranges are internally consistent, which is why no per-range oracle can see it
 --- a/store/machine.go
 +++ b/store/machine.go
-@@ -587,7 +587,9 @@
+@@ -672,7 +672,9 @@
  			m.cfg.ID, left.rng, confErr))
  	}
  	snapMeta := raft.SnapshotMeta{Index: 0, Term: 0, Conf: conf}
--	data := encodeMachine(spec.Right, rightKV)
+-	data := encodeMachine(spec.Right, mark, rightVs)
 +	born := spec.Right.Clone()
 +	born.Start = append(append([]byte(nil), born.Start...), 0x00)
-+	data := encodeMachine(born, rightKV)
++	data := encodeMachine(born, mark, rightVs)
  
  	// Only the RIGHT range's descriptor is written, and it is a discovery
  	// record: it tells a restarting machine that this range exists here. The

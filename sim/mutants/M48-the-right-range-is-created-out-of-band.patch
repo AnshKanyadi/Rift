@@ -9,7 +9,7 @@
 # mutates: the leader creates the right-hand range out of band as well as by applying the entry, which is candidate design (1) in DESIGN-A4 section 4 -- the one the design rejected for having no agreed point at which the split happened. Caught on 276 of 300 seeds, and caught as a STATE DIVERGENCE rather than as an orphan range: the out-of-band range's birth state is derived at a different moment from every other replica's, so snapshot equivalence reaches it long before anything notices that a range exists which no committed log created. That is why split-partition's orphan clause is induced directly instead (raftcheck/splitpartition_test.go)
 --- a/store/machine.go
 +++ b/store/machine.go
-@@ -517,6 +517,9 @@
+@@ -592,6 +592,9 @@
  	//
  	// Found by state machine safety on the first A4 sweep: two nodes applying
  	// different commands at index 1 of a range born from a split.
@@ -19,24 +19,13 @@
  	if spec.Left.Epoch != left.desc.Epoch+1 ||
  		!bytes.Equal(spec.Left.Start, left.desc.Start) ||
  		!bytes.Equal(spec.Right.End, left.desc.End) {
-@@ -559,6 +562,10 @@
- 	left.desc = spec.Left.Clone()
- 
- 	if existing := m.replicaOf(spec.Right.ID); existing != nil {
-+		if existing.raft.AppliedIndex() == 0 && len(existing.kv) == 0 {
-+			existing.kv = rightKV
-+			existing.adoptSnapshot(existing.durSnap, rightKV)
-+		}
- 		return
- 	}
- 
-@@ -611,6 +618,38 @@
+@@ -696,6 +699,38 @@
  	m.splits++
  }
  
 +// proposedSplit is the rejected design from DESIGN-A4 section 4: the leader
-+// creates the right-hand range when it PROPOSES, out of band, instead of every
-+// replica deriving it when the entry applies.
++// creates the right-hand range out of band instead of every replica deriving it
++// when the entry applies.
 +func (m *Node) proposedSplit(left *Replica, spec SplitSpec, index raft.Index, at clock.Instant, s sim.Scheduler) bool {
 +	if !left.IsLeader() || m.replicaOf(spec.Right.ID) != nil {
 +		return false
@@ -50,7 +39,7 @@
 +		return false
 +	}
 +	snapMeta := raft.SnapshotMeta{Index: 0, Term: 0, Conf: conf}
-+	data := encodeMachine(spec.Right, map[string]string{})
++	data := encodeMachine(spec.Right, hlc.Timestamp{}, nil)
 +	b := engine.NewBatch()
 +	b.Set(keyDescOf(spec.Right.ID), encodeDesc(spec.Right))
 +	b.Set(keySnapshotOf(spec.Right.ID), encodeSnapshot(snapMeta, data))
@@ -61,7 +50,7 @@
 +	}
 +	m.cfg.Ledger.RecordRangeBase(uint64(spec.Right.ID),
 +		provenance.Witness(data), provenance.Witness(raft.EncodeConfiguration(conf)))
-+	r.adoptSnapshot(snapMeta, map[string]string{})
++	r.adoptSnapshot(snapMeta, nil, hlc.Timestamp{})
 +	m.addReplica(r)
 +	return false
 +}
