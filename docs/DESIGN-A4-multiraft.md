@@ -466,7 +466,7 @@ its floor.
 | 1 | multiple groups per node, per-range independence, two-mark generalisation | met — `Node` hosts `Replica`s over one engine and one crash boundary; the two-stream question is answered in §9.4c with a check, not an argument |
 | 2 | size-threshold splits as raft operations, surviving crash and restart | met — five defects found and fixed getting here (BUG-011, -013, -014, -015 and the model's BUG-012) |
 | 3 | manual rebalance by conf change plus leadership transfer | met — stateless mechanism (§9.3), 3,396 of 9,014 ordered moves completed across 10k seeds, `rebalance-safety` green |
-| 4 | oracles per-range, or proven meaningful cluster-wide | met — §6's table; all eleven per-range, linearizability unchanged and stated |
+| 4 | oracles per-range, or proven meaningful cluster-wide | met — §6's table; all ten per-range, plus linearizability which stays per-key and is stated |
 | 5 | caller-bug versus runtime re-asked across `raft/` and `store/` | met — §11 |
 | 6 | power floors re-measured under A4's shape | met — 28 floored, 15 opted out, zero below floor; §11b for the two that dropped |
 | 7 | new oracles induced, BUGS.md with mutant classes, corpus, 10k seeds | met — §12b |
@@ -501,7 +501,7 @@ moved `store/node.go` under them and were repaired; two of those defects now liv
 snapshot payload and message framing — and each was checked to still REPRODUCE ITS FINDING under its
 mutant before being re-recorded. Ten of ten do. The two toy bundles are untouched and match exactly.
 
-**Oracles:** eleven, all per-range. Two are new and both were induced; split-partition's third clause
+**Oracles:** ten, all per-range. Two are new and both were induced; split-partition's third clause
 is induced directly, for the reason in §9.4c.
 
 **Race lane:** green, `sim/hunt` 2287s under instrumentation, **zero data races**. It failed twice
