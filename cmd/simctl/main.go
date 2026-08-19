@@ -62,6 +62,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/raft"
@@ -162,6 +163,11 @@ type RaftMeta struct {
 	// way.
 	SplitThreshold int `json:"split_threshold"`
 	Rebalances     int `json:"rebalances"`
+
+	// A5's two. Same reasoning: a bundle that did not carry them would replay a
+	// single-version store against a schedule recorded on an MVCC one.
+	GCRetentionNS        int64  `json:"gc_retention_ns"`
+	SnapshotReadPerMille uint64 `json:"snapshot_read_per_mille"`
 }
 
 // CensusMeta is what the run's elections looked like.
@@ -240,6 +246,8 @@ func cmdRun(args []string) int {
 	promotionLag := fs.Uint64("promotion-lag", 8, "raft workload: how far behind a learner may be and still be promoted")
 	splitEvery := fs.Int("split-threshold", 4, "raft workload: keys a range may hold before its leader proposes a split; 0 disables")
 	rebalances := fs.Int("rebalances", 12, "raft workload: manual replica-movement orders the plan schedules")
+	gcRetention := fs.Int64("gc-retention-ns", int64(2*time.Second), "raft workload: how far behind its clock a leader collects; 0 disables")
+	snapReads := fs.Uint64("snapshot-reads-per-mille", 400, "raft workload: share of reads naming a remembered timestamp")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
@@ -278,20 +286,24 @@ func cmdRun(args []string) int {
 		// sweep makes, so a bundle carries the plan that ran rather than one
 		// regenerated slightly differently later.
 		opt := hunt.RaftOptions{
-			PreVote:           *preVote,
-			SnapshotThreshold: raft.Index(*snapEvery),
-			Transfers:         *transfers,
-			Learners:          *learners,
-			ConfChanges:       *confChanges,
-			PromotionLag:      raft.Index(*promotionLag),
-			SplitThreshold:    *splitEvery,
-			Rebalances:        *rebalances,
+			PreVote:              *preVote,
+			SnapshotThreshold:    raft.Index(*snapEvery),
+			Transfers:            *transfers,
+			Learners:             *learners,
+			ConfChanges:          *confChanges,
+			PromotionLag:         raft.Index(*promotionLag),
+			SplitThreshold:       *splitEvery,
+			Rebalances:           *rebalances,
+			GCRetention:          time.Duration(*gcRetention),
+			SnapshotReadPerMille: *snapReads,
 		}
 		meta.Raft = &RaftMeta{
 			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
 			Transfers: opt.Transfers, Learners: opt.Learners,
 			ConfChanges: opt.ConfChanges, PromotionLag: uint64(opt.PromotionLag),
 			SplitThreshold: opt.SplitThreshold, Rebalances: opt.Rebalances,
+			GCRetentionNS:        int64(opt.GCRetention),
+			SnapshotReadPerMille: opt.SnapshotReadPerMille,
 		}
 		var err error
 		if p, err = hunt.MaterializeRaftWith(*seed, opt); err != nil {
@@ -508,14 +520,16 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 		opt := hunt.CurrentOptions()
 		if meta.Raft != nil {
 			opt = hunt.RaftOptions{
-				PreVote:           meta.Raft.PreVote,
-				SnapshotThreshold: raft.Index(meta.Raft.SnapshotThreshold),
-				Transfers:         meta.Raft.Transfers,
-				Learners:          meta.Raft.Learners,
-				ConfChanges:       meta.Raft.ConfChanges,
-				PromotionLag:      raft.Index(meta.Raft.PromotionLag),
-				SplitThreshold:    meta.Raft.SplitThreshold,
-				Rebalances:        meta.Raft.Rebalances,
+				PreVote:              meta.Raft.PreVote,
+				SnapshotThreshold:    raft.Index(meta.Raft.SnapshotThreshold),
+				Transfers:            meta.Raft.Transfers,
+				Learners:             meta.Raft.Learners,
+				ConfChanges:          meta.Raft.ConfChanges,
+				PromotionLag:         raft.Index(meta.Raft.PromotionLag),
+				SplitThreshold:       meta.Raft.SplitThreshold,
+				Rebalances:           meta.Raft.Rebalances,
+				GCRetention:          time.Duration(meta.Raft.GCRetentionNS),
+				SnapshotReadPerMille: meta.Raft.SnapshotReadPerMille,
 			}
 		}
 		res, err := hunt.RunRaftWith(p, opt, tr)

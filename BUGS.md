@@ -171,7 +171,7 @@ Seventy-nine terms, no leader, and not one violation reported.
 | **Found by** | sim — `raft.AssertQuiescent` |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M14-epoch-check-removed.patch && go run ./cmd/simctl replay --bundle seeds/BUG-002` (any commit) |
-| **Reproduce (seed)** | `seeds/BUG-002` carries seed 40 (was 66; see *the seeds moved* below) |
+| **Reproduce (seed)** | `seeds/BUG-002` carries seed **32** (was 40, and 66 before that; see *the seeds moved* below and §A5 rot) |
 | **Invariant that caught it** | none of the four — this is a liveness stall, and `AssertQuiescent` is the mechanism that refuses to call one a clean run |
 | **Mutant class** | `M14-epoch-check-removed` |
 | **Fix commit** | `ff895a0`, made structural in `04d8d20` |
@@ -958,6 +958,29 @@ which retired a whole hypothesis in one run — and `raft.QuiesceDebug` prints w
 driver was ever handed it, and whether it was acknowledged. Those three numbers ended the hunt: the
 stall showed `lastHanded=0`, so the mark had never been handed, so the close had run and the release
 had not.
+
+
+### A note on BUG-002's seed, and the lane it produced
+
+The bundle's seed has moved twice. The second move is the interesting one.
+
+At A5, `make corpus` was green on BUG-002 and the bundle had **stopped carrying its finding**: with
+M14 applied, the replay was byte-identical to the recording. The mutation changed nothing on that
+schedule, so "apply the mutant, replay the bundle" reproduced a clean run.
+
+`make corpus` cannot see that, and the reason is structural rather than an oversight. A fixed bug's
+bundle records **no violation** — the schedule replays clean by design, and the reproduction is two
+steps. So the lane compares a clean replay against a clean recording, matches, and reports green,
+while the second step has quietly stopped working.
+
+`scripts/corpus-reproduces.sh` is the missing half: it applies each bundle's mutant, replays, and
+requires the result to DIFFER from the recording. A mutated replay that is byte-identical to an
+unmutated one is a mutation that did nothing. The bundle was re-recorded at seed 32, which does
+reproduce, in the commit that noticed.
+
+**The general shape, and it is the same one as the eleventh vacuous-green:** the claim was checked at
+the layer where it was cheap to check, not at the layer where it was made. "Every bug replays from a
+single seed" is a claim about *bundle plus mutant*, and the lane was looking at the bundle.
 
 
 ---

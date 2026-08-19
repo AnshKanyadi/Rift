@@ -9,12 +9,14 @@
 # mutates: a follower that installs a snapshot adopts its keys and keeps its own extent. It is then a state machine that has split holding an extent that has not, so it refuses the next split entry for naming an extent it cannot see (BUG-013)
 --- a/store/node.go
 +++ b/store/node.go
-@@ -370,7 +370,8 @@
+@@ -432,8 +432,9 @@
  			// one here is BUG-013: the node adopts a state machine that has
  			// split and an extent that has not, then refuses the split entry
  			// that would reconcile them.
--			n.kv, n.desc = kv, desc
-+			n.kv = kv
+-			n.ingest(vs, mark)
+-			n.desc = desc
++			n.ingest(vs, hlc.Timestamp{})
++			_ = mark
 +			_ = desc
  			n.snapshotsApplied++
  			n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{

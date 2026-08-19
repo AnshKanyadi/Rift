@@ -109,6 +109,10 @@ provenance: ## The ledger's inputs are harness-observed; a system-reported fact 
 corpus: ## Replay every bundle in seeds/; a bundle that stops reproducing fails the build
 	$(GO) test -count=1 -run 'TestEveryStoredBundleReplays|TestCorpusLaneDetectsRot' ./cmd/simctl/
 
+.PHONY: corpus-reproduces
+corpus-reproduces: ## Every bundle still EXERCISES its defect: apply its mutant, replay, require a difference
+	sh scripts/corpus-reproduces.sh
+
 .PHONY: assertions
 assertions: ## Every declared every-run assertion mechanism must actually be invoked
 	$(GO) test -count=1 -run 'TestEveryAssertionMechanismIsInvoked|TestAssertionRegistryIsWellFormed' ./sim/hunt/
@@ -128,7 +132,7 @@ power-mutants: ## Every MUTANT class: detection rate against a standing floor, o
 lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions provenance corpus smoke mutants ## Everything the push lane runs
+ci: build lint test race blind power assertions provenance corpus corpus-reproduces smoke mutants ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 

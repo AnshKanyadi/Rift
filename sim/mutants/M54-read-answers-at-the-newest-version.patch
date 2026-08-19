@@ -3,9 +3,9 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 1
-# power-ceiling: 20
-# power-measured: PENDING
+# power-floor: 130
+# power-ceiling: 10
+# power-measured: 261 of 300, first at seed 0, at commit 5517111+A5
 # mutates: a read at a timestamp seeks to the key's prefix instead of to the timestamp, so it answers with the NEWEST version rather than the one visible where it asked. Every read at now still returns the right value, which is why a workload without snapshot reads cannot see this at all: it is the defect that makes an MVCC store indistinguishable from a single-version one
 --- a/kv/store.go
 +++ b/kv/store.go
