@@ -924,15 +924,40 @@ gone looking down that particular corridor.
 follower that will come back from a crash not knowing it ever gave one — which is precisely the
 amnesia the whole gating design exists to prevent, arriving through the one door left open.
 
-**Fix.** `closeEmptyMark` replaces `releaseThrough` at that call site. An empty mark releases only
-messages gated on *exactly* it, and it does not move the persisted watermark, because it is not
+**Fix, and it took two halves.** `closeEmptyMark` replaces `releaseThrough` at that call site. An
+empty mark satisfies only itself, and it does not move the persisted watermark, because it is not
 evidence about any write.
+
+The first version of that fix **released** the messages gated on the mark in one pass — and stalled
+**12 seeds in 200**. A message can carry a constraint in both streams, and the two land
+independently: a one-pass release freed only those whose *snapshot* constraint was already met and
+left the rest gated on a mark that no longer exists, so when their snapshot constraint landed a
+moment later, `release()` checked `g.mark <= persisted`, found the empty mark still above the
+watermark, and withheld them forever.
+
+So the mark is **struck** from the messages it gated rather than swept: an empty mark constrains
+nothing, and `release()` then decides on whatever constraints are actually left. **The old code had
+the opposite pair** — it kept liveness by releasing through the mark, which is the unsound half.
+Neither spelling is right alone, and the correction is not "release less" but "record that the
+constraint is gone".
 
 **And the lesson, which is about the shape of the mistake.** Both spellings are one line and both look
 like "this mark is satisfied". The difference is whether the satisfaction is evidence about other
 marks, and the answer depends on *why* it is satisfied — durable, or empty. **A predicate that is true
 for two different reasons does not license the same conclusion from both**, and the two reasons here
 were separated by nothing but a function name.
+
+The second half has its own: **a constraint that has been satisfied must be recorded as satisfied,
+not swept once.** A sweep answers the question at one instant; anything whose *other* constraint
+arrives later never asks again. That is A4's "a fact is recorded, never inferred" arriving in the
+gate rather than in the ledger.
+
+**What made the search short.** Two instruments, both added while hunting it and both kept. The
+driver now asserts that a Ready reporting a mark it writes nothing under is a bug — it did not fire,
+which retired a whole hypothesis in one run — and `raft.QuiesceDebug` prints which mark, whether the
+driver was ever handed it, and whether it was acknowledged. Those three numbers ended the hunt: the
+stall showed `lastHanded=0`, so the mark had never been handed, so the close had run and the release
+had not.
 
 
 ---

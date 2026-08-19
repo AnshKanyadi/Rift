@@ -59,6 +59,12 @@ func TestRaftExitCriteria(t *testing.T) {
 		c.StaleEpochRefusals, c.OutOfExtentRefusals)
 	t.Logf("a4 rebalance: %d moves ordered, %d completed, %d raced an unrelated membership change",
 		c.MovesOrdered, c.MovesCompleted, c.MovesRacingChurn)
+	t.Logf("a5 mvcc:      %d collections proposed, %d applied, %d versions collected",
+		c.GCProposed, c.GCApplied, c.VersionsCollected)
+	t.Logf("a5 reads:     %d snapshot reads at remembered timestamps, %d refused below the mark, "+
+		"%d writes refused below the mark", c.SnapshotReads, c.MVCCReadsRefused, c.MVCCWritesRefused)
+	t.Logf("a5 clock:     %d peer timestamps refused for exceeding maxOffset (expected zero: the "+
+		"schedule mix keeps skew inside the envelope)", c.EnvelopeRefusals)
 	t.Logf("a3 recovery:  %d restarts recovered a log carrying a configuration change, %d of them "+
 		"cross-checked against a snapshot configuration", c.ConfRecoveries, c.ConfCrossChecks)
 	for _, why := range c.InconclusiveCauses {
@@ -144,6 +150,59 @@ func TestRaftExitCriteria(t *testing.T) {
 			"wrong. Before deleting this assertion, revisit rebalance-safety's attribution: it "+
 			"cannot tell whose removal it is looking at when both drivers are live, which is what "+
 			"produced 252 false violations in 300 seeds (BUG-016)", c.MovesRacingChurn)
+	}
+	// A5's mechanisms, on the same rule: every count printed above is asserted
+	// on or deleted (DESIGN-A4 section 9.4b).
+	if c.GCApplied == 0 {
+		t.Error("no collection was ever applied across the whole sweep; the garbage-collection " +
+			"mark never moved, so every claim about what is answerable below it is a claim about " +
+			"a mechanism that did not run")
+	}
+	if c.VersionsCollected == 0 {
+		t.Error("collections applied and collected NOTHING: the mark moved over a history with no " +
+			"versions under it, so the collector was never asked to remove anything")
+	}
+	if c.SnapshotReads == 0 {
+		t.Error("no read named a remembered timestamp; every read was at now, which is the one " +
+			"shape that cannot tell an MVCC store from a single-version one")
+	}
+	if c.MVCCReadsRefused == 0 {
+		t.Error("no read was ever refused below the collection mark. That refusal is the whole " +
+			"reason the mark is a mark and not a cleanup: without it a read below the mark is " +
+			"answered from a history that is no longer there")
+	}
+	// # A write below the mark is asserted at ZERO, and it is a recorded gap
+	//
+	// Every write in this workload is stamped at propose, so its timestamp is
+	// always above the collection mark and the refusal is unreachable HERE. It
+	// is not unreachable in general: A6's transactions write at a timestamp
+	// chosen when the transaction began, which can fall behind the mark while
+	// the transaction is in flight, and that is precisely the case the refusal
+	// exists for.
+	//
+	// So the mechanism is exercised by kv.TestWritingBelowTheMarkIsRefused, the
+	// sweep records ZERO, and this assertion makes the record able to become
+	// wrong: the day a workload can reach it, the lane says so instead of
+	// quietly proving something new. DESIGN-A5 section 11 carries the entry.
+	if c.MVCCWritesRefused != 0 {
+		t.Errorf("%d writes were refused below the collection mark. DESIGN-A5 section 11 records "+
+			"this as unreachable in A5's workload -- every write is stamped at propose, above the "+
+			"mark by construction -- and the record is now wrong", c.MVCCWritesRefused)
+	}
+
+	// # The envelope refusal is asserted at ZERO, and that is a bidirectional gap
+	//
+	// The schedule mix keeps skew inside maxOffset, so no peer should ever be
+	// refused. A nonzero count means either the mix has drifted outside the
+	// envelope -- in which case every bounded-skew claim in this sweep is about
+	// a different experiment -- or the check is firing on nodes that are inside
+	// it. Both are worth stopping for, and the envelope EXPERIMENT that
+	// deliberately exceeds maxOffset is STRETCH (Amendment A6), not this lane.
+	if c.EnvelopeRefusals != 0 {
+		t.Errorf("%d peer timestamps were refused for exceeding maxOffset in a bounded-skew sweep. "+
+			"Either the schedule mix now leaves the envelope, or the check is refusing nodes "+
+			"inside it; hlc.TestCausalityUnderSkew is the model of what bounded means",
+			c.EnvelopeRefusals)
 	}
 	if c.ConfRecoveries == 0 {
 		t.Error("no restart ever recovered a log carrying a configuration change, so nothing in " +
