@@ -1226,6 +1226,17 @@ Stated up front so no claim is ever broader than the evidence:
    we will not find bugs that require a node to *know* its own clock is unusually uncertain, and our
    uncertainty intervals are neither as tight as a healthy real cluster's nor as wide as a degraded
    one's `[A0.4 Q3]`.
+8. **Every client request routes from a COLD descriptor cache.** A real client caches range
+   descriptors and refreshes on refusal, so after a split it is wrong once per moved range and right
+   thereafter. The sim's client believes, on every single request, that the whole key space is the
+   first range at epoch one. The consequence is stated in both directions, because only one of them
+   is comfortable: our stale-epoch refusal count is an **upper bound on how hard that path is
+   exercised**, not a model of production traffic — real clusters route far more requests correctly
+   than this — and the extra retry latency after a split is likewise an upper bound. What it buys is
+   that the path is exercised at all: it measured **zero** across 10,000 seeds before this, because
+   the sim's clients carried no routing and the epoch check was skipped on every request they ever
+   made. For a mechanism whose measured exercise rate was zero, over-exercising is the right
+   direction to be wrong in `[A4]`.
 
 ---
 

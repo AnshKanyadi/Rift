@@ -19,8 +19,26 @@
 #
 #   # power-seeds: N      sweep this many seeds against the mutated tree
 #   # power-floor: M      and require at least M of them to notice
+#   # power-ceiling: K    and require the FIRST of them to be at or before seed K
 #   # power-config: a1    optionally, the build to measure under (a1 | a2 | a3);
 #                        the default is a3, which is what the sweep runs
+#
+# # The ceiling exists because the floor could not see the regression twice
+#
+# A2's words are "seeds-to-detection AND wall-time-to-detection", and this lane
+# measured neither -- it measured a rate. A rate is blind to the regression that
+# actually happens: the class stays exactly as detectable and the detection moves
+# far later in the seed space, so every smoke lane and every mid-phase iteration
+# stops finding it while the nightly number looks unchanged.
+#
+# It has now happened twice, and the second time is the one that names it. A4's
+# client-routing change took M19 from first-detection at seed 145 to seed 553.
+# Its RATE barely moved -- 10 to 7 per 1500, against a floor of 4 -- so this lane
+# was green. The mutant lane caught it, by accident, because M19's covering test
+# ran 500 seeds and the first detecting seed had moved past the end of it.
+#
+# So a class declares both, and breaching either fails the lane. A floor with no
+# ceiling is half an instrument, and this project has now shipped the half twice.
 #
 # or an explicit opt-out with a reason:
 #
@@ -59,6 +77,7 @@ for patch in "$PATCHDIR"/*.patch; do
   na=$(sed -n 's/^# power: *//p' "$patch")
   seeds=$(sed -n 's/^# power-seeds: *//p' "$patch")
   floor=$(sed -n 's/^# power-floor: *//p' "$patch")
+  ceiling=$(sed -n 's/^# power-ceiling: *//p' "$patch")
   cfg=$(sed -n 's/^# power-config: *//p' "$patch")
   [ -n "$cfg" ] || cfg=a3
 
@@ -67,10 +86,17 @@ for patch in "$PATCHDIR"/*.patch; do
     printf '   n/a      %-44s %s\n' "$id" "$na"
     continue
   fi
-  if [ -z "$seeds" ] || [ -z "$floor" ]; then
+  # In --measure mode only the seed count is needed: that mode exists to PRODUCE
+  # the floor and the ceiling, so demanding them first would make a new class
+  # unmeasurable until somebody guessed its numbers.
+  if [ "$MEASURE" = yes ]; then
+    [ -n "$seeds" ] || { printf '   UNCOVERED %s declares no power-seeds.\n' "$id"; failed=$((failed + 1)); continue; }
+  elif [ -z "$seeds" ] || [ -z "$floor" ] || [ -z "$ceiling" ]; then
     printf '   UNCOVERED %s declares no power expectation.\n' "$id"
-    printf '             Every mutant class carries a floor or an explicit opt-out with a reason.\n'
-    printf '             Saying nothing is how thirty-one classes ended up sharing four floors.\n'
+    printf '             Every mutant class carries a rate floor AND a seeds-to-detection ceiling,\n'
+    printf '             or an explicit opt-out with a reason. Saying nothing is how thirty-one\n'
+    printf '             classes ended up sharing four floors, and a rate with no ceiling is how a\n'
+    printf '             kill-time regression went past this lane twice.\n'
     failed=$((failed + 1))
     continue
   fi
@@ -103,19 +129,32 @@ for patch in "$PATCHDIR"/*.patch; do
     printf '   measure  %-44s %s of %s (%s) first=%s\n' "$id" "$got" "$seeds" "$cfg" "$first"
     continue
   fi
+  bad=no
   if [ "$got" -lt "$floor" ]; then
-    printf '   DROPPED  %-44s %s of %s, floor %s (%s)\n' "$id" "$got" "$seeds" "$floor" "$cfg"
+    printf '   DROPPED  %-44s rate %s of %s, floor %s (%s)\n' "$id" "$got" "$seeds" "$floor" "$cfg"
     printf '            The defect is still there and the harness notices it less often. That is a\n'
     printf '            regression in the machine that finds bugs, which is worth more than any one\n'
     printf '            bug it would have found.\n'
+    bad=yes
+  fi
+  if [ "$first" -lt 0 ] || [ "$first" -gt "$ceiling" ]; then
+    printf '   SLOWED   %-44s first detection at seed %s, ceiling %s (%s)\n' "$id" "$first" "$ceiling" "$cfg"
+    printf '            The rate may be fine and the class has still moved out of reach of every\n'
+    printf '            short run: a smoke lane and a mid-phase iteration stop finding it while the\n'
+    printf '            nightly number looks unchanged. Amendment A2 calls this a harness regression\n'
+    printf '            even while every mutant is still killed.\n'
+    bad=yes
+  fi
+  if [ "$bad" = yes ]; then
     failed=$((failed + 1))
   else
-    printf '   ok       %-44s %s of %s, floor %s (%s) first=%s\n' "$id" "$got" "$seeds" "$floor" "$cfg" "$first"
+    printf '   ok       %-44s %s of %s (floor %s), first=%s (ceiling %s) (%s)\n' \
+      "$id" "$got" "$seeds" "$floor" "$first" "$ceiling" "$cfg"
   fi
 done
 
 printf '  ----------------------------------------------------------------\n'
-printf '   %d classes floored, %d opted out with a reason, %d failures\n\n' "$covered" "$optout" "$failed"
+printf '   %d classes floored and ceilinged, %d opted out with a reason, %d failures\n\n' "$covered" "$optout" "$failed"
 
 if [ "$covered" -eq 0 ]; then
   printf '  No class carries a floor. An empty power lane proves nothing.\n\n'

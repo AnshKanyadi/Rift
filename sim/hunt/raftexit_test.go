@@ -57,8 +57,8 @@ func TestRaftExitCriteria(t *testing.T) {
 	t.Logf("a4 routing:   %d requests refused for a stale descriptor epoch, %d committed commands "+
 		"refused for naming a key outside the range's extent",
 		c.StaleEpochRefusals, c.OutOfExtentRefusals)
-	t.Logf("a4 rebalance: %d moves ordered, %d completed",
-		c.MovesOrdered, c.MovesCompleted)
+	t.Logf("a4 rebalance: %d moves ordered, %d completed, %d raced an unrelated membership change",
+		c.MovesOrdered, c.MovesCompleted, c.MovesRacingChurn)
 	t.Logf("a3 recovery:  %d restarts recovered a log carrying a configuration change, %d of them "+
 		"cross-checked against a snapshot configuration", c.ConfRecoveries, c.ConfCrossChecks)
 	for _, why := range c.InconclusiveCauses {
@@ -124,6 +124,26 @@ func TestRaftExitCriteria(t *testing.T) {
 	if c.MovesCompleted == 0 {
 		t.Errorf("%d replica moves were ordered and NONE completed; a stalled move is safe, so the "+
 			"rebalance oracle is green over a mechanism that never finished once", c.MovesOrdered)
+	}
+	// # The bidirectional half of a RECORDED GAP
+	//
+	// DESIGN-A4 section 10 records "a move racing an unrelated membership
+	// change" as unexercised, and says why: the two drivers are separated in
+	// time because a move's add and somebody else's removal are
+	// indistinguishable in a committed log. A recorded gap has to be able to
+	// become wrong, or it is a claim that decays into a lie the first time the
+	// schedule mix moves.
+	//
+	// So this asserts ZERO, and failing here is GOOD NEWS badly reported: it
+	// means the interleaving is now reachable, the rebalance oracle's
+	// attribution needs revisiting before it can judge those seeds, and the
+	// design doc is stale. It is on A6's checklist for exactly that reason.
+	if c.MovesRacingChurn != 0 {
+		t.Errorf("%d move windows contained a membership change the move did not make. "+
+			"DESIGN-A4 section 10 records this interleaving as UNEXERCISED and the record is now "+
+			"wrong. Before deleting this assertion, revisit rebalance-safety's attribution: it "+
+			"cannot tell whose removal it is looking at when both drivers are live, which is what "+
+			"produced 252 false violations in 300 seeds (BUG-016)", c.MovesRacingChurn)
 	}
 	if c.ConfRecoveries == 0 {
 		t.Error("no restart ever recovered a log carrying a configuration change, so nothing in " +

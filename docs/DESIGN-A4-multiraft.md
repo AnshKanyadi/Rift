@@ -194,11 +194,45 @@ that was *near* the right log position instead of *at* it.
 | BUG-012 | whether a split entry took effect | every split entry, unconditionally | the extent the range had when it reached that entry |
 
 This is BUG-004's sentence — *an identifier is not a position* — arriving from five directions in one
-phase. The structural answer is that the extent is no longer something the storage layer keeps
-**about** the state machine; it is part of what the state machine **is**. `encodeMachine` serialises
-the extent and the keys together, so it travels with every snapshot, is restored at the index it
-belongs to, and is covered by the digest snapshot equivalence compares. The class did not become
-impossible; it became **caught**.
+phase, and it is now a **named class**.
+
+### The log-position class
+
+> **Anything derived from a log position must be derived AT that position.**
+
+All six instances, in one place, because a class with its instances scattered across six entries is a
+class nobody can check a seventh candidate against:
+
+| bug | the derived fact | taken from | had to come from |
+|---|---|---|---|
+| BUG-011 | a range's extent at recovery | a descriptor key aligned with no index | the snapshot, aligned with exactly one |
+| BUG-012 | whether a split entry took effect | every split entry, unconditionally | the extent the range held when it reached that entry |
+| BUG-013 | a range's extent after an install | the installing node's own extent | the snapshot that arrived |
+| BUG-014 | whether a key belongs to this range | the extent when the request ARRIVED | the extent at the entry's index |
+| BUG-015 | a split-born range's configuration | `Configuration()`, effective on append | `ConfigurationAt(index)` |
+| BUG-004 | which peer a vote came from | a slice position | the node identifier (A1, the first instance) |
+
+**The structural answer.** The extent stops being something the storage layer keeps *about* the state
+machine and becomes part of what the state machine *is*. `encodeMachine` serialises the extent and
+the keys together, so it travels in the snapshot payload, is restored at the index it belongs to, and
+sits inside the digest snapshot equivalence compares. Everything downstream follows from that one
+move: BUG-011 and BUG-013 become impossible to express, and BUG-014's residue becomes a panic.
+
+**The class became caught, not impossible, and the difference matters.** What the structural answer
+buys is that a wrong extent now DIVERGES a digest, so an oracle sees it. It does not stop a future
+caller from asking a position-free question about something else — BUG-015 was a *configuration*, not
+an extent, and no amount of putting extents in payloads would have prevented it.
+
+**What would make it impossible, if anything would.** One thing would: make position-free questions
+unaskable by typing the answer. If `Configuration()` and `desc` were not readable at all, and every
+such fact were reachable only through a value that carries the index it was taken at — an
+`At[Index, T]` the way `Observed[T]` and `Reported[T]` carry provenance — then BUG-015 would not have
+compiled, exactly as `provcheck` makes a system-reported fact fail to compile into a verdict.
+
+That is not free. `Configuration()` is on the frozen D5 interface, so removing it is a frozen-interface
+change and a stop condition; and the index is not always available at the call site (the leader
+proposing a split has no index yet). **It is the right shape and it is A5's to attempt, not A4's to
+assume** — recorded here so the next phase inherits a proposal rather than a regret.
 
 ### 9.2 The new oracle is not the one §6 predicted, and the reason is worth recording
 
@@ -296,6 +330,24 @@ silently-weaker oracles was looking at oracles, because that is where the previo
 were. The eleventh was in a mechanism the oracles depend on, one layer below where anybody was
 checking.
 
+### The rule this produces, and it is the cheapest defence found so far
+
+> **Any count an exit run prints is either asserted on or deleted.**
+
+A number nobody asserts on is decoration that looks like evidence. It is worse than no number,
+because a reader — including the person who wrote it — sees a line of output where a check should be
+and stops looking. This project shipped exactly that for four phases: `0 requests refused for a
+stale descriptor epoch` was printed by the A4 exit run, was printed by every run before it that had
+the field, and was never once read as the sentence it plainly is.
+
+The rule is cheap in a way the other defences are not. An oracle needs a model; a mutant needs a
+patch and a measured floor; provenance typing needed a whole package. This needs one `if`. Every
+count in `TestRaftExitCriteria` now has one, and the ones that cannot have one — census figures that
+are genuinely context rather than claims — are labelled in the log line as evidence, not asserted.
+
+It generalises past exit runs: the same sentence covers a census field, a lane summary, a SOAK.md
+column. If it is printed and nothing fails when it goes to zero, it was never evidence.
+
 ### 9.4c Criterion 1's two-stream question, answered
 
 A2's rule is that a message attesting to state in two independent streams waits
@@ -342,10 +394,24 @@ explicit `TEST_TIMEOUT`, never a shorter sweep.
 
 ## 10. Limitations, recorded
 
-1. **Moves and unrelated membership churn never race.** §9.4. The rebalance oracle cannot attribute a
-   removal when both drivers are live, so the plan separates them in time. A move racing a churn
-   removal is unexercised, and the honest description of the rebalance evidence is *"safe against
-   crashes, partitions, leader churn and splits; not yet against a concurrent membership change."*
+1. **UNEXERCISED INTERLEAVING: a move racing an unrelated membership change.** §9.4.
+
+   The rebalance oracle cannot attribute a removal when both drivers are live — an add and a remove
+   look exactly like two unrelated membership changes in the log — so the plan separates them in
+   time: churn in the first half of a run, rebalance in the second. The rejected alternative was
+   tagging configuration entries with a move identifier, which is a frozen wire format changed for a
+   checker's convenience.
+
+   **This is precisely the interleaving a production cluster produces constantly.** A rebalancer and
+   an operator do not take turns. The honest description of the rebalance evidence is therefore:
+   *safe against crashes, partitions, leader churn and splits; not yet against a concurrent
+   membership change.*
+
+   It is **bidirectionally asserted**, on the same principle as the toy's gap ledger: the exit run
+   counts moves whose window contains a membership change the move did not make, and fails if that
+   count is ever nonzero. The day a schedule change makes this reachable, the lane says the record is
+   wrong instead of quietly proving something new. It is on **A6's checklist** as a candidate to
+   re-enable once the schedule mix is being reshaped anyway.
 2. **Range merges are out of scope**, per CLAUDE.md A4. Extents therefore only ever shrink, and the
    `split-partition` oracle leans on that: a range once born is never unborn.
 3. **A move is best-effort.** Leadership moving mid-move abandons it (§9.3). Safety is unaffected;

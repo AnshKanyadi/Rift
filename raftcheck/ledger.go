@@ -235,6 +235,60 @@ func (l *Ledger) MovesCompleted() int {
 	return n
 }
 
+// MovesRacingUnrelatedChanges counts move windows that contain a committed
+// membership change the move did not make.
+//
+// # This is a BIDIRECTIONAL gap assertion, and it is expected to be zero
+//
+// The plan separates the two membership drivers in time -- churn in the first
+// half of a run, rebalance in the second -- because a move's add and an
+// unrelated removal are indistinguishable in a committed log, and without the
+// separation the rebalance oracle blamed the churn's removals on moves (252 of
+// 300 seeds, BUG-016).
+//
+// That separation is a real gap: a production cluster interleaves these
+// constantly. DESIGN-A4 section 10 records it as an unexercised interleaving,
+// and a recorded gap has to be able to become WRONG. So this counts the
+// interleaving, the exit run asserts it is zero, and the day a schedule change
+// makes it reachable the lane says the record is stale instead of quietly
+// proving something new.
+//
+// A change is "the move's own" if it adds the destination or removes the source.
+// Anything else committed inside the window belongs to somebody else.
+func (l *Ledger) MovesRacingUnrelatedChanges() int {
+	n := 0
+	for i, m := range l.moves {
+		rl := l.rangeByID(m.Range)
+		if rl == nil {
+			continue
+		}
+		if rl.foreignConfChange(m.At, l.moveEnds(i), m.From, m.To) {
+			n++
+		}
+	}
+	return n
+}
+
+// foreignConfChange reports whether a committed membership change in [since,
+// until) names neither endpoint of the move that owns that window.
+func (l *rangeLedger) foreignConfChange(since, until clock.Instant, from, to raft.NodeID) bool {
+	for _, rec := range l.committed {
+		if rec.entry.Type != raft.EntryConfChange || rec.at < since || rec.at >= until {
+			continue
+		}
+		cc, ok := raft.DecodeConfChange(rec.entry.Data)
+		if !ok {
+			continue
+		}
+		for _, ch := range cc.Changes {
+			if ch.Node != from && ch.Node != to {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (l *Ledger) rangeByID(id uint64) *rangeLedger {
 	for _, r := range l.ranges {
 		if r.id == id {

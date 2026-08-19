@@ -368,6 +368,10 @@ type RaftResult struct {
 	MovesOrdered   int
 	MovesCompleted int
 
+	// MovesRacingChurn is the bidirectional half of a recorded gap: it must be
+	// zero, and the exit run fails if it is not. DESIGN-A4 section 10.
+	MovesRacingChurn int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -668,6 +672,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	res.Ledger = ledger
 	res.MovesOrdered = len(ledger.Moves())
 	res.MovesCompleted = ledger.MovesCompleted()
+	res.MovesRacingChurn = ledger.MovesRacingUnrelatedChanges()
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())
 
 	// # A run with no leader concluded nothing, whatever the checkers say
@@ -752,6 +757,7 @@ type RaftCensus struct {
 	OutOfExtentRefusals int
 	MovesOrdered        int
 	MovesCompleted      int
+	MovesRacingChurn    int
 
 	FirstViolation     uint64
 	FoundAViolation    bool
@@ -790,6 +796,7 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.OutOfExtentRefusals += r.OutOfExtentRefusals
 		c.MovesOrdered += r.MovesOrdered
 		c.MovesCompleted += r.MovesCompleted
+		c.MovesRacingChurn += r.MovesRacingChurn
 		if r.Ranges > c.Ranges {
 			c.Ranges = r.Ranges
 		}
