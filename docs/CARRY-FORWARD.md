@@ -14,21 +14,24 @@ deleted only when the thing is done, and the commit that deletes it says so.
 
 ## Owed by A5
 
-**The `At[Index, T]` proposal.** DESIGN-A4 §9.1 asks what would make the log-position class
-*impossible* rather than merely caught, and answers: make position-free questions unaskable by typing
-the answer, the way `provcheck` makes a system-reported fact fail to compile into a verdict. A5 is to
-attempt it, not to assume it. It touches `Configuration()`, which is on the frozen D5 interface, so
-the attempt is a **report, never an assumed ratification**.
+**~~The `At[Index, T]` proposal.~~ DISCHARGED at A5** — attempted, and the conclusion is recorded in
+DESIGN-A5 §13. Typing the answer pays only where the caller does not already hold the position, and
+A5's dimension has no such site because §7's discipline pushed the timestamp into the data instead.
+Carrying the position in the data and typing it into the answer solve the same problem; the first is
+available whenever you control the wire format. `raft.Configuration()` remains the case that would
+pay and remains a frozen-interface change — see below.
 
-*Ansh, on the A4 sign-off: "record the structural answer beside it... Note honestly that the class
-became caught rather than impossible, and say what would make it impossible if anything would."*
+**~~Every floored mutant class carries a seeds-to-detection ceiling.~~ DISCHARGED at A5** — every
+class carries both, the lane fails on either, and the numbers were re-measured under A5's shape.
 
-**Every floored mutant class carries a seeds-to-detection ceiling.** Done in the same cycle the
-ruling landed; the entry stays until A5's own re-measurement confirms both numbers under A5's shape,
-per that phase's exit criteria.
+---
 
-*Ansh, on the A4 sign-off: "Fix it before A5 closes: every floored class carries a seeds-to-detection
-ceiling alongside its rate floor, and breaching either fails the lane."*
+## Owed by the phase that next has reason to touch the frozen raft interface
+
+**`raft.Configuration()` should take an index.** DESIGN-A5 §13: it is the one site where a caller
+holds a position and asks a question that does not take one, which is what made BUG-015 possible. The
+fix is a frozen-interface change (DESIGN-A0 D5), so it is a **report, never an assumed
+ratification**, and it is not worth opening that interface for on its own.
 
 ---
 

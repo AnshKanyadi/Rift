@@ -348,3 +348,34 @@ arrangement when a class is unreachable by argument rather than by luck.
    counter. Nothing depends on the counters being shared, and keeping them separate stops a busy range
    inflating a quiet one's timestamps — but it does mean a node's timestamps are not totally ordered
    across ranges, which A6 must not assume.
+
+---
+
+## 13. The `At[Index, T]` attempt, and what it concluded
+
+The A4 carry-forward asked A5 to **attempt** typing the position into the answer — an `At[Index, T]`
+the way `Observed[T]` and `Reported[T]` carry provenance — so that a position-free question would
+fail to compile rather than fail in a sweep. It was attempted. The conclusion is not the one the
+proposal expected, and it is worth more than the wrapper would have been.
+
+**Typing the answer pays only where the caller does not already hold the position.** That is what
+made BUG-015 possible: `left.raft.Configuration()` was called from a site that *had* an index — the
+entry it was applying — and asked a question that did not take one. The type would have refused.
+
+A5's dimension has no such site, and not by luck. §7's discipline pushed the timestamp **into the
+data**: a command carries the timestamp its leader stamped it with, a read carries the timestamp it
+named, the collection mark travels with the versions a split moves. Every consumer therefore receives
+the position as an argument and cannot ask a position-free question, because there is no
+position-free question left to ask. Wrapping those answers in `At[Timestamp, T]` would restate an
+argument the caller already passed.
+
+**So the finding is a rule about which fix applies where:**
+
+> Carrying the position **in the data** and typing it **into the answer** solve the same problem, and
+> the first one is available whenever you control the wire format. Reach for the type only where you
+> do not — which is exactly the frozen-interface case, and exactly why A4's instance was the one that
+> got through.
+
+`raft.Configuration()` remains the case that would pay, and it remains a frozen-interface change
+(D5). It is reported here, not assumed, and it stays on the carry-forward for the phase that has a
+reason to touch that interface anyway.
