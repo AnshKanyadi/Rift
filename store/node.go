@@ -912,6 +912,93 @@ func (n *Replica) RequestConfChange(target raft.NodeID) {
 	default:
 		ch = raft.ConfChangeSingle{Type: raft.ConfChangeAddLearner, Node: target}
 	}
+	n.proposeConf(ch)
+}
+
+// RequestMove advances a manual rebalance of this range by ONE step: move the
+// replica on `from` to `to`.
+//
+// # Stateless on purpose, and that is the whole design
+//
+// A move is four things -- add a learner, promote it, hand leadership away if
+// the source is holding it, remove the source -- and the obvious shape is a
+// little state machine on the leader. That shape has a hole with a name: the
+// leader can lose leadership between the add and the remove, and the next
+// leader has no idea a move was under way. The move stalls with an extra
+// replica that nobody will ever remove.
+//
+// So there is no state. Each call reads the configuration and does whichever
+// step is next, which makes the operation idempotent, replayable, and
+// completable by whatever node happens to be leading when it is next asked.
+// Ordering the same move repeatedly is how it finishes.
+//
+// # Safety is a property of the ORDER, and the order is not negotiable
+//
+// The removal is proposed only once `to` is a voter. Since membership changes
+// one server at a time (D-A3-1), the committed voter count goes N -> N+1 -> N
+// and never dips below where it started -- which is "quorum availability is
+// never voluntarily reduced" discharged by construction rather than by care.
+// The rebalance-safety oracle checks it from the committed log anyway, because
+// a property discharged by construction is a property one refactor from being
+// discharged by nothing.
+func (n *Replica) RequestMove(from, to raft.NodeID, begin bool) bool {
+	if !n.IsLeader() || from == to {
+		return false
+	}
+	conf := n.raft.Configuration()
+
+	// # The precondition belongs to the FIRST order, and it has to be explicit
+	//
+	// Statelessness costs one thing: the mechanism cannot tell "the destination
+	// is already a voter because I just added it" from "the destination was
+	// already there before anybody asked". The first is the middle of a move.
+	// The second is not a move at all, and treating it as one goes straight to
+	// removing the source -- a quorum reduction wearing a move's name.
+	//
+	// The caller knows which order is the first one, so the caller says so.
+	// That is not state carried across leadership changes; it is a parameter,
+	// and it turns an implicit assumption into a stated precondition.
+	//
+	// Found by the rebalance oracle on seed 103, in the one shape a checker
+	// reading committed entries cannot be argued out of: a removal committed
+	// with no addition anywhere in the log.
+	if begin {
+		if conf.IsVoter(to) || conf.IsLearner(to) || !conf.IsVoter(from) || len(conf.Voters) < 2 {
+			return false
+		}
+		return n.proposeConf(raft.ConfChangeSingle{Type: raft.ConfChangeAddLearner, Node: to})
+	}
+
+	if !conf.IsVoter(from) && !conf.IsLearner(from) {
+		// Already gone. The move is done, or somebody else did it.
+		return false
+	}
+	switch {
+	case !conf.IsVoter(to) && !conf.IsLearner(to):
+		return n.proposeConf(raft.ConfChangeSingle{Type: raft.ConfChangeAddLearner, Node: to})
+	case conf.IsLearner(to):
+		// raft enforces the catch-up bound here, and a refusal is the bound
+		// doing its job: the next order will try again.
+		return n.proposeConf(raft.ConfChangeSingle{Type: raft.ConfChangeAddVoter, Node: to})
+	case from == n.cfg.ID:
+		// The source is holding leadership. Hand it away first: removing the
+		// leader is legal but it costs an election, and the point of a move is
+		// that the range keeps serving through it.
+		for _, v := range conf.Voters {
+			if v != from {
+				n.RequestTransfer(v)
+				return true
+			}
+		}
+		return false
+	default:
+		return n.proposeConf(raft.ConfChangeSingle{Type: raft.ConfChangeRemoveNode, Node: from})
+	}
+}
+
+// proposeConf is the one place a single-server change is proposed, so the
+// refusal accounting cannot drift between the churn path and the move path.
+func (n *Replica) proposeConf(ch raft.ConfChangeSingle) bool {
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
 	if err := n.raft.ProposeConfChange(id, raft.ConfChangeV2{
@@ -921,9 +1008,10 @@ func (n *Replica) RequestConfChange(target raft.NodeID) {
 		if errors.Is(err, raft.ErrLearnerLagging) {
 			n.lagRefused++
 		}
-		return
+		return false
 	}
 	n.confProposed++
+	return true
 }
 
 // ConfProposed, ConfRefused and LagRefused report what the membership churn

@@ -41,6 +41,11 @@ type Run struct {
 	// has produced the transport.
 	OnConfChange func(sim.NodeID)
 
+	// OnRebalance is called when a "rebalance" action fires, naming the node
+	// whose replica should move and the node it should move to. Read through
+	// the Run at fire time for the same reason as the other two.
+	OnRebalance func(from, to sim.NodeID)
+
 	plan *Plan
 	// fired counts per rule index, parallel to plan.Faults.Rules.
 	fired []int
@@ -246,6 +251,12 @@ func (r *Run) schedule(when clock.Instant, action string, node, from, to int) {
 		r.Loop.Do(when, func() {
 			if r.OnConfChange != nil {
 				r.OnConfChange(nodeID(node))
+			}
+		})
+	case "rebalance":
+		r.Loop.Do(when, func() {
+			if r.OnRebalance != nil {
+				r.OnRebalance(nodeID(from), nodeID(to))
 			}
 		})
 	case "promote":

@@ -70,8 +70,34 @@ func New(cfg Config) (*Node, error) {
 	// The first range's birth state is RECORDED, not left for the ledger to
 	// assume from a missing entry. Every machine records the same constant, which
 	// is the point: the model reads a fact rather than a default.
-	cfg.Ledger.RecordRangeBase(uint64(FirstRange), provenance.Witness(encodeMachine(first, map[string]string{})))
+	cfg.Ledger.RecordRangeBase(uint64(FirstRange),
+		provenance.Witness(encodeMachine(first, map[string]string{})),
+		provenance.Witness(raft.EncodeConfiguration(initialConf(cfg))))
 	return m, nil
+}
+
+// initialConf is the membership every machine starts the first range with. It is
+// the same on every machine by construction -- it comes from the configuration
+// the cluster was built with, not from anything a node decided.
+func initialConf(cfg Config) raft.Configuration {
+	var c raft.Configuration
+	for _, p := range cfg.Peers {
+		if containsNode(cfg.Learners, p) {
+			c.Learners = append(c.Learners, p)
+			continue
+		}
+		c.Voters = append(c.Voters, p)
+	}
+	return c
+}
+
+func containsNode(ns []raft.NodeID, n raft.NodeID) bool {
+	for _, x := range ns {
+		if x == n {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Node) newReplicaFor(d RangeDescriptor) (*Replica, error) {
@@ -436,6 +462,17 @@ func (m *Node) RequestConfChange(target raft.NodeID) {
 	}
 }
 
+// RequestMove advances a manual rebalance of one named range by one step.
+//
+// The RANGE is named by the caller rather than chosen here. A move is an
+// intent, and letting the machine pick which range to move would leave the
+// harness unable to say what it ordered -- so the oracle would have to take the
+// answer from the system it is judging.
+func (m *Node) RequestMove(rng RangeID, from, to raft.NodeID, begin bool) bool {
+	r := m.replicaOf(rng)
+	return r != nil && r.RequestMove(from, to, begin)
+}
+
 // RequestTransfer hands leadership of a led range to target.
 func (m *Node) RequestTransfer(target raft.NodeID) bool {
 	r := m.leaderReplica()
@@ -567,7 +604,8 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 			sim.Stamp(m.epoch.Current(), seq))
 	}
 
-	m.cfg.Ledger.RecordRangeBase(uint64(spec.Right.ID), provenance.Witness(data))
+	m.cfg.Ledger.RecordRangeBase(uint64(spec.Right.ID),
+		provenance.Witness(data), provenance.Witness(raft.EncodeConfiguration(conf)))
 	r.adoptSnapshot(snapMeta, rightKV)
 	m.addReplica(r)
 	m.splits++

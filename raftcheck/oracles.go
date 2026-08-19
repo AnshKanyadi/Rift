@@ -1,6 +1,7 @@
 package raftcheck
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/anshkanyadi/rift/raft"
@@ -505,7 +506,7 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // is the honest behaviour for a caller that has no model -- a checker with no
 // expectation cannot conclude anything, and pretending otherwise is the
 // vacuous-green class again.
-func All(l *Ledger, state StateAt) []sim.Oracle {
+func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf) []sim.Oracle {
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -515,6 +516,8 @@ func All(l *Ledger, state StateAt) []sim.Oracle {
 		NewApplyContinuity(l),
 		NewSnapshotEquivalence(l, state),
 		NewSingleServerChange(l),
+		NewRebalanceSafety(l),
+		NewSplitPartition(l, splits, extent),
 	}
 }
 
@@ -666,6 +669,177 @@ func (o *ApplyContinuity) jumpedByInstall(l *rangeLedger, node int, prev, next r
 		}
 	}
 	return false
+}
+
+// --- split partition -----------------------------------------------------------
+
+// SplitStep is one split entry in a range's committed log, as the harness's
+// model reads it.
+//
+// Applied is the model's verdict on whether the entry took effect: a split
+// applies only against exactly the extent it names, and one that names an extent
+// the range has moved past is refused by every replica.
+type SplitStep struct {
+	Index   raft.Index
+	Applied bool
+
+	Child      uint64
+	ChildStart []byte
+	ChildEnd   []byte
+	ChildEpoch uint64
+}
+
+// SplitsAt and ExtentOf are supplied by the harness, which owns the wire format
+// and restates the rule for applying a split in its own terms.
+type SplitsAt func(base []byte, entries []raft.Entry) []SplitStep
+
+// ExtentOf reads the extent out of a range's recorded birth state.
+type ExtentOf func(base []byte) (start, end []byte, epoch uint64, ok bool)
+
+// SplitPartition: a split creates exactly the range it named, and a refused
+// split creates nothing.
+//
+// # The one thing no per-range oracle can see
+//
+// Every other oracle in this package judges one range against its own history.
+// That is right, and it is why they survived A4 -- but it leaves the failure
+// that exists only BETWEEN two ranges completely unwatched: a parent that splits
+// one way and a child that is born another way. Each is internally consistent.
+// Together they are two ranges disagreeing about who owns a key.
+//
+// So this oracle compares two facts the system produced independently: the split
+// entry sitting in the parent's committed log, and the birth state the child's
+// replicas actually wrote. The harness decodes both -- sharing the wire format,
+// which is not the thing under test -- and nothing here asks a node what it
+// thinks it did.
+//
+// The second clause is the one worth naming. A split entry that names a stale
+// extent is refused by every replica, and a refused split must create NOTHING.
+// If a range comes into existence from an entry the cluster declined, it exists
+// on some replicas and not others, and no per-range oracle would ever look at
+// it, because from inside its own history it is perfectly consistent.
+type SplitPartition struct {
+	base
+	splits SplitsAt
+	extent ExtentOf
+}
+
+func NewSplitPartition(l *Ledger, splits SplitsAt, extent ExtentOf) *SplitPartition {
+	return &SplitPartition{base: base{l: l, name: "split-partition"}, splits: splits, extent: extent}
+}
+
+func (o *SplitPartition) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
+	if !o.stale() {
+		return nil
+	}
+	return o.eachRange(func(id uint64, rl *rangeLedger) *sim.Violation {
+		for _, st := range o.splits(rl.base, rl.Committed()) {
+			child := o.l.rangeByID(st.Child)
+			born := child != nil && child.base != nil
+
+			if !st.Applied {
+				if born {
+					return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+						"the split entry at index %d names an extent this range had already moved past, "+
+							"so every replica refused it -- and range %d exists anyway. A range born from "+
+							"an entry the cluster declined is claimed by whoever applied it and by nobody "+
+							"else, and no oracle that judges one range at a time would ever see it",
+						st.Index, st.Child)}
+				}
+				continue
+			}
+			if !born {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"the split entry at index %d took effect, so range %d owns the keys above %q -- and "+
+						"no replica anywhere ever created it. Those keys are now owned by nothing",
+					st.Index, st.Child, st.ChildStart)}
+			}
+			start, end, epoch, ok := o.extent(child.base)
+			if !ok {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d was born from the split at index %d with a state carrying no extent at all",
+					st.Child, st.Index)}
+			}
+			if !bytes.Equal(start, st.ChildStart) || !bytes.Equal(end, st.ChildEnd) || epoch != st.ChildEpoch {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"the split at index %d says range %d covers [%q,%q) at epoch %d, and range %d was "+
+						"actually born covering [%q,%q) at epoch %d. The two ranges disagree about which "+
+						"keys belong to which, which is the one failure a per-range oracle cannot see",
+					st.Index, st.Child, st.ChildStart, st.ChildEnd, st.ChildEpoch,
+					st.Child, start, end, epoch)}
+			}
+		}
+		return nil
+	})
+}
+
+// --- rebalance safety ---------------------------------------------------------
+
+// RebalanceSafety: a replica move adds before it removes.
+//
+// CLAUDE.md's invariant, in its own words: *replica moves are add-then-remove;
+// quorum availability is never voluntarily reduced.* The two halves are one
+// statement once membership changes one server at a time (D-A3-1). An AddVoter
+// raises the committed voter count by one and a RemoveNode lowers it by one, so
+// if the destination is a voter before the source is removed, the count goes
+// N -> N+1 -> N and never dips. Order is therefore the whole property, and it is
+// visible in the committed log without asking anybody what they meant.
+//
+// What the oracle takes from the harness is which move was ORDERED -- the range
+// and the two nodes. What it takes from the system is nothing: whether the move
+// happened, and in what order, it reads from committed entries.
+//
+// # Why an unfinished move is not a violation
+//
+// A move can stall. The leader that ordered it can lose leadership between the
+// add and the remove, and the next leader has no idea a move was in progress.
+// That leaves the range with an extra replica and no removal, which is
+// wasteful and completely safe -- it is the direction the invariant WANTS to
+// fail in. So a missing removal passes here, and the sweep's non-vacuity check
+// is what stops "every move stalled" from reading as evidence.
+type RebalanceSafety struct{ base }
+
+func NewRebalanceSafety(l *Ledger) *RebalanceSafety {
+	return &RebalanceSafety{base{l: l, name: "rebalance-safety"}}
+}
+
+func (o *RebalanceSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
+	if !o.stale() {
+		return nil
+	}
+	for i, m := range o.l.moves {
+		rl := o.l.rangeByID(m.Range)
+		if rl == nil {
+			continue
+		}
+		until := o.l.moveEnds(i)
+		removed, ok := rl.firstConfChange(m.At, until, raft.ConfChangeRemoveNode, m.From)
+		if !ok {
+			continue
+		}
+		added, ok := rl.firstConfChange(m.At, until, raft.ConfChangeAddVoter, m.To)
+		if !ok {
+			return &sim.Violation{
+				Checker: o.name,
+				Detail: fmt.Sprintf(
+					"range %d: the move of node %d to node %d committed the REMOVAL of %d at index %d "+
+						"with no committed entry ever making %d a voter. The range lost a replica and "+
+						"gained nothing, so its quorum was voluntarily reduced",
+					m.Range, m.From, m.To, m.From, removed, m.To),
+			}
+		}
+		if added > removed {
+			return &sim.Violation{
+				Checker: o.name,
+				Detail: fmt.Sprintf(
+					"range %d: the move of node %d to node %d removed %d at index %d and only made %d a "+
+						"voter at index %d. Between the two the range was one replica short of where it "+
+						"started, which is exactly the window a move exists to avoid",
+					m.Range, m.From, m.To, m.From, removed, m.To, added),
+			}
+		}
+	}
+	return nil
 }
 
 // --- snapshot equivalence -----------------------------------------------------

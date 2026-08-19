@@ -384,7 +384,7 @@ func (p *Plan) ReplicationRTT() clock.Instant {
 
 func knownAction(a string) bool {
 	switch a {
-	case "crash", "restart", "cut", "heal", "cut_both", "heal_both", "promote", "conf":
+	case "crash", "restart", "cut", "heal", "cut_both", "heal_both", "promote", "conf", "rebalance":
 		return true
 	}
 	return false

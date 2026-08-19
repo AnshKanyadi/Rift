@@ -19,6 +19,7 @@ package raftcheck
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/internal/provenance"
@@ -48,6 +49,30 @@ type Ledger struct {
 
 	nodes int
 	rev   uint64
+
+	// moves is every replica movement the HARNESS commanded, in the order it
+	// commanded them.
+	//
+	// # Why the harness records its own orders instead of asking the cluster
+	//
+	// A move is an intent, and no sequence of committed entries states one: an
+	// add and a remove look exactly like two unrelated membership changes. The
+	// oracle therefore needs to know which range a move targeted and which two
+	// nodes it named -- and taking that from the system would be the forbidden
+	// shape, since a store that started no move at all could name a quiet range
+	// and the check would come out green over nothing.
+	//
+	// The harness issued the order, so the harness witnessed it. What it never
+	// takes from the system is whether the order was CARRIED OUT; that it reads
+	// from the committed log like every other verdict.
+	moves []MoveRecord
+}
+
+// MoveRecord is one replica movement the harness ordered.
+type MoveRecord struct {
+	Range    uint64
+	From, To raft.NodeID
+	At       clock.Instant
 }
 
 // rangeLedger is everything the ledger used to be, for one range.
@@ -64,6 +89,14 @@ type rangeLedger struct {
 	// range never had -- which is a checker reporting a violation on every seed
 	// that splits, for a system behaving correctly.
 	base []byte
+
+	// birthConf is the configuration the range was born with, encoded.
+	//
+	// Recorded rather than assumed for the same reason the extent is: a range
+	// born from a split inherits a membership, and a harness that guessed the
+	// cluster's initial one would be describing a different range every time a
+	// membership change landed before the split.
+	birthConf []byte
 
 	// durable[node] is what that node has made durable, most recent last.
 	durableHS []hsRecord
@@ -150,6 +183,66 @@ func (l *Ledger) forRange(id uint64) *rangeLedger {
 // Ranges returns the sub-ledgers in range order, which is the order every oracle
 // walks them in.
 func (l *Ledger) Ranges() []*rangeLedger { return l.ranges }
+
+// RecordMove records a replica movement the harness ordered.
+//
+// Observed: the harness is the thing that issued it.
+func (l *Ledger) RecordMove(mO provenance.Observed[MoveRecord]) {
+	l.rev++
+	l.moves = append(l.moves, mO.Fact())
+}
+
+// Moves is every replica movement the harness ordered.
+func (l *Ledger) Moves() []MoveRecord { return l.moves }
+
+// MoveEnds is when move i stops owning its range's membership changes: the
+// instant the NEXT move on the same range was ordered, or forever.
+//
+// # Why a window and not "everything after"
+//
+// A move is identified by its two nodes, and two moves on one range can name
+// the same source. Seed 103: a move of node 2 to node 3 stalled after adding
+// the learner, and a later move of node 2 to node 1 completed properly. Reading
+// "everything after" blamed the second move's removal on the first, and reported
+// a range that had done exactly the right thing.
+//
+// The harness ordered both, so the harness knows where one stops and the next
+// begins. The window is its own record, not the cluster's.
+func (l *Ledger) MoveEnds(i int) clock.Instant { return l.moveEnds(i) }
+
+func (l *Ledger) moveEnds(i int) clock.Instant {
+	for j := i + 1; j < len(l.moves); j++ {
+		if l.moves[j].Range == l.moves[i].Range {
+			return l.moves[j].At
+		}
+	}
+	return clock.Instant(^uint64(0) >> 1)
+}
+
+// MovesCompleted counts the ordered moves whose removal is committed, which is
+// the only sense in which a move can be said to have happened.
+func (l *Ledger) MovesCompleted() int {
+	n := 0
+	for i, m := range l.moves {
+		rl := l.rangeByID(m.Range)
+		if rl == nil {
+			continue
+		}
+		if _, ok := rl.firstConfChange(m.At, l.moveEnds(i), raft.ConfChangeRemoveNode, m.From); ok {
+			n++
+		}
+	}
+	return n
+}
+
+func (l *Ledger) rangeByID(id uint64) *rangeLedger {
+	for _, r := range l.ranges {
+		if r.id == id {
+			return r
+		}
+	}
+	return nil
+}
 
 // RangeCount is how many ranges the harness has seen.
 func (l *Ledger) RangeCount() int { return len(l.ranges) }
@@ -352,10 +445,94 @@ func (l *rangeLedger) RecordSnapshot(node int, rO provenance.Observed[SnapshotRe
 //
 // Observed: these are the bytes handed to the engine as the new range's initial
 // snapshot, taken as they cross the boundary.
-func (l *rangeLedger) RecordRangeBase(data provenance.Observed[[]byte]) {
+func (l *rangeLedger) RecordRangeBase(data, conf provenance.Observed[[]byte]) {
 	if l.base == nil {
 		l.base = append([]byte(nil), data.Fact()...)
+		l.birthConf = append([]byte(nil), conf.Fact()...)
 	}
+}
+
+// CommittedConfig is the range's membership as its COMMITTED log says it is:
+// the configuration it was born with, plus every committed configuration entry
+// in index order.
+//
+// Committed, not active. The active configuration is effective on append and is
+// not a function of anything the harness can see; this one is, and it is the
+// only membership an outside observer is entitled to talk about.
+func (l *rangeLedger) CommittedConfig() (raft.Configuration, bool) {
+	conf, ok := raft.DecodeConfiguration(l.birthConf)
+	if !ok {
+		return raft.Configuration{}, false
+	}
+	entries := append([]raft.Entry(nil), l.Committed()...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Index < entries[j].Index })
+	for _, e := range entries {
+		if e.Type != raft.EntryConfChange {
+			continue
+		}
+		if next, err := raft.ApplyConfEntry(conf, e.Data); err == nil {
+			conf = next
+		}
+	}
+	return conf, true
+}
+
+// firstConfChange finds the first committed single-server change of the given
+// type naming node, at or after `since`, and reports its log index.
+//
+// Committed, not merely appended: a membership change that never commits is not
+// something the cluster did, and judging a move by an entry that may still be
+// truncated away would report on a decision nobody made.
+func (l *rangeLedger) firstConfChange(since, until clock.Instant, kind raft.ConfChangeType, node raft.NodeID) (raft.Index, bool) {
+	var best raft.Index
+	found := false
+	for _, rec := range l.committed {
+		if rec.entry.Type != raft.EntryConfChange || rec.at < since || rec.at >= until {
+			continue
+		}
+		cc, ok := raft.DecodeConfChange(rec.entry.Data)
+		if !ok || len(cc.Changes) != 1 {
+			continue
+		}
+		if cc.Changes[0].Type != kind || cc.Changes[0].Node != node {
+			continue
+		}
+		// The EARLIEST by index, not the first encountered. The ledger records a
+		// commit when it first sees one, and "first seen" is a property of the
+		// schedule rather than of the log.
+		if !found || rec.entry.Index < best {
+			best, found = rec.entry.Index, true
+		}
+	}
+	return best, found
+}
+
+// ConfRecord is one committed configuration entry, for diagnosis.
+type ConfRecord struct {
+	Index raft.Index
+	At    clock.Instant
+	Desc  string
+}
+
+// CommittedConfRecords lists this range's committed configuration entries.
+func (l *rangeLedger) CommittedConfRecords() []ConfRecord {
+	var out []ConfRecord
+	for _, rec := range l.committed {
+		if rec.entry.Type != raft.EntryConfChange {
+			continue
+		}
+		cc, ok := raft.DecodeConfChange(rec.entry.Data)
+		if !ok {
+			continue
+		}
+		d := ""
+		for _, ch := range cc.Changes {
+			d += fmt.Sprintf("%s(%d) ", ch.Type, ch.Node)
+		}
+		out = append(out, ConfRecord{Index: rec.entry.Index, At: rec.at, Desc: d})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	return out
 }
 
 // ID is this range's identifier.
@@ -729,7 +906,7 @@ func (l *Ledger) SnapshotsInstalled() int {
 }
 
 // RecordRangeBase records the state a range started from, keyed by range.
-func (l *Ledger) RecordRangeBase(rangeID uint64, data provenance.Observed[[]byte]) {
+func (l *Ledger) RecordRangeBase(rangeID uint64, data, conf provenance.Observed[[]byte]) {
 	l.rev++
-	l.forRange(rangeID).RecordRangeBase(data)
+	l.forRange(rangeID).RecordRangeBase(data, conf)
 }

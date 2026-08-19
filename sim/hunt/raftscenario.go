@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/internal/rng"
 	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/raft"
@@ -42,6 +43,11 @@ import (
 type RaftOptions struct {
 	PreVote           bool
 	SnapshotThreshold raft.Index
+
+	// Rebalances is how many manual replica movements the plan orders. Each is
+	// ONE step of a move, so a move needs several: the mechanism is stateless by
+	// design and finishes by being asked again (store.Replica.RequestMove).
+	Rebalances int
 
 	// Transfers is how many leadership transfers the plan schedules.
 	Transfers int
@@ -101,6 +107,10 @@ func A3Options() RaftOptions {
 func A4Options() RaftOptions {
 	o := A3Options()
 	o.SplitThreshold = 4
+	// Twelve orders, not twelve moves: they come in groups of four against one
+	// fixed move, because a stateless move advances one step per order. Three
+	// moves per seed, each with enough orders to finish.
+	o.Rebalances = 12
 	return o
 }
 
@@ -137,10 +147,43 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 		}
 		span := p.Config.DurationNS
 		for i := range opt.ConfChanges {
-			at := span/5 + int64(key.Uint64N(3, uint64(i), 0, 0, uint64(span*3/5)))
+			// # The two membership drivers do not overlap, and that is a
+			// # limitation, recorded rather than hidden
+			//
+			// Churn runs in the first half, rebalance in the second. The reason
+			// is attribution: a move's safety claim is about the ORDER of an add
+			// and a remove, and an add and a remove look exactly like two
+			// unrelated membership changes in the log. With both drivers live at
+			// once, the rebalance oracle blamed the churn's removals on moves --
+			// 252 seeds in 300, every one of them the oracle being right about
+			// the log and wrong about who did it.
+			//
+			// The honest alternatives were to tag configuration entries with a
+			// move identifier, which changes a frozen wire format for the
+			// convenience of a checker, or to separate them in time. DESIGN-A4
+			// §7 records what this costs: no seed exercises a move racing an
+			// unrelated membership change.
+			at := span/5 + int64(key.Uint64N(3, uint64(i), 0, 0, uint64(span*3/10)))
 			target := int(key.Uint64N(4, uint64(i), 0, 0, uint64(p.Config.Nodes)))
 			p.Faults.Entries = append(p.Faults.Entries, plan.Entry{
 				AtNS: at, Action: "conf", Node: target,
+			})
+		}
+	}
+	if opt.Rebalances > 0 {
+		key, err := rng.ParseKey(p.Keys.Raft)
+		if err != nil {
+			return nil, fmt.Errorf("hunt: raft key: %w", err)
+		}
+		span := p.Config.DurationNS
+		for i := range opt.Rebalances {
+			// The second half of the run: a move ordered before any range has
+			// split is a move of the one range everybody already hosts.
+			at := span*3/5 + int64(key.Uint64N(5, uint64(i), 0, 0, uint64(span*3/10)))
+			from := int(key.Uint64N(6, uint64(i), 0, 0, uint64(p.Config.Nodes)))
+			to := int(key.Uint64N(7, uint64(i), 0, 0, uint64(p.Config.Nodes)))
+			p.Faults.Entries = append(p.Faults.Entries, plan.Entry{
+				AtNS: at, Action: "rebalance", From: from, To: to,
 			})
 		}
 	}
@@ -163,43 +206,51 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 	return p, nil
 }
 
-func stateDigest(base []byte, entries []raft.Entry) uint64 {
+// replay is the harness's independent model of a range's state machine.
+//
+// It re-implements what a command DOES. What it borrows from store is the
+// serialisation only, so a defect in APPLYING commands cannot cancel out on both
+// sides of the comparison -- which is the whole reason the oracles take
+// functions instead of importing one.
+//
+// onSplit is called for every split entry with the model's verdict on whether it
+// takes effect, so the two oracles that need splits and the one that needs the
+// final state all read the same replay rather than three drifting copies of it.
+func replay(base []byte, entries []raft.Entry, onSplit func(raft.Index, bool, store.SplitSpec)) (store.RangeDescriptor, map[string]string, bool) {
 	desc, kv, ok := store.DecodeMachine(base)
 	if !ok {
-		panic("hunt: a range was replayed with no birth state recorded")
+		return desc, nil, false
 	}
 	for _, e := range entries {
 		if len(e.Data) == 0 {
 			continue
 		}
-		// A split is a command to the state machine, so the model has to apply
-		// one: after it, the keys at or above the split point belong to the
-		// other range and this one no longer holds them. A model that skipped
-		// splits would compute a state its own snapshots could never match, and
-		// the oracle would report a violation on every seed that split.
-		//
-		// And a model that applied EVERY split entry would do the same thing
-		// from the other side. Two leaders can each propose a split from the same
-		// extent and both entries can commit; the second names an extent the
-		// range has already moved past, and every replica refuses it. The model
-		// has to refuse it too, or it computes a state no replica ever held and
-		// reports all three of them in violation for agreeing (BUG-012).
-		//
-		// The rule is RESTATED here rather than called: a split applies only
-		// against exactly the extent it names, one epoch behind. If the
-		// implementation's rule ever drifts from this one, the oracle fires,
-		// which is the entire reason the harness models the state machine itself.
 		if spec, ok := store.DecodeSplitCommand(e.Data); ok {
-			if spec.Left.Epoch != desc.Epoch+1 ||
-				!bytes.Equal(spec.Left.Start, desc.Start) ||
-				!bytes.Equal(spec.Right.End, desc.End) {
+			// # The rule for whether a split applies, restated
+			//
+			// A split entry names the extent it was computed against and takes
+			// effect only against exactly that extent, one epoch behind. Two
+			// leaders can each propose a split from the same extent and both
+			// entries can commit; the second names an extent the range has
+			// already moved past, and every replica refuses it.
+			//
+			// A model that applied every split entry would compute a state no
+			// replica ever held and report all of them in violation for
+			// agreeing with each other (BUG-012).
+			applies := spec.Left.Epoch == desc.Epoch+1 &&
+				bytes.Equal(spec.Left.Start, desc.Start) &&
+				bytes.Equal(spec.Right.End, desc.End)
+			if onSplit != nil {
+				onSplit(e.Index, applies, spec)
+			}
+			if !applies {
 				continue
 			}
 			// What the left KEEPS is what its new extent covers -- not
-			// everything below the cut point. The two are the same only when
-			// the range holds nothing outside its own extent, so writing it the
-			// short way made the model quietly repair a range that was holding
-			// a key it did not own, and the oracle went green on a state no
+			// everything below the cut point. The two are the same only when the
+			// range holds nothing outside its own extent, so writing it the
+			// short way made the model quietly repair a range that was holding a
+			// key it did not own, and the oracle went green on a state no
 			// replica ever had (BUG-014).
 			for _, k := range sorted.Keys(kv) {
 				if !spec.Left.Contains([]byte(k)) {
@@ -215,7 +266,43 @@ func stateDigest(base []byte, entries []raft.Entry) uint64 {
 			kv[k] = v
 		}
 	}
+	return desc, kv, true
+}
+
+// stateDigest is raftcheck.StateAt.
+func stateDigest(base []byte, entries []raft.Entry) uint64 {
+	desc, kv, ok := replay(base, entries, nil)
+	if !ok {
+		panic("hunt: a range was replayed with no birth state recorded")
+	}
 	return store.StateDigest(desc, kv)
+}
+
+// splitSteps is raftcheck.SplitsAt.
+func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
+	var out []raftcheck.SplitStep
+	_, _, ok := replay(base, entries, func(idx raft.Index, applies bool, spec store.SplitSpec) {
+		out = append(out, raftcheck.SplitStep{
+			Index: idx, Applied: applies,
+			Child:      uint64(spec.Right.ID),
+			ChildStart: spec.Right.Start,
+			ChildEnd:   spec.Right.End,
+			ChildEpoch: spec.Right.Epoch,
+		})
+	})
+	if !ok {
+		panic("hunt: a range was replayed with no birth state recorded")
+	}
+	return out
+}
+
+// extentOf is raftcheck.ExtentOf.
+func extentOf(base []byte) (start, end []byte, epoch uint64, ok bool) {
+	desc, _, ok := store.DecodeMachine(base)
+	if !ok {
+		return nil, nil, 0, false
+	}
+	return desc.Start, desc.End, desc.Epoch, true
 }
 
 // RaftResult is one Raft run.
@@ -318,7 +405,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest))
+	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf))
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {
@@ -371,6 +458,105 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		for _, d := range drivers {
 			if d.IsLeader() {
 				d.RequestConfChange(raft.NodeID(int(target) + 1))
+				break
+			}
+		}
+	}
+
+	// A rebalance moves one replica of one range. The RANGE is chosen here, from
+	// the ledger -- which is built entirely from what the harness observed --
+	// rather than asked of a store. The oracle has to know which range the order
+	// named, and taking that from the system it judges is the shape this project
+	// spent A1 learning to refuse: a store that started no move at all could
+	// name a quiet range, and the check would come out green over nothing.
+	//
+	// Round-robin over the ranges in sorted order, stepped by a counter, so
+	// successive orders spread across whatever has split so far and the choice
+	// stays a function of the plan.
+	// # A move takes several orders, and they all have to be the SAME move
+	//
+	// The mechanism is stateless: each order advances one step. So a move needs
+	// three or four orders -- add, promote, sometimes a leadership handoff, then
+	// remove -- and every one of them has to name the range and the two nodes
+	// the first one named. Rotating the target between orders is how a driver
+	// issues six orders and completes zero moves, which is exactly what the
+	// first version did: 444 moves ordered across 300 seeds, none finished, a
+	// mechanism declared and never invoked.
+	//
+	// So orders come in groups of movesPerOrder against one fixed move, and the
+	// range rotates between groups rather than within them.
+	const movesPerOrder = 4
+	order, group, live := 0, -1, false
+	var cur raftcheck.MoveRecord
+	run.OnRebalance = func(from, to sim.NodeID) {
+		g := order / movesPerOrder
+		order++
+
+		if g != group || !live {
+			group, live = g, false
+			ranges := ledger.Ranges()
+			if len(ranges) == 0 {
+				return
+			}
+			rl := ranges[g%len(ranges)]
+			conf, ok := rl.CommittedConfig()
+			if !ok {
+				return
+			}
+
+			// # A move to a node that is already there is not a move
+			//
+			// The plan names two nodes; the cluster decides whether that pair
+			// is a move. If the destination is already a member, the mechanism
+			// has nothing to add and goes straight to removing the source --
+			// a quorum reduction wearing a move's name, and the oracle said so
+			// on 252 of 300 seeds. Endpoints are validated here against the
+			// COMMITTED configuration the ledger derives from what it observed,
+			// and an order that is not a move is never issued and never
+			// recorded.
+			//
+			// The plan's two numbers are the starting points of a deterministic
+			// scan, so the choice stays a function of the seed.
+			src, dst := raft.NodeID(0), raft.NodeID(0)
+			for i := range n {
+				c := raft.NodeID((int(from)+i)%n + 1)
+				if conf.IsVoter(c) && len(conf.Voters) > 1 {
+					src = c
+					break
+				}
+			}
+			for i := range n {
+				c := raft.NodeID((int(to)+i)%n + 1)
+				if !conf.IsVoter(c) && !conf.IsLearner(c) {
+					dst = c
+					break
+				}
+			}
+			if src == 0 || dst == 0 {
+				return
+			}
+			// The move is recorded only once a leader ACCEPTS it. An order
+			// nobody could act on is not a move the cluster was asked to make,
+			// and recording it would leave the oracle judging a range against
+			// an intent that never reached it.
+			started := false
+			for _, d := range drivers {
+				if d.RequestMove(store.RangeID(rl.ID()), src, dst, true) {
+					started = true
+					break
+				}
+			}
+			if !started {
+				return
+			}
+			cur = raftcheck.MoveRecord{Range: rl.ID(), From: src, To: dst, At: run.Loop.Now()}
+			live = true
+			ledger.RecordMove(provenance.Witness(cur))
+			return
+		}
+
+		for _, d := range drivers {
+			if d.RequestMove(store.RangeID(cur.Range), cur.From, cur.To, false) {
 				break
 			}
 		}
