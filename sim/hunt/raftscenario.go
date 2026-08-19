@@ -1,11 +1,13 @@
 package hunt
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/internal/rng"
+	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
@@ -54,6 +56,10 @@ type RaftOptions struct {
 
 	// PromotionLag bounds how far behind a learner may be and still be promoted.
 	PromotionLag raft.Index
+
+	// SplitThreshold is how many keys a range may hold before its leader
+	// proposes a split. Zero disables splitting.
+	SplitThreshold int
 }
 
 // A2Options is what the sweep runs: snapshots on with a threshold small enough
@@ -77,7 +83,7 @@ func A2Options() RaftOptions {
 // The sweep, the oracle inductions and the power probe now all read this, so
 // they cannot disagree. Advancing a phase is one edit here, and every instrument
 // moves with it.
-func CurrentOptions() RaftOptions { return A3Options() }
+func CurrentOptions() RaftOptions { return A4Options() }
 
 // A3Options adds membership churn: a four-node cluster with one learner, and
 // enough scheduled changes that the cycle runs several times per seed.
@@ -86,6 +92,15 @@ func A3Options() RaftOptions {
 	o.Learners = 1
 	o.ConfChanges = 4
 	o.PromotionLag = 8
+	return o
+}
+
+// A4Options turns on splitting. The threshold is small relative to the key space
+// so a seed's traffic crosses it several times and the cluster ends the run with
+// several ranges rather than a hopeful one.
+func A4Options() RaftOptions {
+	o := A3Options()
+	o.SplitThreshold = 4
 	return o
 }
 
@@ -148,24 +163,59 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 	return p, nil
 }
 
-// stateDigest is the harness's independent model of the state machine, handed to
-// the snapshot oracle.
-//
-// It re-implements what a command does. What it borrows from store is the
-// serialisation only, so a defect in APPLYING commands cannot cancel out on both
-// sides of the comparison -- which is the whole reason the oracle takes a
-// function instead of importing one.
-func stateDigest(entries []raft.Entry) uint64 {
-	kv := map[string]string{}
+func stateDigest(base []byte, entries []raft.Entry) uint64 {
+	desc, kv, ok := store.DecodeMachine(base)
+	if !ok {
+		panic("hunt: a range was replayed with no birth state recorded")
+	}
 	for _, e := range entries {
 		if len(e.Data) == 0 {
 			continue
 		}
-		if op, k, v := store.DecodeCommand(e.Data); op == "put" {
+		// A split is a command to the state machine, so the model has to apply
+		// one: after it, the keys at or above the split point belong to the
+		// other range and this one no longer holds them. A model that skipped
+		// splits would compute a state its own snapshots could never match, and
+		// the oracle would report a violation on every seed that split.
+		//
+		// And a model that applied EVERY split entry would do the same thing
+		// from the other side. Two leaders can each propose a split from the same
+		// extent and both entries can commit; the second names an extent the
+		// range has already moved past, and every replica refuses it. The model
+		// has to refuse it too, or it computes a state no replica ever held and
+		// reports all three of them in violation for agreeing (BUG-012).
+		//
+		// The rule is RESTATED here rather than called: a split applies only
+		// against exactly the extent it names, one epoch behind. If the
+		// implementation's rule ever drifts from this one, the oracle fires,
+		// which is the entire reason the harness models the state machine itself.
+		if spec, ok := store.DecodeSplitCommand(e.Data); ok {
+			if spec.Left.Epoch != desc.Epoch+1 ||
+				!bytes.Equal(spec.Left.Start, desc.Start) ||
+				!bytes.Equal(spec.Right.End, desc.End) {
+				continue
+			}
+			// What the left KEEPS is what its new extent covers -- not
+			// everything below the cut point. The two are the same only when
+			// the range holds nothing outside its own extent, so writing it the
+			// short way made the model quietly repair a range that was holding
+			// a key it did not own, and the oracle went green on a state no
+			// replica ever had (BUG-014).
+			for _, k := range sorted.Keys(kv) {
+				if !spec.Left.Contains([]byte(k)) {
+					delete(kv, k)
+				}
+			}
+			desc = spec.Left
+			continue
+		}
+		// A command for a key outside the extent at this position is refused,
+		// exactly as the replicas refuse it. Restated, not shared.
+		if op, k, v := store.DecodeCommand(e.Data); op == "put" && desc.Contains([]byte(k)) {
 			kv[k] = v
 		}
 	}
-	return store.StateDigest(kv)
+	return store.StateDigest(desc, kv)
 }
 
 // RaftResult is one Raft run.
@@ -212,6 +262,17 @@ type RaftResult struct {
 	LagRefused      int
 	ConfRecoveries  int
 	ConfCrossChecks int
+
+	// A4's evidence. Ranges is how many the cluster ended with, Splits how many
+	// were applied, and StaleEpochRefusals how many requests arrived under a
+	// descriptor the range had moved past -- which is the epoch invariant doing
+	// its job rather than a failure count.
+	Ranges              int
+	SplitsProposed      int
+	SplitsApplied       int
+	StaleEpochRefusals  int
+	StaleSplits         int
+	OutOfExtentRefusals int
 
 	Seed     uint64
 	Outcome  sim.Outcome
@@ -285,8 +346,10 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		d, err := store.New(store.Config{
 			ID: raft.NodeID(i + 1), Peers: peers, Ordinal: ord,
 			Election: 10, Heartbeat: 3,
+			Nodes:             n,
 			Learners:          learners,
 			PromotionLag:      opt.PromotionLag,
+			SplitThreshold:    opt.SplitThreshold,
 			PreVote:           opt.PreVote,
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
@@ -364,6 +427,14 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.LagRefused += d.LagRefused()
 		res.ConfRecoveries += d.ConfRecoveries()
 		res.ConfCrossChecks += d.ConfCrossChecks()
+		res.SplitsProposed += d.SplitsProposed()
+		res.SplitsApplied += d.Splits()
+		res.StaleEpochRefusals += d.StaleEpochRefusals()
+		res.StaleSplits += d.StaleSplits()
+		res.OutOfExtentRefusals += d.OutOfExtentRefusals()
+		if c := d.RangeCount(); c > res.Ranges {
+			res.Ranges = c
+		}
 	}
 
 	// The fire-count assertion only means anything on a run that reached its
@@ -455,6 +526,11 @@ type RaftCensus struct {
 	ConfRecoveries  int
 	ConfCrossChecks int
 
+	Ranges             int
+	SplitsProposed     int
+	SplitsApplied      int
+	StaleEpochRefusals int
+
 	FirstViolation     uint64
 	FoundAViolation    bool
 	InconclusiveCauses []string
@@ -486,6 +562,12 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.LagRefused += r.LagRefused
 		c.ConfRecoveries += r.ConfRecoveries
 		c.ConfCrossChecks += r.ConfCrossChecks
+		c.SplitsProposed += r.SplitsProposed
+		c.SplitsApplied += r.SplitsApplied
+		c.StaleEpochRefusals += r.StaleEpochRefusals
+		if r.Ranges > c.Ranges {
+			c.Ranges = r.Ranges
+		}
 		c.ElectionsStart += r.Census.ElectionsStart
 		c.ElectionsWon += r.Census.ElectionsWon
 		c.SplitVotes += r.Census.SplitVotes

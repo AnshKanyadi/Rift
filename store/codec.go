@@ -101,6 +101,19 @@ func decodeEntry(b []byte) (raft.Entry, bool) {
 // encodeSnapshot stores the snapshot metadata beside its bytes, because a
 // snapshot without its index and term is a state machine nobody can place in a
 // log.
+// # The range descriptor travels with the snapshot, for A3's reason one layer out
+//
+// A2 learned that a snapshot must carry its configuration, because the
+// configuration is a function of the log and a snapshot is the part of the log
+// that no longer exists. A range's EXTENT is the same kind of fact: it is a
+// function of the split entries in the log, and a snapshot compacts them away.
+//
+// Written separately, a descriptor could be stale relative to a snapshot that
+// already covers the split which changed it -- and a node recovering that pair
+// would serve a range whose extent it can no longer re-derive. Two replicas of
+// one range would then disagree about which keys they own, which is what
+// snapshot equivalence caught: two nodes recording different digests for the
+// same index.
 func encodeSnapshot(meta raft.SnapshotMeta, data []byte) []byte {
 	b := putU64(nil, uint64(meta.Index))
 	b = putU64(b, uint64(meta.Term))
@@ -130,6 +143,45 @@ func decodeSnapshot(b []byte) (raft.SnapshotMeta, []byte, bool) {
 		return raft.SnapshotMeta{}, nil, false
 	}
 	return raft.SnapshotMeta{Index: raft.Index(idx), Term: raft.Term(term), Conf: conf}, data, true
+}
+
+// encodeMachine serialises the WHOLE state machine: the extent and the keys.
+//
+// # Why the extent is in here and not beside it
+//
+// It rode beside it for most of A4, first as a separately written descriptor key
+// and then as a field of the snapshot record. Both are the same mistake in
+// different clothing: they make the extent something the storage layer keeps
+// ABOUT the state machine rather than something the state machine IS.
+//
+// The extent is applied state. A split entry moves it, exactly as a put moves a
+// key, and a split applies only against the extent it names -- so a replica that
+// adopts a state machine without its extent has adopted half of one. That is not
+// hypothetical: a follower that installed a snapshot kept its own stale extent,
+// refused the next split entry for naming an extent it could not see, and
+// diverged from every replica that applied it (BUG-013). Because it is here, the
+// extent now travels on the wire with the snapshot, is restored by recovery at
+// the index it belongs to, and is covered by the digest snapshot equivalence
+// compares -- so the same defect is a caught violation rather than a silence.
+func encodeMachine(desc RangeDescriptor, kv map[string]string) []byte {
+	b := putBytes(nil, encodeDesc(desc))
+	return append(b, encodeKV(kv)...)
+}
+
+func decodeMachine(b []byte) (RangeDescriptor, map[string]string, bool) {
+	descRaw, b, ok := takeBytes(b)
+	if !ok {
+		return RangeDescriptor{}, nil, false
+	}
+	desc, ok := decodeDesc(descRaw)
+	if !ok {
+		return RangeDescriptor{}, nil, false
+	}
+	kv, ok := decodeKV(b)
+	if !ok {
+		return RangeDescriptor{}, nil, false
+	}
+	return desc, kv, true
 }
 
 // encodeKV serialises the state machine.
@@ -168,6 +220,17 @@ func decodeKV(b []byte) (map[string]string, bool) {
 		kv[string(kb)] = string(vb)
 	}
 	return kv, true
+}
+
+// DecodeMachine decodes a state machine for the harness's model: the extent it
+// holds and the keys it holds.
+//
+// It reports false rather than returning an empty state on undecodable input.
+// The model cannot judge a range whose starting extent it does not know, and
+// quietly substituting a zero one is how a checker comes out green on a state
+// nobody ever had.
+func DecodeMachine(b []byte) (RangeDescriptor, map[string]string, bool) {
+	return decodeMachine(b)
 }
 
 // DecodeCommand exposes the command wire format to the harness, which builds an

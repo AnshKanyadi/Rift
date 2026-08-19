@@ -34,6 +34,35 @@ type base struct {
 
 func (b base) Name() string { return b.name }
 
+// eachRange walks every range in order and returns the first violation, with the
+// range named in the detail.
+//
+// Every oracle goes through here. DESIGN-A4 §6 is the audit that says why: over
+// many ranges, six of these would produce false positives and two -- log matching
+// and persist-before-reply -- would go quietly weaker, which is the failure this
+// project has now recorded ten of.
+// # Keyed by range ID, not by position, and that distinction was a bug
+//
+// The first version passed the range's index in the sorted slice and the
+// stateful oracles keyed their cursors by it. Ranges are inserted in SORTED
+// position, not appended, so a range born with a lower id shifts every index
+// after it -- and each oracle's cursor silently became attached to a different
+// range's stream. State machine safety then reported two nodes applying
+// different entries at an index where the dump showed them applying the same
+// one, which is a checker manufacturing a violation.
+//
+// An identifier is not a position. That is BUG-004's sentence, and this is the
+// fourth subsystem to need it.
+func (b *base) eachRange(f func(id uint64, l *rangeLedger) *sim.Violation) *sim.Violation {
+	for _, rl := range b.l.ranges {
+		if v := f(rl.id, rl); v != nil {
+			v.Detail = fmt.Sprintf("range %d: %s", rl.id, v.Detail)
+			return v
+		}
+	}
+	return nil
+}
+
 // stale reports whether the ledger has changed since this oracle last looked.
 func (b *base) stale() bool {
 	if b.primed && b.seenRev == b.l.rev {
@@ -66,9 +95,13 @@ func (o *ElectionSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
-	for i := range o.l.ledIn {
-		for j := i + 1; j < len(o.l.ledIn); j++ {
-			a, b := o.l.ledIn[i], o.l.ledIn[j]
+	return o.eachRange(o.check)
+}
+
+func (o *ElectionSafety) check(rangeID uint64, l *rangeLedger) *sim.Violation {
+	for i := range l.ledIn {
+		for j := i + 1; j < len(l.ledIn); j++ {
+			a, b := l.ledIn[i], l.ledIn[j]
 			if a.term == b.term && a.node != b.node {
 				return &sim.Violation{
 					Checker: o.name,
@@ -100,10 +133,14 @@ func (o *LogMatching) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
-	logs := o.l.durableLog
+	return o.eachRange(o.check)
+}
+
+func (o *LogMatching) check(rangeID uint64, l *rangeLedger) *sim.Violation {
+	logs := l.durableLog
 	for a := range logs {
 		for b := a + 1; b < len(logs); b++ {
-			if v := o.compare(a, b, logs[a], logs[b]); v != nil {
+			if v := o.compare(l, a, b, logs[a], logs[b]); v != nil {
 				return v
 			}
 		}
@@ -118,7 +155,7 @@ func (o *LogMatching) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 // every node, and comparing position against position would report two nodes
 // that agree perfectly as divergent -- a checker manufacturing violations, which
 // is the one failure mode worse than a checker that finds none.
-func (o *LogMatching) compare(a, b int, la, lb []raft.Entry) *sim.Violation {
+func (o *LogMatching) compare(l *rangeLedger, a, b int, la, lb []raft.Entry) *sim.Violation {
 	byIndex := func(es []raft.Entry) map[raft.Index]raft.Entry {
 		m := make(map[raft.Index]raft.Entry, len(es))
 		for _, e := range es {
@@ -134,8 +171,8 @@ func (o *LogMatching) compare(a, b int, la, lb []raft.Entry) *sim.Violation {
 	if x := lastIndexOf(lb); x < hi {
 		hi = x
 	}
-	lo := o.l.durableSnap[a].Index
-	if x := o.l.durableSnap[b].Index; x > lo {
+	lo := l.durableSnap[a].Index
+	if x := l.durableSnap[b].Index; x > lo {
 		lo = x
 	}
 	for i := hi; i > lo; i-- {
@@ -186,8 +223,12 @@ func (o *LeaderCompleteness) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
-	for _, c := range o.l.committed {
-		for _, ld := range o.l.ledIn {
+	return o.eachRange(o.check)
+}
+
+func (o *LeaderCompleteness) check(rangeID uint64, l *rangeLedger) *sim.Violation {
+	for _, c := range l.committed {
+		for _, ld := range l.ledIn {
 			if ld.term <= c.entry.Term {
 				continue
 			}
@@ -231,6 +272,13 @@ func hasEntry(log []raft.Entry, e raft.Entry) bool {
 // believed it would consume.
 type StateMachineSafety struct {
 	base
+	// Per range, indexed by the range's position in the ledger's sorted slice.
+	// Ranges are only ever appended, so the index is stable -- and sharing one
+	// cursor across ranges would advance it past streams it never read.
+	per map[uint64]*smsState
+}
+
+type smsState struct {
 	first  map[raft.Index]appliedBy
 	cursor []int
 }
@@ -244,21 +292,29 @@ func (o *StateMachineSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
+	return o.eachRange(o.check)
+}
+
+func (o *StateMachineSafety) check(rangeID uint64, l *rangeLedger) *sim.Violation {
 	// Incremental rather than pairwise-over-everything. The pairwise form was
 	// O(applied squared) across every node pair on every recorded fact, which is
 	// the same answer at a cost that grows with the run; this keeps one entry per
 	// index and compares each new apply against it exactly once.
-	if o.first == nil {
-		o.first = map[raft.Index]appliedBy{}
-		o.cursor = make([]int, o.l.nodes)
+	if o.per == nil {
+		o.per = map[uint64]*smsState{}
 	}
-	for node := 0; node < o.l.nodes; node++ {
-		stream := o.l.applied[node]
-		for ; o.cursor[node] < len(stream); o.cursor[node]++ {
-			e := stream[o.cursor[node]]
-			prior, ok := o.first[e.Index]
+	st := o.per[rangeID]
+	if st == nil {
+		st = &smsState{first: map[raft.Index]appliedBy{}, cursor: make([]int, l.nodes)}
+		o.per[rangeID] = st
+	}
+	for node := 0; node < l.nodes; node++ {
+		stream := l.applied[node]
+		for ; st.cursor[node] < len(stream); st.cursor[node]++ {
+			e := stream[st.cursor[node]]
+			prior, ok := st.first[e.Index]
 			if !ok {
-				o.first[e.Index] = appliedBy{node: node, entry: e}
+				st.first[e.Index] = appliedBy{node: node, entry: e}
 				continue
 			}
 			if prior.node == node {
@@ -308,6 +364,10 @@ type appliedBy struct {
 // guarantee nobody would notice losing.
 type PersistBeforeReply struct {
 	base
+	per map[uint64]*pbrState
+}
+
+type pbrState struct {
 	cursor   int
 	preVotes map[preVoteKey]bool
 }
@@ -326,13 +386,22 @@ func (o *PersistBeforeReply) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
-	if o.preVotes == nil {
-		o.preVotes = map[preVoteKey]bool{}
+	return o.eachRange(o.check)
+}
+
+func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violation {
+	if o.per == nil {
+		o.per = map[uint64]*pbrState{}
 	}
-	for ; o.cursor < len(o.l.sent); o.cursor++ {
-		s := o.l.sent[o.cursor]
+	st := o.per[rangeID]
+	if st == nil {
+		st = &pbrState{preVotes: map[preVoteKey]bool{}}
+		o.per[rangeID] = st
+	}
+	for ; st.cursor < len(l.sent); st.cursor++ {
+		s := l.sent[st.cursor]
 		if s.msg.Type == MsgPreVoteType {
-			o.preVotes[preVoteKey{from: s.msg.From, to: s.msg.To, term: s.msg.Term}] = true
+			st.preVotes[preVoteKey{from: s.msg.From, to: s.msg.To, term: s.msg.Term}] = true
 		}
 		// # A pre-vote's term is a proposal, not an assertion
 		//
@@ -358,7 +427,7 @@ func (o *PersistBeforeReply) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 		// A response to a request that was never made is a node manufacturing
 		// consent, and the message stream is where that is visible.
 		if s.msg.Type == raft.MsgPreVoteResp {
-			if !o.answersAPreVote(s) {
+			if !st.preVotes[preVoteKey{from: s.msg.To, to: s.msg.From, term: s.msg.Term}] {
 				return &sim.Violation{
 					Checker: o.name,
 					Detail: fmt.Sprintf(
@@ -429,16 +498,6 @@ func (o *PersistBeforeReply) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	return nil
 }
 
-// answersAPreVote reports whether a pre-vote response echoes a request that was
-// actually released to this responder, with that term.
-//
-// The index is built as the stream is walked, so a response is answered in
-// constant time. Scanning the whole history per response was the same answer at
-// a cost that grew with the square of the run.
-func (o *PersistBeforeReply) answersAPreVote(resp sentRecord) bool {
-	return o.preVotes[preVoteKey{from: resp.msg.To, to: resp.msg.From, term: resp.msg.Term}]
-}
-
 // All returns every oracle, in a stable order.
 //
 // state is the harness's independent model of the state machine, used by the
@@ -486,6 +545,10 @@ func All(l *Ledger, state StateAt) []sim.Oracle {
 // each other and is blind to a single node applying something twice, or never.
 type ApplyContinuity struct {
 	base
+	per map[uint64]*acState
+}
+
+type acState struct {
 	seen    []map[raft.Index]raft.Entry
 	prev    []raft.Index
 	started []bool
@@ -501,21 +564,32 @@ func (o *ApplyContinuity) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
-	if o.seen == nil {
-		o.seen = make([]map[raft.Index]raft.Entry, o.l.nodes)
-		o.prev = make([]raft.Index, o.l.nodes)
-		o.started = make([]bool, o.l.nodes)
-		o.cursor = make([]int, o.l.nodes)
-		for i := range o.seen {
-			o.seen[i] = map[raft.Index]raft.Entry{}
-		}
+	return o.eachRange(o.check)
+}
+
+func (o *ApplyContinuity) check(rangeID uint64, l *rangeLedger) *sim.Violation {
+	if o.per == nil {
+		o.per = map[uint64]*acState{}
 	}
-	for node := 0; node < o.l.nodes; node++ {
-		seen := o.seen[node]
-		prev, started := o.prev[node], o.started[node]
-		stream := o.l.applied[node]
-		for ; o.cursor[node] < len(stream); o.cursor[node]++ {
-			e := stream[o.cursor[node]]
+	if o.per[rangeID] == nil {
+		st := &acState{
+			seen:    make([]map[raft.Index]raft.Entry, l.nodes),
+			prev:    make([]raft.Index, l.nodes),
+			started: make([]bool, l.nodes),
+			cursor:  make([]int, l.nodes),
+		}
+		for i := range st.seen {
+			st.seen[i] = map[raft.Index]raft.Entry{}
+		}
+		o.per[rangeID] = st
+	}
+	st := o.per[rangeID]
+	for node := 0; node < l.nodes; node++ {
+		seen := st.seen[node]
+		prev, started := st.prev[node], st.started[node]
+		stream := l.applied[node]
+		for ; st.cursor[node] < len(stream); st.cursor[node]++ {
+			e := stream[st.cursor[node]]
 			// Rebuild determinism: the same index must always carry the same
 			// entry on this node, however many times it is replayed.
 			if old, ok := seen[e.Index]; ok {
@@ -539,7 +613,7 @@ func (o *ApplyContinuity) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 				// A rebuild. It has to begin where this node's recovered state
 				// ends: at 1 when there is no snapshot, or just past one it
 				// holds.
-				if !o.restartsAtRecoverable(node, e.Index) {
+				if !o.restartsAtRecoverable(l, node, e.Index) {
 					return &sim.Violation{
 						Checker: o.name,
 						Detail: fmt.Sprintf(
@@ -551,7 +625,7 @@ func (o *ApplyContinuity) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 				}
 			default:
 				// A forward jump is legal only where a snapshot install put it.
-				if !o.jumpedByInstall(node, prev, e.Index) {
+				if !o.jumpedByInstall(l, node, prev, e.Index) {
 					return &sim.Violation{
 						Checker: o.name,
 						Detail: fmt.Sprintf(
@@ -563,18 +637,18 @@ func (o *ApplyContinuity) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 			}
 			prev, started = e.Index, true
 		}
-		o.prev[node], o.started[node] = prev, started
+		st.prev[node], st.started[node] = prev, started
 	}
 	return nil
 }
 
 // restartsAtRecoverable reports whether a rebuild beginning at index i starts
 // where this node could actually have recovered to.
-func (o *ApplyContinuity) restartsAtRecoverable(node int, i raft.Index) bool {
+func (o *ApplyContinuity) restartsAtRecoverable(l *rangeLedger, node int, i raft.Index) bool {
 	if i == 1 {
 		return true // no snapshot: the whole log is replayed
 	}
-	for _, s := range o.l.snaps {
+	for _, s := range l.snaps {
 		if s.node == node && s.rec.Index == i-1 {
 			return true
 		}
@@ -585,8 +659,8 @@ func (o *ApplyContinuity) restartsAtRecoverable(node int, i raft.Index) bool {
 // jumpedByInstall reports whether a snapshot install accounts for the stream
 // moving from prev to next: the snapshot must land exactly where the stream
 // resumes and cover everything skipped.
-func (o *ApplyContinuity) jumpedByInstall(node int, prev, next raft.Index) bool {
-	for _, s := range o.l.snaps {
+func (o *ApplyContinuity) jumpedByInstall(l *rangeLedger, node int, prev, next raft.Index) bool {
+	for _, s := range l.snaps {
 		if s.node == node && !s.rec.Taken && s.rec.Index >= prev && s.rec.Index == next-1 {
 			return true
 		}
@@ -599,11 +673,16 @@ func (o *ApplyContinuity) jumpedByInstall(node int, prev, next raft.Index) bool 
 // StateAt is supplied by the harness: given the committed entries through some
 // index, in index order, it returns a digest of the state machine they produce.
 //
+// base is the state the range was born holding: its extent and its keys. Both
+// halves are needed, because a range born from a split inherits keys, and
+// because a split entry applies only against the exact extent it names -- so the
+// model has to track the extent forward to judge which splits took effect.
+//
 // It is injected rather than implemented here for one reason and it matters: the
 // harness re-implements what a command DOES, so a defect in applying commands
 // cannot cancel out on both sides of the comparison. What it shares with the
 // system is the wire format, which is not the thing under test.
-type StateAt func(entries []raft.Entry) uint64
+type StateAt func(base []byte, entries []raft.Entry) uint64
 
 // SnapshotEquivalence: a snapshot's contents are exactly the state the committed
 // log produces at its index.
@@ -630,9 +709,10 @@ type SnapshotEquivalence struct {
 }
 
 type snapKey struct {
-	node   int
-	index  raft.Index
-	digest uint64
+	rangeID uint64
+	node    int
+	index   raft.Index
+	digest  uint64
 }
 
 // NewSnapshotEquivalence builds the oracle.
@@ -644,22 +724,26 @@ func (o *SnapshotEquivalence) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if o.state == nil || !o.stale() {
 		return nil
 	}
+	return o.eachRange(o.check)
+}
+
+func (o *SnapshotEquivalence) check(rangeID uint64, l *rangeLedger) *sim.Violation {
 	if o.done == nil {
 		o.done = map[snapKey]bool{}
 	}
-	for _, s := range o.l.snaps {
-		k := snapKey{node: s.node, index: s.rec.Index, digest: s.rec.Digest}
+	for _, s := range l.snaps {
+		k := snapKey{rangeID: rangeID, node: s.node, index: s.rec.Index, digest: s.rec.Digest}
 		if o.done[k] {
 			continue
 		}
-		prefix, ok := o.l.committedPrefix(s.rec.Index)
+		prefix, ok := l.committedPrefix(s.rec.Index)
 		if !ok {
 			// The ledger has not witnessed every committed entry under this
 			// snapshot yet, so there is nothing to compare against. Skipped
 			// rather than passed: the run is not asserting anything here.
 			continue
 		}
-		got := o.state(prefix)
+		got := o.state(l.base, prefix)
 		o.done[k] = true
 		if got != s.rec.Digest {
 			verb := "installed"
@@ -713,8 +797,12 @@ func (o *SingleServerChange) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
 		return nil
 	}
-	for node := 0; node < o.l.nodes; node++ {
-		for _, stream := range [][]raft.Entry{o.l.applied[node], o.l.durableLog[node]} {
+	return o.eachRange(o.check)
+}
+
+func (o *SingleServerChange) check(rangeID uint64, l *rangeLedger) *sim.Violation {
+	for node := 0; node < l.nodes; node++ {
+		for _, stream := range [][]raft.Entry{l.applied[node], l.durableLog[node]} {
 			for _, e := range stream {
 				if e.Type != raft.EntryConfChange {
 					continue

@@ -1504,10 +1504,51 @@ func (r *Raft) Compact(index Index) (Term, Configuration, error) {
 		return 0, Configuration{}, fmt.Errorf("raft: node %d cannot compact through %d, which its log does not hold", r.id, index)
 	}
 
-	// The configuration AS OF index, which is not the active one: entries above
-	// the compaction point may have changed it again, and a snapshot that
-	// carried the newer configuration would describe a cluster its own state
-	// machine has not caught up to.
+	conf, err := r.ConfigurationAt(index)
+	if err != nil {
+		return 0, Configuration{}, err
+	}
+
+	p, _ := r.pos(index)
+	r.log = append([]Entry(nil), r.log[p+1:]...)
+	r.snapIndex, r.snapTerm = index, e.Term
+	r.baseConf = conf.Clone()
+	r.recomputeConf()
+	return e.Term, conf, nil
+}
+
+// ConfigurationAt is the configuration in effect AT index, which is not the
+// active one: entries above index may have changed it again.
+//
+// # Why this is exported, and what asking the wrong question cost
+//
+// Two things derive from a log position and must therefore be computed at that
+// position: what a snapshot at index describes, and what a range born from a
+// split at index inherits. Compact had this reasoning inline and got it right.
+// The split path asked `Configuration()` instead -- the ACTIVE configuration,
+// effective on append -- and that is not a function of the applied prefix at
+// all. Two replicas applying the same split entry with different appended tails
+// therefore gave the new range two different birth configurations, and the one
+// whose config was behind refused the next membership entry as an illegal
+// transition (BUG-015).
+//
+// Configurations take effect on append (D-A3-2), so "at index" means the base
+// configuration plus every configuration entry through index -- appended, not
+// applied. That is why this is answerable for an index the state machine has not
+// reached yet, which is exactly the case the split path needs.
+func (r *Raft) ConfigurationAt(index Index) (Configuration, error) {
+	if index < r.snapIndex {
+		return Configuration{}, fmt.Errorf(
+			"raft: node %d cannot state the configuration at %d; its log starts at %d and everything "+
+				"below that has been compacted away", r.id, index, r.snapIndex)
+	}
+	if index == r.snapIndex {
+		return r.baseConf.Clone(), nil
+	}
+	if _, ok := r.at(index); !ok {
+		return Configuration{}, fmt.Errorf(
+			"raft: node %d cannot state the configuration at %d, which its log does not hold", r.id, index)
+	}
 	conf := r.baseConf.Clone()
 	for _, x := range r.log {
 		if x.Index > index {
@@ -1520,13 +1561,7 @@ func (r *Raft) Compact(index Index) (Term, Configuration, error) {
 			conf = next
 		}
 	}
-
-	p, _ := r.pos(index)
-	r.log = append([]Entry(nil), r.log[p+1:]...)
-	r.snapIndex, r.snapTerm = index, e.Term
-	r.baseConf = conf.Clone()
-	r.recomputeConf()
-	return e.Term, conf, nil
+	return conf, nil
 }
 
 // TransferLeadership hands leadership to target without waiting out an election

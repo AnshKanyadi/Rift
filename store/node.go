@@ -25,6 +25,7 @@ import (
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
 	"github.com/anshkanyadi/rift/internal/provenance"
+	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
@@ -32,18 +33,29 @@ import (
 
 // Keys in the engine. Raft's persistent state lives here and nowhere else, so a
 // crash takes exactly what a crash should take and recovery is the real path.
-var (
-	keyHardState = []byte("raft/hs")
-	keySnapshot  = []byte("raft/snap")
-	logPrefix    = []byte("raft/e/")
-	logUpper     = []byte("raft/e0") // one past '/' in byte order
-)
+// Keys are namespaced per range, so one group's state is a contiguous keyspace
+// that can be written, cleared and recovered without touching another's. That is
+// also what earns DeleteRange its place a second time (Amendment A3): a range
+// that splits or moves clears exactly its own span.
+func rangePrefix(id RangeID) []byte {
+	k := make([]byte, 0, 10)
+	k = append(k, 'r', '/')
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(id))
+	return append(k, b[:]...)
+}
 
-func logKey(i raft.Index) []byte {
-	k := make([]byte, len(logPrefix)+8)
-	copy(k, logPrefix)
-	binary.BigEndian.PutUint64(k[len(logPrefix):], uint64(i))
-	return k
+func keyHardStateOf(id RangeID) []byte { return append(rangePrefix(id), []byte("/hs")...) }
+func keySnapshotOf(id RangeID) []byte  { return append(rangePrefix(id), []byte("/snap")...) }
+func keyDescOf(id RangeID) []byte      { return append(rangePrefix(id), []byte("/desc")...) }
+func logPrefixOf(id RangeID) []byte    { return append(rangePrefix(id), []byte("/e/")...) }
+func logUpperOf(id RangeID) []byte     { return append(rangePrefix(id), []byte("/e0")...) }
+
+func logKeyOf(id RangeID, i raft.Index) []byte {
+	k := logPrefixOf(id)
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(i))
+	return append(k, b[:]...)
 }
 
 // Config is one driver's parameters.
@@ -67,6 +79,14 @@ type Config struct {
 	// PromotionLag bounds how far behind a learner may be and still be promoted.
 	PromotionLag raft.Index
 
+	// Nodes is how many machines the cluster has, which a machine needs only to
+	// mint range identifiers that cannot collide with another machine's.
+	Nodes int
+
+	// SplitThreshold is how many keys a range may hold before its leader
+	// proposes a split. Zero disables splitting.
+	SplitThreshold int
+
 	// PreVote turns on the extra election round. It is a build parameter rather
 	// than a plan entry: the ablation runs the same schedules with it on and off,
 	// so it must not perturb the schedule itself.
@@ -83,8 +103,26 @@ type Config struct {
 	ElectionJitter func(term raft.Term) int
 }
 
-// Node is one Raft replica plus its storage and driving loop.
-type Node struct {
+// RangeID names a range. Ranges are numbered as they are created, and the number
+// never means a position: a range's identity outlives every split it takes part
+// in, which is the same discipline as a proposal not being its log index
+// (BUG-004).
+type RangeID uint64
+
+// Replica is one Raft group on this machine: its state machine, its durability
+// record and its driving loop. It is what store.Node was through A3.
+type Replica struct {
+	// rng is the range this replica serves, and desc its descriptor. The
+	// descriptor changes on a split -- its end moves and its epoch rises -- so it
+	// is a value the replica owns rather than a constant it was built with.
+	rng  RangeID
+	desc RangeDescriptor
+
+	// machine is the node hosting this replica. A replica reaches it for the
+	// things that belong to the machine rather than to the range: the engine,
+	// the crash boundary, and the sibling it creates when it splits.
+	machine *Node
+
 	cfg  Config
 	raft *raft.Raft
 	db   *model.DB
@@ -158,12 +196,23 @@ type Node struct {
 	// with its own log.
 	confErr error
 
+	// splitPending stops a second split being proposed from a descriptor the
+	// first has already moved. Two splits in flight would each be computed
+	// against a range extent the other is changing.
+	splitPending   bool
+	splitsProposed int
+	staleSplits    int
+
 	// propSeq numbers this node's proposals. Combined with the node id it makes
 	// a ProposalID unique across the cluster.
 	propSeq uint64
 
 	// answered tracks client ops already responded to, by history index.
 	inflight []clientOp
+
+	// outOfExtent counts committed commands refused at apply for naming a key
+	// outside this range's extent at that log position (BUG-014).
+	outOfExtent int
 
 	down bool
 }
@@ -206,8 +255,8 @@ type clientOp struct {
 	key     string
 }
 
-// New builds a driver with an empty engine.
-func New(cfg Config) (*Node, error) {
+// newReplica builds one group's driver.
+func newReplica(cfg Config) (*Replica, error) {
 	if cfg.Transport == nil || cfg.Ledger == nil {
 		return nil, fmt.Errorf("store: node %d needs a transport and a ledger", cfg.ID)
 	}
@@ -223,81 +272,29 @@ func New(cfg Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{cfg: cfg, raft: r, db: model.New(), kv: map[string]string{}, epoch: sim.NewEpochGuard()}
+	n := &Replica{cfg: cfg, raft: r, db: model.New(), kv: map[string]string{}, epoch: sim.NewEpochGuard()}
 	n.jitter()
 	return n, nil
 }
 
-func (n *Node) jitter() {
+func (n *Replica) keyHardState() []byte { return keyHardStateOf(n.rng) }
+func (n *Replica) keySnapshot() []byte  { return keySnapshotOf(n.rng) }
+func (n *Replica) logPrefix() []byte    { return logPrefixOf(n.rng) }
+func (n *Replica) logUpper() []byte     { return logUpperOf(n.rng) }
+
+func (n *Replica) logKey(i raft.Index) []byte { return logKeyOf(n.rng, i) }
+
+func (n *Replica) jitter() {
 	if n.cfg.ElectionJitter != nil {
 		n.raft.SetElectionTimeout(n.cfg.ElectionJitter(0))
 	}
 }
 
-// Handle is the loop's single entry point.
-func (n *Node) Handle(ev sim.Event, s sim.Scheduler) {
-	switch ev.Kind {
-	case sim.KindTick:
-		if n.down {
-			return
-		}
-		n.raft.Tick()
-	case sim.KindDeliver:
-		if n.down {
-			return
-		}
-		frame, ok := ev.Payload.([]byte)
-		if !ok {
-			return
-		}
-		env, err := sim.Decode(frame)
-		if err != nil {
-			return
-		}
-		m, ok := decodeMessage(env.Body)
-		if !ok {
-			return
-		}
-		n.cfg.Ledger.RecordReceived(n.cfg.Ordinal, provenance.Witness(m), ev.At)
-		_ = n.raft.Step(m)
-	case sim.KindDurable:
-		if n.down {
-			return
-		}
-		tok, ok := ev.Payload.(sim.Stamped[engine.SeqNum])
-		if !ok {
-			return
-		}
-		// A completion is stamped with the incarnation that requested it. One
-		// from a dead incarnation is dropped and counted, never acted on: acting
-		// on it is what advanced the durability watermark past everything
-		// applied and panicked the engine.
-		if !n.epoch.Accept(tok.Epoch) {
-			return
-		}
-		n.onDurable(tok.Value, ev.At)
-	case sim.KindClient:
-		if n.down {
-			return
-		}
-		n.onClient(ev)
-	case sim.KindCrash:
-		n.crash()
-		return
-	case sim.KindRestart:
-		n.restart()
-		return
-	case sim.KindAction:
-	}
-	n.drain(ev.At, s)
-}
-
 // onClient proposes a command. A node that is not the leader simply does not
 // answer, which the checker treats as "may or may not have happened" -- correct,
 // since an unavailable replica is behaving properly.
-func (n *Node) onClient(ev sim.Event) {
-	req, ok := ev.Payload.(Request)
-	if !ok || n.raft.Role() != raft.RoleLeader {
+func (n *Replica) onClient(req Request) {
+	if n.raft.Role() != raft.RoleLeader {
 		return
 	}
 	// Reads go through the log, exactly like writes.
@@ -323,7 +320,7 @@ func (n *Node) onClient(ev sim.Event) {
 }
 
 // drain does the driver's whole job: persist, send, apply, acknowledge.
-func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
+func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 	defer func() {
 		// # Checked here rather than only at the end of the run
 		//
@@ -351,7 +348,7 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 		//    them in one batch -- or on one mark -- would let an acknowledgement
 		//    of either stand for both.
 		if rd.Snapshot != nil {
-			kv, ok := decodeKV(rd.Snapshot.Data)
+			desc, kv, ok := decodeMachine(rd.Snapshot.Data)
 			if !ok {
 				panic(fmt.Sprintf("store: node %d was handed a snapshot it cannot decode", n.cfg.ID))
 			}
@@ -359,8 +356,8 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 				Index: rd.Snapshot.Index, Term: rd.Snapshot.Term, Conf: rd.Snapshot.Conf,
 			}
 			sb := engine.NewBatch()
-			sb.Set(keySnapshot, encodeSnapshot(meta, rd.Snapshot.Data))
-			sb.DeleteRange(logPrefix, logUpper)
+			sb.Set(n.keySnapshot(), encodeSnapshot(meta, rd.Snapshot.Data))
+			sb.DeleteRange(n.logPrefix(), n.logUpper())
 			if seq, err := n.db.Apply(sb, true); err == nil {
 				n.pending = append(n.pending, pendingWrite{
 					seq: seq, snapMark: rd.SnapMark, snap: &meta, snapKV: kv, clearAllLog: true,
@@ -369,9 +366,13 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 					sim.Stamp(n.epoch.Current(), seq))
 			}
 			n.writtenLast = meta.Index
-			n.kv = kv
+			// The extent arrives WITH the state it describes. Keeping the old
+			// one here is BUG-013: the node adopts a state machine that has
+			// split and an extent that has not, then refuses the split entry
+			// that would reconcile them.
+			n.kv, n.desc = kv, desc
 			n.snapshotsApplied++
-			n.cfg.Ledger.RecordSnapshot(n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
+			n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
 				Index: meta.Index, Term: meta.Term, Digest: digest(rd.Snapshot.Data),
 			}), at)
 		}
@@ -387,7 +388,7 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 			// truncation.
 			if rd.HardState != nil {
 				hs := *rd.HardState
-				b.Set(keyHardState, encodeHardState(hs))
+				b.Set(n.keyHardState(), encodeHardState(hs))
 				w.hs = &hs
 			}
 			if k := len(rd.Entries); k > 0 {
@@ -408,11 +409,11 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 				// for (Amendment A3), and the batch is atomic, so the clear and
 				// the rewrite land together or not at all.
 				if rd.Entries[0].Index <= n.writtenLast {
-					b.DeleteRange(logKey(last+1), logUpper)
+					b.DeleteRange(n.logKey(last+1), n.logUpper())
 					w.clearAbove = last
 				}
 				for _, e := range rd.Entries {
-					b.Set(logKey(e.Index), encodeEntry(e))
+					b.Set(n.logKey(e.Index), encodeEntry(e))
 				}
 				w.entries = append(w.entries, rd.Entries...)
 				n.writtenLast = last
@@ -438,21 +439,21 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 				SnapIndex: meta.Index, SnapTerm: meta.Term, SnapData: data,
 				SnapConf: raft.EncodeConfiguration(meta.Conf),
 			}
-			n.cfg.Ledger.RecordSent(n.cfg.Ordinal, provenance.Witness(m), at)
+			n.cfg.Ledger.RecordSent(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(m), at)
 			n.cfg.Transport.Send(sim.Envelope{
 				From: sim.NodeID(n.cfg.Ordinal), To: sim.NodeID(n.ordinalOf(to)),
-				Kind: 1, Body: encodeMessage(m),
+				Kind: 1, Body: putRange(n.rng, encodeMessage(m)),
 			})
 		}
 
 		// 2. Send, in any order, at any time. Safety does not depend on this
 		//    happening after step 1, which is DR-7's entire point.
 		for _, m := range rd.Messages {
-			n.cfg.Ledger.RecordSent(n.cfg.Ordinal, provenance.Witness(m), at)
+			n.cfg.Ledger.RecordSent(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(m), at)
 			n.cfg.Transport.Send(sim.Envelope{
 				From: sim.NodeID(n.cfg.Ordinal),
 				To:   sim.NodeID(n.ordinalOf(m.To)),
-				Kind: 1, Body: encodeMessage(m),
+				Kind: 1, Body: putRange(n.rng, encodeMessage(m)),
 			})
 		}
 
@@ -461,18 +462,53 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 		//    position.
 		if len(rd.Committed) > 0 {
 			for _, e := range rd.Committed {
-				op, k, v := "", "", ""
-				if len(e.Data) > 0 {
+				op, k, v, owned := "", "", "", true
+				switch {
+				case isSplitCommand(e.Data):
+					// A split is a command to the state machine like any other,
+					// and raft has no business knowing what a range is.
+					if spec, ok := decodeSplitCommand(e.Data); ok {
+						n.machine.applySplit(n, spec, e.Index, at, s)
+						n.splitPending = false
+					}
+				case len(e.Data) > 0:
 					op, k, v = decodeCmd(e.Data)
-					if op == "put" {
+					// # The extent is checked HERE, at the log position, and
+					// # the check at arrival cannot stand in for it
+					//
+					// A leader accepts a request against the extent it has
+					// APPLIED. A split entry it has already appended is not
+					// applied yet, so between those two moments the leader
+					// accepts writes for keys the log has already given away,
+					// and the entry commits behind the split.
+					//
+					// Applying it anyway puts a key into a range that does not
+					// own it while the range that does owns it too -- two
+					// ranges claiming one key, which is "no request served
+					// under a stale descriptor epoch" broken from inside. It
+					// survived because the key then sat in the wrong range
+					// forever: the next split moves out only what its own new
+					// right half contains, and a key outside both halves is
+					// moved by nothing (BUG-014).
+					//
+					// This check is at the log position, so every replica
+					// reaches the same verdict from the same state. That is
+					// what the arrival check cannot do and never could.
+					owned = n.desc.Contains([]byte(k))
+					if owned && op == "put" {
 						n.kv[k] = v
 					}
 				}
-				n.answerAt(e, op, k, at)
+				if owned {
+					n.answerAt(e, op, k, at)
+				} else {
+					n.rerouteAt(e, op, k, v, at, s)
+				}
 			}
-			n.cfg.Ledger.RecordApplied(n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
+			n.cfg.Ledger.RecordApplied(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
 			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
 			n.maybeSnapshot(at, s)
+			n.maybeSplit(at)
 		}
 	}
 }
@@ -489,7 +525,7 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 // the correct outcome rather than a gap. The client genuinely does not know
 // whether its write happened, so the history leaves it in flight and the checker
 // treats it as may-or-may-not-have-happened -- the honest answer.
-func (n *Node) answerAt(e raft.Entry, op, key string, at clock.Instant) {
+func (n *Replica) answerAt(e raft.Entry, op, key string, at clock.Instant) {
 	if e.ID.Zero() {
 		return
 	}
@@ -508,11 +544,37 @@ func (n *Node) answerAt(e raft.Entry, op, key string, at clock.Instant) {
 	n.inflight = kept
 }
 
+// rerouteAt answers a command applied outside this range's extent by sending the
+// client back to whichever range owns the key now.
+//
+// The operation is NOT ended in the history. It never took effect, and the
+// client is still waiting -- which is exactly what a router doing
+// refresh-and-retry looks like from outside. Ending it as an error would be a
+// second claim, that the client was told, and nothing here told anyone.
+func (n *Replica) rerouteAt(e raft.Entry, op, key, value string, at clock.Instant, s sim.Scheduler) {
+	n.outOfExtent++
+	if e.ID.Zero() {
+		return
+	}
+	kept := n.inflight[:0]
+	for _, c := range n.inflight {
+		if c.id != e.ID {
+			kept = append(kept, c)
+			continue
+		}
+		s.At(at+staleRetryDelay, sim.KindClient, sim.NodeID(n.cfg.Ordinal),
+			Request{Op: op, Key: key, Value: value, HistIdx: c.histIdx})
+	}
+	n.inflight = kept
+}
+
+// OutOfExtentRefusals is how many committed commands this replica refused to
+// apply for naming a key its extent no longer covers.
+func (n *Replica) OutOfExtentRefusals() int { return n.outOfExtent }
+
 // onDurable turns an engine sync completion into AckPersisted, and records what
 // is now durable into the ledger.
-func (n *Node) onDurable(seq engine.SeqNum, at clock.Instant) {
-	n.db.AdvanceDurable(seq)
-
+func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
 	var mark, snapMark raft.PersistMark
 	kept := n.pending[:0]
 	for _, w := range n.pending {
@@ -561,7 +623,7 @@ func (n *Node) onDurable(seq engine.SeqNum, at clock.Instant) {
 		}
 	}
 
-	n.cfg.Ledger.RecordDurable(n.cfg.Ordinal, provenance.Witness(raftcheck.DurableState{
+	n.cfg.Ledger.RecordDurable(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.DurableState{
 		HardState: n.durHS, Snapshot: n.durSnap, Log: n.durLog,
 	}), at)
 	if mark != 0 {
@@ -575,7 +637,7 @@ func (n *Node) onDurable(seq engine.SeqNum, at clock.Instant) {
 // fold applies one completed write to the durable record. It is the only place
 // that record moves forward, and it moves on the engine's completion rather than
 // on the driver's intention.
-func (n *Node) fold(w pendingWrite) {
+func (n *Replica) fold(w pendingWrite) {
 	if w.hs != nil {
 		n.durHS = *w.hs
 	}
@@ -619,7 +681,7 @@ func (n *Node) fold(w pendingWrite) {
 // VISIBLE state; calling this while a write is in flight returns writes a crash
 // would take, and the one consumer that would be misled -- the ledger the
 // persist-before-reply oracle reads -- would be misled silently.
-func (n *Node) readDurable() provenance.Reported[recovered] {
+func (n *Replica) readDurable() provenance.Reported[recovered] {
 	if v, d := n.db.VisibleSeq(), n.db.DurableSeq(); v != d {
 		panic(fmt.Sprintf(
 			"store: node %d read the engine back with sequence %d visible and only %d durable; "+
@@ -628,18 +690,18 @@ func (n *Node) readDurable() provenance.Reported[recovered] {
 	}
 	var st recovered
 	st.kv = map[string]string{}
-	if v, err := n.db.Get(keyHardState); err == nil {
+	if v, err := n.db.Get(n.keyHardState()); err == nil {
 		st.hs = decodeHardState(v)
 	}
-	if v, err := n.db.Get(keySnapshot); err == nil {
+	if v, err := n.db.Get(n.keySnapshot()); err == nil {
 		if meta, data, ok := decodeSnapshot(v); ok {
 			st.snap = meta
-			if kv, ok := decodeKV(data); ok {
-				st.kv = kv
+			if desc, kv, ok := decodeMachine(data); ok {
+				st.desc, st.haveDesc, st.kv = desc, true, kv
 			}
 		}
 	}
-	it := n.db.NewIter(engine.IterOptions{Lower: logPrefix, Upper: logUpper})
+	it := n.db.NewIter(engine.IterOptions{Lower: n.logPrefix(), Upper: n.logUpper()})
 	for ok := it.First(); ok; ok = it.Next() {
 		if e, ok := decodeEntry(it.Value()); ok {
 			st.entries = append(st.entries, e)
@@ -657,6 +719,12 @@ type recovered struct {
 	snap    raft.SnapshotMeta
 	entries []raft.Entry
 	kv      map[string]string
+
+	// desc is the range extent the snapshot carried. haveDesc distinguishes "the
+	// snapshot said the range is empty" from "there was no snapshot", which a
+	// zero descriptor cannot.
+	desc     RangeDescriptor
+	haveDesc bool
 }
 
 // storedSnapshot is the snapshot this node can hand a follower.
@@ -665,8 +733,8 @@ type recovered struct {
 // deciding what to SEND. Sending a snapshot that is visible but not yet durable
 // is safe -- its contents are derived from entries a quorum already holds -- and
 // no verdict rests on it.
-func (n *Node) storedSnapshot() (raft.SnapshotMeta, []byte, bool) {
-	v, err := n.db.Get(keySnapshot)
+func (n *Replica) storedSnapshot() (raft.SnapshotMeta, []byte, bool) {
+	v, err := n.db.Get(n.keySnapshot())
 	if err != nil {
 		return raft.SnapshotMeta{}, nil, false
 	}
@@ -682,7 +750,7 @@ func (n *Node) storedSnapshot() (raft.SnapshotMeta, []byte, bool) {
 // gated on anything, because no outbound message depends on it -- raft has
 // already compacted in memory, and if the write is lost the node simply recovers
 // the longer log it had before.
-func (n *Node) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
+func (n *Replica) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 	if n.cfg.SnapshotThreshold == 0 {
 		return
 	}
@@ -697,11 +765,11 @@ func (n *Node) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 		return
 	}
 	meta := raft.SnapshotMeta{Index: applied, Term: term, Conf: conf}
-	data := encodeKV(n.kv)
+	data := encodeMachine(n.desc, n.kv)
 
 	b := engine.NewBatch()
-	b.Set(keySnapshot, encodeSnapshot(meta, data))
-	b.DeleteRange(logPrefix, logKey(applied+1))
+	b.Set(n.keySnapshot(), encodeSnapshot(meta, data))
+	b.DeleteRange(n.logPrefix(), n.logKey(applied+1))
 	seq, err := n.db.Apply(b, true)
 	if err != nil {
 		return
@@ -710,10 +778,59 @@ func (n *Node) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 	s.At(at+n.cfg.SyncLatency, sim.KindDurable, sim.NodeID(n.cfg.Ordinal),
 		sim.Stamp(n.epoch.Current(), seq))
 	n.snapshotsTaken++
-	n.cfg.Ledger.RecordSnapshot(n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
+	n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
 		Index: meta.Index, Term: meta.Term, Digest: digest(data), Taken: true,
 	}), at)
 }
+
+// maybeSplit proposes a split once this range holds more keys than its
+// threshold.
+//
+// The split key is the MEDIAN of the keys the range holds, which is a function
+// of state every replica already agrees on. The entry carries it anyway, so
+// followers never re-derive it -- but choosing it from something a follower
+// could not have computed (a clock, a counter) would make the leader's choice
+// unverifiable, and this project has spent three phases learning what an
+// unverifiable value costs.
+func (n *Replica) maybeSplit(at clock.Instant) {
+	if n.cfg.SplitThreshold == 0 || n.splitPending || !n.IsLeader() {
+		return
+	}
+	if len(n.kv) < n.cfg.SplitThreshold {
+		return
+	}
+	key, ok := splitKeyFor(sorted.Keys(n.kv))
+	if !ok {
+		return
+	}
+	left := n.desc.Clone()
+	left.End = append([]byte(nil), key...)
+	left.Epoch++
+	right := RangeDescriptor{
+		ID:    n.machine.nextRangeID(),
+		Start: append([]byte(nil), key...),
+		End:   append([]byte(nil), n.desc.End...),
+		Epoch: 1,
+	}
+	n.propSeq++
+	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
+	if err := n.raft.Propose(id, encodeSplitCommand(SplitSpec{Key: key, Left: left, Right: right})); err != nil {
+		return
+	}
+	n.splitPending = true
+	n.splitsProposed++
+	_ = at
+}
+
+// StaleSplits is how many split entries this replica skipped for naming an
+// extent the range had already moved past.
+func (n *Replica) StaleSplits() int { return n.staleSplits }
+
+// SplitsProposed is how many splits this replica's leader proposed.
+func (n *Replica) SplitsProposed() int { return n.splitsProposed }
+
+// Descriptor reports this replica's range extent, for the harness's counters.
+func (n *Replica) Descriptor() RangeDescriptor { return n.desc.Clone() }
 
 // digest is FNV-1a over the snapshot bytes. It is a comparison key, not a
 // security property: the snapshot's contents are checked against an
@@ -731,11 +848,28 @@ func digest(b []byte) uint64 {
 
 // SnapshotsTaken and SnapshotsApplied report what this node did with snapshots,
 // so a lane can ask whether the paths ran at all.
-func (n *Node) SnapshotsTaken() int   { return n.snapshotsTaken }
-func (n *Node) SnapshotsApplied() int { return n.snapshotsApplied }
+func (n *Replica) SnapshotsTaken() int   { return n.snapshotsTaken }
+func (n *Replica) SnapshotsApplied() int { return n.snapshotsApplied }
+
+// adoptSnapshot installs a derived initial state on a newly created replica.
+func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, kv map[string]string) {
+	r, err := raft.Restore(raft.Config{
+		ID: n.cfg.ID, Peers: n.cfg.Peers,
+		ElectionTimeout: n.cfg.Election, HeartbeatTimeout: n.cfg.Heartbeat,
+		Learners: n.cfg.Learners, PromotionLag: n.cfg.PromotionLag,
+		PreVote: n.cfg.PreVote,
+	}, raft.HardState{}, meta, nil)
+	if err != nil {
+		panic(fmt.Sprintf("store: node %d cannot start range %d: %v", n.cfg.ID, n.rng, err))
+	}
+	n.raft = r
+	n.kv = kv
+	n.durSnap = meta
+	n.jitter()
+}
 
 // IsLeader is the driver's own routing question, not a safety judgement.
-func (n *Node) IsLeader() bool { return !n.down && n.raft.Role() == raft.RoleLeader }
+func (n *Replica) IsLeader() bool { return !n.down && n.raft.Role() == raft.RoleLeader }
 
 // RequestTransfer hands leadership to target if this node is the leader.
 //
@@ -743,7 +877,7 @@ func (n *Node) IsLeader() bool { return !n.down && n.raft.Role() == raft.RoleLea
 // on this node drains it, which is at most one tick away. The alternative is
 // threading a scheduler into an action callback that has none, for a message
 // whose whole point is that it does not have to be fast.
-func (n *Node) RequestTransfer(target raft.NodeID) bool {
+func (n *Replica) RequestTransfer(target raft.NodeID) bool {
 	if !n.IsLeader() || target == n.cfg.ID {
 		return false
 	}
@@ -753,7 +887,7 @@ func (n *Node) RequestTransfer(target raft.NodeID) bool {
 }
 
 // TransfersAsked is how many transfers this node initiated.
-func (n *Node) TransfersAsked() int { return n.transfersAsked }
+func (n *Replica) TransfersAsked() int { return n.transfersAsked }
 
 // RequestConfChange moves target one step around the membership cycle:
 // absent -> learner -> voter -> absent.
@@ -764,7 +898,7 @@ func (n *Node) TransfersAsked() int { return n.transfersAsked }
 // in flight -- leaves the node where it is and the next action tries again.
 // Refusals are counted, because a phase whose membership changes were all
 // refused is a phase that tested nothing.
-func (n *Node) RequestConfChange(target raft.NodeID) {
+func (n *Replica) RequestConfChange(target raft.NodeID) {
 	if !n.IsLeader() || target == n.cfg.ID {
 		return
 	}
@@ -794,35 +928,35 @@ func (n *Node) RequestConfChange(target raft.NodeID) {
 
 // ConfProposed, ConfRefused and LagRefused report what the membership churn
 // actually did. A sweep in which every change was refused is green about nothing.
-func (n *Node) ConfProposed() int { return n.confProposed }
+func (n *Replica) ConfProposed() int { return n.confProposed }
 
 // ConfRefused counts changes the state machine declined for any reason.
-func (n *Node) ConfRefused() int { return n.confRefused }
+func (n *Replica) ConfRefused() int { return n.confRefused }
 
 // LagRefused counts promotions declined because the learner was too far behind,
 // which is the catch-up bound doing its job.
-func (n *Node) LagRefused() int { return n.lagRefused }
+func (n *Replica) LagRefused() int { return n.lagRefused }
 
 // ConfRecoveries is how many restarts recovered a log containing a configuration
 // change, and ConfCrossChecks how many had a snapshot configuration to be
 // checked against.
-func (n *Node) ConfRecoveries() int  { return n.confRecoveries }
-func (n *Node) ConfCrossChecks() int { return n.confCrossChecks }
+func (n *Replica) ConfRecoveries() int  { return n.confRecoveries }
+func (n *Replica) ConfCrossChecks() int { return n.confCrossChecks }
 
 // StateDigest is the harness's hook for computing the digest of a state machine
-// it built itself.
+// it built itself: the extent AND the keys, because both are applied state.
 //
 // The harness re-implements what a command DOES and shares only the
 // serialisation, so a defect in applying commands cannot cancel out on both
 // sides of the snapshot comparison.
-func StateDigest(kv map[string]string) uint64 { return digest(encodeKV(kv)) }
+func StateDigest(desc RangeDescriptor, kv map[string]string) uint64 {
+	return digest(encodeMachine(desc, kv))
+}
 
 // crash takes the process down: volatile state goes, unsynced writes go.
-func (n *Node) crash() {
+func (n *Replica) onCrash() {
 	// A process death ends an incarnation. Every completion already in flight
 	// belongs to it and must never reach whatever comes next.
-	n.epoch.Advance()
-	n.db.Crash()
 	n.down = true
 	n.inflight = nil
 
@@ -844,7 +978,7 @@ func (n *Node) crash() {
 // the Raft that requested it; handing it to the Raft that replaced it
 // acknowledges a mark that instance never issued, which closes nothing and
 // leaves every message gated on its real mark withheld forever. BUG-001.
-func (n *Node) restart() {
+func (n *Replica) restart() {
 	// # A restart is a death followed by a recovery, and the death is not optional
 	//
 	// A restart delivered to a node that is NOT down still ends the running
@@ -857,14 +991,9 @@ func (n *Node) restart() {
 	// "recovered" writes no crash would have kept. It then answered for them.
 	// That is the precise inverse of the fault being injected, and it is how a
 	// follower acked index 15 with 5 durable on seed 92 (BUG-005).
-	if !n.down {
-		n.crash()
-	}
-
 	// A restart is a new incarnation too, not a continuation of the crashed
 	// one. Treating it as a continuation is how a second restart handed a fresh
 	// Raft an acknowledgement for a mark it never issued (BUG-002).
-	n.epoch.Advance()
 	n.pending = nil
 	n.inflight = nil
 
@@ -923,6 +1052,43 @@ func (n *Node) restart() {
 	// leader confirms it -- which is the "snapshot plus tail" half of the
 	// equivalence this phase has to prove.
 	n.kv = st.kv
+
+	// # The extent is applied state, and it is recovered only from an index
+	//
+	// This line read `if st.desc.Epoch >= n.desc.Epoch`, taking whichever
+	// descriptor was newer -- the snapshot's, or the one `readDescriptors` found
+	// under the range's own key. Taking the newer of two facts is right when both
+	// describe the same instant. These do not.
+	//
+	// The snapshot's descriptor is aligned with the state machine the snapshot
+	// decodes to: it is the extent AT that index. The descriptor key is written
+	// whenever a split applies and is aligned with nothing, so after a crash it
+	// can be ahead of the state being rebuilt. A node that applied a split at
+	// index 10, crashed, and recovers from a snapshot at index 6 then rebuilds a
+	// state machine that has not split while holding a descriptor that has.
+	// Re-applying the split entry finds its own effect already recorded in the
+	// extent, judges the entry stale, and skips it -- so the keys never move, and
+	// the node's state machine diverges from every replica that applied it once
+	// (BUG-011).
+	//
+	// So the snapshot wins outright. Where there is no snapshot the extent is the
+	// range's birth extent, and replaying the log carries it forward from there.
+	// Both are positions in the log; the descriptor key is not one, and it is
+	// demoted to what it can honestly be: a record that the range exists.
+	switch {
+	case st.haveDesc:
+		n.desc = st.desc
+	case n.rng == FirstRange:
+		n.desc = FirstRangeDescriptor()
+	default:
+		// A split-born range's descriptor and its birth snapshot are written in
+		// one batch, so discovering the range without its snapshot is not a
+		// state this code can recover from -- and guessing an extent here is how
+		// two ranges come to claim the same keys.
+		panic(fmt.Sprintf(
+			"store: node %d recovered range %d with no snapshot to take an extent from",
+			n.cfg.ID, n.rng))
+	}
 	n.down = false
 	n.writtenLast = n.durSnap.Index
 	if last := lastLogIndex(n.durLog); last > n.writtenLast {
@@ -986,14 +1152,14 @@ func lastLogIndex(es []raft.Entry) raft.Index {
 
 // DurabilityCrossChecks is how often this node's durability record was compared
 // against the engine's own account of what it holds.
-func (n *Node) DurabilityCrossChecks() int { return n.crossChecks }
+func (n *Replica) DurabilityCrossChecks() int { return n.crossChecks }
 
 // StaleEpochDrops is how many completions from a dead incarnation this node
 // refused.
-func (n *Node) StaleEpochDrops() int { return n.epoch.Dropped() }
+func (n *Replica) StaleEpochDrops() int { return n.epoch.Dropped() }
 
 // CheckEpochs refuses a run in which any cross-epoch delivery occurred.
-func (n *Node) CheckEpochs() error {
+func (n *Replica) CheckEpochs() error {
 	return n.epoch.Check(fmt.Sprintf("node %d", n.cfg.ID))
 }
 
@@ -1008,7 +1174,7 @@ func (n *Node) CheckEpochs() error {
 //
 // A crashed node is exempt for the same reason: its in-flight writes died with
 // it, and the gated messages died with the Raft that made them.
-func (n *Node) AssertQuiescent() error {
+func (n *Replica) AssertQuiescent() error {
 	if n.down {
 		return nil
 	}
@@ -1032,9 +1198,17 @@ type Request struct {
 	Key     string
 	Value   string
 	HistIdx int
+
+	// Range and Epoch are what the client BELIEVED when it routed this request.
+	// They are the client's claim, not the cluster's fact, and the replica
+	// checks them against its own descriptor -- which is the entire point of a
+	// range epoch. Zero means "unrouted", which the sim uses for the first
+	// attempt before any descriptor is cached.
+	Range RangeID
+	Epoch uint64
 }
 
-func (n *Node) ordinalOf(id raft.NodeID) int {
+func (n *Replica) ordinalOf(id raft.NodeID) int {
 	for i, p := range n.cfg.Peers {
 		if p == id {
 			return i

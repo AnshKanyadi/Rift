@@ -31,7 +31,40 @@ import (
 //
 // It is append-only and everything in it is a fact the harness witnessed rather
 // than a value it asked a node for.
+//
+// # Per range, and the audit that says why
+//
+// A4 made the cluster many Raft groups, and every one of the ledger's facts
+// belongs to exactly one of them. Merging them would not be a smaller version of
+// the truth: comparing range A's log against range B's is comparing unrelated
+// sequences, and DESIGN-A4 §6 works through what each oracle would then say. Six
+// would produce false positives, which announce themselves. **Two -- log matching
+// and persist-before-reply -- would go quietly weaker**, which does not, and that
+// is the whole reason this type is keyed by range rather than left alone.
 type Ledger struct {
+	// ranges holds one sub-ledger per range, in a SORTED slice. Sorted because
+	// oracles walk it and this package is in core determinism scope.
+	ranges []*rangeLedger
+
+	nodes int
+	rev   uint64
+}
+
+// rangeLedger is everything the ledger used to be, for one range.
+type rangeLedger struct {
+	id uint64
+
+	// base is the state this range STARTED from, as bytes, or nil for a range
+	// that started empty.
+	//
+	// A range born from a split does not begin at nothing: it inherits the keys
+	// above the split point from its parent, derived by every replica from its
+	// own applied state. Its own log therefore describes only what happened
+	// after that, and a model replaying only the log would compute a state the
+	// range never had -- which is a checker reporting a violation on every seed
+	// that splits, for a system behaving correctly.
+	base []byte
+
 	// durable[node] is what that node has made durable, most recent last.
 	durableHS []hsRecord
 
@@ -78,16 +111,48 @@ type Ledger struct {
 	snaps []snapRecord
 
 	nodes int
-
-	// rev increments on every recorded fact. An oracle is a pure function of the
-	// ledger, so a rev that has not moved cannot produce a verdict that has --
-	// and the sweep calls every oracle on every event, which is thousands of full
-	// re-scans per run once logs are long enough to compact.
-	rev uint64
 }
 
-// Rev is the ledger's revision, for oracles that skip unchanged state.
+// rev increments on every recorded fact. An oracle is a pure function of the
+// ledger, so a rev that has not moved cannot produce a verdict that has -- and
+// the sweep calls every oracle on every event, which is thousands of full
+// re-scans per run once logs are long enough to compact.
+//
+// One counter for the whole ledger rather than one per range: an oracle that
+// walks every range has to re-walk when any of them changes.
 func (l *Ledger) Rev() uint64 { return l.rev }
+
+// forRange returns the sub-ledger for id, creating it in sorted position.
+//
+// Created on first mention rather than declared up front, because ranges are
+// born by splitting and the harness learns about one when a node first does
+// something with it.
+func (l *Ledger) forRange(id uint64) *rangeLedger {
+	for _, r := range l.ranges {
+		if r.id == id {
+			return r
+		}
+	}
+	r := &rangeLedger{
+		id:          id,
+		durableLog:  make([][]raft.Entry, l.nodes),
+		durableSnap: make([]raft.SnapshotMeta, l.nodes),
+		applied:     make([][]raft.Entry, l.nodes),
+		nodes:       l.nodes,
+	}
+	l.ranges = append(l.ranges, r)
+	for i := len(l.ranges) - 1; i > 0 && l.ranges[i-1].id > l.ranges[i].id; i-- {
+		l.ranges[i-1], l.ranges[i] = l.ranges[i], l.ranges[i-1]
+	}
+	return r
+}
+
+// Ranges returns the sub-ledgers in range order, which is the order every oracle
+// walks them in.
+func (l *Ledger) Ranges() []*rangeLedger { return l.ranges }
+
+// RangeCount is how many ranges the harness has seen.
+func (l *Ledger) RangeCount() int { return len(l.ranges) }
 
 type hsRecord struct {
 	node int
@@ -144,15 +209,32 @@ type snapRecord struct {
 	at   clock.Instant
 }
 
-// NewLedger returns a ledger for n nodes.
-func NewLedger(n int) *Ledger {
-	return &Ledger{
-		durableLog:  make([][]raft.Entry, n),
-		durableSnap: make([]raft.SnapshotMeta, n),
-		applied:     make([][]raft.Entry, n),
-		nodes:       n,
+// SnapshotsByNode returns each recorded snapshot with the node that produced it,
+// for diagnosis.
+func (l *rangeLedger) SnapshotsByNode() []struct {
+	Node int
+	Rec  SnapshotRecord
+} {
+	out := make([]struct {
+		Node int
+		Rec  SnapshotRecord
+	}, 0, len(l.snaps))
+	for _, s := range l.snaps {
+		out = append(out, struct {
+			Node int
+			Rec  SnapshotRecord
+		}{s.node, s.rec})
 	}
+	return out
 }
+
+// CommittedPrefix exposes the committed prefix for diagnosis.
+func (l *rangeLedger) CommittedPrefix(through raft.Index) ([]raft.Entry, bool) {
+	return l.committedPrefix(through)
+}
+
+// NewLedger returns a ledger for n nodes.
+func NewLedger(n int) *Ledger { return &Ledger{nodes: n} }
 
 // RecordDurable records what a node made durable. entries is the node's full
 // persisted log prefix after the write.
@@ -169,8 +251,7 @@ func NewLedger(n int) *Ledger {
 // checker: what may be recorded here is what the harness WITNESSED crossing the
 // boundary — the batch the driver submitted, promoted when the engine reported
 // that sequence durable — and a provenance.Reported no longer fits.
-func (l *Ledger) RecordDurable(node int, stO provenance.Observed[DurableState], at clock.Instant) {
-	l.rev++
+func (l *rangeLedger) RecordDurable(node int, stO provenance.Observed[DurableState], at clock.Instant) {
 	st := stO.Fact()
 	l.durableHS = append(l.durableHS, hsRecord{node: node, hs: st.HardState, at: at})
 	cp := make([]raft.Entry, len(st.Log))
@@ -201,7 +282,7 @@ type DurableState struct {
 // far as state machine safety holds, and state machine safety is checked
 // independently -- so if it ever fails, this arm is unreliable and the run has
 // already reported the reason.
-func (l *Ledger) holds(node int, e raft.Entry) bool {
+func (l *rangeLedger) holds(node int, e raft.Entry) bool {
 	if l.durableSnap[node].Index >= e.Index {
 		return true
 	}
@@ -218,8 +299,7 @@ func (l *Ledger) holds(node int, e raft.Entry) bool {
 // The message is Observed for the same reason the durable record is: it is a
 // value that crossed the node's boundary on its way to the transport, not an
 // answer to a question about what the node believes it sent.
-func (l *Ledger) RecordSent(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
-	l.rev++
+func (l *rangeLedger) RecordSent(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
 	m := mO.Fact()
 	hs := l.durableHardState(node)
 	l.sent = append(l.sent, sentRecord{
@@ -239,8 +319,7 @@ func (l *Ledger) RecordSent(node int, mO provenance.Observed[raft.Message], at c
 // Observed: it is the frame crossing into the node, taken before the node has
 // done anything with it, not an answer to a question about what it thinks it
 // received.
-func (l *Ledger) RecordReceived(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
-	l.rev++
+func (l *rangeLedger) RecordReceived(node int, mO provenance.Observed[raft.Message], at clock.Instant) {
 	l.recv = append(l.recv, sentRecord{node: node, msg: mO.Fact(), at: at})
 }
 
@@ -250,8 +329,7 @@ func (l *Ledger) RecordReceived(node int, mO provenance.Observed[raft.Message], 
 // as they cross the boundary rather than read back out of the state machine
 // afterwards. Reading them back would ask the system what it applied, which is
 // the question the oracle exists to answer independently.
-func (l *Ledger) RecordApplied(node int, entriesO provenance.Observed[[]raft.Entry], at clock.Instant) {
-	l.rev++
+func (l *rangeLedger) RecordApplied(node int, entriesO provenance.Observed[[]raft.Entry], at clock.Instant) {
 	entries := entriesO.Fact()
 	l.applied[node] = append(l.applied[node], entries...)
 	for _, e := range entries {
@@ -266,13 +344,28 @@ func (l *Ledger) RecordApplied(node int, entriesO provenance.Observed[[]raft.Ent
 // Observed: the digest is of the bytes handed to the engine, or of the bytes
 // that arrived on the wire. Neither is a question asked of a state machine about
 // what it thinks it holds.
-func (l *Ledger) RecordSnapshot(node int, rO provenance.Observed[SnapshotRecord], at clock.Instant) {
-	l.rev++
+func (l *rangeLedger) RecordSnapshot(node int, rO provenance.Observed[SnapshotRecord], at clock.Instant) {
 	l.snaps = append(l.snaps, snapRecord{node: node, rec: rO.Fact(), at: at})
 }
 
+// RecordRangeBase records the state a range started from.
+//
+// Observed: these are the bytes handed to the engine as the new range's initial
+// snapshot, taken as they cross the boundary.
+func (l *rangeLedger) RecordRangeBase(data provenance.Observed[[]byte]) {
+	if l.base == nil {
+		l.base = append([]byte(nil), data.Fact()...)
+	}
+}
+
+// ID is this range's identifier.
+func (l *rangeLedger) ID() uint64 { return l.id }
+
+// Base is the state this range started from, or nil.
+func (l *rangeLedger) Base() []byte { return l.base }
+
 // Snapshots returns every recorded snapshot event, in order.
-func (l *Ledger) Snapshots() []SnapshotRecord {
+func (l *rangeLedger) Snapshots() []SnapshotRecord {
 	out := make([]SnapshotRecord, 0, len(l.snaps))
 	for _, s := range l.snaps {
 		out = append(out, s.rec)
@@ -282,7 +375,7 @@ func (l *Ledger) Snapshots() []SnapshotRecord {
 
 // SnapshotsTaken and SnapshotsInstalled count the two directions, so a lane can
 // ask whether either path ran at all.
-func (l *Ledger) SnapshotsTaken() int {
+func (l *rangeLedger) SnapshotsTaken() int {
 	n := 0
 	for _, s := range l.snaps {
 		if s.rec.Taken {
@@ -293,15 +386,15 @@ func (l *Ledger) SnapshotsTaken() int {
 }
 
 // SnapshotsInstalled is the receiving half of the same count.
-func (l *Ledger) SnapshotsInstalled() int { return len(l.snaps) - l.SnapshotsTaken() }
+func (l *rangeLedger) SnapshotsInstalled() int { return len(l.snaps) - l.SnapshotsTaken() }
 
 // AppliedBy returns what a node applied, in order. It exists for the apply
 // continuity oracle, which is about one node's stream rather than about two
 // nodes agreeing.
-func (l *Ledger) AppliedBy(node int) []raft.Entry { return l.applied[node] }
+func (l *rangeLedger) AppliedBy(node int) []raft.Entry { return l.applied[node] }
 
 // InstallsBy returns the snapshot indices a node installed, in order.
-func (l *Ledger) InstallsBy(node int) []raft.Index {
+func (l *rangeLedger) InstallsBy(node int) []raft.Index {
 	var out []raft.Index
 	for _, s := range l.snaps {
 		if s.node == node && !s.rec.Taken {
@@ -311,10 +404,7 @@ func (l *Ledger) InstallsBy(node int) []raft.Index {
 	return out
 }
 
-// Nodes is how many nodes this ledger covers.
-func (l *Ledger) Nodes() int { return l.nodes }
-
-func (l *Ledger) noteLeader(term raft.Term, node int, at clock.Instant) {
+func (l *rangeLedger) noteLeader(term raft.Term, node int, at clock.Instant) {
 	for _, r := range l.ledIn {
 		if r.term == term && r.node == node {
 			return
@@ -327,7 +417,7 @@ func (l *Ledger) noteLeader(term raft.Term, node int, at clock.Instant) {
 	})
 }
 
-func (l *Ledger) durableHardState(node int) raft.HardState {
+func (l *rangeLedger) durableHardState(node int) raft.HardState {
 	var hs raft.HardState
 	for _, r := range l.durableHS {
 		if r.node == node {
@@ -344,7 +434,7 @@ func (l *Ledger) durableHardState(node int) raft.HardState {
 // an EMPTY suffix and everything durable, and taking the suffix's last index
 // there reports zero -- which is not a small error, it is the persist-before-reply
 // oracle accusing a correct node of acknowledging something it never wrote.
-func (l *Ledger) durableLast(node int) raft.Index {
+func (l *rangeLedger) durableLast(node int) raft.Index {
 	last := l.durableSnap[node].Index
 	if x := lastIndexOf(l.durableLog[node]); x > last {
 		last = x
@@ -352,7 +442,7 @@ func (l *Ledger) durableLast(node int) raft.Index {
 	return last
 }
 
-func (l *Ledger) isCommitted(i raft.Index) bool {
+func (l *rangeLedger) isCommitted(i raft.Index) bool {
 	for _, c := range l.committed {
 		if c.entry.Index == i {
 			return true
@@ -362,7 +452,7 @@ func (l *Ledger) isCommitted(i raft.Index) bool {
 }
 
 // Committed returns the committed entries observed so far.
-func (l *Ledger) Committed() []raft.Entry {
+func (l *rangeLedger) Committed() []raft.Entry {
 	out := make([]raft.Entry, 0, len(l.committed))
 	for _, c := range l.committed {
 		out = append(out, c.entry)
@@ -376,7 +466,7 @@ func (l *Ledger) Committed() []raft.Entry {
 // Incomplete is not a failure. It means the harness has not seen enough to make
 // a claim, and a checker that guessed at the gap would be asserting over a
 // history it does not have.
-func (l *Ledger) committedPrefix(through raft.Index) ([]raft.Entry, bool) {
+func (l *rangeLedger) committedPrefix(through raft.Index) ([]raft.Entry, bool) {
 	if through == 0 {
 		return nil, true
 	}
@@ -427,7 +517,7 @@ type TransferRecord struct {
 // Keyed on DELIVERY rather than on the send. A transfer order that never arrives
 // produces no campaign, and counting it against the feature would be measuring
 // the network. What is attributable is what a node did after it accepted one.
-func (l *Ledger) Transfers() []TransferRecord {
+func (l *rangeLedger) Transfers() []TransferRecord {
 	var out []TransferRecord
 	for _, d := range l.recv {
 		if d.msg.Type != raft.MsgTimeoutNow {
@@ -475,7 +565,7 @@ type Census struct {
 // A run whose leader is never challenged proves nothing, so these numbers are
 // reported alongside every sweep: a schedule mix that produces no contention is
 // a mix that needs fixing, and that is invisible unless it is counted.
-func (l *Ledger) Census() Census {
+func (l *rangeLedger) Census() Census {
 	var c Census
 	startedIn := map[raft.Term]bool{}
 	wonIn := map[raft.Term]bool{}
@@ -533,7 +623,7 @@ func lastIndexOf(es []raft.Entry) raft.Index {
 
 // Dump renders the committed ledger and per-node apply streams, for diagnosis.
 // It is a report surface, not an oracle input.
-func (l *Ledger) Dump() string {
+func (l *rangeLedger) Dump() string {
 	s := "committed (first applied by any node):\n"
 	for _, c := range l.committed {
 		s += fmt.Sprintf("  idx=%d term=%d by=node%d at=%d data=%q\n",
@@ -548,4 +638,98 @@ func (l *Ledger) Dump() string {
 		s += fmt.Sprintf("node %d applied %d entries\n", n, len(l.applied[n]))
 	}
 	return s
+}
+
+// --- the Ledger's own surface, keyed by range ---------------------------------
+//
+// Every entry point takes the range the fact belongs to. There is deliberately
+// no unkeyed variant: a caller that did not know which range it was recording
+// would be a caller recording something the oracles cannot use, and the compiler
+// should say so rather than the sweep.
+
+// Nodes is how many nodes this ledger covers.
+func (l *Ledger) Nodes() int { return l.nodes }
+
+// RecordDurable records what a node made durable for one range.
+func (l *Ledger) RecordDurable(rangeID uint64, node int, st provenance.Observed[DurableState], at clock.Instant) {
+	l.rev++
+	l.forRange(rangeID).RecordDurable(node, st, at)
+}
+
+// RecordSent records a released message.
+func (l *Ledger) RecordSent(rangeID uint64, node int, m provenance.Observed[raft.Message], at clock.Instant) {
+	l.rev++
+	l.forRange(rangeID).RecordSent(node, m, at)
+}
+
+// RecordReceived records a message a node accepted.
+func (l *Ledger) RecordReceived(rangeID uint64, node int, m provenance.Observed[raft.Message], at clock.Instant) {
+	l.rev++
+	l.forRange(rangeID).RecordReceived(node, m, at)
+}
+
+// RecordApplied records entries a node applied.
+func (l *Ledger) RecordApplied(rangeID uint64, node int, entries provenance.Observed[[]raft.Entry], at clock.Instant) {
+	l.rev++
+	l.forRange(rangeID).RecordApplied(node, entries, at)
+}
+
+// RecordSnapshot records a snapshot a node created or installed.
+func (l *Ledger) RecordSnapshot(rangeID uint64, node int, r provenance.Observed[SnapshotRecord], at clock.Instant) {
+	l.rev++
+	l.forRange(rangeID).RecordSnapshot(node, r, at)
+}
+
+// Census aggregates every range's election activity.
+//
+// Summed rather than per range, because the question it answers is about the
+// SWEEP -- did these schedules contend -- and a cluster of ten quiet ranges and
+// one busy one contended. Per-range censuses are available from Ranges() for
+// anyone asking a per-range question.
+func (l *Ledger) Census() Census {
+	var out Census
+	for _, r := range l.ranges {
+		c := r.Census()
+		if c.Terms > out.Terms {
+			out.Terms = c.Terms
+		}
+		out.ElectionsStart += c.ElectionsStart
+		out.ElectionsWon += c.ElectionsWon
+		out.SplitVotes += c.SplitVotes
+		out.Leaders += c.Leaders
+	}
+	return out
+}
+
+// Transfers concatenates every range's leadership transfers.
+func (l *Ledger) Transfers() []TransferRecord {
+	var out []TransferRecord
+	for _, r := range l.ranges {
+		out = append(out, r.Transfers()...)
+	}
+	return out
+}
+
+// SnapshotsTaken and SnapshotsInstalled sum across ranges.
+func (l *Ledger) SnapshotsTaken() int {
+	n := 0
+	for _, r := range l.ranges {
+		n += r.SnapshotsTaken()
+	}
+	return n
+}
+
+// SnapshotsInstalled is the receiving half of the same count.
+func (l *Ledger) SnapshotsInstalled() int {
+	n := 0
+	for _, r := range l.ranges {
+		n += r.SnapshotsInstalled()
+	}
+	return n
+}
+
+// RecordRangeBase records the state a range started from, keyed by range.
+func (l *Ledger) RecordRangeBase(rangeID uint64, data provenance.Observed[[]byte]) {
+	l.rev++
+	l.forRange(rangeID).RecordRangeBase(data)
 }

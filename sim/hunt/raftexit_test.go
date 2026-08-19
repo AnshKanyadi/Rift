@@ -49,6 +49,9 @@ func TestRaftExitCriteria(t *testing.T) {
 		c.SnapshotsTaken, c.SnapshotsApplied, c.TransfersAsked)
 	t.Logf("a3 features:  %d membership changes proposed, %d refused (%d of those a lagging learner)",
 		c.ConfProposed, c.ConfRefused, c.LagRefused)
+	t.Logf("a4 features:  %d splits proposed, %d applied, most ranges on one machine %d, "+
+		"%d requests refused for a stale descriptor epoch",
+		c.SplitsProposed, c.SplitsApplied, c.Ranges, c.StaleEpochRefusals)
 	t.Logf("a3 recovery:  %d restarts recovered a log carrying a configuration change, %d of them "+
 		"cross-checked against a snapshot configuration", c.ConfRecoveries, c.ConfCrossChecks)
 	for _, why := range c.InconclusiveCauses {
@@ -84,6 +87,13 @@ func TestRaftExitCriteria(t *testing.T) {
 	if c.ConfProposed == 0 {
 		t.Error("no membership change was ever proposed across the whole sweep; every configuration " +
 			"oracle in this run checked nothing, and the change path was never executed")
+	}
+	if c.SplitsApplied == 0 {
+		t.Error("no split was applied across the whole sweep; every per-range oracle judged a " +
+			"single range, which is what they already did before A4")
+	}
+	if c.Ranges < 2 {
+		t.Error("no machine ever hosted more than one range, so multi-raft was never exercised")
 	}
 	if c.ConfRecoveries == 0 {
 		t.Error("no restart ever recovered a log carrying a configuration change, so nothing in " +
