@@ -4,7 +4,8 @@
 # expect: killed
 # power-seeds: 300
 # power-floor: 15
-# power-measured: 32 of 300, first at seed 8, at commit 34b284d+A4
+# power-ceiling: 32
+# power-measured: 33 of 300, first at seed 8, at commit 6e716d5+A5-open; was 32 of 300, first at seed 8, at commit 34b284d+A4
 # mutates: a committed command is applied whatever its key, so a range keeps writing keys it has already given away. The key then sits in the wrong range forever, because the next split moves out only what its own right half contains and a key outside both halves is moved by nothing (BUG-014). The split-time partition assertion is removed with it, since that assertion exists only to make this residue loud
 --- a/store/node.go
 +++ b/store/node.go

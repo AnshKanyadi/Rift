@@ -4,7 +4,8 @@
 # expect: killed
 # power-seeds: 300
 # power-floor: 130
-# power-measured: 276 of 300, first at seed 0, at commit 20ebf9d+A4
+# power-ceiling: 10
+# power-measured: 235 of 300, first at seed 0, at commit 6e716d5+A5-open; was 276 of 300, first at seed 0, at commit 20ebf9d+A4
 # mutates: the leader creates the right-hand range out of band as well as by applying the entry, which is candidate design (1) in DESIGN-A4 section 4 -- the one the design rejected for having no agreed point at which the split happened. Caught on 276 of 300 seeds, and caught as a STATE DIVERGENCE rather than as an orphan range: the out-of-band range's birth state is derived at a different moment from every other replica's, so snapshot equivalence reaches it long before anything notices that a range exists which no committed log created. That is why split-partition's orphan clause is induced directly instead (raftcheck/splitpartition_test.go)
 --- a/store/machine.go
 +++ b/store/machine.go

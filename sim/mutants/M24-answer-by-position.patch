@@ -4,7 +4,8 @@
 # expect: killed
 # power-seeds: 300
 # power-floor: 60
-# power-measured: 123 of 300, first at seed 0, at commit 34b284d+A4; was 120 at commit c1a1f6c+A3
+# power-ceiling: 10
+# power-measured: 121 of 300, first at seed 0, at commit 6e716d5+A5-open; was 120 at commit c1a1f6c+A3
 # mutates: an applied entry is matched to a client by POSITION in the outstanding list rather than by the proposal's own identifier, so a client is told its write succeeded for a slot somebody else's command occupies -- BUG-004's shape, which all four safety oracles were correctly green through because an entry overwritten by a later leader is legal Raft
 --- a/store/node.go
 +++ b/store/node.go
