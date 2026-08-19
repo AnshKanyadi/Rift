@@ -1,6 +1,8 @@
 package hunt_test
 
 import (
+	"os"
+	"strconv"
 	"testing"
 
 	"github.com/anshkanyadi/rift/sim"
@@ -63,6 +65,35 @@ import (
 // What prevents it now is not vigilance: hunt.CurrentOptions is the single
 // source of truth, read by the sweep, by these inductions and by the power
 // probe. They cannot disagree, because there is only one of them.
+// boundSeeds caps a covering test's seed range when RAFT_SEEDS is set.
+//
+// # What this costs, stated rather than implied
+//
+// RAFT_SEEDS is the race lane's knob. Under -race the simulator runs roughly ten
+// times slower, which is why Amendment-era A1 bounded the exit run to 200 seeds
+// there and recorded the scope. The covering tests were not bounded, and A4's
+// growth pushed the package past Go's ten-minute default: the race lane failed
+// on a TIMEOUT, with no data race anywhere in it.
+//
+// So in the race lane every seed search is capped too. **Those runs prove
+// nothing about detection while capped** -- a 200-seed slice of a search whose
+// first detection is at seed 553 finds nothing, by construction. What they prove
+// there is the only thing that lane asks: that no cross-goroutine interaction
+// reaches core state while this code runs. The detection claims come from the
+// unraced lanes, which run the full ranges, and from the mutant lane, which runs
+// them with the defect planted.
+func boundSeeds(seeds uint64) uint64 {
+	raw := os.Getenv("RAFT_SEEDS")
+	if raw == "" {
+		return seeds
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || n == 0 || n >= seeds {
+		return seeds
+	}
+	return n
+}
+
 func assertOracleSilent(t *testing.T, oracle string, seeds uint64) {
 	t.Helper()
 	assertOracleSilentWith(t, oracle, seeds, hunt.CurrentOptions())
@@ -73,7 +104,7 @@ func assertOracleSilent(t *testing.T, oracle string, seeds uint64) {
 func assertOracleSilentWith(t *testing.T, oracle string, seeds uint64, opt hunt.RaftOptions) {
 	t.Helper()
 	byOther := map[string]int{}
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
 		p, err := hunt.MaterializeRaftWith(seed, opt)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)
@@ -332,7 +363,7 @@ func TestSnapshotPrefixIsNotOverwritten(t *testing.T) {
 	// this class.
 	const seeds = 3000
 	opt := hunt.A2Options()
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
 		p, err := hunt.MaterializeRaftWith(seed, opt)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)
@@ -457,7 +488,7 @@ func TestSplitPartitionOracleReportsNothing(t *testing.T) {
 func TestSplitInheritsTheConfigurationAtItsIndex(t *testing.T) {
 	const seeds = 1000
 	opt := hunt.CurrentOptions()
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
 		p, err := hunt.MaterializeRaftWith(seed, opt)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)

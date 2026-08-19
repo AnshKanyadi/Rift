@@ -36,11 +36,32 @@ test: ## Go unit tests
 # thousand. The instrumentation costs about 20x, so the default exit run takes
 # roughly ten hours under -race and about three minutes without it. Seed
 # coverage is `make test` and `make soak`, which run the full 10k uninstrumented.
+#
+# A4 widened what RACE_SEEDS bounds. It capped only the exit run; every covering
+# test ran its full seed search under -race, and the package crossed Go's
+# ten-minute default with no data race in it at all -- a timeout reported as a
+# failure. It now caps every seed search in sim/hunt (see boundSeeds), and what
+# that costs is written down where it happens: a capped search proves nothing
+# about DETECTION, only that no cross-goroutine interaction reaches core state
+# while that code runs. Detection is claimed by the unraced lanes and the mutant
+# lane, which run the full ranges.
+#
+# The explicit timeout is here so the next time this budget is exceeded the lane
+# says so instead of panicking at a default nobody chose.
 RACE_SEEDS ?= 200
+# 90 minutes. A4 roughly doubled the per-seed cost -- more ranges, more
+# messages, and 1.85 million routing refusals across the exit sweep -- and
+# sim/hunt crossed 30 minutes under instrumentation with zero data races in it.
+#
+# The budget is what moves, not the seed bound. RACE_SEEDS is 200 because A1
+# ruled that a few hundred simulated seeds answer this lane's question, and
+# lowering it to buy wall clock would be trading a recorded scope for a number
+# nobody ruled on.
+RACE_TIMEOUT ?= 5400s
 
 .PHONY: race
-race: ## Go unit tests under -race (A1 exit run bounded to $(RACE_SEEDS) seeds; see the note above)
-	RAFT_SEEDS=$(RACE_SEEDS) $(GO) test -race ./...
+race: ## Go unit tests under -race (seed searches bounded to $(RACE_SEEDS) seeds; see the note above)
+	RAFT_SEEDS=$(RACE_SEEDS) $(GO) test -race -timeout $(RACE_TIMEOUT) ./...
 
 .PHONY: vet
 vet: ## Standard go vet

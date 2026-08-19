@@ -325,6 +325,14 @@ over the ledger is cheap insurance against that coincidence ending.
 
 ### 9.5 The mutant lane's baseline gate fired, and it was right
 
+And so did the race lane, for the same kind of reason and with a different lesson. It failed with
+**no data race in it**: the package crossed Go's ten-minute default because `RACE_SEEDS` bounded only
+the exit run, while every covering test ran its full seed search under 20× instrumentation. The bound
+now covers every seed search in `sim/hunt`, and what that costs is written at the cap rather than
+implied by it — *a capped search proves nothing about detection*, only that no cross-goroutine
+interaction reaches core state while that code runs. Both lanes also gained explicit timeouts, so the
+next time a budget is exceeded the lane says so instead of panicking at a default nobody chose.
+
 The lane reported `INVALID` and refused to attribute a single kill. The cause was mundane — A4's
 sweeps pushed the baseline package past Go's default ten-minute test timeout — and the behaviour was
 exactly right: it would not report kills against a tree it could not first watch pass. The fix is an
@@ -455,10 +463,43 @@ its floor.
 
 | # | criterion | status |
 |---|---|---|
-| 1 | multiple groups per node, per-range independence, two-mark generalisation | met — `Node` hosts `Replica`s over one engine and one crash boundary; §9.1 and the durability note in `applySplit` |
+| 1 | multiple groups per node, per-range independence, two-mark generalisation | met — `Node` hosts `Replica`s over one engine and one crash boundary; the two-stream question is answered in §9.4c with a check, not an argument |
 | 2 | size-threshold splits as raft operations, surviving crash and restart | met — five defects found and fixed getting here (BUG-011, -013, -014, -015 and the model's BUG-012) |
-| 3 | manual rebalance by conf change plus leadership transfer | met — stateless mechanism (§9.3), 116 moves completed across 300 seeds, `rebalance-safety` green |
-| 4 | oracles per-range, or proven meaningful cluster-wide | met — §6's table, all nine per-range, linearizability unchanged and stated |
+| 3 | manual rebalance by conf change plus leadership transfer | met — stateless mechanism (§9.3), 3,396 of 9,014 ordered moves completed across 10k seeds, `rebalance-safety` green |
+| 4 | oracles per-range, or proven meaningful cluster-wide | met — §6's table; all eleven per-range, linearizability unchanged and stated |
 | 5 | caller-bug versus runtime re-asked across `raft/` and `store/` | met — §11 |
-| 6 | power floors re-measured under A4's shape | met — see the report |
-| 7 | new oracles induced, BUGS.md with mutant classes, corpus, 10k seeds | met — see the report |
+| 6 | power floors re-measured under A4's shape | met — 28 floored, 15 opted out, zero below floor; §11b for the two that dropped |
+| 7 | new oracles induced, BUGS.md with mutant classes, corpus, 10k seeds | met — §12b |
+
+---
+
+## 12b. The numbers this phase closes on
+
+**Exit sweep, 10,000 seeds:** `pass=9992 violation=0 inconclusive=8 errors=0`. The inconclusive rate
+is **0.8 per mille** against a threshold of 30, and every one of the eight is the same cause: a
+history where fewer than 250 per mille of operations were decided, so a green over it would be a
+statement about a run that mostly did not answer. **None is a checker timeout.** The eight seeds are
+identical to the eight from before the client-routing change, which is worth stating: a change that
+added 1.85 million refusals and retries did not move which runs go undecided.
+
+Everything the phase built was exercised at that scale:
+
+| | count |
+|---|---|
+| splits proposed by leaders / applied by replicas | 23,245 / 81,070 |
+| requests refused for a stale descriptor epoch | 1,854,964 |
+| committed commands refused for naming a key outside the extent | 45,193 |
+| replica moves ordered / completed | 9,014 / 3,396 |
+| snapshots taken / installed | 271,820 / 53,556 |
+| membership changes proposed / refused | 44,018 / 10,818 |
+
+**Mutant lane:** 43 killed, canary alive, **0 mismatched, 0 rotted**. Six patches had rotted when A4
+moved `store/node.go` under them and were repaired; two of those defects now live in
+`store/machine.go`.
+
+**Corpus:** 16 bundles. Every raft bundle's trace moved — A4 changed the store's key namespacing,
+snapshot payload and message framing — and each was checked to still REPRODUCE ITS FINDING under its
+mutant before being re-recorded. Ten of ten do. The two toy bundles are untouched and match exactly.
+
+**Oracles:** eleven, all per-range. Two are new and both were induced; split-partition's third clause
+is induced directly, for the reason in §9.4c.
