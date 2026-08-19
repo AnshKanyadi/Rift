@@ -503,3 +503,9 @@ mutant before being re-recorded. Ten of ten do. The two toy bundles are untouche
 
 **Oracles:** eleven, all per-range. Two are new and both were induced; split-partition's third clause
 is induced directly, for the reason in §9.4c.
+
+**Race lane:** green, `sim/hunt` 2287s under instrumentation, **zero data races**. It failed twice
+first, both times on a clock rather than a race (§9.5).
+
+**Every other lane:** build, lint (vet, formatting, the determinism pass, tooling-only, hatches),
+blind, provenance, assertions, smoke — all green.
