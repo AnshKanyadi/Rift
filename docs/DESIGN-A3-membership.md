@@ -172,6 +172,55 @@ such guarantee.
 
 ---
 
+## 9. What the implementation taught
+
+### 9.1 A "caller bug versus runtime condition" split expires when the system gains a way to change itself
+
+A2 classified a leadership transfer to an unknown target as a caller bug and panicked. A3 makes
+membership change under the caller's feet, so it became a runtime condition — and the panic fired on
+the first sweep after churn landed, on 65 of 300 seeds. BUGS.md **BUG-010**.
+
+The A2 decision was reasonable and became wrong without anybody touching it. A classification of what
+a caller *could have known* is a statement about what the system can change behind it, and it needs
+re-asking at every phase that adds one.
+
+### 9.2 The membership oracles were induced against a configuration with no membership
+
+Five mutants reported ALIVE. Their covering tests called `assertOracleSilent`, whose default was
+still A2's options — which schedule **zero** membership changes. The inductions ran in a
+configuration that could not produce the defect, which proves the same nothing as no induction.
+
+Caught because the power lane measured the same mutants under the sweep's real configuration and got
+different numbers. Two instruments disagreeing is how either of them gets checked.
+
+### 9.3 A configuration must be checkable against its own log, continuously
+
+`recomputeConf` is where §3 says the bugs live, and the first check compared a node's recovered
+configuration against one derived from the same recovered bytes — at *recovery only*. A mutant that
+drops the recompute on truncation was detected **0 of 300 seeds**, because something later almost
+always repaired it: a subsequent configuration entry, a snapshot install, a restart.
+
+`AssertConfConsistent` recomputes from the log and compares, and the driver runs it at every drain.
+Detection went 0 → **12 of 300, first at seed 1**. A defect repaired before anybody looks is a defect
+nobody finds.
+
+### 9.4 The power lane immediately earned itself
+
+A3's shape — four nodes, one of them a learner, membership churn — dropped four classes below their
+floors: M14 15→1, M25 15→2, M19 4→2 of 1500, and **M34 1→0 of 3000**, the class that found BUG-009.
+The mix was widened again (eight crashes and six partitions over fourteen seconds), restoring M14 to
+15, M25 to 16 and M19 to 9.
+
+M34 did not come back and could not be made to: it needs a leader that has *not* compacted sending
+`PrevLogIndex 0` to a follower that has, and A3's cluster compacts sooner because four nodes share the
+same client traffic. Its floor is pinned to the A2 shape, with the measurement recorded, exactly as
+M18's is pinned to A1's.
+
+**This is the lane doing the job it was silent through in A2.** Every number above would have been
+invisible one phase ago.
+
+---
+
 ## 8. Exit criteria
 
 Ansh's, verbatim.
@@ -188,3 +237,19 @@ Ansh's, verbatim.
    green or deliberately regenerated with the reason recorded; 10k seeds with zero safety violations
    and inconclusive explained.
 7. The power lane covering every mutant class before the phase closes.
+
+### Status against them
+
+Claude does not mark phases complete; this is evidence for a ruling.
+
+| # | criterion | evidence |
+|---|---|---|
+| 1 | one server at a time, joint consensus recorded as cut | `ProposeConfChange` refuses joint transitions and multi-server changes by name, citing A6; `single-server-change` checks it from outside, induced by `M35` (293/300) |
+| 2 | learner catch-up bounded, promotion refused while lagging, promotion during catch-up loses nothing | 24,075 changes proposed across 10k seeds, 1,289 refused, **475 of those a lagging learner**; `TestPromotionIsRefusedWhileTheLearnerLags` and `TestPromotedLearnerCannotWinWithoutTheCommittedEntries` |
+| 3 | the overlapping-quorum argument stated | §4, with the pigeonhole step and what the cut costs |
+| 4 | configurations survive crash and restart | 7,846 restarts recovered a log carrying a configuration change; 70,923 recoveries cross-checked against an independent derivation; `M38` and `M39` induce both halves |
+| 5 | snapshots carry the configuration | `Snapshot.Conf` and `SnapshotMeta.Conf`, on the wire and on disk; `M39` removes it and is caught 96/300 |
+| 6 | oracles induced, bugs in BUGS.md, corpus regenerated with the reason, 10k green | **pass 9988, violation 0, inconclusive 12, errors 0**; BUG-010 with `M40`; ten bundles re-pinned and verified |
+| 7 | the power lane covering every mutant class | 21 classes floored, 14 opted out with reasons, and a patch declaring neither fails the lane |
+
+Mutant suite: 34 killed, 1 canary alive, 0 mismatched, 0 rotted.

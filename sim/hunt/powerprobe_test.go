@@ -45,11 +45,20 @@ func TestPowerProbe(t *testing.T) {
 		t.Fatalf("POWER_SEEDS: %v", err)
 	}
 
-	opt := hunt.A2Options()
-	if os.Getenv("POWER_CONFIG") == "a1" {
-		// The shape A1 ran: no pre-vote, no snapshots, no transfers. Some classes
-		// are only observable there, and saying which is the point.
+	// The default is what the sweep runs, so a floor measures the machine as it
+	// actually is. The alternatives exist because some classes are only
+	// observable in an older shape, and naming which is the point.
+	//
+	// Getting this wrong is instructive: the first version measured under A2's
+	// options, which schedule no membership changes at all, and reported that
+	// three A3 mutants were undetectable. They were undetectable in a
+	// configuration that never exercised them.
+	opt := hunt.A3Options()
+	switch os.Getenv("POWER_CONFIG") {
+	case "a1":
 		opt = hunt.RaftOptions{PreVote: false, SnapshotThreshold: 0, Transfers: 0}
+	case "a2":
+		opt = hunt.A2Options()
 	}
 
 	detected, first := 0, int64(-1)

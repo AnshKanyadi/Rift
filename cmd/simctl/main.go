@@ -151,6 +151,9 @@ type RaftMeta struct {
 	PreVote           bool   `json:"pre_vote"`
 	SnapshotThreshold uint64 `json:"snapshot_threshold"`
 	Transfers         int    `json:"transfers"`
+	Learners          int    `json:"learners"`
+	ConfChanges       int    `json:"conf_changes"`
+	PromotionLag      uint64 `json:"promotion_lag"`
 }
 
 // CensusMeta is what the run's elections looked like.
@@ -224,6 +227,9 @@ func cmdRun(args []string) int {
 	preVote := fs.Bool("pre-vote", true, "raft workload: run the pre-vote round")
 	snapEvery := fs.Uint64("snapshot-threshold", 6, "raft workload: applied entries between snapshots; 0 disables")
 	transfers := fs.Int("transfers", 2, "raft workload: leadership transfers the plan schedules")
+	learners := fs.Int("learners", 1, "raft workload: how many nodes start as learners")
+	confChanges := fs.Int("conf-changes", 4, "raft workload: membership steps the plan schedules")
+	promotionLag := fs.Uint64("promotion-lag", 8, "raft workload: how far behind a learner may be and still be promoted")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
@@ -265,10 +271,14 @@ func cmdRun(args []string) int {
 			PreVote:           *preVote,
 			SnapshotThreshold: raft.Index(*snapEvery),
 			Transfers:         *transfers,
+			Learners:          *learners,
+			ConfChanges:       *confChanges,
+			PromotionLag:      raft.Index(*promotionLag),
 		}
 		meta.Raft = &RaftMeta{
 			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
-			Transfers: opt.Transfers,
+			Transfers: opt.Transfers, Learners: opt.Learners,
+			ConfChanges: opt.ConfChanges, PromotionLag: uint64(opt.PromotionLag),
 		}
 		var err error
 		if p, err = hunt.MaterializeRaftWith(*seed, opt); err != nil {
@@ -454,12 +464,15 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 		return nil
 
 	case workloadRaft:
-		opt := hunt.A2Options()
+		opt := hunt.A3Options()
 		if meta.Raft != nil {
 			opt = hunt.RaftOptions{
 				PreVote:           meta.Raft.PreVote,
 				SnapshotThreshold: raft.Index(meta.Raft.SnapshotThreshold),
 				Transfers:         meta.Raft.Transfers,
+				Learners:          meta.Raft.Learners,
+				ConfChanges:       meta.Raft.ConfChanges,
+				PromotionLag:      raft.Index(meta.Raft.PromotionLag),
 			}
 		}
 		res, err := hunt.RunRaftWith(p, opt, tr)

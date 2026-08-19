@@ -328,6 +328,34 @@
         "at_ns": 14346512044,
         "action": "heal",
         "to": 1
+      },
+      {
+        "at_ns": 11108196027,
+        "action": "conf",
+        "node": 3
+      },
+      {
+        "at_ns": 5900198244,
+        "action": "conf"
+      },
+      {
+        "at_ns": 4930559259,
+        "action": "conf",
+        "node": 3
+      },
+      {
+        "at_ns": 11168341083,
+        "action": "conf",
+        "node": 3
+      },
+      {
+        "at_ns": 4387261421,
+        "action": "promote",
+        "node": 1
+      },
+      {
+        "at_ns": 7891940220,
+        "action": "promote"
       }
     ]
   },

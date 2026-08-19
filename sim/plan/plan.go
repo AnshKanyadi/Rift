@@ -182,7 +182,7 @@ type Faults struct {
 // what makes ddmin possible at all.
 type Entry struct {
 	AtNS   int64  `json:"at_ns"`
-	Action string `json:"action"` // crash | restart | cut | heal | cut_both | heal_both
+	Action string `json:"action"` // crash | restart | cut | heal | cut_both | heal_both | promote | conf
 	Node   int    `json:"node,omitempty"`
 	From   int    `json:"from,omitempty"`
 	To     int    `json:"to,omitempty"`
@@ -384,7 +384,7 @@ func (p *Plan) ReplicationRTT() clock.Instant {
 
 func knownAction(a string) bool {
 	switch a {
-	case "crash", "restart", "cut", "heal", "cut_both", "heal_both", "promote":
+	case "crash", "restart", "cut", "heal", "cut_both", "heal_both", "promote", "conf":
 		return true
 	}
 	return false

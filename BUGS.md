@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 9 entries — 8 from A1, 1 from A2. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 10 entries — 8 from A1, 1 from A2, 1 from A3. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -50,6 +50,13 @@ the flaw happens to be expressible as a scenario flag.
 
 **Numbering.** `BUG-NNN` here, `TOY-NNN` in `docs/TOY-FINDINGS.md`, and the bundle directories match:
 `seeds/BUG-001` belongs to this file and `seeds/TOY-001` does not.
+
+**The seeds moved again at A3, for the same reason and by the same procedure.** A3 widened the mix
+a second time — eight crashes and six partitions over fourteen seconds, and a four-node cluster with a
+learner — because the power lane measured four classes dropping below their floors under A3's shape,
+including the one that found BUG-009 falling to *zero of three thousand*. Every bundle was re-pinned
+to a seed that still reproduces under its mutant, verified one by one. Bundles were already recording
+their build, so each replays under the shape it was found in rather than today's.
 
 **The seeds moved at A2, deliberately.** A2 widened the schedule mix — four crashes and five partitions over twelve seconds instead of two and three over eight — because pre-vote made the cluster calm enough that the harness stopped finding things (DESIGN-A2 §9). A seed names a run only relative to the generator it was drawn against, so every A1 seed named a different run afterwards and several stopped exhibiting their defect. Each bundle was re-pinned to a seed that does, verified by applying its mutant and watching the finding come back. Where a historical seed is part of the record it is kept beside the new one rather than overwritten.
 
@@ -585,6 +592,56 @@ and the snapshot is intact. It is the worst kind of corruption because the node 
 **Fix.** `matches` answers `PrevLogIndex == 0` with *"only if I have no snapshot"*. Rejecting is safe
 and self-correcting: the reject carries `lastIndex` as its hint, so the leader jumps forward, finds
 the follower is past its own log, and sends a snapshot — which is what it should have done.
+
+---
+
+### BUG-010 — a leader killed itself when asked to hand over to a replica that had been removed
+
+| field | value |
+|---|---|
+| **Found by** | sim — the first sweep after membership churn landed |
+| **Phase** | A3 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M40-transfer-to-a-removed-node-panics.patch && go run ./cmd/simctl replay --bundle seeds/BUG-010` |
+| **Reproduce (seed)** | seed **0**; 65 of 300 seeds reach it |
+| **Invariant that caught it** | none — a panic, from an assertion that had become false |
+| **Mutant class** | none existed — added `M40-transfer-to-a-removed-node-panics` |
+| **Fix commit** | *(this commit)* |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Symptom, verbatim:**
+
+```
+panic: raft: node 2 was asked to transfer leadership to 1, which is not a peer
+```
+
+**Root cause.** A2 gave `TransferLeadership` the frozen D5 signature, which returns no error, and split
+its failures deliberately: *not the leader* is a runtime condition and a no-op; *target is not a peer*
+is a caller bug and panics. That split was correct when membership was fixed — a caller naming a
+non-member had made a mistake it could have avoided.
+
+A3 makes membership change under the caller's feet. A node scheduled for a transfer can be removed
+from the configuration before the order is issued, by a change the caller neither made nor saw.
+Nothing it could have checked would have told it, because the answer can change between the check and
+the call.
+
+**Why the checkers caught it here and not earlier.** It could not exist before A3: it needs a
+configuration to change. It appeared on the first sweep after membership churn landed, on 65 of 300
+seeds, because the plan schedules transfers and membership steps independently and they collide often.
+
+**What this would have caused in production.** A leader crashing during a routine rebalance —
+precisely the operation that removes replicas, so precisely the operation most likely to have a stale
+target. An operator moving load off a machine would take the leader down with it, and the panic
+message would send them looking for a caller bug that was not there.
+
+**Fix.** *Not in the configuration* joins *not the leader* on the runtime side: a no-op. A learner
+target is a no-op too, for a reason worth stating — a learner cannot win an election, so ordering it
+to campaign would burn a term for nothing. **Transferring to yourself stays a panic**, because that
+is a caller bug in any membership.
+
+**And the lesson, which is about the earlier decision rather than this one.** The A2 split was
+reasonable and became wrong without anybody touching it. A classification of "caller bug versus
+runtime condition" is a statement about what the caller can know, and that changes when the system
+gains a way to change its own state. It is worth re-asking at every phase that adds one.
 
 ---
 

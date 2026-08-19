@@ -1,0 +1,22 @@
+# id: M40-transfer-to-a-removed-node-panics
+# covering-test: TestConfigurationSurvivesRecovery
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 32
+# power-measured: 65 at commit c1a1f6c+A3
+# mutates: a leadership transfer to a node that is no longer in the configuration is treated as a caller bug and panics. Membership changes under the caller's feet, so it is a runtime condition, and killing the leader for it turns a routine rebalance into an outage
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1526,7 +1526,10 @@
+ 		panic(fmt.Sprintf("raft: node %d was asked to transfer leadership to itself", r.id))
+ 	}
+ 	i := r.peerIdx(target)
+-	if i < 0 || !r.conf.IsVoter(target) {
++	if i < 0 {
++		panic(fmt.Sprintf("raft: node %d was asked to transfer leadership to %d, which is not a peer", r.id, target))
++	}
++	if !r.conf.IsVoter(target) {
+ 		// Not in the configuration, or a learner: a learner cannot win an
+ 		// election, so ordering it to campaign would burn a term for nothing.
+ 		return

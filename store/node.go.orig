@@ -18,6 +18,7 @@ package store
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/anshkanyadi/rift/clock"
@@ -59,6 +60,12 @@ type Config struct {
 	Transport sim.Transport
 	Ledger    *raftcheck.Ledger
 	History   *sim.History
+
+	// Learners are the peers that start as learners rather than voters.
+	Learners []raft.NodeID
+
+	// PromotionLag bounds how far behind a learner may be and still be promoted.
+	PromotionLag raft.Index
 
 	// PreVote turns on the extra election round. It is a build parameter rather
 	// than a plan entry: the ablation runs the same schedules with it on and off,
@@ -135,6 +142,21 @@ type Node struct {
 	snapshotsTaken   int
 	snapshotsApplied int
 	transfersAsked   int
+	confProposed     int
+	confRefused      int
+	lagRefused       int
+
+	// confRecoveries counts restarts whose recovered log carried a configuration
+	// change, and confCrossChecks counts those where the snapshot carried a
+	// configuration to check the recovery against. Both are evidence that the
+	// paths ran: a phase whose configuration never survived a crash proved
+	// nothing about surviving one.
+	confRecoveries  int
+	confCrossChecks int
+
+	// confErr latches the first time this node's cached configuration disagreed
+	// with its own log.
+	confErr error
 
 	// propSeq numbers this node's proposals. Combined with the node id it makes
 	// a ProposalID unique across the cluster.
@@ -195,6 +217,7 @@ func New(cfg Config) (*Node, error) {
 	r, err := raft.New(raft.Config{
 		ID: cfg.ID, Peers: cfg.Peers,
 		ElectionTimeout: cfg.Election, HeartbeatTimeout: cfg.Heartbeat,
+		Learners: cfg.Learners, PromotionLag: cfg.PromotionLag,
 		PreVote: cfg.PreVote,
 	})
 	if err != nil {
@@ -301,6 +324,23 @@ func (n *Node) onClient(ev sim.Event) {
 
 // drain does the driver's whole job: persist, send, apply, acknowledge.
 func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
+	defer func() {
+		// # Checked here rather than only at the end of the run
+		//
+		// A node's cached configuration must agree with its own log at every
+		// quiet moment. Checking only at the end misses every divergence that
+		// something later repaired -- a subsequent configuration entry, a
+		// snapshot install, a restart -- and a defect that is repaired before
+		// anybody looks is a defect nobody finds. Measured: a truncation that
+		// forgets to recompute went from 0 detections in 300 seeds to a real
+		// number the moment the check moved here.
+		//
+		// Latched rather than returned, because drain has no error path and the
+		// first inconsistency is the one worth reporting.
+		if n.confErr == nil {
+			n.confErr = n.raft.AssertConfConsistent()
+		}
+	}()
 	for n.raft.HasReady() {
 		rd := n.raft.Ready()
 
@@ -315,7 +355,9 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 			if !ok {
 				panic(fmt.Sprintf("store: node %d was handed a snapshot it cannot decode", n.cfg.ID))
 			}
-			meta := raft.SnapshotMeta{Index: rd.Snapshot.Index, Term: rd.Snapshot.Term}
+			meta := raft.SnapshotMeta{
+				Index: rd.Snapshot.Index, Term: rd.Snapshot.Term, Conf: rd.Snapshot.Conf,
+			}
 			sb := engine.NewBatch()
 			sb.Set(keySnapshot, encodeSnapshot(meta, rd.Snapshot.Data))
 			sb.DeleteRange(logPrefix, logUpper)
@@ -394,6 +436,7 @@ func (n *Node) drain(at clock.Instant, s sim.Scheduler) {
 			m := raft.Message{
 				Type: raft.MsgSnap, From: n.cfg.ID, To: to, Term: n.raft.Term(),
 				SnapIndex: meta.Index, SnapTerm: meta.Term, SnapData: data,
+				SnapConf: raft.EncodeConfiguration(meta.Conf),
 			}
 			n.cfg.Ledger.RecordSent(n.cfg.Ordinal, provenance.Witness(m), at)
 			n.cfg.Transport.Send(sim.Envelope{
@@ -647,13 +690,13 @@ func (n *Node) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 	if applied < n.raft.SnapshotIndex()+n.cfg.SnapshotThreshold {
 		return
 	}
-	term, err := n.raft.Compact(applied)
+	term, conf, err := n.raft.Compact(applied)
 	if err != nil {
 		// Not applied or not durable yet. A refusal, not a failure: the
 		// threshold will be met again on the next apply.
 		return
 	}
-	meta := raft.SnapshotMeta{Index: applied, Term: term}
+	meta := raft.SnapshotMeta{Index: applied, Term: term, Conf: conf}
 	data := encodeKV(n.kv)
 
 	b := engine.NewBatch()
@@ -711,6 +754,60 @@ func (n *Node) RequestTransfer(target raft.NodeID) bool {
 
 // TransfersAsked is how many transfers this node initiated.
 func (n *Node) TransfersAsked() int { return n.transfersAsked }
+
+// RequestConfChange moves target one step around the membership cycle:
+// absent -> learner -> voter -> absent.
+//
+// A cycle rather than one kind of change, because A3 has to exercise all three
+// and a cluster that only ever adds runs out of room. The step is chosen from
+// the CURRENT configuration, so a refusal -- a lagging learner, a change already
+// in flight -- leaves the node where it is and the next action tries again.
+// Refusals are counted, because a phase whose membership changes were all
+// refused is a phase that tested nothing.
+func (n *Node) RequestConfChange(target raft.NodeID) {
+	if !n.IsLeader() || target == n.cfg.ID {
+		return
+	}
+	conf := n.raft.Configuration()
+	var ch raft.ConfChangeSingle
+	switch {
+	case conf.IsLearner(target):
+		ch = raft.ConfChangeSingle{Type: raft.ConfChangeAddVoter, Node: target}
+	case conf.IsVoter(target):
+		ch = raft.ConfChangeSingle{Type: raft.ConfChangeRemoveNode, Node: target}
+	default:
+		ch = raft.ConfChangeSingle{Type: raft.ConfChangeAddLearner, Node: target}
+	}
+	n.propSeq++
+	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
+	if err := n.raft.ProposeConfChange(id, raft.ConfChangeV2{
+		Changes: []raft.ConfChangeSingle{ch}, Transition: raft.ConfChangeSimple,
+	}); err != nil {
+		n.confRefused++
+		if errors.Is(err, raft.ErrLearnerLagging) {
+			n.lagRefused++
+		}
+		return
+	}
+	n.confProposed++
+}
+
+// ConfProposed, ConfRefused and LagRefused report what the membership churn
+// actually did. A sweep in which every change was refused is green about nothing.
+func (n *Node) ConfProposed() int { return n.confProposed }
+
+// ConfRefused counts changes the state machine declined for any reason.
+func (n *Node) ConfRefused() int { return n.confRefused }
+
+// LagRefused counts promotions declined because the learner was too far behind,
+// which is the catch-up bound doing its job.
+func (n *Node) LagRefused() int { return n.lagRefused }
+
+// ConfRecoveries is how many restarts recovered a log containing a configuration
+// change, and ConfCrossChecks how many had a snapshot configuration to be
+// checked against.
+func (n *Node) ConfRecoveries() int  { return n.confRecoveries }
+func (n *Node) ConfCrossChecks() int { return n.confCrossChecks }
 
 // StateDigest is the harness's hook for computing the digest of a state machine
 // it built itself.
@@ -787,6 +884,7 @@ func (n *Node) restart() {
 	r, err := raft.Restore(raft.Config{
 		ID: n.cfg.ID, Peers: n.cfg.Peers,
 		ElectionTimeout: n.cfg.Election, HeartbeatTimeout: n.cfg.Heartbeat,
+		Learners: n.cfg.Learners, PromotionLag: n.cfg.PromotionLag,
 		PreVote: n.cfg.PreVote,
 	}, st.hs, st.snap, st.entries)
 	if err != nil {
@@ -795,6 +893,30 @@ func (n *Node) restart() {
 		panic(fmt.Sprintf("store: node %d cannot recover: %v", n.cfg.ID, err))
 	}
 	n.raft = r
+
+	// # The recovered configuration, checked against the same bytes
+	//
+	// recomputeConf is where DESIGN-A3 §3 says the bugs live: a configuration is
+	// a function of the log, and the log can be truncated, replaced by a
+	// snapshot, or read back off disk. Recovery is the moment the node's answer
+	// can be compared against one derived independently from what it recovered
+	// FROM, and the comparison can only fail, which is the side of the provenance
+	// rule where the system's own answer is allowed.
+	for _, e := range st.entries {
+		if e.Type == raft.EntryConfChange {
+			n.confRecoveries++
+			break
+		}
+	}
+	want, ok := derivedConf(st)
+	if ok {
+		n.confCrossChecks++
+	}
+	if ok && !r.Configuration().Equal(want) {
+		panic(fmt.Sprintf(
+			"store: node %d recovered configuration %s from a snapshot and log that say %s",
+			n.cfg.ID, r.Configuration(), want))
+	}
 
 	// The state machine restarts from the snapshot, not from empty. Anything
 	// above it sits in the log tail and comes back through Ready.Committed once a
@@ -809,6 +931,34 @@ func (n *Node) restart() {
 	n.jitter()
 }
 
+// derivedConf rebuilds the configuration from a recovered state: the snapshot's
+// configuration, then every configuration entry in the log tail, in order.
+//
+// It reports false when the snapshot carries no configuration, which is the
+// ordinary case for a node young enough never to have compacted -- there is
+// nothing to derive from and nothing to compare against.
+func derivedConf(st recovered) (raft.Configuration, bool) {
+	if len(st.snap.Conf.Voters) == 0 {
+		return raft.Configuration{}, false
+	}
+	conf := st.snap.Conf.Clone()
+	for _, e := range st.entries {
+		if e.Type != raft.EntryConfChange {
+			continue
+		}
+		cc, ok := raft.DecodeConfChange(e.Data)
+		if !ok {
+			continue
+		}
+		for _, ch := range cc.Changes {
+			if next, err := raft.ApplyConfChange(conf, ch); err == nil {
+				conf = next
+			}
+		}
+	}
+	return conf, true
+}
+
 // sameDurableState compares the driver's durability record with what the engine
 // gave back.
 func sameDurableState(recHS raft.HardState, recSnap raft.SnapshotMeta, recLog []raft.Entry, got recovered) error {
@@ -816,7 +966,8 @@ func sameDurableState(recHS raft.HardState, recSnap raft.SnapshotMeta, recLog []
 	if recHS != gotHS {
 		return fmt.Errorf("hard state recorded %+v, engine returned %+v", recHS, gotHS)
 	}
-	if recSnap != got.snap {
+	if recSnap.Index != got.snap.Index || recSnap.Term != got.snap.Term ||
+		!recSnap.Conf.Equal(got.snap.Conf) {
 		return fmt.Errorf("snapshot recorded %+v, engine returned %+v", recSnap, got.snap)
 	}
 	if len(recLog) != len(gotLog) {
@@ -864,7 +1015,16 @@ func (n *Node) CheckEpochs() error {
 // A crashed node is exempt for the same reason: its in-flight writes died with
 // it, and the gated messages died with the Raft that made them.
 func (n *Node) AssertQuiescent() error {
-	if n.down || len(n.pending) > 0 {
+	if n.down {
+		return nil
+	}
+	// The configuration check does not depend on anything being in flight: a
+	// node's cached membership must agree with its own log at every quiet
+	// moment, in flight or not.
+	if n.confErr != nil {
+		return n.confErr
+	}
+	if len(n.pending) > 0 {
 		return nil
 	}
 	return n.raft.AssertQuiescent()

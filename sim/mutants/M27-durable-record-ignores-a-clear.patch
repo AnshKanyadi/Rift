@@ -3,9 +3,8 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 2
-# power-measured: 4 at commit bf10d04
-# power-config: a2
+# power-floor: 5
+# power-measured: 11 at commit c1a1f6c+A3
 # mutates: the driver's durability record keeps entries the engine cleared, so the record the persist-before-reply oracle judges against drifts ahead of what a crash would recover -- the mirror direction of M26, and the direction that would make the oracle wrong rather than the system
 --- a/store/node.go
 +++ b/store/node.go

@@ -3,9 +3,8 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 2
-# power-measured: 4 at commit bf10d04
-# power-config: a2
+# power-floor: 5
+# power-measured: 11 at commit c1a1f6c+A3
 # mutates: a conflicting append rewrites the entries it replaces but leaves the discarded branch's tail in the engine, so recovery reads a new prefix spliced onto a dead branch and calls the result a log -- gapless by index, so Restore accepts it
 --- a/store/node.go
 +++ b/store/node.go

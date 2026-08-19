@@ -3,9 +3,8 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 50
-# power-measured: 101 at commit bf10d04
-# power-config: a2
+# power-floor: 48
+# power-measured: 96 at commit c1a1f6c+A3
 # mutates: the one-vote-per-term rule is dropped, so a node that has already voted grants again and two candidates win the same term -- the canonical election safety failure
 --- a/raft/raft.go
 +++ b/raft/raft.go

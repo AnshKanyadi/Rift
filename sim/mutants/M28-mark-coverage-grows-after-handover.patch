@@ -3,9 +3,8 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 129
-# power-measured: 258 at commit bf10d04
-# power-config: a2
+# power-floor: 140
+# power-measured: 280 at commit c1a1f6c+A3
 # mutates: a mark is reused after the driver has already started writing it, so its coverage grows and the acknowledgement means less than the messages gated on it require. BOTH defences are removed, because either alone prevents it: raft freezing coverage at handover, and the driver refusing to acknowledge a mark whose writes are not all durable. Removing one gives 0 of 300; removing both gives 257 of 300
 --- a/raft/raft.go
 +++ b/raft/raft.go

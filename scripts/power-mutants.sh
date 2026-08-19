@@ -19,7 +19,8 @@
 #
 #   # power-seeds: N      sweep this many seeds against the mutated tree
 #   # power-floor: M      and require at least M of them to notice
-#   # power-config: a1    optionally, the build to measure under (a1 | a2)
+#   # power-config: a1    optionally, the build to measure under (a1 | a2 | a3);
+#                        the default is a3, which is what the sweep runs
 #
 # or an explicit opt-out with a reason:
 #
@@ -59,7 +60,7 @@ for patch in "$PATCHDIR"/*.patch; do
   seeds=$(sed -n 's/^# power-seeds: *//p' "$patch")
   floor=$(sed -n 's/^# power-floor: *//p' "$patch")
   cfg=$(sed -n 's/^# power-config: *//p' "$patch")
-  [ -n "$cfg" ] || cfg=a2
+  [ -n "$cfg" ] || cfg=a3
 
   if [ -n "$na" ]; then
     optout=$((optout + 1))

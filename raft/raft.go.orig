@@ -87,12 +87,339 @@ type ProposalID struct {
 // Zero reports whether the identifier is unset.
 func (p ProposalID) Zero() bool { return p.Node == 0 && p.Seq == 0 }
 
+// EntryType is a closed enum: an entry is a state machine command or a
+// configuration change, and nothing decides which by looking at the bytes.
+type EntryType uint8
+
+const (
+	EntryNormal EntryType = iota + 1
+	EntryConfChange
+	numEntryTypes
+)
+
+func (e EntryType) String() string {
+	switch e {
+	case EntryNormal:
+		return "normal"
+	case EntryConfChange:
+		return "conf-change"
+	case numEntryTypes:
+		return "invalid"
+	}
+	return "unknown"
+}
+
 // Entry is one log entry.
 type Entry struct {
+	Type  EntryType
 	Term  Term
 	Index Index
 	ID    ProposalID
 	Data  []byte
+}
+
+// ConfChangeType is a closed enum of the changes a single step may make.
+type ConfChangeType uint8
+
+const (
+	ConfChangeAddVoter ConfChangeType = iota + 1
+	ConfChangeAddLearner
+	ConfChangeRemoveNode
+	numConfChangeTypes
+)
+
+func (c ConfChangeType) String() string {
+	switch c {
+	case ConfChangeAddVoter:
+		return "add-voter"
+	case ConfChangeAddLearner:
+		return "add-learner"
+	case ConfChangeRemoveNode:
+		return "remove-node"
+	case numConfChangeTypes:
+		return "invalid"
+	}
+	return "unknown"
+}
+
+// ConfChangeSingle is one server's change.
+type ConfChangeSingle struct {
+	Type ConfChangeType
+	Node NodeID
+}
+
+// ConfChangeTransition is how a change gets from the old configuration to the
+// new one.
+type ConfChangeTransition uint8
+
+const (
+	// ConfChangeSimple is the only transition A3 implements: one server at a
+	// time, no joint configuration, safe by the overlapping-quorum argument in
+	// DESIGN-A3 §4.
+	ConfChangeSimple ConfChangeTransition = iota + 1
+
+	// The joint transitions are named because the frozen type is called V2 and
+	// V2 is the shape that supports them. They are refused at A3 by Amendment
+	// A6, and refusing them by name is how the cut stays visible at the call
+	// site instead of being implied by an absence.
+	ConfChangeJointImplicit
+	ConfChangeJointExplicit
+	numConfChangeTransitions
+)
+
+func (c ConfChangeTransition) String() string {
+	switch c {
+	case ConfChangeSimple:
+		return "simple"
+	case ConfChangeJointImplicit:
+		return "joint-implicit"
+	case ConfChangeJointExplicit:
+		return "joint-explicit"
+	case numConfChangeTransitions:
+		return "invalid"
+	}
+	return "unknown"
+}
+
+// ConfChangeV2 is the frozen shape from DESIGN-A0 D5.
+//
+// # The name says joint and the phase says not
+//
+// D5 froze `ProposeConfChange(id ProposalID, cc ConfChangeV2) error` and nothing
+// about the type's contents. ConfChangeV2 is etcd's name for the change type
+// that SUPPORTS joint consensus, which Amendment A6 cut. The type therefore has
+// its general shape -- a list of changes and a transition -- and A3 refuses
+// anything but one simple change, citing A6.
+//
+// Conforming to the frozen signature and refusing what a later amendment cut
+// contradicts neither: D5 constrains the shape, A6 constrains the semantics, and
+// both hold at once. Enabling the STRETCH item later deletes a refusal rather
+// than changing a frozen signature (DESIGN-A3 §2).
+type ConfChangeV2 struct {
+	Changes    []ConfChangeSingle
+	Transition ConfChangeTransition
+}
+
+// EncodeConfChange and DecodeConfChange are the configuration change's wire and
+// storage form.
+//
+// The encoding lives in raft/ rather than in the driver because a configuration
+// change is not a state machine command: raft itself has to read one back out of
+// its own log to recompute the active configuration after a truncation or a
+// restore. A driver-owned encoding would make the pure state machine depend on
+// the driver to understand its own log.
+//
+// Fixed-width and explicit, for the reason every codec here is: an encoding
+// discovered at run time is an encoding that can differ between runs.
+func EncodeConfChange(cc ConfChangeV2) []byte {
+	b := []byte{byte(cc.Transition), byte(len(cc.Changes))}
+	for _, ch := range cc.Changes {
+		b = append(b, byte(ch.Type))
+		var id [8]byte
+		for i := 7; i >= 0; i-- {
+			id[i] = byte(ch.Node)
+			ch.Node >>= 8
+		}
+		b = append(b, id[:]...)
+	}
+	return b
+}
+
+// DecodeConfChange reads one back.
+func DecodeConfChange(b []byte) (ConfChangeV2, bool) {
+	if len(b) < 2 {
+		return ConfChangeV2{}, false
+	}
+	cc := ConfChangeV2{Transition: ConfChangeTransition(b[0])}
+	n := int(b[1])
+	b = b[2:]
+	if len(b) != n*9 {
+		return ConfChangeV2{}, false
+	}
+	for range n {
+		ch := ConfChangeSingle{Type: ConfChangeType(b[0])}
+		var id NodeID
+		for i := 1; i <= 8; i++ {
+			id = id<<8 | NodeID(b[i])
+		}
+		ch.Node = id
+		cc.Changes = append(cc.Changes, ch)
+		b = b[9:]
+	}
+	return cc, true
+}
+
+// EncodeConfiguration and DecodeConfiguration put a membership on the wire and
+// in a snapshot.
+func EncodeConfiguration(c Configuration) []byte {
+	b := []byte{byte(len(c.Voters)), byte(len(c.Learners))}
+	for _, n := range append(append([]NodeID(nil), c.Voters...), c.Learners...) {
+		for i := 56; i >= 0; i -= 8 {
+			b = append(b, byte(n>>uint(i)))
+		}
+	}
+	return b
+}
+
+// DecodeConfiguration reads one back.
+func DecodeConfiguration(b []byte) (Configuration, bool) {
+	if len(b) < 2 {
+		return Configuration{}, false
+	}
+	nv, nl := int(b[0]), int(b[1])
+	b = b[2:]
+	if len(b) != (nv+nl)*8 {
+		return Configuration{}, false
+	}
+	read := func() NodeID {
+		var n NodeID
+		for i := range 8 {
+			n = n<<8 | NodeID(b[i])
+		}
+		b = b[8:]
+		return n
+	}
+	var c Configuration
+	for range nv {
+		c.Voters = append(c.Voters, read())
+	}
+	for range nl {
+		c.Learners = append(c.Learners, read())
+	}
+	return c, true
+}
+
+// Configuration is who is in the cluster.
+//
+// Voters vote and are counted in quorums. Learners receive entries and apply
+// them and are counted in nothing -- which is the entire point: adding a slow
+// server directly as a voter raises the quorum while that server can contribute
+// nothing, so a cluster that tolerated one failure tolerates none until it
+// catches up.
+//
+// Both slices are sorted and deduplicated. Sorted because this package is in
+// core determinism scope and any order that leaks into behaviour must not depend
+// on insertion; deduplicated because a node counted twice is a quorum of one
+// wearing a hat.
+type Configuration struct {
+	Voters   []NodeID
+	Learners []NodeID
+}
+
+// IsVoter reports whether n votes and counts toward quorums.
+func (c Configuration) IsVoter(n NodeID) bool { return contains(c.Voters, n) }
+
+// IsLearner reports whether n receives entries without counting.
+func (c Configuration) IsLearner(n NodeID) bool { return contains(c.Learners, n) }
+
+// Members is every node in the configuration, voters then learners, each sorted.
+func (c Configuration) Members() []NodeID {
+	out := make([]NodeID, 0, len(c.Voters)+len(c.Learners))
+	out = append(out, c.Voters...)
+	out = append(out, c.Learners...)
+	sortIDs(out)
+	return out
+}
+
+// Clone returns a copy, because a configuration is stored in a snapshot and
+// replayed from a log and must never alias either.
+func (c Configuration) Clone() Configuration {
+	return Configuration{
+		Voters:   append([]NodeID(nil), c.Voters...),
+		Learners: append([]NodeID(nil), c.Learners...),
+	}
+}
+
+// Equal compares two configurations.
+func (c Configuration) Equal(o Configuration) bool {
+	if len(c.Voters) != len(o.Voters) || len(c.Learners) != len(o.Learners) {
+		return false
+	}
+	for i := range c.Voters {
+		if c.Voters[i] != o.Voters[i] {
+			return false
+		}
+	}
+	for i := range c.Learners {
+		if c.Learners[i] != o.Learners[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (c Configuration) String() string {
+	return fmt.Sprintf("voters=%v learners=%v", c.Voters, c.Learners)
+}
+
+// ApplyConfChange returns the configuration after one single change, or an
+// error. Exported so a checker can derive a configuration independently from the
+// same bytes the node read.
+func ApplyConfChange(c Configuration, ch ConfChangeSingle) (Configuration, error) {
+	return c.apply(ch)
+}
+
+// apply returns the configuration after one single change, or an error.
+func (c Configuration) apply(ch ConfChangeSingle) (Configuration, error) {
+	out := c.Clone()
+	switch ch.Type {
+	case ConfChangeAddVoter:
+		out.Learners = removeID(out.Learners, ch.Node)
+		out.Voters = insertID(out.Voters, ch.Node)
+	case ConfChangeAddLearner:
+		if contains(out.Voters, ch.Node) {
+			return c, fmt.Errorf("raft: node %d is a voter and cannot be demoted to a learner in one step", ch.Node)
+		}
+		out.Learners = insertID(out.Learners, ch.Node)
+	case ConfChangeRemoveNode:
+		out.Voters = removeID(out.Voters, ch.Node)
+		out.Learners = removeID(out.Learners, ch.Node)
+	case numConfChangeTypes:
+		return c, fmt.Errorf("raft: unknown configuration change type %d", ch.Type)
+	}
+	if len(out.Voters) == 0 {
+		return c, fmt.Errorf("raft: %s would leave the cluster with no voters, which is a cluster "+
+			"that can never elect anybody again", ch.Type)
+	}
+	return out, nil
+}
+
+func contains(xs []NodeID, n NodeID) bool {
+	for _, x := range xs {
+		if x == n {
+			return true
+		}
+	}
+	return false
+}
+
+func insertID(xs []NodeID, n NodeID) []NodeID {
+	if contains(xs, n) {
+		return xs
+	}
+	xs = append(xs, n)
+	sortIDs(xs)
+	return xs
+}
+
+func removeID(xs []NodeID, n NodeID) []NodeID {
+	out := xs[:0]
+	for _, x := range xs {
+		if x != n {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// sortIDs is an insertion sort. Small sets, and no import for something a
+// cluster membership list can do in six lines.
+func sortIDs(xs []NodeID) {
+	for i := 1; i < len(xs); i++ {
+		for j := i; j > 0 && xs[j-1] > xs[j]; j-- {
+			xs[j-1], xs[j] = xs[j], xs[j-1]
+		}
+	}
 }
 
 // MessageType is a closed enum.
@@ -182,6 +509,11 @@ type Message struct {
 	SnapIndex Index
 	SnapTerm  Term
 	SnapData  []byte
+
+	// SnapConf is the snapshot's configuration, encoded. Carried on the wire
+	// because a follower installing a snapshot has to learn the membership from
+	// the same message: it is discarding the log that would otherwise tell it.
+	SnapConf []byte
 }
 
 // HardState is the state Raft must have durable before it may act on it.
@@ -214,6 +546,15 @@ type Snapshot struct {
 	Index Index
 	Term  Term
 	Data  []byte
+
+	// Conf is the configuration as of Index.
+	//
+	// A snapshot without it is a state machine that does not know who it is
+	// talking to. The active configuration is a function of the log, and a
+	// snapshot is precisely the part of the log that no longer exists -- so
+	// after compaction there is nowhere else for it to come from. CLAUDE.md's
+	// invariant list says it directly: snapshots carry the active config.
+	Conf Configuration
 }
 
 // Ready is a drain: calling it returns pending outputs and clears them.
@@ -363,6 +704,16 @@ type Config struct {
 	// ElectionTimeout or a healthy leader is deposed by its own silence.
 	HeartbeatTimeout int
 
+	// Learners are the peers that start as learners rather than voters. Peers
+	// not listed here are voters.
+	Learners []NodeID
+
+	// PromotionLag is how many entries behind the leader a learner may be and
+	// still be promoted. Zero takes a default; promotion is REFUSED past it
+	// rather than queued, because a queued promotion is one whose preconditions
+	// were true at some point in the past (DESIGN-A3 §5).
+	PromotionLag Index
+
 	// PreVote adds the round that stops a node which can send but not receive
 	// from inflating the cluster's term every time it campaigns. Off by default
 	// so the ablation can measure the difference rather than assert it.
@@ -371,8 +722,28 @@ type Config struct {
 
 // Raft is one node's state machine.
 type Raft struct {
-	id    NodeID
+	id NodeID
+
+	// peers is every node this replica tracks -- voters and learners -- sorted,
+	// and it is what the parallel slices below are indexed by. It is DERIVED
+	// from conf and rebuilt whenever conf changes, preserving each node's
+	// progress by identity rather than by position (DESIGN-A3 §3).
 	peers []NodeID
+
+	// conf is the active configuration: the latest one in this node's log,
+	// committed or not. baseConf is the configuration the snapshot carried,
+	// which is where a recompute starts from after compaction.
+	//
+	// Effect-on-append is what makes the overlapping-quorum argument work, and
+	// its consequence is that every path which changes the log -- append,
+	// truncate, install, restore -- must recompute conf. Not one of them may
+	// forget, which is why recomputeConf exists and why nothing sets conf
+	// directly.
+	conf     Configuration
+	baseConf Configuration
+
+	// promotionLag bounds how far behind a learner may be and still be promoted.
+	promotionLag Index
 
 	// Persistent, and durable before it is acted upon.
 	term Term
@@ -601,10 +972,24 @@ func New(cfg Config) (*Raft, error) {
 			cfg.HeartbeatTimeout, cfg.ElectionTimeout)
 	}
 
-	peers := make([]NodeID, len(cfg.Peers))
-	copy(peers, cfg.Peers)
+	conf := Configuration{}
+	for _, p := range cfg.Peers {
+		if contains(cfg.Learners, p) {
+			conf.Learners = insertID(conf.Learners, p)
+		} else {
+			conf.Voters = insertID(conf.Voters, p)
+		}
+	}
+	if len(conf.Voters) == 0 {
+		return nil, fmt.Errorf("raft: node %d was configured with no voters", cfg.ID)
+	}
+	lag := cfg.PromotionLag
+	if lag == 0 {
+		lag = defaultPromotionLag
+	}
+	peers := conf.Members()
 	r := &Raft{
-		id: cfg.ID, peers: peers,
+		id: cfg.ID, peers: peers, conf: conf, baseConf: conf.Clone(), promotionLag: lag,
 		role:                      RoleFollower,
 		electionTimeout:           cfg.ElectionTimeout,
 		randomizedElectionTimeout: cfg.ElectionTimeout,
@@ -629,6 +1014,13 @@ func Restore(cfg Config, hs HardState, snap SnapshotMeta, entries []Entry) (*Raf
 	}
 	r.term, r.vote = hs.Term, hs.Vote
 	r.snapIndex, r.snapTerm = snap.Index, snap.Term
+	if len(snap.Conf.Voters) > 0 {
+		// The snapshot's configuration is the base a recovering node rebuilds
+		// from. Without it the node would recover into whatever its Config said
+		// at construction, which is the membership it had when it was first
+		// started -- possibly several changes ago.
+		r.baseConf = snap.Conf.Clone()
+	}
 	r.log = append(r.log, entries...)
 	for i, e := range r.log {
 		if e.Index != snap.Index+Index(i)+1 {
@@ -643,6 +1035,7 @@ func Restore(cfg Config, hs HardState, snap SnapshotMeta, entries []Entry) (*Raf
 	// and it would then try to apply entries it has already applied.
 	r.commitIndex = snap.Index
 	r.appliedIdx = snap.Index
+	r.recomputeConf()
 	// Everything the engine gave back is durable by definition, and it is
 	// RECORDED as such here. Leaving the watermark at zero would leave a
 	// recovered node believing nothing it holds is durable, which is not a
@@ -661,6 +1054,10 @@ func Restore(cfg Config, hs HardState, snap SnapshotMeta, entries []Entry) (*Raf
 type SnapshotMeta struct {
 	Index Index
 	Term  Term
+
+	// Conf is the configuration as of Index. A recovering node reads its
+	// membership from here before it can do anything at all.
+	Conf Configuration
 }
 
 // ID, Role and Term exist for the driver and for logging. **No oracle may call
@@ -700,7 +1097,10 @@ func (r *Raft) Tick() {
 	switch r.role {
 	case RoleFollower, RoleCandidate:
 		r.electionElapsed++
-		if r.electionElapsed >= r.randomizedElectionTimeout {
+		if r.electionElapsed >= r.randomizedElectionTimeout && r.conf.IsVoter(r.id) {
+			// A learner never campaigns. It is counted in no quorum, so an
+			// election it started could not finish, and the term it burned would
+			// depose a healthy leader for nothing.
 			r.campaign()
 		}
 	case RoleLeader:
@@ -741,7 +1141,7 @@ func (r *Raft) Propose(id ProposalID, data []byte) error {
 		// have, which is the one thing that can make a transfer fail to complete.
 		return ErrTransferInProgress
 	}
-	e := Entry{Term: r.term, Index: r.lastIndex() + 1, ID: id, Data: append([]byte(nil), data...)}
+	e := Entry{Type: EntryNormal, Term: r.term, Index: r.lastIndex() + 1, ID: id, Data: append([]byte(nil), data...)}
 	r.appendEntries(e)
 	// The leader's own match index is NOT advanced here. A leader counts its own
 	// replication only once the entry is durable, and AckPersisted is where that
@@ -750,6 +1150,79 @@ func (r *Raft) Propose(id ProposalID, data []byte) error {
 	// outbound message against.
 	r.broadcastAppend()
 	return nil
+}
+
+// ErrConfChangeInFlight is returned while an earlier configuration change has
+// not committed. Three simultaneously live configurations have no overlap
+// guarantee, which is DESIGN-A3 §4's reasoning one level up.
+var ErrConfChangeInFlight = errors.New("raft: a configuration change is already in flight")
+
+// ErrLearnerLagging is returned when a learner is too far behind to promote.
+var ErrLearnerLagging = errors.New("raft: learner is too far behind to promote")
+
+// ProposeConfChange appends a configuration change. The signature is DESIGN-A0
+// D5's, frozen.
+//
+// A3 accepts exactly one simple change and refuses the joint transitions BY
+// NAME, citing Amendment A6, so the cut is visible where somebody tries to use
+// it rather than implied by an absence (DESIGN-A3 §2).
+func (r *Raft) ProposeConfChange(id ProposalID, cc ConfChangeV2) error {
+	if id.Zero() {
+		return fmt.Errorf("raft: a configuration change needs an identifier; the zero value is refused")
+	}
+	if r.role != RoleLeader {
+		return ErrNotLeader
+	}
+	if r.leadTransferee != 0 {
+		return ErrTransferInProgress
+	}
+	if cc.Transition != ConfChangeSimple {
+		return fmt.Errorf("raft: %s is a joint-consensus transition, which Amendment A6 moved to "+
+			"STRETCH.md. v1 changes one server at a time, which is safe without joint consensus by "+
+			"the overlapping-quorum argument in DESIGN-A3 §4", cc.Transition)
+	}
+	if len(cc.Changes) != 1 {
+		return fmt.Errorf("raft: a v1 configuration change carries exactly one server, got %d. Two "+
+			"at once is the case the overlap argument does not cover, which is what joint consensus "+
+			"exists for", len(cc.Changes))
+	}
+	if last := r.lastConfIndex(); last > r.commitIndex {
+		return ErrConfChangeInFlight
+	}
+
+	ch := cc.Changes[0]
+	if ch.Type == ConfChangeAddVoter && r.conf.IsLearner(ch.Node) {
+		if i := r.peerIdx(ch.Node); i >= 0 {
+			if gap := r.lastIndex() - r.matchIndex[i]; gap > r.promotionLag {
+				return fmt.Errorf("%w: node %d is %d entries behind, bound is %d. Promoting it now "+
+					"raises the quorum while it can contribute nothing, so a cluster that tolerated "+
+					"one failure would tolerate none until it caught up",
+					ErrLearnerLagging, ch.Node, gap, r.promotionLag)
+			}
+		}
+	}
+	if _, err := r.conf.apply(ch); err != nil {
+		return err
+	}
+
+	e := Entry{
+		Type: EntryConfChange, Term: r.term, Index: r.lastIndex() + 1,
+		ID: id, Data: EncodeConfChange(cc),
+	}
+	r.appendEntries(e)
+	r.broadcastAppend()
+	return nil
+}
+
+// lastConfIndex is the index of the newest configuration entry still in the log,
+// or zero. Anything the snapshot covers is committed by construction.
+func (r *Raft) lastConfIndex() Index {
+	for i := len(r.log) - 1; i >= 0; i-- {
+		if r.log[i].Type == EntryConfChange {
+			return r.log[i].Index
+		}
+	}
+	return 0
 }
 
 // Step feeds one message in.
@@ -854,7 +1327,7 @@ func (r *Raft) stepPreVoteResp(m Message) {
 		return
 	}
 	r.preGranted[i] = true
-	if count(r.preGranted) >= r.quorum() {
+	if r.countVoters(r.preGranted) >= r.quorum() {
 		r.preVoting = false
 		r.forceCampaign()
 	}
@@ -916,7 +1389,19 @@ func (r *Raft) stepSnap(m Message) {
 	}
 	r.gated = kept
 
+	conf, ok := DecodeConfiguration(m.SnapConf)
+	if !ok {
+		// A snapshot whose configuration does not decode is a snapshot that
+		// cannot say who the cluster is. Refusing it leaves this node behind,
+		// which is recoverable; installing it leaves this node guessing, which
+		// is not.
+		r.sendGated(Message{Type: MsgAppResp, From: r.id, To: m.From, Term: r.term, Success: false})
+		return
+	}
+
 	r.log = nil
+	r.baseConf = conf
+	r.recomputeConf()
 	r.snapIndex, r.snapTerm = m.SnapIndex, m.SnapTerm
 	r.commitIndex = m.SnapIndex
 	r.appliedIdx = m.SnapIndex
@@ -927,7 +1412,7 @@ func (r *Raft) stepSnap(m Message) {
 	r.dirty()
 	r.nextSnapMark++
 	r.snapMark = r.nextSnapMark
-	r.pendingSnap = &Snapshot{Index: m.SnapIndex, Term: m.SnapTerm, Data: m.SnapData}
+	r.pendingSnap = &Snapshot{Index: m.SnapIndex, Term: m.SnapTerm, Data: m.SnapData, Conf: conf}
 
 	// GATE: MsgAppResp following InstallSnapshot, on the snapshot durably
 	// installed. Without it the node acks, crashes before the install is
@@ -968,26 +1453,50 @@ func (r *Raft) sendSnapshot(to NodeID) {
 // Discarding a prefix the state machine has not consumed, or one the engine has
 // not written, is unrecoverable in a way no later check can undo, so it is a
 // refusal rather than an invariant.
-func (r *Raft) Compact(index Index) (Term, error) {
+func (r *Raft) Compact(index Index) (Term, Configuration, error) {
 	if index <= r.snapIndex {
-		return r.snapTerm, nil
+		return r.snapTerm, r.baseConf.Clone(), nil
 	}
 	if index > r.appliedIdx {
-		return 0, fmt.Errorf("raft: node %d cannot compact through %d with only %d applied; that "+
+		return 0, Configuration{}, fmt.Errorf("raft: node %d cannot compact through %d with only %d applied; that "+
 			"prefix has not reached the state machine yet", r.id, index, r.appliedIdx)
 	}
 	if index > r.tail.persisted {
-		return 0, fmt.Errorf("raft: node %d cannot compact through %d with only %d durable; the "+
+		return 0, Configuration{}, fmt.Errorf("raft: node %d cannot compact through %d with only %d durable; the "+
 			"prefix would be gone from memory and never have been on disk", r.id, index, r.tail.persisted)
 	}
 	e, ok := r.at(index)
 	if !ok {
-		return 0, fmt.Errorf("raft: node %d cannot compact through %d, which its log does not hold", r.id, index)
+		return 0, Configuration{}, fmt.Errorf("raft: node %d cannot compact through %d, which its log does not hold", r.id, index)
 	}
+
+	// The configuration AS OF index, which is not the active one: entries above
+	// the compaction point may have changed it again, and a snapshot that
+	// carried the newer configuration would describe a cluster its own state
+	// machine has not caught up to.
+	conf := r.baseConf.Clone()
+	for _, x := range r.log {
+		if x.Index > index {
+			break
+		}
+		if x.Type != EntryConfChange {
+			continue
+		}
+		if cc, ok := DecodeConfChange(x.Data); ok {
+			for _, ch := range cc.Changes {
+				if next, err := conf.apply(ch); err == nil {
+					conf = next
+				}
+			}
+		}
+	}
+
 	p, _ := r.pos(index)
 	r.log = append([]Entry(nil), r.log[p+1:]...)
 	r.snapIndex, r.snapTerm = index, e.Term
-	return e.Term, nil
+	r.baseConf = conf.Clone()
+	r.recomputeConf()
+	return e.Term, conf, nil
 }
 
 // TransferLeadership hands leadership to target without waiting out an election
@@ -999,17 +1508,28 @@ func (r *Raft) Compact(index Index) (Term, error) {
 // interface is not negotiable -- twice in A1 the divergence WAS the defect. The
 // consequence has to be lived with honestly, so the two failure kinds are split:
 //
-//	not the leader, or a transfer already pending -- a runtime condition the
-//	caller cannot predict. A no-op. The caller checks Role() if it cares.
-//	target is self, or not a peer -- a caller BUG, which a silent no-op would
-//	hide until somebody wondered why leadership never moved. It panics.
+//	not the leader, a transfer already pending, or the target no longer in the
+//	configuration -- runtime conditions the caller cannot predict. A no-op.
+//	target is self -- a caller BUG, which a silent no-op would hide until
+//	somebody wondered why leadership never moved. It panics.
+//
+// # "not a peer" moved sides at A3, and that is a real correction
+//
+// A2 classified an unknown target as a caller bug, because membership was fixed
+// and a caller naming a non-member had made a mistake. A3 makes membership
+// change under the caller's feet: a node scheduled for a transfer can be removed
+// from the configuration before the order is issued, and nothing the caller can
+// check would have told it. It is now a runtime condition, and it fired on the
+// first sweep after membership churn landed.
 func (r *Raft) TransferLeadership(target NodeID) {
 	if target == r.id {
 		panic(fmt.Sprintf("raft: node %d was asked to transfer leadership to itself", r.id))
 	}
 	i := r.peerIdx(target)
-	if i < 0 {
-		panic(fmt.Sprintf("raft: node %d was asked to transfer leadership to %d, which is not a peer", r.id, target))
+	if i < 0 || !r.conf.IsVoter(target) {
+		// Not in the configuration, or a learner: a learner cannot win an
+		// election, so ordering it to campaign would burn a term for nothing.
+		return
 	}
 	if r.role != RoleLeader || r.leadTransferee != 0 {
 		return
@@ -1110,9 +1630,9 @@ func (r *Raft) stepVoteResp(m Message) {
 		r.votesDenied[i] = true
 	}
 	switch {
-	case count(r.votesGranted) >= r.quorum():
+	case r.countVoters(r.votesGranted) >= r.quorum():
 		r.becomeLeader()
-	case count(r.votesDenied) >= r.quorum():
+	case r.countVoters(r.votesDenied) >= r.quorum():
 		// The election is lost and cannot be won; wait for the timeout rather
 		// than campaigning again immediately, which would spin the term.
 		r.becomeFollower(r.term, r.vote)
@@ -1240,13 +1760,14 @@ func (r *Raft) maybeCommit() {
 			continue
 		}
 		cnt := 0
-		for i := range r.peers {
-			if r.matchIndex[i] >= n {
+		for i, p := range r.peers {
+			if r.conf.IsVoter(p) && r.matchIndex[i] >= n {
 				cnt++
 			}
 		}
 		if cnt >= r.quorum() {
 			r.commitIndex = n
+			r.stepDownIfRemoved()
 			return
 		}
 	}
@@ -1254,6 +1775,23 @@ func (r *Raft) maybeCommit() {
 
 // campaign is what an election timeout produces. With pre-vote on it asks first
 // and only spends a term if the answer is yes.
+// stepDownIfRemoved makes a leader stand down once its own removal is committed.
+//
+// It keeps leading until then, deliberately. Effect-on-append means it stopped
+// being a voter the moment it appended the change, so it no longer counts itself
+// toward the quorum -- but somebody has to replicate the entry that removes it,
+// and the only node that can is the one being removed.
+func (r *Raft) stepDownIfRemoved() {
+	if r.role != RoleLeader || r.conf.IsVoter(r.id) {
+		return
+	}
+	if last := r.lastConfIndex(); last != 0 && last > r.commitIndex {
+		return
+	}
+	r.becomeFollower(r.term, r.vote)
+	r.leader = 0
+}
+
 func (r *Raft) campaign() {
 	if r.preVote {
 		r.preCampaign()
@@ -1622,6 +2160,44 @@ func (r *Raft) marksFor(idx Index) (logMark, snapMark PersistMark) {
 // it (DESIGN-A1 §0).
 func (r *Raft) PendingGated() int { return len(r.gated) }
 
+// AssertConfConsistent refuses a node whose cached configuration disagrees with
+// its own log.
+//
+// The active configuration is a FUNCTION of the log (DESIGN-A3 §3), so it can
+// always be recomputed and compared. Every path that changes the log has to
+// recompute it, and DESIGN-A3 names that as where the bugs live -- a truncation
+// that forgets leaves a node using a membership its own log no longer describes,
+// and nothing outside the node can see the difference, because the log it
+// publishes is correct and only its idea of who is in the cluster is not.
+//
+// This is a check that can only fail, which is the side of the provenance rule
+// where a node's own state is a permitted input.
+func (r *Raft) AssertConfConsistent() error {
+	want := r.baseConf.Clone()
+	for _, e := range r.log {
+		if e.Type != EntryConfChange {
+			continue
+		}
+		cc, ok := DecodeConfChange(e.Data)
+		if !ok {
+			continue
+		}
+		for _, ch := range cc.Changes {
+			if next, err := want.apply(ch); err == nil {
+				want = next
+			}
+		}
+	}
+	if r.conf.Equal(want) {
+		return nil
+	}
+	return fmt.Errorf(
+		"raft: node %d is using configuration %s while its own log says %s; a path that changes the "+
+			"log forgot to recompute, and from outside the node this is invisible -- the log it "+
+			"publishes is correct and only its idea of who is in the cluster is not",
+		r.id, r.conf, want)
+}
+
 // AssertQuiescent refuses a node that has gone quiet while still withholding a
 // message.
 //
@@ -1718,6 +2294,7 @@ func (r *Raft) setTermAndVote(t Term, v NodeID) {
 }
 
 func (r *Raft) appendEntries(es ...Entry) {
+	conf := false
 	// Positions are derived from indices now, so a gap would not be a wrong
 	// answer later, it would be a wrong answer everywhere. Refuse it here.
 	for _, e := range es {
@@ -1728,6 +2305,15 @@ func (r *Raft) appendEntries(es ...Entry) {
 				r.id, e.Index, r.lastIndex()))
 		}
 		r.log = append(r.log, e)
+		if e.Type == EntryConfChange {
+			conf = true
+		}
+	}
+	if conf {
+		// Effect on APPEND, not on commit (DESIGN-A3 §3): commitment is counted
+		// under the OLD configuration, so waiting for it lets a node's own vote
+		// commit its own removal.
+		r.recomputeConf()
 	}
 	r.dirty()
 }
@@ -1798,6 +2384,12 @@ func (r *Raft) truncateFrom(i Index) {
 		kept = append(kept, g)
 	}
 	r.gated = kept
+
+	// A truncation can remove a configuration entry, so the active configuration
+	// has to be rebuilt from what the log now says. Recomputed from scratch
+	// rather than undone: an undo that is one case short is a cluster that
+	// disagrees with itself about who is in it.
+	r.recomputeConf()
 }
 
 // pos converts a log index to a position in the slice, reporting whether the
@@ -1913,7 +2505,109 @@ func (r *Raft) logIsUpToDate(idx Index, term Term) bool {
 	return idx >= r.lastIndex()
 }
 
-func (r *Raft) quorum() int { return len(r.peers)/2 + 1 }
+// quorum is a majority of VOTERS. Learners are counted in nothing, which is the
+// whole reason they exist.
+func (r *Raft) quorum() int { return len(r.conf.Voters)/2 + 1 }
+
+// countVoters counts set flags belonging to voters only. The flag slices are
+// indexed by position in peers, which includes learners, so counting the slice
+// would let a learner vote by being in it.
+func (r *Raft) countVoters(flags []bool) int {
+	n := 0
+	for i, p := range r.peers {
+		if i < len(flags) && flags[i] && r.conf.IsVoter(p) {
+			n++
+		}
+	}
+	return n
+}
+
+// defaultPromotionLag is the catch-up bound when none is configured.
+const defaultPromotionLag Index = 8
+
+// recomputeConf rebuilds the active configuration from the snapshot's
+// configuration plus every configuration entry still in the log, in order.
+//
+// # Why every log change goes through here
+//
+// A configuration entry takes effect when it is APPENDED (DESIGN-A3 §3), so a
+// configuration is a function of the log's contents -- and the log can be
+// truncated, replaced by a snapshot, or restored from disk. Recomputing from
+// scratch is the only version that cannot drift: incremental application has to
+// be undone on truncation, and an undo that is one case short is a cluster that
+// disagrees with itself about who is in it.
+func (r *Raft) recomputeConf() {
+	conf := r.baseConf.Clone()
+	for _, e := range r.log {
+		if e.Type != EntryConfChange {
+			continue
+		}
+		cc, ok := DecodeConfChange(e.Data)
+		if !ok {
+			continue
+		}
+		for _, ch := range cc.Changes {
+			if next, err := conf.apply(ch); err == nil {
+				conf = next
+			}
+		}
+	}
+	r.setConf(conf)
+}
+
+// setConf installs a configuration and rebuilds the peer-indexed state,
+// preserving each node's progress BY IDENTITY.
+//
+// Preserving by position would be the same bug as identifying a proposal by its
+// log index (BUG-004): the position means something only relative to a peer set
+// that has just changed.
+func (r *Raft) setConf(conf Configuration) {
+	oldPeers := r.peers
+	oldNext, oldMatch := r.nextIndex, r.matchIndex
+	oldGranted, oldDenied, oldPre := r.votesGranted, r.votesDenied, r.preGranted
+
+	r.conf = conf
+	r.peers = conf.Members()
+	n := len(r.peers)
+	r.nextIndex = make([]Index, n)
+	r.matchIndex = make([]Index, n)
+	r.votesGranted = make([]bool, n)
+	r.votesDenied = make([]bool, n)
+	r.preGranted = make([]bool, n)
+
+	for i, p := range r.peers {
+		for j, q := range oldPeers {
+			if p != q {
+				continue
+			}
+			if j < len(oldNext) {
+				r.nextIndex[i] = oldNext[j]
+			}
+			if j < len(oldMatch) {
+				r.matchIndex[i] = oldMatch[j]
+			}
+			if j < len(oldGranted) {
+				r.votesGranted[i] = oldGranted[j]
+			}
+			if j < len(oldDenied) {
+				r.votesDenied[i] = oldDenied[j]
+			}
+			if j < len(oldPre) {
+				r.preGranted[i] = oldPre[j]
+			}
+			break
+		}
+		// A node that is new to the configuration starts from the leader's own
+		// end of the log, as becomeLeader would have set it.
+		if r.nextIndex[i] == 0 {
+			r.nextIndex[i] = r.lastIndex() + 1
+		}
+	}
+}
+
+// Configuration reports the active membership. For the driver's routing and for
+// logging; no oracle may call it (DESIGN-A1 §0).
+func (r *Raft) Configuration() Configuration { return r.conf.Clone() }
 
 func (r *Raft) peerIdx(id NodeID) int {
 	for i, p := range r.peers {

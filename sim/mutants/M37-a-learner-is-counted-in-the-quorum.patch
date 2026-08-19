@@ -1,0 +1,20 @@
+# id: M37-a-learner-is-counted-in-the-quorum
+# covering-test: TestElectionSafetyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 10
+# power-measured: 20 at commit c1a1f6c+A3
+# mutates: learners are counted in quorums and votes, so the cluster's idea of a majority includes nodes that were added precisely because they could not yet be trusted with one
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -2477,7 +2477,8 @@
+ func (r *Raft) countVoters(flags []bool) int {
+ 	n := 0
+ 	for i, p := range r.peers {
+-		if i < len(flags) && flags[i] && r.conf.IsVoter(p) {
++		if i < len(flags) && flags[i] {
++			_ = p
+ 			n++
+ 		}
+ 	}

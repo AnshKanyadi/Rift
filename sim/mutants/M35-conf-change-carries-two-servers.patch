@@ -1,0 +1,20 @@
+# id: M35-conf-change-carries-two-servers
+# covering-test: TestSingleServerChangeOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 146
+# power-measured: 293 at commit c1a1f6c+A3
+# mutates: a configuration change carries two servers at once, which is exactly the case the overlapping-quorum argument does not cover: two configurations differing by more than one server need not have intersecting majorities
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1181,7 +1181,8 @@
+ 			"STRETCH.md. v1 changes one server at a time, which is safe without joint consensus by "+
+ 			"the overlapping-quorum argument in DESIGN-A3 §4", cc.Transition)
+ 	}
+-	if len(cc.Changes) != 1 {
++	cc.Changes = append(cc.Changes, cc.Changes[0])
++	if false {
+ 		return fmt.Errorf("raft: a v1 configuration change carries exactly one server, got %d. Two "+
+ 			"at once is the case the overlap argument does not cover, which is what joint consensus "+
+ 			"exists for", len(cc.Changes))

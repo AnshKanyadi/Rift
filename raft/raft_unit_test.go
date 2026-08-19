@@ -1,6 +1,9 @@
 package raft
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func threeNode(t *testing.T, id NodeID) *Raft {
 	t.Helper()
@@ -201,5 +204,119 @@ func TestLeaderCountsItsOwnCopyOnlyWhenDurable(t *testing.T) {
 	got := r.Ready()
 	if len(got.Committed) != 1 || got.Committed[0].Index != 1 {
 		t.Fatalf("index 1 did not commit once the leader's own copy was durable: %+v", got.Committed)
+	}
+}
+
+// leaderOfThree brings node 1 to leadership in a three-voter cluster.
+func leaderOfThree(t *testing.T, cfg Config) *Raft {
+	t.Helper()
+	r, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	for range cfg.ElectionTimeout {
+		r.Tick()
+	}
+	r.AckPersisted(r.Ready().Mark)
+	if err := r.Step(Message{Type: MsgVoteResp, From: 2, To: 1, Term: 1, Granted: true}); err != nil {
+		t.Fatalf("vote resp: %v", err)
+	}
+	if r.Role() != RoleLeader {
+		t.Fatalf("node 1 did not win; role is %s", r.Role())
+	}
+	return r
+}
+
+// TestPromotionIsRefusedWhileTheLearnerLags is the catch-up bound.
+//
+// Promoting a learner that is behind raises the quorum while that learner can
+// contribute nothing, so a cluster that tolerated one failure tolerates none
+// until it catches up. The refusal is a refusal and not a queue: a queued
+// promotion is one whose preconditions were true at some point in the past.
+func TestPromotionIsRefusedWhileTheLearnerLags(t *testing.T) {
+	r := leaderOfThree(t, Config{
+		ID: 1, Peers: []NodeID{1, 2, 3, 4}, Learners: []NodeID{4},
+		ElectionTimeout: 10, HeartbeatTimeout: 3, PromotionLag: 2,
+	})
+
+	// Put some distance between the leader's log and the learner's.
+	for i := range 6 {
+		if err := r.Propose(ProposalID{Node: 1, Seq: uint64(i + 1)}, []byte("x")); err != nil {
+			t.Fatalf("propose: %v", err)
+		}
+	}
+	r.AckPersisted(r.Ready().Mark)
+
+	promote := ConfChangeV2{
+		Transition: ConfChangeSimple,
+		Changes:    []ConfChangeSingle{{Type: ConfChangeAddVoter, Node: 4}},
+	}
+	err := r.ProposeConfChange(ProposalID{Node: 1, Seq: 100}, promote)
+	if !errors.Is(err, ErrLearnerLagging) {
+		t.Fatalf("a learner six entries behind a bound of two was promoted: %v", err)
+	}
+	if r.Configuration().IsVoter(4) {
+		t.Fatal("the refusal did not stop the configuration from changing")
+	}
+
+	// Once it catches up, the same promotion is accepted.
+	if err := r.Step(Message{
+		Type: MsgAppResp, From: 4, To: 1, Term: 1, Success: true, MatchIndex: r.Status().Last,
+	}); err != nil {
+		t.Fatalf("app resp: %v", err)
+	}
+	if err := r.ProposeConfChange(ProposalID{Node: 1, Seq: 101}, promote); err != nil {
+		t.Fatalf("a caught-up learner was refused promotion: %v", err)
+	}
+	if !r.Configuration().IsVoter(4) {
+		t.Fatal("the accepted promotion did not take effect on append")
+	}
+}
+
+// TestPromotedLearnerCannotWinWithoutTheCommittedEntries is the safety half of
+// the same criterion: a promotion during catch-up cannot lose a committed entry.
+//
+// Promotion is a LIVENESS risk, not a safety one, and the reason is worth
+// stating because it is what makes the catch-up bound a policy rather than a
+// correctness requirement. A promoted-but-lagging voter raises the quorum, so
+// commits may stall — but it cannot cause a committed entry to be lost, because
+// the up-to-date check refuses it the votes it would need to become leader and
+// overwrite one.
+//
+// This is the check that has to hold even if the bound is set wrong.
+func TestPromotedLearnerCannotWinWithoutTheCommittedEntries(t *testing.T) {
+	// A voter that holds six entries in term 1.
+	voter, err := New(Config{
+		ID: 2, Peers: []NodeID{1, 2, 3, 4}, Learners: []NodeID{4},
+		ElectionTimeout: 10, HeartbeatTimeout: 3,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	var ents []Entry
+	for i := range 6 {
+		ents = append(ents, Entry{Type: EntryNormal, Term: 1, Index: Index(i + 1), Data: []byte("x")})
+	}
+	if err := voter.Step(Message{
+		Type: MsgApp, From: 1, To: 2, Term: 1, PrevLogIndex: 0, Entries: ents, LeaderCommit: 6,
+	}); err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	voter.AckPersisted(voter.Ready().Mark)
+
+	// Node 4, promoted while holding only two of them, campaigns.
+	if err := voter.Step(Message{
+		Type: MsgVote, From: 4, To: 2, Term: 2, LastLogIndex: 2, LastLogTerm: 1,
+	}); err != nil {
+		t.Fatalf("vote: %v", err)
+	}
+	voter.AckPersisted(voter.Ready().Mark)
+
+	for _, m := range voter.Ready().Messages {
+		if m.Type == MsgVoteResp && m.To == 4 && m.Granted {
+			t.Fatal("a voter granted its vote to a node missing four committed entries. " +
+				"That node would win, and everything it does not have is gone -- which is " +
+				"leader completeness failing by way of a promotion")
+		}
 	}
 }

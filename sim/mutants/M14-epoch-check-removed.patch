@@ -3,9 +3,8 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 6
-# power-measured: 13 at commit bf10d04
-# power-config: a2
+# power-floor: 7
+# power-measured: 15 at commit c1a1f6c+A3
 # mutates: the epoch check is removed, so a completion from a dead incarnation reaches a live component -- the class behind TOY-003, the store restart bug and the durability panic
 --- a/store/node.go
 +++ b/store/node.go

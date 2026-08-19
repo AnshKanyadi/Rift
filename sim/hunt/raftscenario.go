@@ -43,6 +43,17 @@ type RaftOptions struct {
 
 	// Transfers is how many leadership transfers the plan schedules.
 	Transfers int
+
+	// Learners is how many of the cluster's nodes start as learners. They are
+	// the highest-numbered ones, so the voters are a stable prefix.
+	Learners int
+
+	// ConfChanges is how many membership steps the plan schedules. Each moves one
+	// node around the cycle absent -> learner -> voter -> absent.
+	ConfChanges int
+
+	// PromotionLag bounds how far behind a learner may be and still be promoted.
+	PromotionLag raft.Index
 }
 
 // A2Options is what the sweep runs: snapshots on with a threshold small enough
@@ -52,20 +63,30 @@ func A2Options() RaftOptions {
 	return RaftOptions{PreVote: true, SnapshotThreshold: 6, Transfers: 2}
 }
 
+// A3Options adds membership churn: a four-node cluster with one learner, and
+// enough scheduled changes that the cycle runs several times per seed.
+func A3Options() RaftOptions {
+	o := A2Options()
+	o.Learners = 1
+	o.ConfChanges = 4
+	o.PromotionLag = 8
+	return o
+}
+
 func RaftGenConfig() plan.GenConfig {
 	cfg := plan.DefaultGenConfig()
-	cfg.Nodes = 3
-	cfg.Duration = 12 * time.Second
-	cfg.ClientOps = 60
-	cfg.Crashes = 4
-	cfg.Partitions = 5 // weighted up, and genFaults alternates so most are single cuts
+	cfg.Nodes = 4 // three voters and one learner at A3
+	cfg.Duration = 14 * time.Second
+	cfg.ClientOps = 70
+	cfg.Crashes = 8
+	cfg.Partitions = 6 // weighted up, and genFaults alternates so most are single cuts
 	cfg.Holds = 0      // A1 Raft has no clock-sensitive logic; holds land with leases
 	return cfg
 }
 
 // MaterializeRaft turns a seed into a prepared plan with A2's options.
 func MaterializeRaft(seed uint64) (*plan.Plan, error) {
-	return MaterializeRaftWith(seed, A2Options())
+	return MaterializeRaftWith(seed, A3Options())
 }
 
 // MaterializeRaftWith turns a seed into a prepared plan, adding the leadership
@@ -77,6 +98,20 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 	p, err := plan.Materialize(seed, RaftGenConfig())
 	if err != nil {
 		return nil, fmt.Errorf("hunt: materialize: %w", err)
+	}
+	if opt.ConfChanges > 0 {
+		key, err := rng.ParseKey(p.Keys.Raft)
+		if err != nil {
+			return nil, fmt.Errorf("hunt: raft key: %w", err)
+		}
+		span := p.Config.DurationNS
+		for i := range opt.ConfChanges {
+			at := span/5 + int64(key.Uint64N(3, uint64(i), 0, 0, uint64(span*3/5)))
+			target := int(key.Uint64N(4, uint64(i), 0, 0, uint64(p.Config.Nodes)))
+			p.Faults.Entries = append(p.Faults.Entries, plan.Entry{
+				AtNS: at, Action: "conf", Node: target,
+			})
+		}
 	}
 	if opt.Transfers > 0 {
 		key, err := rng.ParseKey(p.Keys.Raft)
@@ -152,6 +187,16 @@ type RaftResult struct {
 	SnapshotsApplied int
 	TransfersAsked   int
 
+	// A3's evidence. ConfRefused is not a failure count: a change refused
+	// because one is already in flight, or because a learner lags, is the rule
+	// working. A sweep where every change was refused is the one that proves
+	// nothing, which is why both are reported.
+	ConfProposed    int
+	ConfRefused     int
+	LagRefused      int
+	ConfRecoveries  int
+	ConfCrossChecks int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -171,7 +216,7 @@ const syncLatency = clock.Instant(12_000_000)
 // RunRaft builds a three-node Raft group on a plan, drives client traffic
 // against it, and checks the result.
 func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
-	return RunRaftWith(p, A2Options(), tr)
+	return RunRaftWith(p, A3Options(), tr)
 }
 
 // RunRaftWith drives the group with explicit build options.
@@ -202,6 +247,14 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	for i := range peers {
 		peers[i] = raft.NodeID(i + 1)
 	}
+	// The highest-numbered nodes start as learners, so the voter set is a stable
+	// prefix and a seed's initial configuration is readable from its node count.
+	var learners []raft.NodeID
+	for i := n - opt.Learners; i < n; i++ {
+		if i >= 0 {
+			learners = append(learners, raft.NodeID(i+1))
+		}
+	}
 
 	// Election jitter is plan-derived: a pure state machine cannot randomize for
 	// itself, and a live draw would break replay.
@@ -216,6 +269,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		d, err := store.New(store.Config{
 			ID: raft.NodeID(i + 1), Peers: peers, Ordinal: ord,
 			Election: 10, Heartbeat: 3,
+			Learners:          learners,
+			PromotionLag:      opt.PromotionLag,
 			PreVote:           opt.PreVote,
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
@@ -233,6 +288,15 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// A scheduled promote is A2's leadership transfer: whoever is leading hands
 	// off to the named node. The plan carries it as an action, so it replays.
+	run.OnConfChange = func(target sim.NodeID) {
+		for _, d := range drivers {
+			if d.IsLeader() {
+				d.RequestConfChange(raft.NodeID(int(target) + 1))
+				break
+			}
+		}
+	}
+
 	run.OnPromote = func(target sim.NodeID) {
 		for _, d := range drivers {
 			if d.RequestTransfer(raft.NodeID(int(target) + 1)) {
@@ -279,6 +343,11 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.SnapshotsTaken += d.SnapshotsTaken()
 		res.SnapshotsApplied += d.SnapshotsApplied()
 		res.TransfersAsked += d.TransfersAsked()
+		res.ConfProposed += d.ConfProposed()
+		res.ConfRefused += d.ConfRefused()
+		res.LagRefused += d.LagRefused()
+		res.ConfRecoveries += d.ConfRecoveries()
+		res.ConfCrossChecks += d.ConfCrossChecks()
 	}
 
 	// The fire-count assertion only means anything on a run that reached its
@@ -361,6 +430,15 @@ type RaftCensus struct {
 	SnapshotsApplied int
 	TransfersAsked   int
 
+	// A3's. ConfRefused is not a failure count -- a change refused because one is
+	// already in flight, or because a learner lags, is the rule working -- but a
+	// sweep where every change was refused proves nothing, so both are reported.
+	ConfProposed    int
+	ConfRefused     int
+	LagRefused      int
+	ConfRecoveries  int
+	ConfCrossChecks int
+
 	FirstViolation     uint64
 	FoundAViolation    bool
 	InconclusiveCauses []string
@@ -387,6 +465,11 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.SnapshotsTaken += r.SnapshotsTaken
 		c.SnapshotsApplied += r.SnapshotsApplied
 		c.TransfersAsked += r.TransfersAsked
+		c.ConfProposed += r.ConfProposed
+		c.ConfRefused += r.ConfRefused
+		c.LagRefused += r.LagRefused
+		c.ConfRecoveries += r.ConfRecoveries
+		c.ConfCrossChecks += r.ConfCrossChecks
 		c.ElectionsStart += r.Census.ElectionsStart
 		c.ElectionsWon += r.Census.ElectionsWon
 		c.SplitVotes += r.Census.SplitVotes

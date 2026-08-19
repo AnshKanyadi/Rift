@@ -35,6 +35,12 @@ type Run struct {
 	// argument Loop.Do makes for link cuts.
 	OnPromote func(sim.NodeID)
 
+	// OnConfChange is called when a "conf" action fires, naming the node whose
+	// membership should move one step. Read through the run at fire time for the
+	// same reason OnPromote is: the nodes it talks to do not exist until Build
+	// has produced the transport.
+	OnConfChange func(sim.NodeID)
+
 	plan *Plan
 	// fired counts per rule index, parallel to plan.Faults.Rules.
 	fired []int
@@ -236,6 +242,12 @@ func (r *Run) schedule(when clock.Instant, action string, node, from, to int) {
 		r.Loop.Do(when, func() { r.Transport.CutBoth(nodeID(from), nodeID(to)) })
 	case "heal_both":
 		r.Loop.Do(when, func() { r.Transport.HealBoth(nodeID(from), nodeID(to)) })
+	case "conf":
+		r.Loop.Do(when, func() {
+			if r.OnConfChange != nil {
+				r.OnConfChange(nodeID(node))
+			}
+		})
 	case "promote":
 		// Read through r at fire time rather than capturing the hook now, so a
 		// driver may set OnPromote after Build -- which it must, since the nodes

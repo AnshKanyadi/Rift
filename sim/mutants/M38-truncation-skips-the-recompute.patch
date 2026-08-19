@@ -1,0 +1,23 @@
+# id: M38-truncation-skips-the-recompute
+# covering-test: TestConfigurationSurvivesRecovery
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 6
+# power-measured: 12 at commit c1a1f6c+A3
+# mutates: a truncation removes a configuration entry without rebuilding the active configuration, so the node goes on using a membership its own log no longer describes -- DESIGN-A3 §3 names this as where the bugs live
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -2347,11 +2347,7 @@
+ 	}
+ 	r.gated = kept
+ 
+-	// A truncation can remove a configuration entry, so the active configuration
+-	// has to be rebuilt from what the log now says. Recomputed from scratch
+-	// rather than undone: an undo that is one case short is a cluster that
+-	// disagrees with itself about who is in it.
+-	r.recomputeConf()
++	// mutated: the recompute is gone
+ }
+ 
+ // pos converts a log index to a position in the slice, reporting whether the

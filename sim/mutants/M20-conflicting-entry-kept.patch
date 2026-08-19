@@ -3,9 +3,8 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 3
-# power-measured: 6 at commit bf10d04
-# power-config: a2
+# power-floor: 5
+# power-measured: 11 at commit c1a1f6c+A3
 # mutates: a follower keeps its own entry at a conflicting index instead of truncating from it, so two replicas apply different commands at the same log position
 --- a/raft/raft.go
 +++ b/raft/raft.go

@@ -455,6 +455,7 @@ func All(l *Ledger, state StateAt) []sim.Oracle {
 		NewPersistBeforeReply(l),
 		NewApplyContinuity(l),
 		NewSnapshotEquivalence(l, state),
+		NewSingleServerChange(l),
 	}
 }
 
@@ -673,6 +674,81 @@ func (o *SnapshotEquivalence) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 						"from this snapshot and replaying the tail would not land where replaying the "+
 						"whole log lands",
 					s.node, verb, s.rec.Index, s.rec.Term, s.rec.Digest, got),
+			}
+		}
+	}
+	return nil
+}
+
+// --- one server at a time -----------------------------------------------------
+
+// SingleServerChange: every configuration change in the cluster moves exactly
+// one server, with no joint transition.
+//
+// # Why this is the oracle A3 needs
+//
+// The entire safety of single-node membership changes is the overlapping-quorum
+// argument (DESIGN-A3 §4), and that argument holds only while configurations
+// differ by at most one server. A change carrying two is not a smaller version
+// of joint consensus, it is the case joint consensus exists for -- and it would
+// leave two majorities that need not intersect, which is every Raft safety
+// property at once.
+//
+// ProposeConfChange refuses such a change, so this is the outside confirmation
+// that the refusal held: it reads the entries that actually reached logs and
+// state machines, not the code path that was supposed to prevent them.
+//
+// It decodes with raft's own codec. That is the wire format rather than the
+// semantics -- the oracle re-derives nothing about what a change MEANS -- and it
+// can only make a run fail, which is the side of the provenance rule where a
+// system-supplied fact is allowed.
+type SingleServerChange struct{ base }
+
+// NewSingleServerChange builds the oracle.
+func NewSingleServerChange(l *Ledger) *SingleServerChange {
+	return &SingleServerChange{base{l: l, name: "single-server-change"}}
+}
+
+func (o *SingleServerChange) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
+	if !o.stale() {
+		return nil
+	}
+	for node := 0; node < o.l.nodes; node++ {
+		for _, stream := range [][]raft.Entry{o.l.applied[node], o.l.durableLog[node]} {
+			for _, e := range stream {
+				if e.Type != raft.EntryConfChange {
+					continue
+				}
+				cc, ok := raft.DecodeConfChange(e.Data)
+				if !ok {
+					return &sim.Violation{
+						Checker: o.name,
+						Detail: fmt.Sprintf(
+							"node %d holds a configuration entry at index %d that does not decode; a "+
+								"membership nobody can read is a membership nobody agrees on",
+							node, e.Index),
+					}
+				}
+				if cc.Transition != raft.ConfChangeSimple {
+					return &sim.Violation{
+						Checker: o.name,
+						Detail: fmt.Sprintf(
+							"node %d holds a %s configuration change at index %d. Joint transitions "+
+								"were cut by Amendment A6, and the overlapping-quorum argument that "+
+								"makes v1 safe does not cover them",
+							node, cc.Transition, e.Index),
+					}
+				}
+				if len(cc.Changes) != 1 {
+					return &sim.Violation{
+						Checker: o.name,
+						Detail: fmt.Sprintf(
+							"node %d holds a configuration change at index %d moving %d servers at "+
+								"once. Two configurations differing by more than one server need not "+
+								"have intersecting majorities, which is every safety property at once",
+							node, e.Index, len(cc.Changes)),
+					}
+				}
 			}
 		}
 	}

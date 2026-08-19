@@ -4,8 +4,7 @@
 # expect: killed
 # power-seeds: 300
 # power-floor: 150
-# power-measured: 300 at commit bf10d04
-# power-config: a2
+# power-measured: 300 at commit c1a1f6c+A3
 # mutates: decodeMessage reads one uint64 more than encodeMessage writes, so no message decodes, no node becomes leader, and every client operation goes unanswered -- the shape of BUG-001, which no safety oracle could see and only the election census caught
 --- a/store/codec.go
 +++ b/store/codec.go

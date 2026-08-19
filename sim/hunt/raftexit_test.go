@@ -47,6 +47,10 @@ func TestRaftExitCriteria(t *testing.T) {
 		"inconclusive and never a pass", sim.UnknownDominatedPerMille)
 	t.Logf("a2 features:  %d snapshots taken, %d installed, %d leadership transfers requested",
 		c.SnapshotsTaken, c.SnapshotsApplied, c.TransfersAsked)
+	t.Logf("a3 features:  %d membership changes proposed, %d refused (%d of those a lagging learner)",
+		c.ConfProposed, c.ConfRefused, c.LagRefused)
+	t.Logf("a3 recovery:  %d restarts recovered a log carrying a configuration change, %d of them "+
+		"cross-checked against a snapshot configuration", c.ConfRecoveries, c.ConfCrossChecks)
 	for _, why := range c.InconclusiveCauses {
 		t.Logf("inconclusive: %s", why)
 	}
@@ -76,6 +80,18 @@ func TestRaftExitCriteria(t *testing.T) {
 		t.Error("no snapshot was ever INSTALLED across the whole sweep. Taking one exercises " +
 			"compaction; installing one is what exercises InstallSnapshot racing appends and " +
 			"restarts, which CLAUDE.md names as A2's danger zone")
+	}
+	if c.ConfProposed == 0 {
+		t.Error("no membership change was ever proposed across the whole sweep; every configuration " +
+			"oracle in this run checked nothing, and the change path was never executed")
+	}
+	if c.ConfRecoveries == 0 {
+		t.Error("no restart ever recovered a log carrying a configuration change, so nothing in " +
+			"this sweep exercised a configuration surviving a crash")
+	}
+	if c.ConfCrossChecks == 0 {
+		t.Error("no recovery was ever checked against a snapshot's configuration, so the one " +
+			"place recomputeConf can be compared against an independent derivation never ran")
 	}
 	if c.TransfersAsked == 0 {
 		t.Error("no leadership transfer was requested across the whole sweep, so the transfer path " +

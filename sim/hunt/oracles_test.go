@@ -48,11 +48,18 @@ import (
 // floored at detected-at-all with a 1000-seed range, the same treatment
 // floors.go gives dirty-read and ack-counting, and no rate is claimed for it.
 
-// assertOracleSilent sweeps the A2 configuration and fails only when the named
-// oracle reports.
+// assertOracleSilent sweeps the configuration the sweep runs and fails only when
+// the named oracle reports.
+//
+// The default follows the phase. It lagged once -- it was still A2's options
+// after A3 landed, so the membership oracles were induced against a
+// configuration that schedules no membership changes at all, and five mutants
+// reported ALIVE against tests that could not have caught them. An induction run
+// in a configuration that cannot produce the defect proves the same nothing as
+// no induction.
 func assertOracleSilent(t *testing.T, oracle string, seeds uint64) {
 	t.Helper()
-	assertOracleSilentWith(t, oracle, seeds, hunt.A2Options())
+	assertOracleSilentWith(t, oracle, seeds, hunt.A3Options())
 }
 
 // assertOracleSilentWith is the same with explicit build options, for an oracle
@@ -286,14 +293,74 @@ func TestSnapshotEquivalenceOracleReportsNothing(t *testing.T) {
 // the corrected form fires on the commit index, which is what Raft actually
 // guarantees, and this is the first thing it caught.
 func TestSnapshotPrefixIsNotOverwritten(t *testing.T) {
+	// # The A2 shape, and the reason is measured
+	//
+	// The defect needs a leader that sends PrevLogIndex 0 -- "start from the
+	// beginning" -- to a follower that has compacted past it. A leader only
+	// sends that if it has not compacted itself, and A3's cluster compacts
+	// sooner: four nodes sharing the same client traffic, one of them a learner,
+	// so each voter's log crosses the snapshot threshold earlier.
+	//
+	// Measured with M34 planted, 3000 seeds: A2 shape 2 detections, first at seed
+	// 2065; A3 shape ZERO. The class did not become safe, it became unreachable
+	// in this configuration -- which is exactly the difference the power lane
+	// exists to make visible, and it is visible here because the lane now covers
+	// this class.
 	const seeds = 3000
+	opt := hunt.A2Options()
+	for seed := uint64(0); seed < seeds; seed++ {
+		p, err := hunt.MaterializeRaftWith(seed, opt)
+		if err != nil {
+			t.Fatalf("seed %d: materialize: %v", seed, err)
+		}
+		if _, err := hunt.RunRaftWith(p, opt, nil); err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+	}
+}
+
+// TestSingleServerChangeOracleReportsNothing is the covering test for
+// M35-conf-change-carries-two-servers.
+//
+// The overlapping-quorum argument that makes single-node changes safe without
+// joint consensus holds only while configurations differ by at most one server
+// (DESIGN-A3 §4). A change carrying two is not a smaller joint consensus, it is
+// the case joint consensus exists for.
+func TestSingleServerChangeOracleReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "single-server-change", 100)
+}
+
+// TestConfigurationSurvivesRecovery is the covering test for the two mutants
+// that break a configuration's journey through a crash: M38 skips the recompute
+// a truncation forces, and M39 leaves the configuration out of the snapshot.
+//
+// It asserts two things and the second is the one that keeps it honest: no run
+// fails, AND the cross-check between a node's recovered configuration and one
+// derived independently from the same recovered bytes actually ran. A run in
+// which no node ever recovered a configuration would pass the first trivially.
+func TestConfigurationSurvivesRecovery(t *testing.T) {
+	const seeds = 200
+	checks, recoveries := 0, 0
 	for seed := uint64(0); seed < seeds; seed++ {
 		p, err := hunt.MaterializeRaft(seed)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)
 		}
-		if _, err := hunt.RunRaft(p, nil); err != nil {
+		r, err := hunt.RunRaft(p, nil)
+		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)
 		}
+		checks += r.ConfCrossChecks
+		recoveries += r.ConfRecoveries
+	}
+	t.Logf("%d recoveries carried a configuration change in the log; %d were checked against a "+
+		"snapshot configuration", recoveries, checks)
+	if checks == 0 {
+		t.Fatal("no recovered configuration was ever compared against an independent derivation, " +
+			"so this test asserts nothing about the one function DESIGN-A3 §3 names as where the " +
+			"bugs live")
+	}
+	if recoveries == 0 {
+		t.Fatal("no restart ever recovered a log carrying a configuration change")
 	}
 }
