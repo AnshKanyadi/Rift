@@ -53,10 +53,23 @@ var frozen = []struct {
 	// here rather than downstream.
 	{name: "ProposeConfChange", sig: "(id ProposalID, cc ConfChangeV2) error", phase: "A3"},
 	{name: "ReadIndex", sig: "(ctx []byte) error", phase: "A7"},
-	{name: "TransferLeadership", sig: "(target NodeID)", phase: "A2"},
-	{name: "Campaign", sig: "() error", phase: "A2"},
-	{name: "Status", sig: "() Status", phase: "A2"},
+	// Built at A2, so their phase markers are cleared and they are required now.
+	// A marker left behind would make a missing method log "not yet built" and
+	// pass forever, which is the slow way to lose a freeze.
+	{name: "TransferLeadership", sig: "(target NodeID)"},
+	{name: "Campaign", sig: "() error"},
+	{name: "Status", sig: "() Status"},
 }
+
+// signedPhases are the phases Ansh has signed off. A frozen signature may be
+// deferred to a phase that has not happened yet; deferring it to one that has is
+// either a freeze that was quietly dropped or a marker nobody cleared, and the
+// two are indistinguishable from the outside.
+//
+// This is the mechanism that makes "not yet built" expire. Without it a method
+// frozen for A2 and never written would have logged "not yet built (frozen,
+// lands in A2)" through A3, A4 and every phase after, passing every time.
+var signedPhases = map[string]bool{"A0": true, "A1": true, "A2": true}
 
 // TestD5FrozenSignatures fails when the implementation's exported surface
 // diverges from what D5 froze.
@@ -64,6 +77,13 @@ func TestD5FrozenSignatures(t *testing.T) {
 	got := methodsOf(t, "../../raft/raft.go", "Raft")
 
 	for _, f := range frozen {
+		if f.phase != "" && signedPhases[f.phase] {
+			t.Errorf("STALE PHASE MARKER: %s is deferred to %s, which is signed.\n"+
+				"  Either it was built and the marker was never cleared, or it was frozen for a "+
+				"phase that closed without it. Both read the same from here, and both mean this "+
+				"pin has stopped pinning that method.", f.name, f.phase)
+			continue
+		}
 		have, ok := got[f.name]
 		if !ok {
 			if f.phase != "" {
