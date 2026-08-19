@@ -1,0 +1,19 @@
+# id: M46-split-inherits-the-appended-configuration
+# covering-test: TestSplitInheritsTheConfigurationAtItsIndex
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 3000
+# power-floor: 1
+# power-measured: 6 of 3000, first at seed 215, at commit 34b284d+A4 -- floored at detected-at-all, because six instances is not a rate
+# mutates: a range born from a split inherits the ACTIVE configuration, which is effective on append and is not a function of the applied prefix. Two replicas applying the same split entry with different appended tails give the new range two different birth configurations, and the one that starts behind reads the next membership entry as an illegal transition (BUG-015)
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -581,7 +581,7 @@
+ 	// membership entry as an illegal transition (BUG-015). Everything a split
+ 	// derives has to be derived at the split's position, which is the sentence
+ 	// this whole phase keeps rediscovering.
+-	conf, confErr := left.raft.ConfigurationAt(index)
++	conf, confErr := left.raft.Configuration(), error(nil)
+ 	if confErr != nil {
+ 		panic(fmt.Sprintf("store: node %d cannot state range %d's configuration at the split it is applying: %v",
+ 			m.cfg.ID, left.rng, confErr))

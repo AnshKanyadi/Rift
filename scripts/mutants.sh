@@ -64,7 +64,13 @@ printf '  ----------------------------------------------------------\n'
 # ---------------------------------------------------------------- baseline
 copy_tree "$scratch/baseline"
 baseline_pkgs=$(sed -n 's/^# package: *//p' "$PATCHDIR"/*.patch | sort -u | tr '\n' ' ')
-if ! (cd "$scratch/baseline" && $GO test -count=1 $baseline_pkgs >"$scratch/baseline.log" 2>&1); then
+# An explicit timeout, because Go's default 10 minutes is a number chosen for
+# unit tests and this lane runs seed sweeps. A4's exit sweep alone is five
+# minutes; the baseline crossed ten and the lane reported INVALID, which is the
+# gate working -- it refused to attribute anything to a tree it could not first
+# see pass. The remedy is to give it enough time, never to shorten the sweeps.
+TEST_TIMEOUT=${TEST_TIMEOUT:-3600s}
+if ! (cd "$scratch/baseline" && $GO test -count=1 -timeout "$TEST_TIMEOUT" $baseline_pkgs >"$scratch/baseline.log" 2>&1); then
   printf '   INVALID  the unpatched tree does not pass the packages these mutants target.\n\n'
   sed 's/^/     /' "$scratch/baseline.log" | head -30
   printf '\n  Every failure below would be unattributable, so no kills are reported.\n'
@@ -120,7 +126,7 @@ for patch in "$PATCHDIR"/*.patch; do
   rc=0
   # `|| rc=$?` rather than a bare call: set -e would abort the whole lane on the
   # first killed mutant, which is the expected outcome for most of them.
-  (cd "$work" && $GO test -count=1 -v -run "^${test_name}\$" "$pkg" >"$scratch/$id.log" 2>&1) || rc=$?
+  (cd "$work" && $GO test -count=1 -timeout "$TEST_TIMEOUT" -v -run "^${test_name}\$" "$pkg" >"$scratch/$id.log" 2>&1) || rc=$?
   end=$(now_ms)
   if ! grep -q "^=== RUN[[:space:]]*${test_name}\$" "$scratch/$id.log"; then
     printf '   ERROR    %s: its covering test %s never ran.\n' "$id" "$test_name"

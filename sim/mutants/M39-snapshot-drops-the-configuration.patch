@@ -8,13 +8,13 @@
 # mutates: a snapshot is written without its configuration, so a node recovering from it has no idea who it is talking to and falls back to the membership it was first constructed with
 --- a/store/node.go
 +++ b/store/node.go
-@@ -675,7 +675,8 @@
+@@ -764,7 +764,8 @@
  		// threshold will be met again on the next apply.
  		return
  	}
 -	meta := raft.SnapshotMeta{Index: applied, Term: term, Conf: conf}
 +	_ = conf
 +	meta := raft.SnapshotMeta{Index: applied, Term: term}
- 	data := encodeKV(n.kv)
+ 	data := encodeMachine(n.desc, n.kv)
  
  	b := engine.NewBatch()

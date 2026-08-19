@@ -6,14 +6,14 @@
 # power-floor: 7
 # power-measured: 15 at commit c1a1f6c+A3
 # mutates: the epoch check is removed, so a completion from a dead incarnation reaches a live component -- the class behind TOY-003, the store restart bug and the durability panic
---- a/store/node.go
-+++ b/store/node.go
-@@ -159,7 +159,7 @@
- 		// from a dead incarnation is dropped and counted, never acted on: acting
- 		// on it is what advanced the durability watermark past everything
- 		// applied and panicked the engine.
--		if !n.epoch.Accept(tok.Epoch) {
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -185,7 +185,7 @@
+ 		if !ok {
+ 			return
+ 		}
+-		if !m.epoch.Accept(tok.Epoch) {
 +		if false {
  			return
  		}
- 		n.onDurable(tok.Value, ev.At)
+ 		// One engine, one sequence, many replicas: the completion is offered to

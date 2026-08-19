@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 10 entries — 8 from A1, 1 from A2, 1 from A3. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 16 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -642,6 +642,237 @@ is a caller bug in any membership.
 reasonable and became wrong without anybody touching it. A classification of "caller bug versus
 runtime condition" is a statement about what the caller can know, and that changes when the system
 gains a way to change its own state. It is worth re-asking at every phase that adds one.
+
+### BUG-011 — a node re-applying a split after a crash kept the keys it had just given away
+
+| field | value |
+|---|---|
+| **Found by** | sim — snapshot equivalence, on 178 of the first 300 A4 seeds |
+| **Phase** | A4 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M43-extent-recovered-from-a-floating-key.patch && go run ./cmd/simctl replay --bundle seeds/BUG-011` |
+| **Reproduce (seed)** | seed **0**, range 3, applied index 12 |
+| **Invariant that caught it** | snapshot equivalence — a snapshot's contents are the state the committed log produces at its index |
+| **Mutant class** | none existed — added `M43-extent-recovered-from-a-floating-key` |
+| **Fix commit** | ebea8c5 |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Symptom, verbatim:**
+
+```
+range 3: node 2 took a snapshot at index 12 term 1 whose contents are not the state the committed
+log produces there: snapshot digest 10893142299075315290, log digest 13438753892299047465
+```
+
+**Root cause.** A range's extent was written to its own engine key whenever a split applied, and a
+restart read it back from there. The state machine, meanwhile, was rebuilt from the newest snapshot
+and then re-applying the log tail above it.
+
+Those two are not aligned. The descriptor key is a position in no log at all; the snapshot is a
+position in exactly one. A node that applied a split at index 10, crashed, and recovered from a
+snapshot at index 6 therefore rebuilt a state machine that had **not** split while holding an extent
+that **had**. Re-applying the split entry then found its own effect already recorded in the extent,
+judged the entry stale under the epoch guard, and skipped it — so the keys never moved. Nodes 0 and 1
+applied the split once and held `{k02,k03}`; node 2 held `{k02,k03,k04,k05}` forever after.
+
+**Why the checker caught it.** Because A4 had already moved the extent into the snapshot payload for
+an unrelated reason, the digest snapshot equivalence compares covers the extent as well as the keys.
+Without that, the divergence would have been invisible: the keys alone would have matched on any node
+whose extent happened to agree.
+
+**What this would have caused in production.** Two replicas of one range disagreeing about which keys
+they own, permanently, with no error anywhere. Reads would return different answers depending on which
+replica served them, and the range would never repair itself, because nothing in the protocol ever
+re-derives an extent.
+
+**Fix.** The extent is recovered only from a point that is aligned with the state machine: the
+snapshot's descriptor, unconditionally, or the range's birth extent when there is no snapshot. The
+descriptor key is demoted to what it can honestly be — a record that the range exists here — and the
+left range's is no longer written at all.
+
+**The general shape.** *Anything derived from a log position must be derived AT that position.* This
+is the same sentence as BUG-004's "an identifier is not a position", and A4 produced four more
+instances of it before the phase closed.
+
+---
+
+### BUG-012 — three replicas agreed with each other and the checker reported all three in violation
+
+| field | value |
+|---|---|
+| **Found by** | inspection, while diagnosing BUG-011 — the model disagreed with every node at once |
+| **Phase** | A4 |
+| **Reproduce (plan)** | `go run ./cmd/simctl replay --bundle seeds/BUG-012` with the model's split rule reverted |
+| **Reproduce (seed)** | seed **2**, range 1 |
+| **Invariant that caught it** | none — this is a defect in the checker, not the system |
+| **Mutant class** | covered by `M42-a-split-child-is-born-one-key-wide`, which fails if the model stops modelling splits faithfully |
+| **Fix commit** | ebea8c5 |
+| **Minimized?** | no |
+
+**Root cause.** The harness's model of the state machine applied **every** split entry it found in a
+committed log. The system does not: a split entry names the extent it was computed against, and one
+naming an extent the range has already moved past is refused by every replica. Two leaders can each
+propose a split from the same extent and both entries can commit.
+
+So on any seed containing a superseded split, the model computed a state no replica ever held and
+reported a violation against three nodes that agreed with each other.
+
+**Why this is in BUGS.md at all.** It is a harness defect, which DR-29 normally keeps out of this
+file. It is here because it is inseparable from BUG-011: it was found inside that investigation, and
+for one afternoon it made a real divergence look like three of them. A checker that manufactures
+violations is not merely noise — it is the thing that trains you to disbelieve the checker.
+
+**Fix.** The model restates the staleness rule in its own terms rather than sharing the
+implementation's. Restating is the point: if the two ever drift, the oracle fires, which is exactly
+what the harness is for.
+
+---
+
+### BUG-013 — a follower installed a snapshot, adopted a state machine that had split, and kept an extent that had not
+
+| field | value |
+|---|---|
+| **Found by** | sim — snapshot equivalence, on 78 of 300 seeds after BUG-011 was fixed |
+| **Phase** | A4 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M44-installed-snapshot-drops-the-extent.patch && go run ./cmd/simctl replay --bundle seeds/BUG-013` |
+| **Reproduce (seed)** | seed **2**, range 1, index 24 |
+| **Invariant that caught it** | snapshot equivalence |
+| **Mutant class** | none existed — added `M44-installed-snapshot-drops-the-extent` |
+| **Fix commit** | ebea8c5 |
+| **Minimized?** | no |
+
+**Root cause.** The extent travelled beside the snapshot rather than inside it: the storage layer
+wrote `encodeSnapshot(meta, n.desc, data)`, taking `n.desc` from the **installing** node. A follower
+that installed a snapshot therefore adopted the sender's keys and kept its own extent.
+
+At index 18 that node's keys were right and its extent was two splits behind. The split entry at index
+23 then named an extent the node could not see, was judged stale, and was skipped — and the node kept
+serving `k02` after the range had given it to a sibling.
+
+**What this would have caused in production.** Snapshot install is how a lagging replica catches up,
+so this fires precisely on the replica that was already behind: it rejoins, looks healthy, and owns
+the wrong keys.
+
+**Fix.** The extent is part of the state machine's payload, not metadata about it. `encodeMachine`
+serialises the extent and the keys together, so the extent travels on the wire with the snapshot, is
+restored at the index it belongs to, and is covered by the digest snapshot equivalence compares. The
+same defect is now a caught violation rather than a silence.
+
+---
+
+### BUG-014 — a range applied a write for a key it had already given away, and kept it forever
+
+| field | value |
+|---|---|
+| **Found by** | sim — snapshot equivalence, on 13 of 300 seeds after BUG-013 was fixed |
+| **Phase** | A4 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M45-apply-ignores-the-extent.patch && go run ./cmd/simctl replay --bundle seeds/BUG-014` |
+| **Reproduce (seed)** | seed **28**, range 2, index 13 |
+| **Invariant that caught it** | snapshot equivalence; the invariant it breaks is *no request served under a stale descriptor epoch* |
+| **Mutant class** | none existed — added `M45-apply-ignores-the-extent` |
+| **Fix commit** | ebea8c5 |
+| **Minimized?** | no |
+
+**Root cause.** The extent was checked where a request **arrived** and nowhere else. A leader accepts
+a request against the extent it has *applied*; a split entry it has already appended is not applied
+yet. Between those two moments the leader accepts writes for keys the log has already given away, and
+those entries commit behind the split.
+
+Range 2 gave `[k06,∞)` to range 6 at index 9 and applied `put k07` at index 10. The key then sat in
+the wrong range permanently: the next split at index 12 moved out only what **its** new right half
+contained, and `k07` was outside both halves, so nothing ever moved it.
+
+**Why it took three fixes to surface.** It was masked by the harness's own model, which deleted every
+key at or above the cut point instead of keeping what the new extent covers. Those two rules agree
+only when a range holds nothing outside its extent — exactly the assumption this bug violates — so the
+model quietly repaired the range and the oracle went green on a state no replica ever had.
+
+**What this would have caused in production.** Two ranges claiming one key with no error anywhere: the
+router sends the read to range 6 and the write landed in range 2. Split traffic is when it happens,
+which is when the system is already busy.
+
+**Fix.** The extent is checked at the **log position**, where every replica reaches the same verdict
+from the same state, and a command naming a key outside it is refused and the client re-routed. The
+split path now asserts that its two halves partition what the range holds, so the residue that let
+this survive is a loud failure instead of a slow divergence.
+
+---
+
+### BUG-015 — two replicas gave one new range two different birth configurations
+
+| field | value |
+|---|---|
+| **Found by** | sim — a raft refusal, seed 9595 of the A4 exit sweep |
+| **Phase** | A4 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M46-split-inherits-the-appended-configuration.patch && go run ./cmd/simctl replay --bundle seeds/BUG-015` |
+| **Reproduce (seed)** | seed **9595**, range 4 |
+| **Invariant that caught it** | none — a refusal, from `ApplyConfEntry` declining an illegal transition |
+| **Mutant class** | none existed — added `M46-split-inherits-the-appended-configuration` |
+| **Fix commit** | ebea8c5 |
+| **Minimized?** | no |
+
+**Symptom, verbatim:**
+
+```
+node 2: range 4: raft: node 3 refused the configuration entry at index 5:
+raft: node 2 is a voter and cannot be demoted to a learner in one step
+```
+
+**Root cause.** A range born from a split inherited `left.raft.Configuration()` — the **active**
+configuration, which is effective on append (D-A3-2). That is not a function of the applied prefix.
+Two replicas applying the same split entry with different appended tails therefore handed the new
+range two different birth configurations, and the replica that started behind read the next membership
+entry as an illegal transition.
+
+**Why the checker caught it.** Not by an oracle: by raft refusing an entry it could not apply. The
+refusal is the A3 machinery working — a configuration change that would violate the overlapping-quorum
+argument is declined at the funnel rather than ignored downstream — and here it fired on a caller that
+had asked the wrong question.
+
+**What this would have caused in production.** A new range whose replicas disagree about who is in it,
+which is a disagreement about who can win an election and what counts as a quorum. Every safety
+argument in Raft is downstream of the replicas agreeing on the configuration.
+
+**Fix.** `raft.ConfigurationAt(index)` — the reasoning `Compact` already had inline, exported for the
+second caller that needed it. The split path asks for the configuration **at the split's index**.
+
+---
+
+### BUG-016 — the rebalance oracle blamed one move's removal on a different move
+
+| field | value |
+|---|---|
+| **Found by** | the rebalance oracle, firing on 252 of 300 seeds and then on seed 103 |
+| **Phase** | A4 |
+| **Reproduce (plan)** | `go run ./cmd/simctl replay --bundle seeds/BUG-016` with the attribution window removed |
+| **Reproduce (seed)** | seed **103**, range 1 |
+| **Invariant that caught it** | none — this is a defect in the checker |
+| **Mutant class** | covered by `M41-rebalance-removes-before-it-adds`, which the corrected oracle still kills at 192 of 300 |
+| **Fix commit** | 34b284d |
+| **Minimized?** | no |
+
+**Root cause, in two rounds.** A move is an intent, and no sequence of committed entries states one:
+an add and a remove look exactly like two unrelated membership changes. The oracle attributed **every**
+removal of a move's source after the move was ordered.
+
+First round, 252 of 300 seeds: A3's membership churn ran concurrently and its removals were read as
+moves. Second round, one seed: two moves on range 1 shared a source, and the second move's correct
+removal was blamed on the first, which had stalled.
+
+**Why this is in BUGS.md.** Same reason as BUG-012. It is the third instrument in this project to
+catch itself, and the number that matters is that it reported 252 violations against a system that was
+behaving correctly. A checker with a false-positive rate that high is worse than no checker: it is a
+checker people learn to override.
+
+**Fix.** Two things, and neither is a loosened check. The two membership drivers are separated in time
+so a removal has one plausible author, which is a **recorded limitation** — no seed exercises a move
+racing an unrelated membership change (DESIGN-A4 §7). And a move owns its range's membership only
+until the next move on that range is ordered, a window the harness derives from its own record of what
+it ordered rather than from anything the cluster says.
+
+The mechanism gained something too: `RequestMove` takes an explicit `begin`, because a stateless move
+cannot otherwise tell "the destination is already a voter because I just added it" from "the
+destination was already there", and the second is not a move at all.
+
 
 ---
 

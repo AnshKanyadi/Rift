@@ -370,3 +370,82 @@ func TestConfigurationSurvivesRecovery(t *testing.T) {
 		t.Fatal("no restart ever recovered a log carrying a configuration change")
 	}
 }
+
+// TestRebalanceSafetyOracleReportsNothing is the covering test for
+// M41-rebalance-removes-before-it-adds.
+//
+// The mutant makes a move propose the removal of the source as its first step
+// instead of adding the destination, which is the whole failure a rebalance
+// exists to avoid: the range spends the move one replica short, and a crash in
+// that window costs it quorum on a change nobody had to make.
+//
+// The oracle reads the committed log, so it sees the removal whether or not the
+// move ever finishes, and it needs no cooperation from the thing it judges.
+//
+// 60 seeds. The harness notices the mutant on 192 of the first 300, first at
+// seed 0 (scripts/power-mutants.sh, M41).
+func TestRebalanceSafetyOracleReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "rebalance-safety", 60)
+}
+
+// TestSplitPartitionOracleReportsNothing is the covering test for
+// M42-a-split-child-is-born-one-key-wide.
+//
+// The mutant gives the new range a birth extent that does not match the split
+// entry that created it: the parent gives away everything above the cut point
+// and the child is born claiming one key less, so the keys between belong to
+// nobody.
+//
+// This is the failure mode no per-range oracle can see. Both ranges are
+// internally consistent -- the parent's state matches the parent's log and the
+// child's matches the child's -- and every oracle before A4 judged exactly one
+// range against exactly its own history. Only a comparison BETWEEN two ranges
+// catches it.
+//
+// 60 seeds. The harness notices the mutant on 300 of the first 300, first at
+// seed 0 (scripts/power-mutants.sh, M42) -- every seed that splits at all, which
+// is what a broken partition looks like.
+func TestSplitPartitionOracleReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "split-partition", 60)
+}
+
+// TestSplitInheritsTheConfigurationAtItsIndex is the covering test for
+// M46-split-inherits-the-appended-configuration, and it is A4's own bug
+// (BUGS.md BUG-015).
+//
+// A range born from a split inherits its parent's configuration. Asking for the
+// ACTIVE one — effective on append — asks a question whose answer is not a
+// function of the applied prefix, so two replicas applying the same split entry
+// with different appended tails hand the new range two different memberships.
+//
+// # What catches it is a refusal, not an oracle, and that is the point
+//
+// No oracle fires. `ApplyConfEntry` declines the next membership entry as an
+// illegal transition, because from the behind replica's view it demotes a voter
+// to a learner in one step. That is A3's funnel — configuration changes are
+// refused at the entry point rather than ignored downstream — catching an A4
+// caller that asked the wrong question, one phase after it was built.
+//
+// # 1000 seeds, and the number is why
+//
+// Measured with M46 planted, 3000 seeds: **6 detections, first at seed 215**.
+// The defect needs a split, a membership change, and two replicas whose appended
+// tails differ at the split's index, all in one run. It surfaced originally on
+// seed 9595 of the 10,000-seed exit sweep and nowhere smaller.
+//
+// So the range here is roughly five times the measured seeds-to-detection, the
+// same margin rule the power floors use, and the class is floored at
+// detected-at-all rather than at a rate — six instances is not a rate.
+func TestSplitInheritsTheConfigurationAtItsIndex(t *testing.T) {
+	const seeds = 1000
+	opt := hunt.CurrentOptions()
+	for seed := uint64(0); seed < seeds; seed++ {
+		p, err := hunt.MaterializeRaftWith(seed, opt)
+		if err != nil {
+			t.Fatalf("seed %d: materialize: %v", seed, err)
+		}
+		if _, err := hunt.RunRaftWith(p, opt, nil); err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+	}
+}

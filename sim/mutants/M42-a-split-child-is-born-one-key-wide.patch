@@ -1,0 +1,21 @@
+# id: M42-a-split-child-is-born-one-key-wide
+# covering-test: TestSplitPartitionOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 150
+# power-measured: 300 of 300, first at seed 0, at commit 34b284d+A4
+# mutates: a range born from a split starts one key above where the split entry says it does. The parent gives away everything at or above the cut point and the child claims everything above it, so the cut key itself belongs to neither. Both ranges are internally consistent, which is why no per-range oracle can see it
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -587,7 +587,9 @@
+ 			m.cfg.ID, left.rng, confErr))
+ 	}
+ 	snapMeta := raft.SnapshotMeta{Index: 0, Term: 0, Conf: conf}
+-	data := encodeMachine(spec.Right, rightKV)
++	born := spec.Right.Clone()
++	born.Start = append(append([]byte(nil), born.Start...), 0x00)
++	data := encodeMachine(born, rightKV)
+ 
+ 	// Only the RIGHT range's descriptor is written, and it is a discovery
+ 	// record: it tells a restarting machine that this range exists here. The

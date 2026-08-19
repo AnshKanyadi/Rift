@@ -1,0 +1,31 @@
+# id: M43-extent-recovered-from-a-floating-key
+# covering-test: TestSnapshotEquivalenceOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 60
+# power-measured: 124 of 300, first at seed 0, at commit 34b284d+A4
+# mutates: a range's extent is recovered from its own descriptor key whenever that key is newer than the snapshot's. The key is aligned with no log index, so after a crash it can be ahead of the state being rebuilt: the node re-applies the split, finds its own effect already recorded in the extent, judges the entry stale and never moves the keys (BUG-011)
+--- a/store/node.go
++++ b/store/node.go
+@@ -1164,8 +1164,9 @@
+ 	// Both are positions in the log; the descriptor key is not one, and it is
+ 	// demoted to what it can honestly be: a record that the range exists.
+ 	switch {
+-	case st.haveDesc:
++	case st.haveDesc && st.desc.Epoch >= n.desc.Epoch:
+ 		n.desc = st.desc
++	case st.haveDesc:
+ 	case n.rng == FirstRange:
+ 		n.desc = FirstRangeDescriptor()
+ 	default:
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -595,6 +595,7 @@
+ 	// aligned with any index and the left's extent has to be (see the switch in
+ 	// Replica.restart, and BUG-011).
+ 	b := engine.NewBatch()
++	b.Set(keyDescOf(spec.Left.ID), encodeDesc(spec.Left))
+ 	b.Set(keyDescOf(spec.Right.ID), encodeDesc(spec.Right))
+ 	b.Set(keySnapshotOf(spec.Right.ID), encodeSnapshot(snapMeta, data))
+ 	seq, err := m.db.Apply(b, true)

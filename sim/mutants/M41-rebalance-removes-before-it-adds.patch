@@ -1,0 +1,19 @@
+# id: M41-rebalance-removes-before-it-adds
+# covering-test: TestRebalanceSafetyOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 96
+# power-measured: 192 of 300, first at seed 0, at commit 34b284d+A4
+# mutates: a manual rebalance removes the source replica as its FIRST step instead of adding the destination. The range spends the whole move one replica short, so a crash in that window costs it a quorum on a change nobody had to make. This is the invariant CLAUDE.md names: replica moves are add-then-remove, quorum availability never voluntarily reduced
+--- a/store/node.go
++++ b/store/node.go
+@@ -966,7 +966,7 @@
+ 		if conf.IsVoter(to) || conf.IsLearner(to) || !conf.IsVoter(from) || len(conf.Voters) < 2 {
+ 			return false
+ 		}
+-		return n.proposeConf(raft.ConfChangeSingle{Type: raft.ConfChangeAddLearner, Node: to})
++		return n.proposeConf(raft.ConfChangeSingle{Type: raft.ConfChangeRemoveNode, Node: from})
+ 	}
+ 
+ 	if !conf.IsVoter(from) && !conf.IsLearner(from) {

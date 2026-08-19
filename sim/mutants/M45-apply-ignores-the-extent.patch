@@ -1,0 +1,33 @@
+# id: M45-apply-ignores-the-extent
+# covering-test: TestSnapshotEquivalenceOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 15
+# power-measured: 32 of 300, first at seed 8, at commit 34b284d+A4
+# mutates: a committed command is applied whatever its key, so a range keeps writing keys it has already given away. The key then sits in the wrong range forever, because the next split moves out only what its own right half contains and a key outside both halves is moved by nothing (BUG-014). The split-time partition assertion is removed with it, since that assertion exists only to make this residue loud
+--- a/store/node.go
++++ b/store/node.go
+@@ -494,7 +494,7 @@
+ 					// This check is at the log position, so every replica
+ 					// reaches the same verdict from the same state. That is
+ 					// what the arrival check cannot do and never could.
+-					owned = n.desc.Contains([]byte(k))
++					owned = true
+ 					if owned && op == "put" {
+ 						n.kv[k] = v
+ 					}
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -549,11 +549,7 @@
+ 		case spec.Right.Contains([]byte(k)):
+ 			rightKV[k] = left.kv[k]
+ 			delete(left.kv, k)
+-		case spec.Left.Contains([]byte(k)):
+ 		default:
+-			panic(fmt.Sprintf(
+-				"store: node %d splitting range %d holds key %q, which neither %s nor %s covers",
+-				m.cfg.ID, left.rng, k, spec.Left, spec.Right))
+ 		}
+ 	}
+ 	left.desc = spec.Left.Clone()

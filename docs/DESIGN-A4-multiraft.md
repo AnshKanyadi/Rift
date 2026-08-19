@@ -173,3 +173,118 @@ Ansh's, verbatim.
    investigated before the phase closes.
 7. Every new oracle induced; every bug in BUGS.md with its mutant class; corpus green or deliberately
    regenerated with the reason; 10k seeds zero violations with inconclusive explained.
+
+---
+
+## 9. What the implementation taught
+
+Written after the code, and the entries are ordered by what they cost.
+
+### 9.1 One sentence, five times: a fact derived from a log position must be derived AT that position
+
+A4 produced five defects and they are the same defect. Each time, something was computed from state
+that was *near* the right log position instead of *at* it.
+
+| bug | the thing derived | where it was taken from | where it had to come from |
+|---|---|---|---|
+| BUG-011 | a range's extent at recovery | a descriptor key aligned with no index | the snapshot, which is aligned with exactly one |
+| BUG-013 | a range's extent after an install | the installing node's own extent | the snapshot that arrived |
+| BUG-014 | whether a key belongs to this range | the extent when the request *arrived* | the extent at the entry's index |
+| BUG-015 | a split-born range's configuration | the **active** configuration, effective on append | the configuration at the split's index |
+| BUG-012 | whether a split entry took effect | every split entry, unconditionally | the extent the range had when it reached that entry |
+
+This is BUG-004's sentence — *an identifier is not a position* — arriving from five directions in one
+phase. The structural answer is that the extent is no longer something the storage layer keeps
+**about** the state machine; it is part of what the state machine **is**. `encodeMachine` serialises
+the extent and the keys together, so it travels with every snapshot, is restored at the index it
+belongs to, and is covered by the digest snapshot equivalence compares. The class did not become
+impossible; it became **caught**.
+
+### 9.2 The new oracle is not the one §6 predicted, and the reason is worth recording
+
+§6 promised *range epoch monotonicity*. It was written before the extent moved into the state machine
+payload, and afterwards the promised oracle would have checked the harness's own model rather than the
+system: the model replays committed entries and advances the epoch by construction, so asking it
+whether the epoch decreased is asking it about itself.
+
+What actually covers epoch monotonicity is snapshot equivalence, and it covers it **against every
+node's real snapshot**: the digest includes the extent, so a replica whose epoch or bounds went
+backwards diverges from the model at that index and the oracle fires. That is not a downgrade — it is
+the same claim, checked against a system fact instead of a harness fact. BUG-011 and BUG-013 are both
+instances of it firing.
+
+Two oracles were built instead, and both read facts the system produced:
+
+- **`split-partition`** compares the split entry in the parent's committed log against the birth state
+  the child's replicas actually wrote, and requires that a split every replica refused created
+  nothing. This is the one failure no per-range oracle can see: a parent and a child each internally
+  consistent and disagreeing with each other.
+- **`rebalance-safety`** reads the committed configuration entries and requires that a move's addition
+  commits before its removal. One-server-at-a-time makes order the whole property: the committed voter
+  count goes N → N+1 → N and never dips, which is *quorum availability is never voluntarily reduced*.
+
+### 9.3 The rebalance mechanism is stateless, and that is a design decision with a reason
+
+The obvious shape is a small state machine on the leader: adding, promoting, transferring, removing.
+It has a hole with a name — the leader can lose leadership between the add and the remove, and the
+next leader has no idea a move was under way, so the move stalls with an extra replica nobody will
+remove.
+
+So `RequestMove` carries no state. Each order reads the configuration and does whichever step is next,
+which makes the operation idempotent, replayable, and completable by whatever node happens to be
+leading when it is next asked. Ordering the same move repeatedly is how it finishes.
+
+Statelessness costs exactly one thing, and it is paid explicitly rather than assumed away: the
+mechanism cannot tell *"the destination is already a voter because I just added it"* from *"the
+destination was already there"*. The first is the middle of a move; the second is not a move at all,
+and treating it as one goes straight to removing the source. The caller knows which order is the first
+one, so the caller says so — `RequestMove(from, to, begin)` — and the precondition is stated instead of
+inferred.
+
+**A stalled move is not a violation and the oracle says so.** It leaves the range with an extra
+replica and no removal, which is wasteful and completely safe: it is the direction the invariant wants
+to fail in. What stops "every move stalled" from reading as evidence is the sweep's non-vacuity check,
+which requires completed moves.
+
+### 9.4 The third instrument to catch itself, and the number that makes it matter
+
+`rebalance-safety` reported **252 violations in 300 seeds** against a system that was behaving
+correctly, then one more on seed 103 after the first cause was fixed. Both were the oracle, not the
+cluster (BUG-016).
+
+The root cause is that a move is an *intent*, and no sequence of committed entries states one: an add
+and a remove look exactly like two unrelated membership changes. The oracle had no way to tell whose
+removal it was looking at.
+
+Two fixes, neither of which is a loosened check:
+
+1. **The two membership drivers are separated in time.** Churn runs in the first half of a run,
+   rebalance in the second, so a removal has one plausible author. The alternative was to tag
+   configuration entries with a move identifier, which changes a wire format for the convenience of a
+   checker. **The cost is recorded in §7 below and it is real: no seed exercises a move racing an
+   unrelated membership change.**
+2. **A move owns its range's membership changes only until the next move on that range is ordered.**
+   The window comes from the harness's record of what it ordered — not from anything the cluster says.
+
+The reason this is written down at length is the rate. A checker that reports 252 false violations in
+300 seeds is worse than no checker: it is a checker people learn to override.
+
+### 9.5 The mutant lane's baseline gate fired, and it was right
+
+The lane reported `INVALID` and refused to attribute a single kill. The cause was mundane — A4's
+sweeps pushed the baseline package past Go's default ten-minute test timeout — and the behaviour was
+exactly right: it would not report kills against a tree it could not first watch pass. The fix is an
+explicit `TEST_TIMEOUT`, never a shorter sweep.
+
+---
+
+## 10. Limitations, recorded
+
+1. **Moves and unrelated membership churn never race.** §9.4. The rebalance oracle cannot attribute a
+   removal when both drivers are live, so the plan separates them in time. A move racing a churn
+   removal is unexercised, and the honest description of the rebalance evidence is *"safe against
+   crashes, partitions, leader churn and splits; not yet against a concurrent membership change."*
+2. **Range merges are out of scope**, per CLAUDE.md A4. Extents therefore only ever shrink, and the
+   `split-partition` oracle leans on that: a range once born is never unborn.
+3. **A move is best-effort.** Leadership moving mid-move abandons it (§9.3). Safety is unaffected;
+   completion is not guaranteed by any single order.
