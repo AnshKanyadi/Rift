@@ -49,9 +49,16 @@ func TestRaftExitCriteria(t *testing.T) {
 		c.SnapshotsTaken, c.SnapshotsApplied, c.TransfersAsked)
 	t.Logf("a3 features:  %d membership changes proposed, %d refused (%d of those a lagging learner)",
 		c.ConfProposed, c.ConfRefused, c.LagRefused)
-	t.Logf("a4 features:  %d splits proposed, %d applied, most ranges on one machine %d, "+
-		"%d requests refused for a stale descriptor epoch",
-		c.SplitsProposed, c.SplitsApplied, c.Ranges, c.StaleEpochRefusals)
+	// Proposed is per LEADER and applied is per REPLICA, so applied is several
+	// times proposed and the labels say which. A ratio read as a failure rate
+	// would be alarming and wrong.
+	t.Logf("a4 splits:    %d proposed by leaders, %d applied by replicas, most ranges on one machine %d",
+		c.SplitsProposed, c.SplitsApplied, c.Ranges)
+	t.Logf("a4 routing:   %d requests refused for a stale descriptor epoch, %d committed commands "+
+		"refused for naming a key outside the range's extent",
+		c.StaleEpochRefusals, c.OutOfExtentRefusals)
+	t.Logf("a4 rebalance: %d moves ordered, %d completed",
+		c.MovesOrdered, c.MovesCompleted)
 	t.Logf("a3 recovery:  %d restarts recovered a log carrying a configuration change, %d of them "+
 		"cross-checked against a snapshot configuration", c.ConfRecoveries, c.ConfCrossChecks)
 	for _, why := range c.InconclusiveCauses {
@@ -94,6 +101,29 @@ func TestRaftExitCriteria(t *testing.T) {
 	}
 	if c.Ranges < 2 {
 		t.Error("no machine ever hosted more than one range, so multi-raft was never exercised")
+	}
+	// A4's three mechanisms must have RUN, on the same rule as A2's and A3's.
+	//
+	// The epoch refusal is the one this rule was written for. It read ZERO
+	// across 10,000 seeds and nothing said so, because the sweep's clients
+	// carried no routing at all and the check was skipped on every request they
+	// ever made. That is the eleventh instance of the vacuous-green class, and
+	// it was guarding an invariant CLAUDE.md names by name.
+	if c.StaleEpochRefusals == 0 {
+		t.Error("no request was ever refused for a stale descriptor epoch across the whole sweep; " +
+			"the epoch check is the mechanism behind \"no request served under a stale descriptor " +
+			"epoch\", and a sweep that never reaches it says nothing about that invariant")
+	}
+	if c.OutOfExtentRefusals == 0 {
+		t.Error("no committed command was ever refused for naming a key outside its range's extent; " +
+			"that check is BUG-014's fix and this sweep never executed it")
+	}
+	// Ordered is not enough. A move that stalls is SAFE -- it leaves an extra
+	// replica and removes nothing -- so the rebalance oracle passes over a sweep
+	// in which every single move stalled, and would be saying nothing.
+	if c.MovesCompleted == 0 {
+		t.Errorf("%d replica moves were ordered and NONE completed; a stalled move is safe, so the "+
+			"rebalance oracle is green over a mechanism that never finished once", c.MovesOrdered)
 	}
 	if c.ConfRecoveries == 0 {
 		t.Error("no restart ever recovered a log carrying a configuration change, so nothing in " +

@@ -361,6 +361,13 @@ type RaftResult struct {
 	StaleSplits         int
 	OutOfExtentRefusals int
 
+	// MovesOrdered and MovesCompleted are the manual rebalance's non-vacuity
+	// evidence. A sweep in which every move stalled is green about a mechanism
+	// that never finished, and a stalled move is SAFE -- which is exactly why the
+	// rebalance oracle alone cannot tell the two apart.
+	MovesOrdered   int
+	MovesCompleted int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -575,9 +582,33 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	// produces it -- the same routing the toy uses under failover.
 	for _, op := range p.Workload.Ops {
 		idx := hist.Begin(clock.Instant(op.AtNS), op.Client, op.Seq, op.Kind, op.Key, op.Value)
+		// # Every request routes from a descriptor cache, and the cache is stale
+		//
+		// This carried no routing at all -- Range and Epoch zero, "unrouted" --
+		// so the epoch check at arrival was skipped on every request the sweep
+		// ever made. Across 10,000 seeds it refused **zero**. A mechanism
+		// declared, wired and never invoked is the eleventh instance of the
+		// class this project has been counting, and it was guarding an invariant
+		// CLAUDE.md names: *no request served under a stale descriptor epoch.*
+		//
+		// So every request now routes the way a client with a cold cache does:
+		// believing the whole key space is the first range at epoch one, which is
+		// exactly what a client that has never refreshed believes. Once anything
+		// splits, requests for moved keys arrive naming a range that no longer
+		// owns them and requests for kept keys arrive naming an epoch that has
+		// moved on -- and both refusal paths run, are counted, and retry with the
+		// routing the replica corrected.
+		//
+		// Modelling the cache as cold on EVERY request rather than persistent is
+		// deliberate and it over-exercises the path. A persistent cache would
+		// refuse once per split; this refuses once per request after a split,
+		// which is more traffic through the check than a real client would
+		// generate. For a mechanism whose measured exercise rate was zero, more
+		// is the right direction to be wrong in.
 		req := store.Request{
 			Client: op.Client, Seq: op.Seq, Op: op.Kind,
 			Key: op.Key, Value: op.Value, HistIdx: idx,
+			Range: store.FirstRange, Epoch: 1,
 		}
 		for i := range nodes {
 			run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, sim.NodeID(i), req)
@@ -635,6 +666,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	}
 	res.History = hist
 	res.Ledger = ledger
+	res.MovesOrdered = len(ledger.Moves())
+	res.MovesCompleted = ledger.MovesCompleted()
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())
 
 	// # A run with no leader concluded nothing, whatever the checkers say
@@ -712,10 +745,13 @@ type RaftCensus struct {
 	ConfRecoveries  int
 	ConfCrossChecks int
 
-	Ranges             int
-	SplitsProposed     int
-	SplitsApplied      int
-	StaleEpochRefusals int
+	Ranges              int
+	SplitsProposed      int
+	SplitsApplied       int
+	StaleEpochRefusals  int
+	OutOfExtentRefusals int
+	MovesOrdered        int
+	MovesCompleted      int
 
 	FirstViolation     uint64
 	FoundAViolation    bool
@@ -751,6 +787,9 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.SplitsProposed += r.SplitsProposed
 		c.SplitsApplied += r.SplitsApplied
 		c.StaleEpochRefusals += r.StaleEpochRefusals
+		c.OutOfExtentRefusals += r.OutOfExtentRefusals
+		c.MovesOrdered += r.MovesOrdered
+		c.MovesCompleted += r.MovesCompleted
 		if r.Ranges > c.Ranges {
 			c.Ranges = r.Ranges
 		}
