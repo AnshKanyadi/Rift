@@ -2,6 +2,7 @@
 # covering-test: TestEmptyHistoryIsInconclusiveNeverPass
 # package: ./sim/checker/
 # expect: killed
+# power: n/a -- breaks the oracle FRAMEWORK, not the system under test; a sweep of the system cannot see it and its covering test is deterministic
 # mutates: the operation floor is ignored, so a checker that consumed nothing reports pass
 --- a/sim/oracle.go
 +++ b/sim/oracle.go

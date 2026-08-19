@@ -2,6 +2,10 @@
 # covering-test: TestLeaderCompletenessOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 1500
+# power-floor: 1
+# power-measured: 4 at commit bf10d04
+# power-config: a2
 # mutates: the candidate up-to-date check is dropped, so a node missing committed entries can win an election and those entries are overwritten -- leader completeness failing exactly as figure 8 predicts
 --- a/raft/raft.go
 +++ b/raft/raft.go

@@ -2,6 +2,7 @@
 # covering-test: TestLeaderCountsItsOwnCopyOnlyWhenDurable
 # package: ./raft/
 # expect: killed
+# power: n/a -- unreachable on this schedule mix by construction: every node has the same modelled disk, so the leader's own fsync always lands before any follower's ack. Measured trace-identical over 10k seeds. A floor would be a floor on zero
 # mutates: the leader advances its own match index on append instead of on durability, so it counts a copy it has not written toward the commit quorum -- DR-8's first gate with the leader on the other end of it, where the message is elided because the leader is talking to itself
 --- a/raft/raft.go
 +++ b/raft/raft.go

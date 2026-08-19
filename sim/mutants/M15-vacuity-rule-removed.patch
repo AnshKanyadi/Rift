@@ -2,6 +2,7 @@
 # covering-test: TestUnknownDominatedHistoryIsInconclusive
 # package: ./sim/
 # expect: killed
+# power: n/a -- as M8 -- a verdict-classification defect, deterministic covering test
 # mutates: the unknown-dominated floor is removed, so a history that mostly went unanswered banks a pass -- the shape the codec off-by-one had, where porcupine returned green over 40 operations no node ever answered
 --- a/sim/oracle.go
 +++ b/sim/oracle.go

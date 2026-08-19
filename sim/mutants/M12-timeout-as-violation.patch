@@ -2,6 +2,7 @@
 # covering-test: TestUnavailabilityIsNotAViolation
 # package: ./sim/checker/
 # expect: killed
+# power: n/a -- as M8 -- a framework defect, deterministic covering test
 # mutates: an operation that never returned is scored as a safety failure rather than unknown
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go

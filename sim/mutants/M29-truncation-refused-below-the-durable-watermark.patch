@@ -2,6 +2,10 @@
 # covering-test: TestStateMachineSafetyOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 300
+# power-floor: 3
+# power-measured: 7 at commit bf10d04
+# power-config: a2
 # mutates: the in-raft state machine safety assertion is weakened back to the false invariant it once held -- that no truncation may reach at or below the DURABLE watermark. Raft guarantees no such thing: a follower deletes a conflicting entry and everything after it, routinely from disk. The node kills itself on a correct protocol step
 --- a/raft/raft.go
 +++ b/raft/raft.go

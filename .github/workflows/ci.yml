@@ -108,9 +108,14 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-      # Three harness defects have silently reduced detection power while every
-      # other lane stayed green. This one fails when a planted flaw class stops
-      # being found at its standing floor.
+      # Harness defects have silently reduced detection power while every other
+      # lane stayed green. This one fails when a planted flaw class stops being
+      # found at its standing floor.
+      #
+      # It covers the toy's four classes AND every mutant class. It did not cover
+      # the mutants until A3, which is why it was green through the largest power
+      # regression in the project: pre-vote took M18 from 10 detections in 500 to
+      # 0 and M19 from 228 in 300 to 1, and nothing said so.
       - run: make power
 
   corpus:

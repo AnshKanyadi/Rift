@@ -9,6 +9,7 @@ STUB         := ./scripts/lane-stub.sh
 TOOLING_ONLY := ./scripts/tooling-only.sh
 BLIND        := ./scripts/blind-analyzer.sh
 MUTANTS      := ./scripts/mutants.sh
+POWERMUTANTS := ./scripts/power-mutants.sh
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -92,8 +93,15 @@ assertions: ## Every declared every-run assertion mechanism must actually be inv
 	$(GO) test -count=1 -run 'TestEveryAssertionMechanismIsInvoked|TestAssertionRegistryIsWellFormed' ./sim/hunt/
 
 .PHONY: power
-power: ## Harness-power floors: every planted flaw class must still be detected at its floor
+power: power-toy power-mutants ## Harness-power floors: every planted flaw class must still be detected at its floor
+
+.PHONY: power-toy
+power-toy: ## The toy's four flaw classes, floored since A0
 	$(GO) test -count=1 -run 'TestHarnessPower|TestEveryObservableFlawHasAFloor' ./sim/hunt/
+
+.PHONY: power-mutants
+power-mutants: ## Every MUTANT class: detection rate against a standing floor, or an explicit opt-out
+	@$(POWERMUTANTS)
 
 .PHONY: lint
 lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the determinism vet pass
@@ -144,7 +152,7 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 .PHONY: lanes
 lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
-	@echo "       hatches blind power assertions provenance corpus"
+	@echo "       hatches blind power power-toy power-mutants assertions provenance corpus"
 	@echo "       smoke soak"
 	@echo "       mutants"
 	@echo "STUB : (none in A0)"

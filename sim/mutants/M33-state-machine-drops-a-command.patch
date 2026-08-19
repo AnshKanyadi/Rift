@@ -2,6 +2,10 @@
 # covering-test: TestSnapshotEquivalenceOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 300
+# power-floor: 146
+# power-measured: 292 at commit bf10d04
+# power-config: a2
 # mutates: the state machine silently drops one command in seven, so every snapshot it takes is not the state its own committed log produces. The harness re-implements what a command DOES rather than calling into store, which is the only reason this cannot cancel out on both sides of the comparison
 --- a/store/node.go
 +++ b/store/node.go

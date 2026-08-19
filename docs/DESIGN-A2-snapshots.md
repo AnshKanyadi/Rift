@@ -325,6 +325,70 @@ complaining about legal truncations.
 
 ---
 
+### 9.8 The power lane was silent through the power regression, because it was not watching
+
+Asked directly after A2: *did the harness-power lane fire when pre-vote dropped
+M18 from 10 detections in 500 to 0 and M19 from 228 in 300 to 1?*
+
+**No. It could not have.** `sim/hunt/floors.go` floors four TOY flaw classes and
+zero mutant classes, and by A2 there were thirty-one mutants. The lane was green
+because it had never been looking at the classes whose power moved.
+
+That is the tenth instance of the vacuous-green class by DESIGN-A1 §5c's register
+and the second inside an instrument, after the mutant suite's inability to tell a
+deleted covering test from an uncaught defect (§9.6). Two instruments in one
+phase, which is itself the finding: the things that watch are the things nobody
+watches.
+
+`scripts/power-mutants.sh` closes it. Every mutant patch now declares a detection
+floor with the range it was measured over, or an explicit opt-out with a reason,
+and a patch declaring neither **fails the lane** -- because saying nothing is how
+thirty-one classes came to share four floors. Seventeen classes carry floors;
+fourteen opt out, each with its reason recorded in the patch header.
+
+**Floors, measured at `bf10d04`**, set at roughly half the measured rate, which
+is the margin rule the toy floors already use:
+
+| class | measured | floor | first |
+|---|---|---|---|
+| M17 vote twice in one term | 101/300 | 50 | 3 |
+| M18 prev-log check term-blind *(A1 shape)* | 29/300 | 14 | 15 |
+| M19 vote for a shorter log | 4/1500 | 1 | 81 |
+| M20 conflicting entry kept | 6/300 | 3 | 60 |
+| M21 decode off-by-one | 300/300 | 150 | 0 |
+| M23 gated messages never released | 300/300 | 150 | 0 |
+| M24 answer by position | 53/300 | 26 | 10 |
+| M14 epoch check removed | 13/300 | 6 | 28 |
+| M25 restart recovers unsynced writes | 15/300 | 7 | 28 |
+| M26 truncated suffix left in the engine | 4/300 | 2 | 129 |
+| M27 durable record ignores a clear | 4/300 | 2 | 129 |
+| M28 mark coverage grows after handover | 258/300 | 129 | 1 |
+| M29 truncation refused below the durable watermark | 7/300 | 3 | 60 |
+| M31 snapshot stream loses its gate | 50/300 | 25 | 9 |
+| M32 apply stream skips an index | 300/300 | 150 | 0 |
+| M33 state machine drops a command | 292/300 | 146 | 0 |
+| M34 append from zero over a snapshot | 1/3000 | 1 | 1364 |
+
+**Induced by reverting A2's mix widening**, which is the change that was supposed
+to compensate for pre-vote. Three classes drop below their floors:
+
+| class | wide mix | narrow mix |
+|---|---|---|
+| M14 epoch check removed | 13/300 | **4** |
+| M25 restart recovers unsynced writes | 15/300 | **4** |
+| M34 append from zero over a snapshot | 1/3000 | **0** |
+
+The last line is the one to keep. With the narrower mix M34 is detected on zero
+of three thousand seeds — **BUG-009, A2's own bug, would not have been findable
+at all.** The mix widening was justified when it was made by an argument about
+what pre-vote suppresses; this is the number behind that argument, and it only
+exists because the lane now measures.
+
+The UNCOVERED path is induced too: a patch with its power headers stripped fails
+the lane by name.
+
+---
+
 ## 8. Exit criteria
 
 Ansh's, recorded verbatim so the report can be checked against them rather than against a paraphrase.

@@ -2,6 +2,7 @@
 # covering-test: TestOracleHaltsAtTheFirstViolation
 # package: ./sim/
 # expect: killed
+# power: n/a -- as M8 -- a framework defect, deterministic covering test
 # mutates: the loop keeps running after a violation, so it records the last rather than the first
 --- a/sim/loop.go
 +++ b/sim/loop.go

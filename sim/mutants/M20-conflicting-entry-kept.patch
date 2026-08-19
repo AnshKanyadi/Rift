@@ -2,6 +2,10 @@
 # covering-test: TestStateMachineSafetyOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 300
+# power-floor: 3
+# power-measured: 6 at commit bf10d04
+# power-config: a2
 # mutates: a follower keeps its own entry at a conflicting index instead of truncating from it, so two replicas apply different commands at the same log position
 --- a/raft/raft.go
 +++ b/raft/raft.go

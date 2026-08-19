@@ -2,6 +2,7 @@
 # covering-test: TestFailoverDoesNotManufactureViolations
 # package: ./sim/hunt/
 # expect: killed
+# power: n/a -- as M1 -- floored in sim/hunt/floors.go
 # mutates: the primary acknowledges before the backups have the write
 --- a/sim/toy/toy.go
 +++ b/sim/toy/toy.go

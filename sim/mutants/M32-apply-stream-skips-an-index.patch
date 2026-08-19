@@ -2,6 +2,10 @@
 # covering-test: TestApplyContinuityOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 300
+# power-floor: 150
+# power-measured: 300 at commit bf10d04
+# power-config: a2
 # mutates: the driver acknowledges one more applied index than it applied, so the state machine never sees that command and the next Ready starts past it -- a hole no cross-node comparison can see, because every node's stream is self-consistent
 --- a/store/node.go
 +++ b/store/node.go

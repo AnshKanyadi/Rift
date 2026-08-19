@@ -2,6 +2,7 @@
 # covering-test: TestPlantedViolationHaltsTheRun
 # package: ./sim/
 # expect: killed
+# power: n/a -- as M8 -- a framework defect, deterministic covering test
 # mutates: OnStep violations are discarded by the loop, so no oracle can ever halt a run
 --- a/sim/loop.go
 +++ b/sim/loop.go

@@ -1,0 +1,93 @@
+package hunt_test
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"testing"
+
+	"github.com/anshkanyadi/rift/sim"
+	"github.com/anshkanyadi/rift/sim/hunt"
+	"github.com/anshkanyadi/rift/sim/plan"
+)
+
+// TestPowerProbe measures how often the harness NOTICES a planted defect.
+//
+// # Why this exists, and what was wrong before it
+//
+// `make power` has stood since A0 as the lane that fails when detection power
+// drops. It covered four toy flaw classes and zero mutant classes. So when
+// pre-vote landed and M18's log-matching detections went from 10 in 500 to 0,
+// and M19's from 228 in 300 to 1, the lane was green -- not because it judged the
+// drop acceptable but because it had never been looking. A lane whose whole
+// purpose is to catch a power regression, silent through the largest power
+// regression in the project, is not a lane.
+//
+// This probe is the missing half. It is a MEASUREMENT, not an assertion: it runs
+// a seed range against a mutated tree and reports how many seeds noticed.
+// scripts/power-mutants.sh is what turns the number into a build failure.
+//
+// # A detection is "the run did not complete cleanly"
+//
+// Any oracle violation, any end-of-run violation, any harness error, any panic,
+// or a run that elected nobody. Deliberately not "the oracle I expected fired":
+// power is about whether the machinery notices, and attribution belongs to the
+// mutant lane, which already checks it per class. Defining detection narrowly
+// here would let a class stay covered on paper while the number that matters
+// moves.
+func TestPowerProbe(t *testing.T) {
+	raw := os.Getenv("POWER_SEEDS")
+	if raw == "" {
+		t.Skip("POWER_SEEDS unset: this is a probe driven by scripts/power-mutants.sh, not a test")
+	}
+	seeds, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("POWER_SEEDS: %v", err)
+	}
+
+	opt := hunt.A2Options()
+	if os.Getenv("POWER_CONFIG") == "a1" {
+		// The shape A1 ran: no pre-vote, no snapshots, no transfers. Some classes
+		// are only observable there, and saying which is the point.
+		opt = hunt.RaftOptions{PreVote: false, SnapshotThreshold: 0, Transfers: 0}
+	}
+
+	detected, first := 0, int64(-1)
+	for seed := uint64(0); seed < seeds; seed++ {
+		if noticed(seed, opt) {
+			detected++
+			if first < 0 {
+				first = int64(seed)
+			}
+		}
+	}
+	fmt.Printf("POWER detected=%d of=%d first=%d\n", detected, seeds, first)
+}
+
+// noticed reports whether the harness objected to this seed in any way.
+func noticed(seed uint64, opt hunt.RaftOptions) (bad bool) {
+	defer func() {
+		if recover() != nil {
+			bad = true
+		}
+	}()
+	p, err := hunt.MaterializeRaftWith(seed, opt)
+	if err != nil {
+		return true
+	}
+	r, err := hunt.RunRaftWith(p, opt, nil)
+	if err != nil {
+		return true
+	}
+	if r.Violated != nil || r.Census.ElectionsWon == 0 {
+		return true
+	}
+	for _, rep := range r.Reports {
+		if rep.Verdict == sim.VerdictViolation {
+			return true
+		}
+	}
+	return false
+}
+
+var _ = plan.Plan{}

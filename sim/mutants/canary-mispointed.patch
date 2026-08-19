@@ -2,6 +2,7 @@
 # covering-test: TestLinearizableHistoryPasses
 # package: ./sim/checker/
 # expect: alive
+# power: n/a -- the canary is declared against a test that does not cover it and must SURVIVE; a detection floor on it would contradict its purpose
 # mutates: the timeout-as-pass mutation, declared against a test that does not cover it
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go

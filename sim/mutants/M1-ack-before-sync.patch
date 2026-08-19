@@ -2,6 +2,7 @@
 # covering-test: TestToySurvivesOneThousandSeeds
 # package: ./sim/hunt/
 # expect: killed
+# power: n/a -- the toy's own flaw classes carry standing floors in sim/hunt/floors.go, measured and enforced there since A0
 # mutates: the primary acknowledges a write before it is durable
 --- a/sim/toy/toy.go
 +++ b/sim/toy/toy.go

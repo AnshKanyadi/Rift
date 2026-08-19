@@ -2,6 +2,7 @@
 # covering-test: TestTimeoutIsInconclusiveNotPass
 # package: ./sim/checker/
 # expect: killed
+# power: n/a -- as M8 -- a framework defect, deterministic covering test
 # mutates: a checker timeout is scored as a pass rather than inconclusive
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go

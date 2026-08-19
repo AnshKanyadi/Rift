@@ -2,6 +2,7 @@
 # covering-test: TestPlantedViolationHaltsTheRun
 # package: ./sim/
 # expect: killed
+# power: n/a -- as M8 -- a framework defect, deterministic covering test
 # mutates: the violation dump omits the plan reference, so a finding names no reproduction
 --- a/sim/loop.go
 +++ b/sim/loop.go

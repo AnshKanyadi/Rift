@@ -2,6 +2,10 @@
 # covering-test: TestPersistBeforeReplyOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 300
+# power-floor: 7
+# power-measured: 15 at commit bf10d04
+# power-config: a2
 # mutates: a restart delivered to a node that is not down skips the death half, so the node is rebuilt from the engine's visible state and recovers writes no crash would have kept -- the residue of BUG-005, a follower acking index 15 with 5 durable
 --- a/store/node.go
 +++ b/store/node.go

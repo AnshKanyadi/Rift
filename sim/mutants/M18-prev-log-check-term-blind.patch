@@ -2,6 +2,10 @@
 # covering-test: TestLogMatchingOracleReportsNothing
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 300
+# power-floor: 14
+# power-measured: 29 at commit bf10d04
+# power-config: a1
 # mutates: the append consistency check compares the previous INDEX and ignores its term, so a follower splices a leader's suffix onto a prefix that disagrees and two logs share an (index, term) while differing before it
 --- a/raft/raft.go
 +++ b/raft/raft.go

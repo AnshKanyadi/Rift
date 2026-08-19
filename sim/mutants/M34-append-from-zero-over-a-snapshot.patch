@@ -2,6 +2,10 @@
 # covering-test: TestSnapshotPrefixIsNotOverwritten
 # package: ./sim/hunt/
 # expect: killed
+# power-seeds: 3000
+# power-floor: 1
+# power-measured: 1 at commit bf10d04
+# power-config: a2
 # mutates: a node whose applied prefix is already in a snapshot accepts an append starting at index 1, because the consistency check treats PrevLogIndex 0 as agreeable to everybody. It then overwrites entries it has already applied and told the cluster were committed
 --- a/raft/raft.go
 +++ b/raft/raft.go

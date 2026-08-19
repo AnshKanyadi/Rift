@@ -45,6 +45,30 @@ import "github.com/anshkanyadi/rift/sim/toy"
 // how reachable. They are the first classes to re-measure at higher seed counts
 // when the soak farm switches on at A1 (docs/TOY-FINDINGS.md).
 
+// # This table covers the TOY's classes, and for two phases it was the whole lane
+//
+// Read the paragraph above again with a number in hand. `make power` existed to
+// make a drop in detection power break the build. It floored four toy flaw
+// classes. It floored **zero** mutant classes -- and by A2 there were thirty-one
+// mutants.
+//
+// So when pre-vote landed and took M18's log-matching detections from 10 in 500
+// to 0, and M19's from 228 in 300 to 1, this lane was green. Not because it
+// judged the drop acceptable: because it had never been looking at those classes
+// at all. A lane whose whole purpose is to catch a power regression, silent
+// through the largest power regression in the project, is not a lane.
+//
+// scripts/power-mutants.sh is the missing half, and `make power` now runs both.
+// Every mutant patch declares either a detection floor with the range it was
+// measured over, or an explicit opt-out with a reason; a patch that declares
+// neither fails the lane, because saying nothing is exactly how thirty-one
+// classes came to share four floors.
+//
+// Amendment A2 had already required it -- "a regression in kill-time is treated
+// as a harness regression even while every mutant is still killed" -- and the
+// mutant lane recorded wall-clock seconds. Seconds measure the machine. Seeds
+// measure the harness.
+
 // Floor is one flaw class's standing power requirement.
 //
 // Measured is the number the floor was derived from, kept beside it: a floor
