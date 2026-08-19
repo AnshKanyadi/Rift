@@ -59,6 +59,17 @@ func TestPowerProbe(t *testing.T) {
 		opt = hunt.RaftOptions{PreVote: false, SnapshotThreshold: 0, Transfers: 0}
 	case "a2":
 		opt = hunt.A2Options()
+	case "a3":
+		// Every historical shape is named, because a patch that pins itself to
+		// one is making a claim that has to keep meaning the same thing. The
+		// DEFAULT is `current`: unnamed means "whatever the sweep runs today",
+		// which is what the old `a3` default silently meant after A3 stopped
+		// being current.
+		opt = hunt.A3Options()
+	case "a4":
+		opt = hunt.A4Options()
+	case "a5":
+		opt = hunt.A5Options()
 	}
 
 	detected, first := 0, int64(-1)

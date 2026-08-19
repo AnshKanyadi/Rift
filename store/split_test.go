@@ -152,3 +152,85 @@ func mustSimClock(t *testing.T) clock.Clock {
 	}
 	return c
 }
+
+// counterSource is a timestamp source that is NOT an HLC: it hands out
+// increasing timestamps from a counter and ignores every peer it is told about,
+// which is roughly what a client of a central timestamp oracle sees.
+type counterSource struct{ n int64 }
+
+func (c *counterSource) Now() hlc.Timestamp {
+	if c.n == 0 {
+		// Start well above zero: the zero Timestamp means UNSET, and a source
+		// whose first stamp is 1 leaves no timestamp that is genuinely "before
+		// everything" for a test to ask about.
+		c.n = 100
+	}
+	c.n++
+	return hlc.Timestamp{Wall: clock.NewWall(c.n)}
+}
+func (c *counterSource) Update(t hlc.Timestamp) error {
+	if int64(t.Wall) > c.n {
+		c.n = int64(t.Wall)
+	}
+	return nil
+}
+func (c *counterSource) MaxOffset() time.Duration { return 0 }
+
+// TestATimestampSourceCanBeSwapped is A5 exit criterion 3, and it is a test
+// rather than an assertion for a reason.
+//
+// CLAUDE.md Amendment A6 pre-authorizes a TSO fallback if A6's uncertainty
+// machinery is not green in time. An interface with one implementation is not a
+// fallback -- it is a shape that happens to fit the only thing that has ever
+// been put in it, and the first person to try a second one discovers the places
+// that reached past it.
+//
+// So this drives the whole store on a source that is not an HLC: no wall clock,
+// no logical counter, no envelope. Writes land, reads at a timestamp answer, and
+// the extent arithmetic is untouched -- which is the claim "the fallback stays
+// available" reduced to something that can fail.
+func TestATimestampSourceCanBeSwapped(t *testing.T) {
+	src := &counterSource{}
+	m, err := New(Config{
+		ID: 1, Peers: []raft.NodeID{1}, Ordinal: 0,
+		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
+		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
+		Nodes: 1, Clock: mustSimClock(t),
+		NewTimestampSource: func(clock.Clock) (hlc.Source, error) { return src, nil },
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	r := m.replicaOf(FirstRange)
+	if r == nil {
+		t.Fatal("no first range")
+	}
+	if _, ok := r.hlc.(*counterSource); !ok {
+		t.Fatalf("the replica built an %T; the seam is not a seam", r.hlc)
+	}
+
+	// Three versions of one key, at three timestamps this source chose.
+	var stamps []hlc.Timestamp
+	for i, v := range []string{"a", "b", "c"} {
+		at := r.hlc.Now()
+		stamps = append(stamps, at)
+		b := engine.NewBatch()
+		if err := r.mvcc.PutInto(b, []byte("k"), at, []byte(v)); err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+		if _, err := m.db.Apply(b, false); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		got, ok, err := r.mvcc.ReadAt([]byte("k"), stamps[i])
+		if err != nil || !ok || string(got) != want {
+			t.Errorf("read at %s = (%q, %v, %v), want %q", stamps[i], got, ok, err, want)
+		}
+	}
+	// And a read before the first version still finds nothing, which is the
+	// answer that distinguishes "no version here" from "the newest one".
+	if _, ok, err := r.mvcc.ReadAt([]byte("k"), hlc.Timestamp{Wall: clock.NewWall(1)}); err != nil || ok {
+		t.Errorf("a read before every version returned one (ok=%v err=%v)", ok, err)
+	}
+}

@@ -122,7 +122,11 @@ func (m *Node) newReplicaFor(d RangeDescriptor) (*Replica, error) {
 	// node share a clock and not a logical counter, so a busy range cannot
 	// inflate a quiet one's timestamps -- and both are bounded by the same
 	// maxOffset, which is what makes the cluster-wide argument work.
-	h, err := hlc.New(m.cfg.Clock)
+	newSource := m.cfg.NewTimestampSource
+	if newSource == nil {
+		newSource = func(c clock.Clock) (hlc.Source, error) { return hlc.New(c) }
+	}
+	h, err := newSource(m.cfg.Clock)
 	if err != nil {
 		return nil, err
 	}

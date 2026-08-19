@@ -20,8 +20,22 @@
 #   # power-seeds: N      sweep this many seeds against the mutated tree
 #   # power-floor: M      and require at least M of them to notice
 #   # power-ceiling: K    and require the FIRST of them to be at or before seed K
-#   # power-config: a1    optionally, the build to measure under (a1 | a2 | a3);
-#                        the default is a3, which is what the sweep runs
+#   # power-config: a1    optionally, the build to measure under (a1 | a2 | a3 |
+#                        a4 | a5); the default is `current`, which is whatever
+#                        shape the sweep runs today
+#
+# # The default used to be spelled `a3`, and the label went stale silently
+#
+# It meant "what the sweep runs", and it was written when A3 was what the sweep
+# ran. The probe had no case for "a3" at all, so it fell through to
+# CurrentOptions -- correct behaviour under a label that had stopped describing
+# it. Every measurement in every patch header therefore says `(a3)` and means
+# `(current)`, which is exactly the kind of quiet drift this lane exists to catch
+# in the system under test.
+#
+# The default is now named `current` and the report prints that. A patch that
+# genuinely needs an older shape names it, and the probe now has a case for each
+# one -- so a name means what it says for as long as the patch says it.
 #
 # # The ceiling exists because the floor could not see the regression twice
 #
@@ -79,7 +93,7 @@ for patch in "$PATCHDIR"/*.patch; do
   floor=$(sed -n 's/^# power-floor: *//p' "$patch")
   ceiling=$(sed -n 's/^# power-ceiling: *//p' "$patch")
   cfg=$(sed -n 's/^# power-config: *//p' "$patch")
-  [ -n "$cfg" ] || cfg=a3
+  [ -n "$cfg" ] || cfg=current
 
   if [ -n "$na" ]; then
     optout=$((optout + 1))

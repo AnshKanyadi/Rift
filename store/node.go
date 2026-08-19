@@ -77,9 +77,23 @@ type Config struct {
 	// one node has one oscillator, and modelling each range with its own would
 	// let the simulator produce skew between two replicas that share a process,
 	// which is the harness lying in the system's favour.
-	Clock   clock.Clock
-	Ledger  *raftcheck.Ledger
-	History *sim.History
+	Clock clock.Clock
+
+	// NewTimestampSource builds a range's timestamp source. Nil means the HLC.
+	//
+	// # This is the A6 escape hatch, and it is a seam rather than a promise
+	//
+	// CLAUDE.md Amendment A6 pre-authorizes a TSO fallback "if A6's uncertainty
+	// machinery is not green by Dec 1". A fallback nobody has ever exercised is a
+	// plan, not an option: the first person to try it finds the three places that
+	// reached past the interface for something only an HLC has.
+	//
+	// So the constructor is injectable and TestATimestampSourceCanBeSwapped
+	// drives the store on a source that is not an HLC. Same distinction this
+	// project keeps making, between a mechanism declared and one invoked.
+	NewTimestampSource func(clock.Clock) (hlc.Source, error)
+	Ledger             *raftcheck.Ledger
+	History            *sim.History
 
 	// Learners are the peers that start as learners rather than voters.
 	Learners []raft.NodeID
