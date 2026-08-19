@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 70
 # power-ceiling: 10
-# power-measured: 143 of 300, first at seed 2, at commit 6e716d5+A5-open; was 143 of 300, first at seed 2, at commit 34b284d+A4
+# power-measured: 180 of 300, first at seed 2, under current at commit A5-close; was 143 of 300, first at seed 2, at commit 6e716d5+A5-open
 # mutates: a follower that installs a snapshot adopts its keys and keeps its own extent. It is then a state machine that has split holding an extent that has not, so it refuses the next split entry for naming an extent it cannot see (BUG-013)
 --- a/store/node.go
 +++ b/store/node.go

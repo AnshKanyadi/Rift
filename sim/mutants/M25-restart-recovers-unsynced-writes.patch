@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 8
 # power-ceiling: 48
-# power-measured: 17 of 300, first at seed 12, at commit 6e716d5+A5-open; was 16 at commit c1a1f6c+A3
+# power-measured: 130 of 300, first at seed 3, under current at commit A5-close; was 17 of 300, first at seed 12, at commit 6e716d5+A5-open
 # mutates: a restart delivered to a node that is not down skips the death half, so the node is rebuilt from the engine's visible state and recovers writes no crash would have kept -- the residue of BUG-005, a follower acking index 15 with 5 durable
 --- a/store/machine.go
 +++ b/store/machine.go

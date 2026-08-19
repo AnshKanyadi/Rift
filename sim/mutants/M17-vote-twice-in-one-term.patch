@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 48
 # power-ceiling: 12
-# power-measured: 119 of 300, first at seed 3, at commit 6e716d5+A5-open; was 96 at commit c1a1f6c+A3
+# power-measured: 127 of 300, first at seed 1, under current at commit A5-close; was 119 of 300, first at seed 3, at commit 6e716d5+A5-open
 # mutates: the one-vote-per-term rule is dropped, so a node that has already voted grants again and two candidates win the same term -- the canonical election safety failure
 --- a/raft/raft.go
 +++ b/raft/raft.go

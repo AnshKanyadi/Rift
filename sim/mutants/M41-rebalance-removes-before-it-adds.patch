@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 96
 # power-ceiling: 10
-# power-measured: 191 of 300, first at seed 0, at commit 6e716d5+A5-open; was 192 of 300, first at seed 0, at commit 34b284d+A4
+# power-measured: 194 of 300, first at seed 0, under current at commit A5-close; was 191 of 300, first at seed 0, at commit 6e716d5+A5-open
 # mutates: a manual rebalance removes the source replica as its FIRST step instead of adding the destination. The range spends the whole move one replica short, so a crash in that window costs it a quorum on a change nobody had to make. This is the invariant CLAUDE.md names: replica moves are add-then-remove, quorum availability never voluntarily reduced
 --- a/store/node.go
 +++ b/store/node.go

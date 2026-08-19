@@ -4,8 +4,8 @@
 # expect: killed
 # power-seeds: 3000
 # power-floor: 1
-# power-ceiling: 224
-# power-measured: 5 of 3000, first at seed 56, at commit 6e716d5+A5-open; was 6 of 3000, first at seed 215, at commit 34b284d+A4 -- floored at detected-at-all, because six instances is not a rate
+# power-ceiling: 900
+# power-measured: 1 of 3000, first at seed 215, under current at commit A5-close; was 5 of 3000, first at seed 56, at commit 6e716d5+A5-open. FRAGILE: this class is at 1 detection in 3000 and its first has moved 56 -> 215 across one phase, so it is floored at detected-at-all and the ceiling is widened to 900 -- far enough that ordinary drift does not fail the lane, near enough that a move past a third of the range does. It catches BUG-015, and if it reaches zero the class is gone rather than quiet
 # mutates: a range born from a split inherits the ACTIVE configuration, which is effective on append and is not a function of the applied prefix. Two replicas applying the same split entry with different appended tails give the new range two different birth configurations, and the one that starts behind reads the next membership entry as an illegal transition (BUG-015)
 --- a/store/machine.go
 +++ b/store/machine.go

@@ -6,7 +6,7 @@
 # power-floor: 4
 # power-ceiling: 48
 # power-config: a3
-# power-measured: 8 of 300, first at seed 12, under the A3 shape at commit 97d2140+A5. It is PINNED to a3 because A5's shape does not reach it often enough to floor: measured across shapes on identical code, a3 8/300 (first 12), a4 4/300 (first 32), a5 3/300 (first 32). The decline tracks RANGE COUNT -- more ranges mean each range's pending writes are shorter-lived, so a stale completion is more often harmless -- which is the reading the three numbers support and is not an argument anyone has proved. Was 18 of 300 under A4's code; part of that drop is A5's code rather than its options, since a3 options on A5 code give 8
+# power-measured: 8 of 300, first at seed 12, under a3 at commit A5-close; was 8 of 300, first at seed 12, under the A3 shape at commit 97d2140+A5. It is PINNED to a3 because A5's shape does not reach it often enough to floor: measured across shapes on identical code, a3 8/300 (first 12), a4 4/300 (first 32), a5 3/300 (first 32). The decline tracks RANGE COUNT -- more ranges mean each range's pending writes are shorter-lived, so a stale completion is more often harmless -- which is the reading the three numbers support and is not an argument anyone has proved. Was 18 of 300 under A4's code; part of that drop is A5's code rather than its options, since a3 options on A5 code give 8
 # mutates: the epoch check is removed, so a completion from a dead incarnation reaches a live component -- the class behind TOY-003, the store restart bug and the durability panic
 --- a/store/machine.go
 +++ b/store/machine.go

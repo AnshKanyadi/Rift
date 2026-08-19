@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 50
 # power-ceiling: 10
-# power-measured: 166 of 300, first at seed 1, at commit 6e716d5+A5-open; was 100 at commit c1a1f6c+A3
+# power-measured: 171 of 300, first at seed 1, under current at commit A5-close; was 166 of 300, first at seed 1, at commit 6e716d5+A5-open
 # mutates: an index covered by an in-flight snapshot install is reported as needing no durability point, so an append response attesting to it goes out while the snapshot is still unwritten. DR-8 enumerated this as MsgAppResp following InstallSnapshot before raft/ existed, and A2 is where it became reachable
 --- a/raft/raft.go
 +++ b/raft/raft.go
