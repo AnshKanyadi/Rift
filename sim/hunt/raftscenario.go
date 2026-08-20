@@ -773,6 +773,76 @@ func txnFacts(base []byte, entries []raft.Entry) ([]raftcheck.CommitFact, map[st
 	return flat, decided
 }
 
+// recoveredStates is raftcheck.RecoveredAt: every range's final state machine,
+// decoded into the four record kinds.
+//
+// The state comes from store.ReplayMachine -- the real apply path over a fresh
+// engine -- and this only decodes the result. The invariants oracle then asserts
+// properties of that result and never of how it was reached, which is the
+// distinction that makes it legitimate where the removed model was not.
+func recoveredStates(l *raftcheck.Ledger) []raftcheck.RecoveredState {
+	var out []raftcheck.RecoveredState
+	for _, rl := range l.Ranges() {
+		if rl.Base() == nil {
+			continue
+		}
+		desc, mark, recs, ok := store.ReplayMachine(rl.Base(), rl.Committed())
+		if !ok {
+			continue
+		}
+		st := raftcheck.RecoveredState{
+			Range: rl.ID(), Start: desc.Start, End: desc.End, GCMark: mark,
+		}
+		ns := namespaceOf(desc.ID)
+		for _, r := range recs {
+			kind, ok := kv.KindOf(ns, r.Key)
+			if !ok {
+				continue
+			}
+			key, ok := kv.DecodeAnyKey(ns, r.Key)
+			if !ok {
+				continue
+			}
+			switch kind {
+			case kv.KindData:
+				_, at, ok := kv.DecodeKey(ns, r.Key)
+				if ok {
+					st.Versions = append(st.Versions, raftcheck.RecoveredVersion{Key: string(key), At: at})
+				}
+			case kv.KindLock:
+				lk, ok := kv.DecodeLockValue(r.Value)
+				if ok {
+					st.Locks = append(st.Locks, raftcheck.RecoveredLock{
+						Key: string(key), Primary: string(lk.Primary),
+						StartTS: lk.StartTS, Deadline: lk.Deadline,
+					})
+				}
+			case kv.KindWrite:
+				_, commitTS, ok := kv.DecodeWriteKey(ns, r.Key)
+				if !ok {
+					continue
+				}
+				startTS, rollback, ok := kv.DecodeWriteValue(r.Value)
+				if ok {
+					st.Writes = append(st.Writes, raftcheck.CommitFact{
+						Key: string(key), StartTS: startTS, CommitTS: commitTS, Rollback: rollback,
+					})
+				}
+			case kv.KindTxn:
+				rec, ok := kv.DecodeTxnValue(r.Value)
+				if ok {
+					st.Decided = append(st.Decided, raftcheck.CommitFact{
+						Key: string(key), StartTS: rec.StartTS, CommitTS: rec.CommitTS,
+						Rollback: rec.Status != kv.TxnCommitted,
+					})
+				}
+			}
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
 // extentOf is raftcheck.ExtentOf.
 func extentOf(base []byte) (start, end []byte, epoch uint64, ok bool) {
 	desc, _, _, ok := store.DecodeMachine(base)
@@ -903,7 +973,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts))
+	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts,
+		func() []raftcheck.RecoveredState { return recoveredStates(ledger) }))
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {

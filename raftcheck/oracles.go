@@ -507,7 +507,7 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // is the honest behaviour for a caller that has no model -- a checker with no
 // expectation cannot conclude anything, and pretending otherwise is the
 // vacuous-green class again.
-func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt) []sim.Oracle {
+func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt, recovered RecoveredAt) []sim.Oracle {
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -521,6 +521,7 @@ func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads Reads
 		NewSplitPartition(l, splits, extent),
 		NewMVCCReadCorrectness(l, reads),
 		NewTransactionAtomicity(l, facts),
+		NewPercolatorInvariants(l, recovered),
 	}
 }
 
@@ -1295,4 +1296,194 @@ func txnDecisionKey(primary string, startTS hlc.Timestamp) string {
 // TxnDecisionKey is the harness's spelling of the same thing.
 func TxnDecisionKey(primary string, startTS hlc.Timestamp) string {
 	return txnDecisionKey(primary, startTS)
+}
+
+// --- Percolator invariants over the recovered state -----------------------------
+
+// RecoveredState is one range's final state machine, decoded into the four
+// record kinds. The harness produces it by REPLAYING the committed log through
+// the real apply path; this oracle only inspects the result.
+type RecoveredState struct {
+	Range  uint64
+	Start  []byte
+	End    []byte
+	GCMark hlc.Timestamp
+
+	Locks    []RecoveredLock
+	Writes   []CommitFact
+	Decided  []CommitFact
+	Versions []RecoveredVersion
+}
+
+// RecoveredLock is a lock found in the final state.
+type RecoveredLock struct {
+	Key      string
+	Primary  string
+	StartTS  hlc.Timestamp
+	Deadline hlc.Timestamp
+}
+
+// RecoveredVersion is a data version found in the final state.
+type RecoveredVersion struct {
+	Key string
+	At  hlc.Timestamp
+}
+
+// RecoveredAt is supplied by the harness: every range's final state.
+type RecoveredAt func() []RecoveredState
+
+// PercolatorInvariants: four properties of the FINAL state, each checkable by
+// inspection.
+//
+// # Why this exists, and why it is not the model that was removed
+//
+// Snapshot equivalence used to judge the state machine against an independent
+// MODEL. At A6 that model is a second implementation of Percolator, and one
+// produced five defects of its own in a single sitting, so it was replaced by an
+// independent EXECUTION (store.ReplayMachine). That trade gives up exactly one
+// property: **an apply path wrong the same way on every replica**. A cluster
+// that mishandles lock expiry identically everywhere agrees with itself, replays
+// consistently, and satisfies snapshot isolation and bank conservation for as
+// long as the error stays symmetric.
+//
+// This oracle is one of the two replacements (the other is the symmetric-apply
+// mutant classes). The distinction that makes it legitimate where the model was
+// not: **it asserts properties of the result, not the derivation.** It never
+// says what the state should be; it says what no correct state can look like,
+// whatever produced it. Four assertions, no reimplementation.
+type PercolatorInvariants struct {
+	base
+	recovered RecoveredAt
+}
+
+func NewPercolatorInvariants(l *Ledger, recovered RecoveredAt) *PercolatorInvariants {
+	return &PercolatorInvariants{base: base{l: l, name: "percolator-invariants"}, recovered: recovered}
+}
+
+func (o *PercolatorInvariants) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
+	if !o.stale() {
+		return nil
+	}
+	states := o.recovered()
+
+	// Decisions are cluster-wide: a lock's primary can be on any range, and
+	// after a split it is on a different one from where it started.
+	decided := map[string]CommitFact{}
+	for _, st := range states {
+		for _, d := range st.Decided {
+			decided[txnDecisionKey(d.Key, d.StartTS)] = d
+		}
+	}
+	committedAt := map[string]bool{}
+	for _, d := range decided {
+		if !d.Rollback {
+			committedAt[d.StartTS.String()+"->"+d.CommitTS.String()] = true
+		}
+	}
+
+	for _, st := range states {
+		// 1. A key is never both COMMITTED and LOCKED for one transaction.
+		//
+		// CommitInto writes the record and drops the lock in ONE batch, so the
+		// two can never coexist for the same (key, start timestamp). A lock left
+		// beside its own commit record is a commit that landed without clearing
+		// it -- and the key is then unreadable forever, because every reader
+		// blocks on a lock whose transaction is already decided.
+		//
+		// # Why not "a committed transaction leaves no lock anywhere"
+		//
+		// That is the property, and it is EVENTUAL: a committed transaction's
+		// secondary commit steps may still be in flight, and a resolver will
+		// finish them. A finite run that stops in the middle of that is not a
+		// failure -- it is the state resolution exists for, and the atomicity
+		// oracle says the same thing about the same shape. Asserting the
+		// eventual form at the end of a run would make every crashed coordinator
+		// a safety violation.
+		//
+		// What IS instantaneously true is the pair above, and that is what a
+		// checker may say.
+		locked := map[string]hlc.Timestamp{}
+		for _, l := range st.Locks {
+			locked[l.Key] = l.StartTS
+		}
+		for _, w := range st.Writes {
+			if w.Rollback {
+				continue
+			}
+			if st, ok := locked[w.Key]; ok && st == w.StartTS {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"%q is committed at %s for the transaction that started at %s, and still holds "+
+						"that transaction's lock. A commit clears its own lock in the same batch, so "+
+						"the two cannot coexist -- and a reader blocks forever on a lock whose "+
+						"transaction is already decided",
+					w.Key, w.CommitTS, w.StartTS)}
+			}
+		}
+
+		for _, l := range st.Locks {
+
+			// 4. Every lock is resolvable: some range covers its primary key.
+			//
+			// A lock naming a primary no range holds can never be decided by
+			// anybody, which is the orphan a split would create if a lock named
+			// a range instead of a key (D-A6-1).
+			if !coversKey(states, []byte(l.Primary)) {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d: %q is locked by a transaction whose primary %q is covered by no "+
+						"range. Nothing can ever read that decision, so the lock is permanent",
+					st.Range, l.Key, l.Primary)}
+			}
+		}
+
+		// 2. A commit record implies a committed transaction record.
+		//
+		// A write record says "the version at this start timestamp is committed
+		// here". If no transaction record agrees, a value is visible that no
+		// commit point ever authorised -- which is the read half of atomicity
+		// broken, and it is invisible to a checker that only compares replicas
+		// with each other because every replica shows the same thing.
+		for _, w := range st.Writes {
+			if w.Rollback {
+				continue
+			}
+			if !committedAt[w.StartTS.String()+"->"+w.CommitTS.String()] {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d: %q is committed at %s for the transaction that started at %s, and no "+
+						"transaction record anywhere says that transaction committed at that "+
+						"timestamp. A value is visible that no commit point authorised",
+					st.Range, w.Key, w.CommitTS, w.StartTS)}
+			}
+		}
+
+		// 3. At most one version at or below the collection mark, per key.
+		//
+		// Not "no version below the mark": collection deliberately KEEPS the
+		// newest version at or below it, because that is the one a read at the
+		// mark's successor needs. Two of them means collection did not run where
+		// it said it had, and the mark is a claim about history nobody enforced.
+		below := map[string]int{}
+		for _, v := range st.Versions {
+			if v.At.LessEq(st.GCMark) {
+				below[v.Key]++
+				if below[v.Key] > 1 {
+					return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+						"range %d: %q has %d versions at or below the collection mark %s. Collection "+
+							"keeps exactly one -- the version a read just above the mark needs -- so "+
+							"more than one means the mark moved over history it never collected",
+						st.Range, v.Key, below[v.Key], st.GCMark)}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// coversKey reports whether any range's extent contains key.
+func coversKey(states []RecoveredState, key []byte) bool {
+	for _, st := range states {
+		if bytes.Compare(key, st.Start) >= 0 && (len(st.End) == 0 || bytes.Compare(key, st.End) < 0) {
+			return true
+		}
+	}
+	return false
 }
