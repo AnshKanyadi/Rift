@@ -25,6 +25,10 @@ import (
 // nothing here consults a clock, and why the resolve step carries the timestamp
 // it judges an expiry against.
 func (n *Replica) applyTxn(b *engine.Batch, c TxnCommand) {
+	// The counters are the driver's; the EFFECT is applyTxnTo's, which the
+	// replay runs too. One apply implementation, two callers -- see
+	// store.ReplayMachine for why that is the arrangement and what it costs.
+	before := n.mvcc.RollForwards() + n.mvcc.RollBacks()
 	switch c.Op {
 	case OpPrewrite:
 		err := n.mvcc.PrewriteInto(b, []byte(c.Key), kv.Lock{
@@ -37,16 +41,6 @@ func (n *Replica) applyTxn(b *engine.Batch, c TxnCommand) {
 		case errors.Is(err, kv.ErrKeyIsLocked):
 			n.prewriteBlocked++
 		default:
-			n.txnRefused++
-		}
-
-	case OpCommitKey:
-		if err := n.mvcc.CommitInto(b, []byte(c.Key), c.StartTS, c.CommitTS); err != nil {
-			n.txnRefused++
-		}
-
-	case OpRollbackKey:
-		if err := n.mvcc.RollbackInto(b, []byte(c.Key), c.StartTS); err != nil {
 			n.txnRefused++
 		}
 
@@ -70,48 +64,11 @@ func (n *Replica) applyTxn(b *engine.Batch, c TxnCommand) {
 			n.txnRefused++
 		}
 
-	case OpResolve:
-		n.applyResolve(b, c)
-
 	default:
-		n.txnRefused++
+		applyTxnTo(n.mvcc, b, c, n.desc)
 	}
-}
-
-// applyResolve reads the lock on this key, decides from the primary's record,
-// and applies the verdict.
-//
-// # Why the whole decision happens here rather than at the coordinator
-//
-// The verdict must be identical on every replica, so it has to be a function of
-// applied state at this log position. A resolver that decided on its own machine
-// and shipped the answer would be shipping a fact derived somewhere else -- and
-// two resolvers racing would ship two answers for one lock.
-//
-// So the command carries the INPUTS (which key, at what read timestamp) and the
-// state machine computes the verdict. The one thing it cannot do is read another
-// range: when the primary lives elsewhere the command is a no-op here and the
-// coordinator routes the primary half separately, which is D-A6-4's split
-// between deciding and applying.
-func (n *Replica) applyResolve(b *engine.Batch, c TxnCommand) {
-	l, ok, err := n.mvcc.Lock([]byte(c.Key))
-	if err != nil || !ok {
-		// No lock: somebody else resolved it, or it was never there. Both are
-		// ordinary, and neither is a failure.
-		return
-	}
-	primaryHere := n.desc.Contains(l.Primary)
-	r, commitTS, err := n.mvcc.ResolveLock([]byte(c.Key), l, c.ReadTS, primaryHere)
-	if err != nil {
-		n.txnRefused++
-		return
-	}
-	if r == kv.ResolveWait {
+	if c.Op == OpResolve && n.mvcc.RollForwards()+n.mvcc.RollBacks() == before {
 		n.resolveWaits++
-		return
-	}
-	if err := n.mvcc.ApplyResolutionInto(b, []byte(c.Key), l, r, commitTS); err != nil {
-		n.txnRefused++
 	}
 }
 

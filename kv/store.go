@@ -313,3 +313,88 @@ func (s *Store) Keys() ([][]byte, error) {
 	}
 	return out, nil
 }
+
+// Record is one engine record belonging to this store: a data version, a lock, a
+// commit record or a transaction record.
+//
+// # Why the snapshot carries all four and not just the versions
+//
+// A5's snapshot payload carried data versions, because at A5 that was the whole
+// state machine. A6 adds three more record kinds, and a snapshot that carried
+// only versions would hand a follower a state machine with the values and none
+// of the locks, commit records or decisions -- so an installed replica would
+// answer reads from data nobody had committed and resolve nothing, while every
+// other replica saw a consistent picture.
+//
+// The state machine is everything under this store's namespace. Enumerating it
+// rather than listing the kinds is deliberate: a fifth record kind added later
+// is carried automatically, and the failure mode of forgetting one is exactly
+// the one above.
+type Record struct {
+	Key   []byte // the ENGINE key, namespace included
+	Value []byte
+}
+
+// Records is the whole state machine, in engine order.
+func (s *Store) Records() ([]Record, error) {
+	it := s.db.NewIter(engine.IterOptions{Lower: s.ns, Upper: prefixEnd(s.ns)})
+	defer func() { _ = it.Close() }()
+
+	var out []Record
+	for ok := it.First(); ok; ok = it.Next() {
+		if !s.owns(it.Key()) {
+			continue
+		}
+		out = append(out, Record{
+			Key:   append([]byte(nil), it.Key()...),
+			Value: append([]byte(nil), it.Value()...),
+		})
+	}
+	return out, it.Error()
+}
+
+// owns reports whether an engine key under this namespace belongs to the state
+// machine rather than to raft's own bookkeeping.
+//
+// The two share a namespace because A4 gave each range one contiguous keyspace,
+// so the discriminator is the record kind byte. Listing what the state machine
+// owns rather than what raft owns is the safer direction: a new raft key is
+// excluded by default, and a new state-machine kind has to be added here, where
+// the compiler cannot help but the test that snapshots a lock will.
+func (s *Store) owns(engineKey []byte) bool {
+	if len(engineKey) <= len(s.ns) || string(engineKey[:len(s.ns)]) != string(s.ns) {
+		return false
+	}
+	switch engineKey[len(s.ns)] {
+	case dataPrefix, lockPrefix, writePrefix, txnPrefix:
+		return true
+	}
+	return false
+}
+
+// IngestRecordsInto replaces this store's whole state in one batch.
+func (s *Store) IngestRecordsInto(b *engine.Batch, rs []Record, mark hlc.Timestamp) {
+	for _, kind := range []byte{dataPrefix, lockPrefix, writePrefix, txnPrefix} {
+		lo := append(append([]byte(nil), s.ns...), kind)
+		b.DeleteRange(lo, prefixEnd(lo))
+	}
+	for _, r := range rs {
+		b.Set(r.Key, r.Value)
+	}
+	s.gcMark = mark
+}
+
+// UserKeyOf extracts the user key a record belongs to, whatever its kind.
+//
+// A split partitions by USER key, and every record kind embeds one: data and
+// write records add a timestamp after it, locks and transaction records do not.
+// A transaction record goes wherever its PRIMARY key goes, which is what keeps a
+// resolver able to find it after a split (D-A6-1).
+func (s *Store) UserKeyOf(engineKey []byte) ([]byte, bool) {
+	if !s.owns(engineKey) {
+		return nil, false
+	}
+	kind := engineKey[len(s.ns)]
+	key, _, ok := takeMetaKey(s.ns, kind, engineKey)
+	return key, ok
+}

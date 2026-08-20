@@ -200,3 +200,8 @@ func hasRange(ds []RangeDescriptor, id RangeID) bool {
 	}
 	return false
 }
+
+// RangePrefix is a range's engine-key namespace, exported for the harness's
+// model: it renders the same records the store writes, and a record's engine key
+// embeds the namespace.
+func RangePrefix(id RangeID) []byte { return rangePrefix(id) }

@@ -173,21 +173,19 @@ func decodeSnapshot(b []byte) (raft.SnapshotMeta, []byte, bool) {
 // has been collected and whose record of that collection has not -- so it would
 // answer reads below the mark from a history that is no longer there, which is
 // the silently-wrong read the mark exists to prevent.
-func encodeMachine(desc RangeDescriptor, mark hlc.Timestamp, vs []kv.Version) []byte {
+func encodeMachine(desc RangeDescriptor, mark hlc.Timestamp, rs []kv.Record) []byte {
 	b := putBytes(nil, encodeDesc(desc))
 	b = putU64(b, uint64(mark.Wall))
 	b = putU64(b, uint64(mark.Logical))
-	b = putU64(b, uint64(len(vs)))
-	for _, v := range vs {
-		b = putBytes(b, v.Key)
-		b = putU64(b, uint64(v.At.Wall))
-		b = putU64(b, uint64(v.At.Logical))
-		b = putBytes(b, v.Value)
+	b = putU64(b, uint64(len(rs)))
+	for _, r := range rs {
+		b = putBytes(b, r.Key)
+		b = putBytes(b, r.Value)
 	}
 	return b
 }
 
-func decodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+func decodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Record, bool) {
 	var zero RangeDescriptor
 	descRaw, b, ok := takeBytes(b)
 	if !ok {
@@ -210,33 +208,20 @@ func decodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Version, bool
 	if !ok {
 		return zero, hlc.Timestamp{}, nil, false
 	}
-	vs := make([]kv.Version, 0, n)
+	rs := make([]kv.Record, 0, n)
 	for range n {
-		var kb, vb []byte
-		kb, b, ok = takeBytes(b)
+		var k, v []byte
+		k, b, ok = takeBytes(b)
 		if !ok {
 			return zero, hlc.Timestamp{}, nil, false
 		}
-		var w, l uint64
-		w, b, ok = takeU64(b)
+		v, b, ok = takeBytes(b)
 		if !ok {
 			return zero, hlc.Timestamp{}, nil, false
 		}
-		l, b, ok = takeU64(b)
-		if !ok {
-			return zero, hlc.Timestamp{}, nil, false
-		}
-		vb, b, ok = takeBytes(b)
-		if !ok {
-			return zero, hlc.Timestamp{}, nil, false
-		}
-		vs = append(vs, kv.Version{
-			Key:   kb,
-			At:    hlc.Timestamp{Wall: clock.NewWall(int64(w)), Logical: uint32(l)},
-			Value: vb,
-		})
+		rs = append(rs, kv.Record{Key: k, Value: v})
 	}
-	return desc, mark, vs, true
+	return desc, mark, rs, true
 }
 
 // encodeKV serialises the state machine.
@@ -284,7 +269,7 @@ func decodeKV(b []byte) (map[string]string, bool) {
 // The model cannot judge a range whose starting extent it does not know, and
 // quietly substituting a zero one is how a checker comes out green on a state
 // nobody ever had.
-func DecodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+func DecodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Record, bool) {
 	return decodeMachine(b)
 }
 

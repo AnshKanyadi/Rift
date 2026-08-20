@@ -548,6 +548,26 @@ func (m *Node) RequestMove(rng RangeID, from, to raft.NodeID, begin bool) bool {
 	return r != nil && r.RequestMove(from, to, begin)
 }
 
+// Now hands out a timestamp from this machine's clock, for a client that needs
+// one.
+//
+// # Why a client asks a node rather than reading a clock
+//
+// A transaction's start timestamp has to be inside the cluster's uncertainty
+// envelope, and the envelope is a property of the nodes' clocks. A coordinator
+// with a clock of its own would be a time source outside the bound every read
+// rests on -- and every uncertainty interval computed from maxOffset would be
+// describing a different cluster than the one that issued the timestamp.
+//
+// It reports false when this machine hosts no range, which is not a failure: the
+// caller asks somebody else, exactly as it does for any other request.
+func (m *Node) Now() (hlc.Timestamp, bool) {
+	if m.down || len(m.replicas) == 0 {
+		return hlc.Timestamp{}, false
+	}
+	return m.replicas[0].hlc.Now(), true
+}
+
 // RequestTransfer hands leadership of a led range to target.
 func (m *Node) RequestTransfer(target raft.NodeID) bool {
 	r := m.leaderReplica()
@@ -624,17 +644,27 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 	// Moving only the newest version would make a split silently truncate
 	// history, and the read that noticed would be one at a timestamp before the
 	// split -- which is exactly the read a snapshot-isolated transaction makes.
-	var leftKept, rightVs []kv.Version
-	for _, v := range left.versions() {
+	//
+	// A6: it moves every RECORD, not only the data versions. A lock, a commit
+	// record and a transaction record all belong to the key they name, and a
+	// split that carried the values without them would hand the right range
+	// values nobody had committed and strand the locks on the left -- where the
+	// key they lock no longer lives, so nothing would ever resolve them.
+	var leftKept, rightVs []kv.Record
+	for _, rec := range left.versions() {
+		userKey, ok := left.mvcc.UserKeyOf(rec.Key)
+		if !ok {
+			continue
+		}
 		switch {
-		case spec.Right.Contains(v.Key):
-			rightVs = append(rightVs, v)
-		case spec.Left.Contains(v.Key):
-			leftKept = append(leftKept, v)
+		case spec.Right.Contains(userKey):
+			rightVs = append(rightVs, reNamespace(rec, left.mvcc.Namespace(), rangePrefix(spec.Right.ID)))
+		case spec.Left.Contains(userKey):
+			leftKept = append(leftKept, rec)
 		default:
 			panic(fmt.Sprintf(
 				"store: node %d splitting range %d holds key %q, which neither %s nor %s covers",
-				m.cfg.ID, left.rng, v.Key, spec.Left, spec.Right))
+				m.cfg.ID, left.rng, userKey, spec.Left, spec.Right))
 		}
 	}
 	// The mark travels with the versions. A right range born with a zero mark
@@ -694,6 +724,24 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 	r.adoptSnapshot(snapMeta, rightVs, mark)
 	m.addReplica(r)
 	m.splits++
+}
+
+// reNamespace rewrites a record's engine key from one range's namespace into
+// another's.
+//
+// A record's engine key embeds the namespace, so a record moving between ranges
+// has to be re-addressed. Doing it here rather than storing namespace-relative
+// keys is deliberate: the engine key is what the store actually writes, and a
+// record that carried a relative key would be one decode away from landing in
+// the wrong range every time somebody forgot.
+func reNamespace(r kv.Record, from, to []byte) kv.Record {
+	if len(r.Key) < len(from) {
+		return r
+	}
+	out := make([]byte, 0, len(to)+len(r.Key)-len(from))
+	out = append(out, to...)
+	out = append(out, r.Key[len(from):]...)
+	return kv.Record{Key: out, Value: r.Value}
 }
 
 // nextRangeID mints an identifier for a new range.

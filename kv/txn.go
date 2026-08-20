@@ -328,3 +328,52 @@ func takeTS(b []byte) (hlc.Timestamp, []byte, bool) {
 // takes the lock. A resolver never converts: it compares timestamps, because two
 // replicas must reach the same verdict from the same log position.
 const DefaultTTL = 500 * time.Millisecond
+
+// The value codecs, exported for the harness's model.
+//
+// It restates what a prewrite and a commit DO and shares only the SERIALISATION,
+// which is the same split every other model function in this project makes: a
+// defect in applying a step cannot cancel out on both sides of the comparison,
+// and a model that produced different bytes for the same logical state would
+// report a divergence on every seed.
+func EncodeLockValue(l Lock) []byte { return encodeLock(l) }
+func EncodeWriteValue(startTS hlc.Timestamp, rollback bool) []byte {
+	return encodeWrite(startTS, rollback)
+}
+func EncodeTxnValue(r TxnRecord) []byte { return encodeTxn(r) }
+
+// The value decoders, exported for the harness's model for the same reason the
+// encoders are: a split-born range INHERITS records, and a model that could not
+// read them would start every child range with an incomplete state and report a
+// divergence on every seed that split mid-transaction.
+func DecodeLockValue(b []byte) (Lock, bool) { return decodeLock(b) }
+func DecodeWriteValue(b []byte) (startTS hlc.Timestamp, rollback bool, ok bool) {
+	return decodeWrite(b)
+}
+func DecodeTxnValue(b []byte) (TxnRecord, bool) { return decodeTxn(b) }
+
+// KindOf reports which record kind an engine key under ns is.
+func KindOf(ns, engineKey []byte) (byte, bool) {
+	if len(engineKey) <= len(ns) || string(engineKey[:len(ns)]) != string(ns) {
+		return 0, false
+	}
+	return engineKey[len(ns)], true
+}
+
+// The record kind bytes, exported so the harness can dispatch on them.
+const (
+	KindData  = dataPrefix
+	KindLock  = lockPrefix
+	KindWrite = writePrefix
+	KindTxn   = txnPrefix
+)
+
+// DecodeAnyKey extracts the user key from an engine key of any kind.
+func DecodeAnyKey(ns, engineKey []byte) ([]byte, bool) {
+	kind, ok := KindOf(ns, engineKey)
+	if !ok {
+		return nil, false
+	}
+	key, _, ok := takeMetaKey(ns, kind, engineKey)
+	return key, ok
+}

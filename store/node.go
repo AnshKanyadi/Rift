@@ -312,7 +312,7 @@ type pendingWrite struct {
 	snapMark raft.PersistMark
 
 	snap         *raft.SnapshotMeta
-	snapVersions []kv.Version
+	snapVersions []kv.Record
 	snapMarkTS   hlc.Timestamp
 
 	// clearAllLog is an install, which discards every entry; clearBelow is a
@@ -1005,7 +1005,7 @@ type recovered struct {
 	hs       raft.HardState
 	snap     raft.SnapshotMeta
 	entries  []raft.Entry
-	versions []kv.Version
+	versions []kv.Record
 	mark     hlc.Timestamp
 
 	// desc is the range extent the snapshot carried. haveDesc distinguishes "the
@@ -1192,7 +1192,7 @@ func (n *Replica) SnapshotsTaken() int   { return n.snapshotsTaken }
 func (n *Replica) SnapshotsApplied() int { return n.snapshotsApplied }
 
 // adoptSnapshot installs a derived initial state on a newly created replica.
-func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, vs []kv.Version, mark hlc.Timestamp) {
+func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, vs []kv.Record, mark hlc.Timestamp) {
 	r, err := raft.Restore(raft.Config{
 		ID: n.cfg.ID, Peers: n.cfg.Peers,
 		ElectionTimeout: n.cfg.Election, HeartbeatTimeout: n.cfg.Heartbeat,
@@ -1214,17 +1214,17 @@ func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, vs []kv.Version, mark hl
 // (Amendment A3): a best-effort clear followed by a separate write would leave a
 // window holding a mixture of two states, and a crash in that window recovers
 // into it.
-func (n *Replica) ingest(vs []kv.Version, mark hlc.Timestamp) {
+func (n *Replica) ingest(rs []kv.Record, mark hlc.Timestamp) {
 	b := engine.NewBatch()
-	n.mvcc.IngestInto(b, vs, mark)
+	n.mvcc.IngestRecordsInto(b, rs, mark)
 	if _, err := n.db.Apply(b, false); err != nil {
 		panic(fmt.Sprintf("store: node %d cannot ingest range %d's state: %v", n.cfg.ID, n.rng, err))
 	}
 }
 
 // versions is everything this replica's state machine holds.
-func (n *Replica) versions() []kv.Version {
-	vs, err := n.mvcc.Versions()
+func (n *Replica) versions() []kv.Record {
+	vs, err := n.mvcc.Records()
 	if err != nil {
 		panic(fmt.Sprintf("store: node %d cannot read range %d's own state back: %v", n.cfg.ID, n.rng, err))
 	}
@@ -1400,8 +1400,8 @@ func (n *Replica) ConfCrossChecks() int { return n.confCrossChecks }
 // The harness re-implements what a command DOES and shares only the
 // serialisation, so a defect in applying commands cannot cancel out on both
 // sides of the snapshot comparison.
-func StateDigest(desc RangeDescriptor, mark hlc.Timestamp, vs []kv.Version) uint64 {
-	return digest(encodeMachine(desc, mark, vs))
+func StateDigest(desc RangeDescriptor, mark hlc.Timestamp, rs []kv.Record) uint64 {
+	return digest(encodeMachine(desc, mark, rs))
 }
 
 // crash takes the process down: volatile state goes, unsynced writes go.

@@ -57,6 +57,13 @@ type RaftOptions struct {
 	// single-version store -- and the collection mark refuses nothing, ever.
 	SnapshotReadPerMille uint64
 
+	// Transfers is how many bank transactions the plan schedules. Zero disables
+	// the bank workload, which is what every phase before A6 runs.
+	Transfers2PC int
+
+	// Accounts is how many bank accounts exist. Each is one key.
+	Accounts int
+
 	// Rebalances is how many manual replica movements the plan orders. Each is
 	// ONE step of a move, so a move needs several: the mechanism is stateless by
 	// design and finishes by being asked again (store.Replica.RequestMove).
@@ -102,7 +109,7 @@ func A2Options() RaftOptions {
 // The sweep, the oracle inductions and the power probe now all read this, so
 // they cannot disagree. Advancing a phase is one edit here, and every instrument
 // moves with it.
-func CurrentOptions() RaftOptions { return A5Options() }
+func CurrentOptions() RaftOptions { return A6Options() }
 
 // A3Options adds membership churn: a four-node cluster with one learner, and
 // enough scheduled changes that the cycle runs several times per seed.
@@ -129,6 +136,17 @@ func A4Options() RaftOptions {
 
 // A5Options adds MVCC: collection with a retention window, and a share of reads
 // at remembered timestamps.
+// A6Options adds the bank: Percolator transactions over the accounts, on top of
+// everything A5 runs.
+func A6Options() RaftOptions {
+	o := A5Options()
+	o.Accounts = 8
+	// Enough that transfers overlap and contend -- a workload whose transactions
+	// never meet exercises neither the write-conflict path nor resolution.
+	o.Transfers2PC = 40
+	return o
+}
+
 func A5Options() RaftOptions {
 	o := A4Options()
 	// Two seconds against a fourteen-second run: long enough that collection
@@ -260,19 +278,16 @@ func newestCommitOf(cs []raftcheck.CommitFact) (hlc.Timestamp, bool) {
 	return best, ok
 }
 
-func replay(base []byte, entries []raft.Entry,
-	onSplit func(raft.Index, bool, store.SplitSpec),
-	onRead func(raftcheck.ReadExpectation),
-) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
-	return replayFull(base, entries, onSplit, onRead, nil, nil)
-}
+// namespaceOf is a range's engine-key prefix, which the model needs both to
+// decode a birth payload and to render its own records.
+func namespaceOf(id store.RangeID) []byte { return store.RangePrefix(id) }
 
 func replayFull(base []byte, entries []raft.Entry,
 	onSplit func(raft.Index, bool, store.SplitSpec),
 	onRead func(raftcheck.ReadExpectation),
 	commits map[string][]raftcheck.CommitFact,
 	decided map[string]raftcheck.CommitFact,
-) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, map[string]*modelLock, bool) {
 	if commits == nil {
 		commits = map[string][]raftcheck.CommitFact{}
 	}
@@ -280,10 +295,14 @@ func replayFull(base []byte, entries []raft.Entry,
 		decided = map[string]raftcheck.CommitFact{}
 	}
 	locks := map[string]*modelLock{}
-	desc, mark, vs, ok := store.DecodeMachine(base)
+	desc, mark, recs, ok := store.DecodeMachine(base)
 	if !ok {
-		return desc, mark, nil, false
+		return desc, mark, nil, nil, false
 	}
+	// A birth payload carries the CHILD's namespace, which is the namespace this
+	// replay is about. Decoding with it rather than guessing is the difference
+	// between reading a split-born range's inheritance and reading nothing.
+	vs := seedFrom(namespaceOf(desc.ID), recs, locks, commits, decided)
 	for _, e := range entries {
 		if len(e.Data) == 0 {
 			continue
@@ -322,6 +341,7 @@ func replayFull(base []byte, entries []raft.Entry,
 					Key: c.Key, StartTS: c.StartTS, CommitTS: c.StartTS, Rollback: true,
 				})
 				delete(locks, c.Key)
+				vs = dropVersion(vs, c.Key, c.StartTS)
 			case store.OpPutTxnRecord:
 				dk := raftcheck.TxnDecisionKey(c.Key, c.StartTS)
 				if _, seen := decided[dk]; seen {
@@ -334,6 +354,19 @@ func replayFull(base []byte, entries []raft.Entry,
 			case store.OpResolve:
 				l := locks[c.Key]
 				if l == nil {
+					continue
+				}
+				// A resolver can only read a record on its OWN range. When the
+				// primary lives elsewhere the step is a no-op here and the
+				// coordinator routes the primary half separately -- D-A6-4's
+				// split between deciding and applying.
+				//
+				// The model skipped this check and rolled back locks whose
+				// primary it could not see, on the strength of an absence that
+				// only meant "not here". Same shape as BUG-012: a model that
+				// applies a step the replicas refuse computes a state no replica
+				// ever held.
+				if !desc.Contains([]byte(l.primary)) {
 					continue
 				}
 				dk := raftcheck.TxnDecisionKey(l.primary, l.startTS)
@@ -349,6 +382,7 @@ func replayFull(base []byte, entries []raft.Entry,
 						Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
 					})
 					delete(locks, c.Key)
+					vs = dropVersion(vs, c.Key, l.startTS)
 				case c.ReadTS.LessEq(l.deadline):
 					// wait
 				default:
@@ -356,6 +390,7 @@ func replayFull(base []byte, entries []raft.Entry,
 						Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
 					})
 					delete(locks, c.Key)
+					vs = dropVersion(vs, c.Key, l.startTS)
 				}
 			}
 			continue
@@ -394,6 +429,29 @@ func replayFull(base []byte, entries []raft.Entry,
 				}
 			}
 			vs = kept
+			// A split moves EVERY record kind, not just the versions. The first
+			// version of this dropped only the data and left the locks and
+			// commit records for keys the range had given away -- so the model
+			// rendered records the store had moved, and snapshot equivalence
+			// fired on every seed that split while a transaction was in flight.
+			//
+			// The same sentence as BUG-014, in the record dimension: what the
+			// left KEEPS is what its new extent covers, for all four kinds.
+			for k := range locks {
+				if !spec.Left.Contains([]byte(k)) {
+					delete(locks, k)
+				}
+			}
+			for k := range commits {
+				if !spec.Left.Contains([]byte(k)) {
+					delete(commits, k)
+				}
+			}
+			for dk, d := range decided {
+				if !spec.Left.Contains([]byte(d.Key)) {
+					delete(decided, dk)
+				}
+			}
 			desc = spec.Left
 			continue
 		}
@@ -457,7 +515,146 @@ func replayFull(base []byte, entries []raft.Entry,
 			vs = insertVersion(vs, kv.Version{Key: []byte(k), At: at, Value: []byte(v)})
 		}
 	}
-	return desc, mark, vs, true
+	return desc, mark, vs, locks, true
+}
+
+// seedFrom loads a birth payload into the model's logical state.
+//
+// # All four kinds, because a split-born range INHERITS all four
+//
+// The first version pulled out the data versions and dropped the rest. A range
+// born from a split then started with the values and none of the locks, commit
+// records or decisions its parent had -- so the model refused prewrites the
+// store accepted, kept versions the store had rolled back, and reported a
+// divergence on every seed that split while a transaction was in flight.
+//
+// That is the same mistake the STORE made one commit earlier in its snapshot
+// payload, and the two were made independently. "The state machine is its data"
+// is the intuition, and at A6 it is wrong on both sides of the comparison.
+func seedFrom(ns []byte, recs []kv.Record, locks map[string]*modelLock,
+	commits map[string][]raftcheck.CommitFact, decided map[string]raftcheck.CommitFact) []kv.Version {
+	var out []kv.Version
+	for _, r := range recs {
+		kind, ok := kv.KindOf(ns, r.Key)
+		if !ok {
+			continue
+		}
+		key, ok := kv.DecodeAnyKey(ns, r.Key)
+		if !ok {
+			continue
+		}
+		switch kind {
+		case kv.KindData:
+			_, at, ok := kv.DecodeKey(ns, r.Key)
+			if !ok {
+				continue
+			}
+			out = append(out, kv.Version{Key: key, At: at, Value: r.Value})
+		case kv.KindLock:
+			l, ok := kv.DecodeLockValue(r.Value)
+			if !ok {
+				continue
+			}
+			locks[string(key)] = &modelLock{
+				primary: string(l.Primary), startTS: l.StartTS, deadline: l.Deadline,
+			}
+		case kv.KindWrite:
+			_, commitTS, ok := kv.DecodeWriteKey(ns, r.Key)
+			if !ok {
+				continue
+			}
+			startTS, rollback, ok := kv.DecodeWriteValue(r.Value)
+			if !ok {
+				continue
+			}
+			commits[string(key)] = append(commits[string(key)], raftcheck.CommitFact{
+				Key: string(key), StartTS: startTS, CommitTS: commitTS, Rollback: rollback,
+			})
+		case kv.KindTxn:
+			rec, ok := kv.DecodeTxnValue(r.Value)
+			if !ok {
+				continue
+			}
+			decided[raftcheck.TxnDecisionKey(string(key), rec.StartTS)] = raftcheck.CommitFact{
+				Key: string(key), StartTS: rec.StartTS, CommitTS: rec.CommitTS,
+				Rollback: rec.Status != kv.TxnCommitted,
+			}
+		}
+	}
+	return out
+}
+
+// modelRecords renders the model's logical state into the same engine records
+// the store writes, so a digest over one is a digest over the other.
+//
+// The ENCODING is shared and the SEMANTICS are not: everything above decided
+// what the state is; this only writes it down, in the one layout both sides
+// must agree on or every seed reports a divergence.
+func modelRecords(ns []byte, vs []kv.Version, locks map[string]*modelLock,
+	commits map[string][]raftcheck.CommitFact, decided map[string]raftcheck.CommitFact) []kv.Record {
+	var out []kv.Record
+	for _, v := range vs {
+		out = append(out, kv.Record{Key: kv.EncodeKey(ns, v.Key, v.At), Value: v.Value})
+	}
+	for _, k := range sortedKeys(locks) {
+		l := locks[k]
+		out = append(out, kv.Record{
+			Key: kv.LockKey(ns, []byte(k)),
+			Value: kv.EncodeLockValue(kv.Lock{
+				Primary: []byte(l.primary), StartTS: l.startTS, Deadline: l.deadline,
+			}),
+		})
+	}
+	for _, k := range sortedCommitKeys(commits) {
+		for _, c := range commits[k] {
+			out = append(out, kv.Record{
+				Key:   kv.WriteKey(ns, []byte(k), c.CommitTS),
+				Value: kv.EncodeWriteValue(c.StartTS, c.Rollback),
+			})
+		}
+	}
+	for _, dk := range sortedDecisionKeys(decided) {
+		d := decided[dk]
+		st := kv.TxnCommitted
+		if d.Rollback {
+			st = kv.TxnRolledBack
+		}
+		out = append(out, kv.Record{
+			Key: kv.TxnKey(ns, []byte(d.Key), d.StartTS),
+			Value: kv.EncodeTxnValue(kv.TxnRecord{
+				Status: st, StartTS: d.StartTS, CommitTS: d.CommitTS,
+			}),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Key, out[j].Key) < 0 })
+	return out
+}
+
+func sortedKeys(m map[string]*modelLock) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedCommitKeys(m map[string][]raftcheck.CommitFact) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedDecisionKeys(m map[string]raftcheck.CommitFact) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // readModel answers a read from the model's own version list: the newest version
@@ -475,6 +672,22 @@ func readModel(vs []kv.Version, key string, at hlc.Timestamp) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// dropVersion removes the uncommitted version a rollback discards.
+//
+// The store's RollbackInto deletes it, because a version no commit record will
+// ever point at is unreachable and would sit in the range forever. The model has
+// to do the same, or its digest carries a record the store does not.
+func dropVersion(vs []kv.Version, key string, at hlc.Timestamp) []kv.Version {
+	out := vs[:0]
+	for _, v := range vs {
+		if string(v.Key) == key && v.At == at {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // insertVersion places a version in engine order: by key ascending, and by
@@ -503,17 +716,17 @@ func insertVersion(vs []kv.Version, v kv.Version) []kv.Version {
 
 // stateDigest is raftcheck.StateAt.
 func stateDigest(base []byte, entries []raft.Entry) uint64 {
-	desc, mark, vs, ok := replay(base, entries, nil, nil)
+	desc, mark, recs, ok := store.ReplayMachine(base, entries)
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
 	}
-	return store.StateDigest(desc, mark, vs)
+	return store.StateDigest(desc, mark, recs)
 }
 
 // splitSteps is raftcheck.SplitsAt.
 func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
 	var out []raftcheck.SplitStep
-	_, _, _, ok := replay(base, entries, func(idx raft.Index, applies bool, spec store.SplitSpec) {
+	_, _, _, _, ok := replayFull(base, entries, func(idx raft.Index, applies bool, spec store.SplitSpec) {
 		out = append(out, raftcheck.SplitStep{
 			Index: idx, Applied: applies,
 			Child:      uint64(spec.Right.ID),
@@ -521,7 +734,7 @@ func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
 			ChildEnd:   spec.Right.End,
 			ChildEpoch: spec.Right.Epoch,
 		})
-	}, nil)
+	}, nil, nil, nil)
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
 	}
@@ -531,9 +744,9 @@ func splitSteps(base []byte, entries []raft.Entry) []raftcheck.SplitStep {
 // readExpectations is raftcheck.ReadsAt.
 func readExpectations(base []byte, entries []raft.Entry) []raftcheck.ReadExpectation {
 	var out []raftcheck.ReadExpectation
-	_, _, _, ok := replay(base, entries, nil, func(e raftcheck.ReadExpectation) {
+	_, _, _, _, ok := replayFull(base, entries, nil, func(e raftcheck.ReadExpectation) {
 		out = append(out, e)
-	})
+	}, nil, nil)
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
 	}
@@ -544,7 +757,7 @@ func readExpectations(base []byte, entries []raft.Entry) []raftcheck.ReadExpecta
 func txnFacts(base []byte, entries []raft.Entry) ([]raftcheck.CommitFact, map[string]raftcheck.CommitFact) {
 	commits := map[string][]raftcheck.CommitFact{}
 	decided := map[string]raftcheck.CommitFact{}
-	if _, _, _, ok := replayFull(base, entries, nil, nil, commits, decided); !ok {
+	if _, _, _, _, ok := replayFull(base, entries, nil, nil, commits, decided); !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
 	}
 	var flat []raftcheck.CommitFact
@@ -712,6 +925,11 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		return res, fmt.Errorf("hunt: raft key: %w", err)
 	}
 
+	// coordRef is set once the coordinator exists, and read from inside the
+	// store's callback. The indirection is because the drivers must exist before
+	// the coordinator can address them, and the coordinator must exist before a
+	// driver can call back into it -- the same late-binding the transport uses.
+	var coordRef *coordinator
 	drivers := make([]*store.Node, n)
 	for i := range nodes {
 		ord := i
@@ -727,6 +945,11 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
 			Transport:         run.Transport, Ledger: ledger, History: hist,
+			OnTxnApplied: func(c store.TxnCommand, at clock.Instant, s sim.Scheduler) {
+				if coordRef != nil {
+					coordRef.applied(c, at, s)
+				}
+			},
 			// The node's own clock, with its own timeline: skew between nodes
 			// is what the HLC exists to reconcile, so handing every node the
 			// same clock would make A5's whole property vacuous.
@@ -857,6 +1080,20 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			if d.RequestTransfer(raft.NodeID(int(target) + 1)) {
 				break
 			}
+		}
+	}
+
+	// # The bank
+	//
+	// Transfers are scheduled through the middle of the run, so they overlap
+	// crashes, splits and each other. Each is driven by the coordinator in
+	// bank.go: an ordinary client issuing one step at a time.
+	var coord *coordinator
+	if opt.Transfers2PC > 0 && opt.Accounts > 0 {
+		coord = newCoordinator(drivers, n, hist, ledger, opt, p)
+		coordRef = coord
+		if err := coord.schedule(run, p); err != nil {
+			return res, err
 		}
 	}
 
