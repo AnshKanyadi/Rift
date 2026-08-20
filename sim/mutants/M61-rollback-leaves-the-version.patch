@@ -1,0 +1,19 @@
+# id: M61-rollback-leaves-the-version
+# covering-test: TestPercolatorInvariantsReportNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 30
+# power-measured: PENDING
+# mutates: a rollback drops the lock and writes the tombstone but leaves the uncommitted data version behind. SYMMETRIC across replicas, so replay equivalence runs the same apply path and leaves the same version -- and no client can see it either, because no commit record points at it. It SURVIVED its first covering test, which is the surrendered property made visible, and the invariant that catches it was added in response: a rolled-back version does not exist
+--- a/kv/txn.go
++++ b/kv/txn.go
+@@ -153,7 +153,6 @@
+ 	}
+ 	b.Set(WriteKey(s.ns, key, startTS), encodeWrite(startTS, true))
+ 	b.Delete(LockKey(s.ns, key))
+-	b.Delete(EncodeKey(s.ns, key, startTS))
+ 	s.rollbacks++
+ 	return nil
+ }

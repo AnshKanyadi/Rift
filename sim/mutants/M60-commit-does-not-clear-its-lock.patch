@@ -1,0 +1,19 @@
+# id: M60-commit-does-not-clear-its-lock
+# covering-test: TestPercolatorInvariantsReportNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 30
+# power-measured: PENDING
+# mutates: a commit writes its write record and leaves the lock standing. SYMMETRIC: every replica does it, so the cluster agrees with itself, replays consistently, and satisfies snapshot isolation and bank conservation -- and every reader of that key blocks forever on a lock whose transaction is already decided. This is the class the removed model used to cover and the reason the invariants oracle exists
+--- a/kv/txn.go
++++ b/kv/txn.go
+@@ -135,7 +135,6 @@
+ 			"before it began, and a reader would see the write appear in its own past", commitTS, startTS)
+ 	}
+ 	b.Set(WriteKey(s.ns, key, commitTS), encodeWrite(startTS, false))
+-	b.Delete(LockKey(s.ns, key))
+ 	s.commits++
+ 	return nil
+ }

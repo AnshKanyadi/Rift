@@ -1455,6 +1455,39 @@ func (o *PercolatorInvariants) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 			}
 		}
 
+		// 5. A rolled-back version does not exist.
+		//
+		// # This invariant was added because a mutant survived
+		//
+		// M61 leaves the uncommitted data version behind when a transaction
+		// rolls back. It is SYMMETRIC -- every replica does it -- so replay
+		// equivalence cannot see it: the replay runs the same apply path and
+		// leaves the same version. It is invisible to clients too, because no
+		// commit record points at the version and the read path walks past the
+		// tombstone. The mutant survived its covering test, which is the
+		// surrendered property made visible rather than argued about.
+		//
+		// The property that catches it is not a comparison at all: a rollback
+		// tombstone says this start timestamp is dead, and a dead version is
+		// unreachable storage that grows without bound. No correct final state
+		// contains one.
+		rolledBack := map[string]bool{}
+		for _, w := range st.Writes {
+			if w.Rollback {
+				rolledBack[w.Key+"@"+w.StartTS.String()] = true
+			}
+		}
+		for _, v := range st.Versions {
+			if rolledBack[v.Key+"@"+v.At.String()] {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d: %q has a version at %s whose transaction was ROLLED BACK. No commit "+
+						"record will ever point at it, so it is unreachable storage -- invisible to "+
+						"every client and to every checker that compares replicas, because they all "+
+						"hold the same dead byte",
+					st.Range, v.Key, v.At)}
+			}
+		}
+
 		// 3. At most one version at or below the collection mark, per key.
 		//
 		// Not "no version below the mark": collection deliberately KEEPS the

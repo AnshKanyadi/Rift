@@ -1,0 +1,20 @@
+# id: M62-lock-expiry-off-by-one
+# covering-test: TestTheDeadlineIsComparedAgainstTheReadTimestamp
+# package: ./kv/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 30
+# power-measured: PENDING
+# mutates: a lock is never respected as live -- the expiry test always falls through to roll-back. SYMMETRIC: every replica breaks the same live locks, so the cluster agrees and a transaction is aborted by a competitor that had no right to abort it. Atomicity survives, because a rolled-back transaction is a legitimate outcome; what is lost is that a live coordinator's work is destroyed under it
+--- a/kv/resolve.go
++++ b/kv/resolve.go
+@@ -87,7 +87,7 @@
+ 		return ResolveForward, rec.CommitTS, nil
+ 	case ok:
+ 		return ResolveBack, hlc.Timestamp{}, nil
+-	case readTS.LessEq(l.Deadline):
++	case readTS.Less(l.Deadline) && false:
+ 		return ResolveWait, hlc.Timestamp{}, nil
+ 	default:
+ 		return ResolveBack, hlc.Timestamp{}, nil

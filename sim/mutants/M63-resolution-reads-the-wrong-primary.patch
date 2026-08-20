@@ -1,0 +1,20 @@
+# id: M63-resolution-reads-the-wrong-primary
+# covering-test: TestResolutionRollsForwardAndBack
+# package: ./kv/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 30
+# power-measured: PENDING
+# mutates: a resolver reads the transaction record of the LOCKED key rather than of the primary the lock names. SYMMETRIC. For a primary resolving itself the two coincide, so it looks right in the simple case and is wrong for every secondary -- which is the shape of defect a checker comparing replicas with each other cannot see at all
+--- a/kv/resolve.go
++++ b/kv/resolve.go
+@@ -78,7 +78,7 @@
+ 		// (BUG-011's class, D-A6-1).
+ 		return ResolveWait, hlc.Timestamp{}, nil
+ 	}
+-	rec, ok, err := s.Txn(l.Primary, l.StartTS)
++	rec, ok, err := s.Txn(key, l.StartTS)
+ 	if err != nil {
+ 		return ResolveWait, hlc.Timestamp{}, err
+ 	}

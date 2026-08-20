@@ -517,3 +517,36 @@ func TestSplitInheritsTheConfigurationAtItsIndex(t *testing.T) {
 func TestMVCCReadCorrectnessOracleReportsNothing(t *testing.T) {
 	assertOracleSilent(t, "mvcc-read-correctness", 60)
 }
+
+// TestPercolatorInvariantsReportNothing is the covering test for
+// M60-commit-does-not-clear-its-lock, and it is one of the two mechanisms that
+// replaced the independent model at A6.
+//
+// # The class it exists for
+//
+// store.ReplayMachine gives up exactly one property the model had: an apply path
+// wrong the SAME WAY on every replica. Such a cluster agrees with itself,
+// replays consistently, and satisfies snapshot isolation and bank conservation
+// for as long as the error stays symmetric -- so every checker that compares
+// replicas, or compares clients against each other, is blind to it by
+// construction.
+//
+// These invariants are not blind to it, because they do not compare anything.
+// They assert what no correct final state can look like, whatever produced it.
+//
+// 60 seeds; the mutant is caught on 300 of the first 300, first at seed 0.
+func TestPercolatorInvariantsReportNothing(t *testing.T) {
+	assertOracleSilent(t, "percolator-invariants", 60)
+}
+
+// TestTransactionAtomicityOracleReportsNothing is the covering test for
+// M64-secondary-commits-at-its-own-timestamp.
+//
+// A transaction whose keys land at different commit timestamps is half visible
+// to a reader between the two, which is atomicity broken in the one way a
+// per-key checker cannot see: each key's own history is perfectly ordinary.
+//
+// 60 seeds.
+func TestTransactionAtomicityOracleReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "transaction-atomicity", 60)
+}

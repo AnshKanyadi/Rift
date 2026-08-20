@@ -1,0 +1,27 @@
+# id: M64-secondary-commits-at-its-own-timestamp
+# covering-test: TestTransactionAtomicityOracleReportsNothing
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 30
+# power-measured: PENDING
+# mutates: a transaction's secondaries commit one logical tick after its primary. Each key's own history is perfectly ordinary -- one prewrite, one commit, ascending timestamps -- so nothing that looks at a single key can see it, and every replica agrees. A reader between the two timestamps sees half the transaction, which is the definition of atomicity broken
+--- a/sim/hunt/bank.go
++++ b/sim/hunt/bank.go
+@@ -169,9 +169,13 @@
+ 		c.ledger.RecordTxnCommit(t.id, t.commitTS, at)
+ 		t.phase = phaseCommitKeys
+ 		t.pending = len(t.keys)
+-		for _, k := range t.keys {
++		for i, k := range t.keys {
++			ct := t.commitTS
++			if i > 0 {
++				ct = ct.Next()
++			}
+ 			c.send(t, store.TxnCommand{
+-				Op: store.OpCommitKey, Key: k, StartTS: t.startTS, CommitTS: t.commitTS,
++				Op: store.OpCommitKey, Key: k, StartTS: t.startTS, CommitTS: ct,
+ 			}, at, s)
+ 		}
+ 
