@@ -37,12 +37,33 @@ ratification**, and it is not worth opening that interface for on its own.
 
 ## Owed by A6
 
+**One reduced-seed unthrottled garbage-collection run.** DESIGN-A0 §7 item 9 records what the A5
+collection throttle costs: M53's class goes from 1 detection in 60 seeds to 0 in 3,000. The figure
+must be re-measured under A6's shape rather than inherited from A5's, at a reduced seed count so the
+run is affordable.
+
+*Ansh, on the A5 sign-off: "put one unthrottled run on the A6 checklist at a reduced seed count, so
+the number gets re-measured under A6's shape rather than inherited from A5's."*
+
+**Bound the race lane, with a measurement.** It is 90 minutes at A5 and will be four hours by A7. Its
+value is concentrated in `sim/hunt`, where the driver, mailbox and simulator meet, and it has found
+real races twice, so it stays — but the seed count has never been measured, only inherited. Run
+`sim/hunt` under `-race` at 50, 100 and 200 seeds and report whether the two races it caught
+historically are still caught at the lower counts. Bound it at the smallest count that catches
+everything 200 catches, with the measurement recorded. **Do not guess the number** — same discipline
+as the window curve.
+
+*Ansh, on the A5 sign-off: "Before A6 closes, report what race seed count is actually needed... If
+100 catches everything 200 catches, bound it there with the measurement recorded, which is the same
+discipline as the window curve. Do not guess the number."*
+
 **Re-enable the move-racing-churn interleaving.** DESIGN-A4 §10 records it as an unexercised
 interleaving: the plan separates the two membership drivers in time because a move's add and an
 unrelated removal are indistinguishable in a committed log. It is the interleaving a production
 cluster produces constantly.
 
-A6 reshapes the schedule mix anyway, which is the moment to try. What has to be solved first is
+A6 reshapes the schedule mix anyway, which is the moment to try, and the A5 sign-off says to attempt
+it there. What has to be solved first is
 `rebalance-safety`'s **attribution** — it cannot tell whose removal it is looking at when both
 drivers are live, which is what produced 252 false violations in 300 seeds (BUG-016). The
 bidirectional assertion in `TestRaftExitCriteria` fails the day the interleaving becomes reachable,

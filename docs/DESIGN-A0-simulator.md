@@ -1237,6 +1237,16 @@ Stated up front so no claim is ever broader than the evidence:
    the sim's clients carried no routing and the epoch check was skipped on every request they ever
    made. For a mechanism whose measured exercise rate was zero, over-exercising is the right
    direction to be wrong in `[A4]`.
+9. **Garbage-collection pressure is far below what production produces.** A5's collector proposes at
+   most one collection per range at a time, and only once the mark would move by a quarter of the
+   retention window. The first version proposed on essentially every apply, which is closer to what a
+   busy range does — and it cost a **30x** runtime, taking a 200-seed sweep from 49 seconds to 25
+   minutes and a 10,000-seed exit run from viable to most of a day.
+   The consequence is measured rather than asserted: **M53's class is detected on 1 seed in 60 with
+   the unthrottled collector and 0 in 3,000 with the throttle.** That number is what the throttle
+   costs — a defect class that the sweep can no longer reach, kept alive by a direct induction
+   instead (`TestAnEmptyMarkDoesNotReleaseAnEarlierOne`). One reduced-seed unthrottled run is on A6's
+   checklist so the figure is re-measured under that phase's shape rather than inherited `[A5]`.
 
 ---
 
