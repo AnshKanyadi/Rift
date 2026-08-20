@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 17 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4, 1 from A5. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 18 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4, 1 from A5, 1 from A6. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -1013,6 +1013,58 @@ reproduce, in the commit that noticed.
 **The general shape, and it is the same one as the eleventh vacuous-green:** the claim was checked at
 the layer where it was cheap to check, not at the layer where it was made. "Every bug replays from a
 single seed" is a claim about *bundle plus mutant*, and the lane was looking at the bundle.
+
+
+### BUG-018 — two transactions owned one key, because the steps in one batch could not see each other
+
+| field | value |
+|---|---|
+| **Found by** | sim — snapshot equivalence, on 12 of the first 30 A6 seeds, **on the first outing of `store.ReplayMachine`** |
+| **Phase** | A6 |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M59-transaction-steps-batched-blind.patch && go run ./cmd/simctl replay --bundle seeds/BUG-018` |
+| **Reproduce (seed)** | seed **5**, range 8, entries 9 through 16 applied in one Ready |
+| **Invariant that caught it** | snapshot equivalence — a snapshot is the state the committed log produces at its index |
+| **Mutant class** | none existed — added `M59-transaction-steps-batched-blind` |
+| **Fix commit** | *(this commit)* |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Symptom, verbatim:**
+
+```
+range 8: node 1 took a snapshot at index 16 term 2 whose contents are not the state the committed
+log produces there: snapshot digest 10885164352708667826, log digest 15917669729469132538
+```
+
+**Root cause.** Every transaction step reads the engine before it writes: a prewrite asks whether the
+key is locked and whether a newer commit exists; a resolve reads the lock and the primary's record.
+The apply loop staged all of a Ready's commands into one batch and wrote it once at the end, so a step
+staged and not yet flushed was a step the next one could not see.
+
+Two prewrites of the same key in one Ready therefore **both succeeded**, and the second overwrote the
+first's lock. Two transactions owned one key and neither knew.
+
+**Why the bisect was decisive.** Node 2 applied indices 1 through 8 one Ready at a time and matched
+the replay exactly at every step; then entries 9 through 16 arrived together and the two answers
+parted in a single jump. **The replica's state depended on how many entries happened to arrive
+together, which is not a function of the log** — and "the state is a function of the log" is precisely
+what snapshot equivalence asserts.
+
+**What this would have caused in production.** Atomicity broken silently. The losing transaction's
+lock is gone, so nothing resolves it and nothing rolls it back; its commit record can land later on a
+key another transaction has already committed. It needs no crash, no partition and no clock skew —
+only two steps of two transactions arriving in one batch, which is the ordinary case under load.
+
+**The fix.** A step is flushed on both sides of itself: before, so it reads everything below it, and
+after, so the next one reads it. That is the same correction a read needed at A5 — *a read must see
+writes staged at lower indices in the same batch* — arriving in the write path, where the read is
+hidden inside a precondition rather than being the point of the operation.
+
+**And the finding about the checker, which is the reason to read this entry.** The A5 model would not
+have caught this. It replayed logically, one command at a time, with no batching at all — so it had
+no notion of a Ready and could not represent the state that produced the bug. `ReplayMachine` caught
+it because it executes the real apply path against a real engine and therefore *can* differ from the
+driver in exactly the ways the driver can be wrong. The mechanism adopted an hour earlier paid for
+itself on its first sweep.
 
 
 ---

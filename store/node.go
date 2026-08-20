@@ -617,9 +617,30 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 					if c, ok := decodeTxnCommand(e.Data); ok {
 						owned = n.desc.Contains([]byte(c.Key))
 						if owned {
+							// # Every step reads the engine, so every step is
+							// # flushed on both sides of itself
+							//
+							// A prewrite asks whether the key is locked and
+							// whether a newer commit exists; a resolve reads the
+							// lock and the primary's record. All of that is an
+							// ENGINE read, so a step staged into a batch and not
+							// yet written is a step the next one cannot see.
+							//
+							// Batching a whole Ready therefore made the steps in
+							// it blind to each other: two prewrites of one key
+							// both succeeded and the second overwrote the first's
+							// lock, so two transactions owned a key and neither
+							// knew (BUG-018). The replica's state then depended
+							// on how many entries happened to arrive together --
+							// which is not a function of the log, and is exactly
+							// what snapshot equivalence is for.
+							n.flushApply(mb)
 							n.applyTxn(mb, c)
+							n.flushApply(mb)
+							n.answerTxn(e, c, at, s)
 						}
 						k = c.Key
+						op = "txn"
 					}
 
 				case isSplitCommand(e.Data):
