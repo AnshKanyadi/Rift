@@ -379,3 +379,53 @@ argument the caller already passed.
 `raft.Configuration()` remains the case that would pay, and it remains a frozen-interface change
 (D5). It is reported here, not assumed, and it stays on the carry-forward for the phase that has a
 reason to touch that interface anyway.
+
+---
+
+## 14. Exit criteria status
+
+| # | criterion | status |
+|---|---|---|
+| 1 | HLC wraps `Wall`, never `Mono`; A0.4 as foundation; uniform-`maxOffset` assertion live | met — `hlc/` touches no `Mono`, and A0.4's three enforcement layers are inherited rather than restated. `clock.AssertUniformMaxOffset` still runs every run and is still in the every-run assertion registry |
+| 2 | MVCC versions keyed by HLC timestamp, GC below a low-water mark, and a test proving a read below the mark is REFUSED | met — `kv.TestAReadBelowTheGCMarkIsRefused`, which also pins the off-by-one: the version at the mark's successor must survive |
+| 3 | timestamp source behind an interface, TSO fallback available | met — and *exercised*: `store.TestATimestampSourceCanBeSwapped` drives the whole store on a source with no wall clock, no logical counter and no envelope (§13's rule about what an unexercised interface is worth) |
+| 4 | reads at a timestamp judged by an oracle from harness-observed writes | met — `mvcc-read-correctness`, both directions, induced by M54 and M55 |
+| 5 | the log-position class applied preemptively | met — §7 written before the code, §11.1 for the four instances it caught before they became bugs |
+| 6 | every count the exit run prints asserted or deleted | met — including two bidirectional gaps asserted at zero (§12) |
+| 7 | power floors with rate AND kill-time under A5's shape | met — 31 classes floored and ceilinged, 16 opted out with a reason, zero failures |
+| 8 | oracles induced, BUGS.md with mutant classes, corpus, 10k seeds | met — §15 |
+
+---
+
+## 15. The numbers this phase closes on
+
+**Exit sweep, 10,000 seeds:** `pass=9992 violation=0 inconclusive=8 errors=0` in 44m32s. The
+inconclusive rate is **0.8 per mille** against a threshold of 30, and every one is the same cause: a
+history where fewer than 250 per mille of operations were decided. **None is a checker timeout.**
+
+The rate is unchanged from A4 while the histories are *smaller*, because snapshot reads are excluded
+from them (§12.2) — so the same fraction of runs go undecided over a shorter record.
+
+| | count |
+|---|---|
+| collections proposed / applied / versions collected | 283,859 / 1,038,678 / 550,650 |
+| snapshot reads at remembered timestamps | 139,425 |
+| reads refused below the collection mark | 31,234 |
+| writes refused below the mark | 0 — recorded gap, §12.1 |
+| peer timestamps refused for exceeding `maxOffset` | 0 — recorded gap, §12.3 |
+| splits proposed / applied | 23,220 / 79,777 |
+| stale-descriptor-epoch refusals | 1,854,582 |
+| replica moves ordered / completed | 8,956 / 3,336 |
+
+**Mutant lane:** 47 killed, canary alive, **0 mismatched, 0 rotted**. Four patches rotted when the
+state machine moved into the engine and were repaired; the baseline now runs exactly the covering
+tests, which is narrower and stronger than the packages it used to run.
+
+**Corpus:** 18 bundles, and the phase added a lane. `make corpus` was green while BUG-002 had stopped
+carrying its finding — the mutated replay was byte-identical to the recording, so the mutation changed
+nothing. `scripts/corpus-reproduces.sh` checks the claim the corpus actually makes, and it caught four
+more bundles going stale within the same phase, one of them from a fix made an hour earlier.
+
+**The one protocol defect** was BUG-017, in `raft/`, present since A2, and it took **three** halves.
+The 2,000-seed mid-phase sweep was clean both times the first two landed; the 10,000-seed exit run
+found the third at seed 6425.
