@@ -1051,8 +1051,15 @@ what snapshot equivalence asserts.
 
 **What this would have caused in production.** Atomicity broken silently. The losing transaction's
 lock is gone, so nothing resolves it and nothing rolls it back; its commit record can land later on a
-key another transaction has already committed. It needs no crash, no partition and no clock skew —
-only two steps of two transactions arriving in one batch, which is the ordinary case under load.
+key another transaction has already committed.
+
+**It needs no crash, no partition, and no injected fault at all.** Every other entry in this file
+required an engineered schedule: a crash at a particular instant, a partition, a lost unsynced write.
+This one requires two steps of two transactions to arrive in one batch, which is what happens under
+*load*. A defect reachable under ordinary operation is a different and more serious class than one
+that needs a fault to reach, and it is worth separating them: the fault-requiring defects are found by
+the injectors, and this one was found because the checker looks at something the injectors do not
+control.
 
 **The fix.** A step is flushed on both sides of itself: before, so it reads everything below it, and
 after, so the next one reads it. That is the same correction a read needed at A5 — *a read must see
@@ -1063,8 +1070,35 @@ hidden inside a precondition rather than being the point of the operation.
 have caught this. It replayed logically, one command at a time, with no batching at all — so it had
 no notion of a Ready and could not represent the state that produced the bug. `ReplayMachine` caught
 it because it executes the real apply path against a real engine and therefore *can* differ from the
-driver in exactly the ways the driver can be wrong. The mechanism adopted an hour earlier paid for
-itself on its first sweep.
+driver in exactly the ways the driver can be wrong.
+
+**A verification mechanism was replaced under protest of losing a property, and the replacement
+immediately found a defect the original was structurally blind to.** That is the argument for the
+swap, made by the swap — and it is the reason the swap's own record (DESIGN-A6 §13) is worth more
+than the mechanism.
+
+### The method: batch-boundary bisection
+
+Worth writing down as a technique, because A7's read index and B4's kill-point sweep will both need
+it.
+
+When a replica's state disagrees with a replay of its own log, print the state digest **after each
+Ready** on the replica and after each **index** in the replay, and line them up:
+
+```
+node 2   through=1..8   matches the replay at every index
+node 2   through=16     one jump, and the answers have parted
+replay   through=9..16  eight separate values, all different from the node's one
+```
+
+The node's digests are per *Ready*; the replay's are per *entry*. Where the node's trace skips
+indices, entries arrived together — and if the divergence appears exactly across such a skip, the
+defect is in **what a batch does that a sequence does not**. That is a small and enumerable set:
+staged writes not yet visible to later reads in the same batch, effects applied out of order within a
+batch, and a flush boundary in the wrong place.
+
+The technique's value is that it points at the batch boundary rather than at any of the sixteen
+entries, which is where three hours of reading the entries would never have looked.
 
 
 ---

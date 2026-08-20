@@ -6,6 +6,29 @@
 
 ---
 
+## 0. The result of this phase, stated first
+
+**BUG-018.** Every transaction step reads the engine before it writes. The apply loop staged a whole
+`Ready` into one batch and wrote it once at the end, so a step could not see the steps above it. Two
+prewrites of one key in one `Ready` both succeeded, and the second overwrote the first's lock —
+**leaving two transactions owning one key and neither knowing**.
+
+> **The replica's state depended on how many entries happened to arrive together, which is not a
+> function of the log — and that it *is* a function of the log is exactly what snapshot equivalence
+> asserts.**
+
+It needs **no crash, no partition, and no injected fault at all**: only two steps arriving in one
+batch, which is what happens under load. Every other entry in BUGS.md required an engineered
+schedule.
+
+And the retired model could not have found it, because it replayed logically one command at a time
+with no notion of a `Ready`. **A verification mechanism was replaced under protest of losing a
+property, and the replacement immediately found a defect the original was structurally blind to.**
+That is the argument for the swap, made by the swap. §13 is the swap; §14 is the bug, the method that
+found it, and the three corrections it produced.
+
+---
+
 ## 1. What changes, and where the failures actually live
 
 A5 gave every write a timestamp and every read a timestamp to ask at. A6 makes a *set* of writes
@@ -343,3 +366,121 @@ assertion rather than a tuned test.
 > which is a claim about a list, not a proof. **The day a defect of this shape reaches BUGS.md without
 > a mutant having caught it, this record is wrong and says so**, and the response is a new class here
 > rather than a note.
+>
+> **The claim is being actively tested, and has already been tested once.** `M61` survived its first
+> run — the list produced a survivor rather than a green tick — and the survivor was answered with a
+> new invariant (§14.5). A list that has caught nothing and a list that has surfaced a hole are
+> different kinds of claim, and this one is the second.
+
+---
+
+## 14. BUG-018, the method that found it, and three corrections
+
+### 14.1 The chain, in full
+
+1. **Every transaction step reads the engine before it writes.** A prewrite asks whether the key is
+   locked and whether a newer commit exists. A commit reads the lock to learn the primary and the
+   start timestamp. A resolve reads the lock *and* the primary's transaction record. This is not
+   incidental to Percolator — it is what Percolator *is*: conflict detection at the record level.
+2. **The apply loop staged a whole `Ready` into one batch and wrote it once at the end.** That is the
+   correct shape for A1 through A5, where a command was a put: puts do not read.
+3. **So a step could not see the steps above it in the same batch.** The engine reads a step performed
+   returned the state as of the *start* of the `Ready`.
+4. **Two prewrites of one key in one `Ready` both succeeded.** Each read no lock, because the other's
+   lock was still staged.
+5. **The second overwrote the first's lock.** One lock record per key, last writer wins.
+6. **Two transactions owned one key and neither knew.** The loser's lock is gone, so nothing resolves
+   it and nothing rolls it back; its commit record can land later on a key another transaction has
+   already committed. **Atomicity broken silently** — no error, no divergence at the client, until a
+   balance is wrong.
+
+### 14.2 The finding
+
+> **The replica's state depended on how many entries happened to arrive together.**
+
+That is not a function of the log. How many entries a `Ready` carries depends on arrival timing,
+batching, and how far behind the replica is — none of which is replicated. **That the state *is* a
+function of the log is exactly what snapshot equivalence asserts**, which is why the assertion caught
+it and nothing else did.
+
+### 14.3 The class: no fault required
+
+It needs **no crash, no partition, no clock skew, no injected fault at all**. It needs load.
+
+This is worth separating from the rest of BUGS.md, where every entry needed an engineered schedule —
+a crash at a particular instant, a partition, a lost unsynced write. Those are found *by the
+injectors*, and the injectors are aimed. **A defect reachable under ordinary operation is a different
+and more serious class**, because nothing has to go wrong for a user to reach it, and because the
+harness that finds it is not the fault machinery but the checker looking at something the fault
+machinery does not control.
+
+### 14.4 The method: batch-boundary bisection
+
+Worth writing down as a technique. A7's read index and B4's kill-point sweep will both want it.
+
+When a replica's state disagrees with a replay of its own log, print a state digest **after each
+`Ready`** on the replica and **after each index** in the replay, and line them up:
+
+```
+node 2   through 1..8    matches the replay at every index
+node 2   through 16      one jump, and the answers have parted
+replay   through 9..16   eight separate values, none equal to the node's one
+```
+
+The node's digests are per `Ready`; the replay's are per entry. Where the node's trace **skips
+indices**, entries arrived together. If the divergence appears exactly across such a skip, the defect
+is in **what a batch does that a sequence does not** — a small, enumerable set: writes staged but not
+visible to later reads in the same batch; effects applied out of order within a batch; a flush
+boundary in the wrong place.
+
+Its value is that it indicts the **boundary** rather than any of the sixteen entries. Three hours of
+reading those entries would never have looked at the boundary, because the boundary is not in the log.
+
+### 14.5 Correction one: M61 survived, and that is the ledger working
+
+`M61` — a rollback that leaves the version behind — was killed by nothing on its first run. Symmetric,
+so replay equivalence leaves the same version on every replica; invisible to clients, because no
+commit record points at the orphan.
+
+That is precisely the shape §13.4 surrenders, and it happened in the same cycle the surrender was
+recorded. **It is the first demonstration that the mutant-class list is a claim being actively tested
+rather than an assertion** — the list did not merely sit in the doc as a promise, it produced a
+survivor, and the survivor produced a new invariant (`percolator-invariants` #5, *a rolled-back
+version does not exist*) rather than a tuned test.
+
+### 14.6 Correction two: invariant 1's first form was an eventual property
+
+The first form was **"a committed transaction leaves no lock behind"**, taken from the ruling's
+wording. It fired on **60 of 60 runs**, and the runs were correct.
+
+The property is **eventual**. A transaction commits its primary, then its secondaries, then clears
+locks; a run that ends mid-cleanup has a committed transaction with a lock outstanding and has done
+nothing wrong. **An eventual property cannot be a per-step or end-of-run assertion.** This is the same
+shape as a safety oracle never counting unavailability as a violation: the system being *not yet
+finished* is not the system being *wrong*, and a checker that cannot tell them apart reports the
+first as the second.
+
+The reform is the instantaneously-true pair, which catches the class the eventual form was aimed at:
+
+- a key is never both **committed and locked for the same transaction** — the lock and the commit
+  record of one transaction on one key cannot coexist, at any instant;
+- a commit record implies a **committed transaction record** somewhere — no commit without a decision.
+
+Recorded rather than silently fixed, because the wording that produced the error was the decider's,
+and a future reader should see the correction and not only the corrected form.
+
+### 14.7 Correction three: the forward-only cursor changed what the checker could see
+
+Snapshot equivalence rebuilt the state from the birth payload on every snapshot, which is quadratic in
+the log. Replacing it with a resumable cursor was worth 2.8 s/seed — and introduced a defect.
+
+**A snapshot skipped because the range's committed prefix was incomplete becomes checkable later**,
+once the prefix fills in. A forward-only cursor has by then advanced past that index, and answered the
+shorter prefix with **the state at the later index**. Ten seeds in a hundred.
+
+> **An optimization that changes what a checker can see is a checker change wearing a performance
+> change's clothes.**
+
+Fixed by restarting from a fresh replay whenever a request goes backwards: the cursor is an
+optimization for the forward case only, and it is never allowed to answer a question it has already
+passed.

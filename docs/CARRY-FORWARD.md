@@ -86,6 +86,17 @@ record, and the response is a new class in §13.3, not a footnote.
 *Ansh, on the A6 stop: "the day a defect of this shape reaches BUGS.md without a mutant having caught
 it, the record is wrong and says so."*
 
+**Status: tested once, already.** `M61` (a rollback that leaves the version) survived its first run —
+symmetric, so replay equivalence left the same version; invisible to clients, because no commit record
+pointed at the orphan. It was answered with `percolator-invariants` #5 rather than a tuned test. The
+list is therefore a claim under active test rather than an assertion, which is the most that can
+honestly be said for it.
+
+**The batch-boundary technique.** DESIGN-A6 §14.4. When a replica disagrees with a replay of its own
+log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
+**skip** in the node's indices. A7 (read index, where a lease or an index read can be answered
+mid-batch) and B4 (kill points, where a kill lands inside a batch) will both want it.
+
 ---
 
 ## Owed by I2
