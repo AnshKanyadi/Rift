@@ -76,6 +76,18 @@ anyway."*
 
 ---
 
+## Standing, from A6
+
+**The symmetric-apply gap.** DESIGN-A6 §13.4: an apply path wrong identically on every replica is not
+caught by replay equivalence, and is covered by a list of mutant classes rather than by a mechanism.
+A list is a claim, not a proof. Any BUGS.md entry of that shape which no mutant caught invalidates the
+record, and the response is a new class in §13.3, not a footnote.
+
+*Ansh, on the A6 stop: "the day a defect of this shape reaches BUGS.md without a mutant having caught
+it, the record is wrong and says so."*
+
+---
+
 ## Owed by I2
 
 **The undecodable-snapshot panic.** DESIGN-A4 §11 classifies it as correct today and wrong later: the

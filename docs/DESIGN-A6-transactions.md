@@ -254,3 +254,92 @@ Ansh's, verbatim.
    reduced-seed unthrottled GC run.
 8. **25,000 seeds** at exit, zero violations, inconclusive explained. Mid-phase iteration stays at
    2,000.
+
+---
+
+## 13. Snapshot equivalence judges an independent EXECUTION, not an independent model
+
+Ratified by Ansh on the A6 stop. This section is the record of why a verification
+mechanism was replaced, which is worth more than the mechanism.
+
+### 13.1 What was there, and why it stopped working
+
+Since A2, snapshot equivalence has judged the state machine against a model the harness
+**reimplements**: given a range's birth state and its committed log, the harness computes what the
+state should be, and a snapshot must equal it. The point was precise — *a defect in applying commands
+cannot cancel out on both sides of the comparison* — and it was cheap while a command was a put.
+
+A6 makes a command a step of a two-phase commit with locks, write records, transaction records,
+expiry, and a resolution whose answer depends on which range holds a primary. A model of that is a
+second implementation of Percolator.
+
+**The evidence, and it is the argument.** In one sitting, that model produced five divergences, and
+**every one was a defect in the model**:
+
+1. a split-born range's inherited **locks, write records and transaction records** dropped — the model
+   read the birth payload as data only;
+2. **versions a rollback removes** left in place;
+3. **locks and commit records a split gives away** left behind on the parent, when only the data
+   versions were moved;
+4. **resolution of a primary the range cannot see** — the model decided from an absence that only
+   meant "not on this range";
+5. the birth payload decoded in the **parent's namespace** rather than the child's.
+
+By BUG-016's own standard — a checker that reports false violations is worse than none — that model
+is not fit for this phase.
+
+### 13.2 What replaced it, and what that keeps
+
+`store.ReplayMachine` rebuilds the state from the birth payload and the committed log **in a fresh
+engine that has never been anything else**, through the real apply path, with no access to any running
+node.
+
+| kept | given up |
+|---|---|
+| a snapshot taken at the wrong index | — |
+| a snapshot that drops a record kind | — |
+| an install that loses state | — |
+| two replicas of one range diverging | — |
+| a state that depends on how entries were *batched* rather than on the log (**BUG-018**) | — |
+| — | **an apply path wrong the same way on every replica** |
+
+It paid for itself immediately: BUG-018 was found on its first sweep, and **the removed model could
+not have found it** — the model replayed logically, one command at a time, with no notion of a Ready,
+so it could not represent the state that produced the bug.
+
+### 13.3 The surrendered property, and the two things that replace it
+
+> **An apply path wrong identically on every replica is not caught by replay equivalence.**
+
+A cluster that mishandles lock expiry the same way everywhere agrees with itself, replays
+consistently, and satisfies snapshot isolation and bank conservation for as long as the error stays
+symmetric. Client-facing oracles catch **asymmetric** error, and this class is symmetric by
+construction. So it is covered by two narrower things instead:
+
+**One: mutant classes.** A mutant per symmetric-apply defect, each perturbing the apply path
+identically on all replicas — `M60` a commit that does not clear its lock, `M61` a rollback that leaves
+the version, `M62` lock expiry off by one, `M63` resolution reading the wrong primary, `M64` a
+secondary committing at its own timestamp. A survivor is the gap made visible, not a test to tune.
+
+**Two: invariants over the recovered state.** Not a reimplementation — assertions about what no
+correct final state can look like, whatever produced it (`percolator-invariants`):
+
+1. a key is never both committed and locked for one transaction;
+2. a commit record implies a committed transaction record somewhere;
+3. at most one version at or below the collection mark, per key;
+4. every lock names a primary some range covers;
+5. a rolled-back version does not exist.
+
+**The fifth exists because a mutant survived.** M61 was killed by nothing on its first run: symmetric,
+so replay equivalence left the same version; invisible to clients, because no commit record points at
+it. That is exactly the shape the surrendered property describes, and it was answered with a new
+assertion rather than a tuned test.
+
+### 13.4 The gap, in the ledger's form
+
+> **UNCAUGHT BY REPLAY EQUIVALENCE: an apply path wrong identically on every replica.**
+>
+> It is caught by the symmetric-apply mutant classes above, to the extent those classes are complete —
+> which is a claim about a list, not a proof. **The day a defect of this shape reaches BUGS.md without
+> a mutant having caught it, this record is wrong and says so**, and the response is a new class here
+> rather than a note.
