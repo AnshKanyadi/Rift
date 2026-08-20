@@ -335,9 +335,26 @@ rhetorical:
 | 6 | the minimum-operations floor counted operations *recorded* | 40 unanswered operations satisfied it; porcupine returned PASS | BUGS.md BUG-001 |
 | 7 | `StaleEpochDrops` and `EpochFailure`, collected every run | consulted by nothing; `M14` survived the suite | BUGS.md BUG-002 |
 | 8 | **the ledger's durability record, read back from the engine** | **the oracle compared the system against its own account, 44,911 times ahead of the truth** | this section |
+| 9 | the mutant suite could not tell a deleted covering test from an uncaught defect | `go test -run` exits 0 on no match, so a mutant whose test had been removed read as ALIVE and blamed the checker | DESIGN-A2 §9.6 |
+| 10 | `make power` floored four TOY classes and **zero** mutant classes | green through the largest power regression in the project: M18 10-in-500 to 0, M19 228-in-300 to 1 | DESIGN-A2 §9.7 |
+| 11 | the range-epoch check, guarding *no request served under a stale descriptor epoch* | **zero** refusals across 10,000 seeds; the sweep's clients carried no routing, so the check was skipped on every request they ever made | DESIGN-A4 §9.4b |
+| 12 | the power lane's rate floor could not see a **kill-time** regression | M19's rate held (10 to 7 per 1500, floor 4) while its seeds-to-detection tripled, 145 to 553; the lane was green and the class had left the reach of every short run | DESIGN-A5, and Amendment A2 had named it |
+| 13 | **`make corpus`, guarding the reproducibility claim itself** | **green while a bundle had stopped carrying its finding**: a fixed bug's bundle records no violation by design, so the lane compared a clean replay against a clean recording and matched | DESIGN-A5 §16 |
+| 14 | the power lane's `power-config` default, spelled `a3` | it meant "what the sweep runs" and was written when A3 was what the sweep ran; the probe had no case for `a3` at all, so it fell through to current — correct behaviour under a label that had stopped describing it | DESIGN-A5 §11b |
 
-Seven of the eight were in the harness. The eighth was in a **verdict**, which is the difference
+Seven of the first eight were in the harness. The eighth was in a **verdict**, which is the difference
 between a machine that finds less than it should and a machine that certifies something false.
+
+**Everything after the eighth has been in an instrument**, and that is the finding the register now
+carries: 9 and 10 in the mutant and power lanes, 12 in the power lane's floor shape, 14 in its config
+label, and 13 in the corpus lane. The things that watch are the things nobody watches. 11 is the one
+exception, and it is the one that shows where to look next: it was in a *mechanism the oracles depend
+on*, one layer below where the audit was looking, because the previous ten had been in oracles.
+
+**13 is the sharpest of the fourteen** and its general form is the one to carry forward:
+
+> A lane that verifies an artifact reproduces must verify it reproduces **something** — not that it
+> reproduces identically to a baseline that is also empty.
 
 ### What was done about it
 

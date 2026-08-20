@@ -429,3 +429,100 @@ more bundles going stale within the same phase, one of them from a fix made an h
 **The one protocol defect** was BUG-017, in `raft/`, present since A2, and it took **three** halves.
 The 2,000-seed mid-phase sweep was clean both times the first two landed; the 10,000-seed exit run
 found the third at seed 6425.
+
+---
+
+## 16. What A5 is actually evidence for
+
+Three findings, in the order of how much they should change what the next phase does.
+
+### 16.1 A named class, written before the code, closed before it produced a defect
+
+This is the first time the project has done that, and the comparison is a number rather than a
+feeling.
+
+| | A4 | A5 |
+|---|---|---|
+| the class | *anything derived from a log position must be derived AT that position* | the same class, one dimension over: *…from a timestamp… AT that timestamp* |
+| when it was written | after the fact, from six bugs | **before the code**, as §7 |
+| facts it governs | six found | **four**, listed in §11.1 |
+| how many became bugs | **six** | **zero** |
+
+The dimension offered just as many opportunities. A5 introduced a second position and every fact
+derived from one was a candidate: which version a read sees, whether a read is answerable, whether a
+write conflicts, what a snapshot contains, what a node's clock does with a received timestamp. Four
+of those are exactly the shapes A4 got wrong in the other dimension, and each was written down with
+its wrong spelling beside its right one before any of it was implemented.
+
+**So this is a design discipline with demonstrated predictive value, not a postmortem practice.** The
+cost of naming a class is one section written before the work; the return, measured once, is six
+defects in one phase against zero in the next. That is the argument for the practice, and it is the
+strongest one in the repository.
+
+The `At[Index, T]` attempt (§13) stays recorded beside it, because a discharged attempt with a
+reasoned conclusion is worth more than a wrapper nobody needed: **typing the answer pays only where
+the caller does not already hold the position**, and §7's discipline removed every such caller from
+this dimension by pushing the position into the data.
+
+### 16.2 There are three streams, not two
+
+A2 established that *a message attesting to state in two independent streams waits for BOTH*. BUG-017
+is that rule one constraint further on, and it took three corrections to find the shape.
+
+The streams are **the log, the snapshot, and the hard state**. The third was invisible because it had
+no field of its own: term claims were gated on `dirtyMark`, which answers *is anything pending right
+now* — not *is this node's term on disk*. The two coincide until a mark stops being current without
+becoming durable, which is exactly what closing an empty mark does.
+
+**And `termMark()` alone was not enough.** Collapsing it into the index's mark with a `max` puts two
+constraints in one field, and they are satisfied by different events: a message gated on
+`max(index 2, term 1)` waits on 2, and when mark 2 closes *empty* the collapsed field is struck and
+the message leaves with the term still in flight under mark 1.
+
+> **A `max` over two constraints is a single constraint.** It is correct only when one event can
+> satisfy both, and two independent streams are precisely the case where none can.
+
+That is written here in those words because it is the same error as the A2 collapse, and the next
+reader with two marks and one field will reach for `max` again. `gatedMessage` carries all three
+separately and `closeEmptyMark` strikes only the field that names the mark.
+
+### 16.3 The exit-run size earned itself in the cycle it was questioned
+
+The seed policy set mid-phase iteration at 2,000 and held phase exit at 10,000. In the same phase:
+
+- the 2,000-seed sweep was **clean** before halves two and three of BUG-017 existed;
+- the third half appeared at **seed 6425** of 10,000.
+
+A 2,000-seed exit run would have shipped A5 with a follower able to advertise a term that was not on
+its disk. This paragraph is here so that the next argument for cutting the exit run meets it: the
+number is not a habit, and it has now been earned twice — BUG-009 at 1 in 3,000, and this at 6,425 in
+10,000.
+
+### 16.4 The corpus lane, and the general form of its failure
+
+`make corpus` was green while BUG-002's bundle had stopped carrying its finding. The mechanism is
+worth stating precisely because it is not carelessness: **a fixed bug's bundle records no violation by
+design**. The schedule replays clean, and the reproduction is two steps — apply the mutant, replay.
+So the lane compared a clean replay against a clean recording, matched, and reported green while the
+second step had quietly stopped working.
+
+It is the **thirteenth** instance of the vacuous-green class (DESIGN-A1 §5c's register) and the
+sharpest of the thirteen, because it was guarding the reproducibility claim itself — the one this
+project rests a resume line on.
+
+`scripts/corpus-reproduces.sh` applies each bundle's mutant and requires the replay to **differ**. It
+caught four more bundles going stale in the same phase, one of them from a fix made an hour earlier.
+The general form:
+
+> A lane that verifies an artifact reproduces must verify it reproduces **something** — not that it
+> reproduces identically to a baseline that is also empty.
+
+### 16.5 Three defects caught by assertions written for other reasons
+
+The state machine moving from a Go map into the engine turned three latent ordering assumptions into
+engine-visible facts (§11.2), and every one landed on an assertion written for a different reason one
+or two phases earlier: BUG-005's read-back check, A4's split-partition assertion, and the apply
+loop's own ordering.
+
+That is the compounding this project was built for, and it is the return on writing an assertion at
+the moment its reasoning is precise rather than when something needs it.
