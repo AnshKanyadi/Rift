@@ -715,10 +715,56 @@ func insertVersion(vs []kv.Version, v kv.Version) []kv.Version {
 }
 
 // stateDigest is raftcheck.StateAt.
-func stateDigest(base []byte, entries []raft.Entry) uint64 {
-	desc, mark, recs, ok := store.ReplayMachine(base, entries)
+func stateDigest(base []byte) raftcheck.StateCursor {
+	r, ok := store.NewReplay(base)
 	if !ok {
 		panic("hunt: a range was replayed with no birth state recorded")
+	}
+	return &replayCursor{base: base, r: r}
+}
+
+// replayCursor adapts store.Replay to the oracle's cursor.
+//
+// The digest is over the WHOLE state machine, which at A6 is four record kinds
+// and not one. A digest over the data versions alone would go green on a
+// snapshot that dropped every lock.
+type replayCursor struct {
+	base []byte
+	r    *store.Replay
+}
+
+// DigestThrough advances the cursor, or restarts it when asked to go BACKWARDS.
+//
+// # Why backwards happens, and why the first version was wrong to assume it did not
+//
+// Snapshots are fed in index order, but a snapshot is skipped while the ledger
+// has not yet witnessed every committed entry beneath it -- and it becomes
+// checkable later, after the cursor has moved past. Asking a forward-only cursor
+// for a shorter prefix then returns the state at the LATER index, and the
+// comparison fails against a snapshot that was perfectly correct.
+//
+// Measured: 10 of 100 seeds, immediately. A cursor is an optimisation, and an
+// optimisation that changes an answer is a defect -- so when the request goes
+// backwards it is answered from a fresh replay, which is what the shape before
+// the optimisation always did.
+func (c *replayCursor) DigestThrough(prefix []raft.Entry) uint64 {
+	r := c.r
+	if len(prefix) < r.Applied() {
+		fresh, ok := store.NewReplay(c.base)
+		if !ok {
+			panic("hunt: a range was replayed with no birth state recorded")
+		}
+		r = fresh
+	} else {
+		c.r = r
+	}
+	r.Apply(prefix)
+	desc, mark, recs, ok := r.State()
+	if !ok {
+		panic("hunt: a replay could not read its own state back")
+	}
+	if r == c.r {
+		c.r = r
 	}
 	return store.StateDigest(desc, mark, recs)
 }
@@ -973,8 +1019,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts,
-		func() []raftcheck.RecoveredState { return recoveredStates(ledger) }))
+	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts))
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {
@@ -1260,6 +1305,18 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	}
 	res.Outcome = out
 	res.Violated = run.Loop.Violation()
+
+	// The Percolator invariants are properties of the FINAL state, so they are
+	// evaluated once, here, rather than on every step. That is not an
+	// optimisation dressed as a principle: evaluating them mid-run would assert
+	// an eventual property against a run caught mid-cleanup, and it cost ten
+	// times the runtime for the privilege (raftcheck.PercolatorInvariants.Interested).
+	if res.Violated == nil {
+		inv := raftcheck.NewPercolatorInvariants(ledger, func() []raftcheck.RecoveredState {
+			return recoveredStates(ledger)
+		})
+		res.Violated = inv.Check()
+	}
 	res.Census = ledger.Census()
 
 	// A node that stopped while still withholding a message is a stall, not a

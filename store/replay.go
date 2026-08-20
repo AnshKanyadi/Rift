@@ -45,96 +45,146 @@ import (
 // path at all. They are the independent judgement now, and they judge the thing
 // that matters: what a client can see.
 func ReplayMachine(base []byte, entries []raft.Entry) (RangeDescriptor, hlc.Timestamp, []kv.Record, bool) {
+	r, ok := NewReplay(base)
+	if !ok {
+		return RangeDescriptor{}, hlc.Timestamp{}, nil, false
+	}
+	r.Apply(entries)
+	return r.State()
+}
+
+// Replay is a resumable ReplayMachine.
+//
+// # Why resumable, and the number that forced it
+//
+// Snapshot equivalence checks EVERY snapshot a range takes, and a range takes
+// one every few applied entries. Rebuilding from the birth payload for each of
+// them is quadratic in the log, and with transactions the log is long: measured,
+// it took an A6 seed from 0.35 seconds to 5.2, and a 2,000-seed sweep did not
+// finish inside two hours.
+//
+// A cursor makes it linear. Nothing about the CHECK changes -- each snapshot is
+// still compared against the state its own committed prefix produces, through
+// the real apply path, in an engine that has never been anything else.
+type Replay struct {
+	desc RangeDescriptor
+	s    *kv.Store
+	db   *model.DB
+	b    *engine.Batch
+	next int
+}
+
+// NewReplay starts a replay from a range's birth payload.
+func NewReplay(base []byte) (*Replay, bool) {
 	desc, mark, recs, ok := decodeMachine(base)
 	if !ok {
-		return desc, mark, nil, false
+		return nil, false
 	}
 	db := model.New()
 	s, err := kv.NewStore(db, rangePrefix(desc.ID))
 	if err != nil {
-		return desc, mark, nil, false
+		return nil, false
 	}
 	seed := engine.NewBatch()
 	s.IngestRecordsInto(seed, recs, mark)
 	if _, err := db.Apply(seed, false); err != nil {
-		return desc, mark, nil, false
+		return nil, false
 	}
+	return &Replay{desc: desc, s: s, db: db, b: engine.NewBatch()}, true
+}
 
-	flush := func(b *engine.Batch) {
-		if b.Empty() {
+// Apply advances the replay to cover entries, which must be the range's
+// committed prefix in index order. Entries already applied are skipped, so a
+// caller may hand it a growing prefix.
+func (r *Replay) Apply(entries []raft.Entry) {
+	for i := r.next; i < len(entries); i++ {
+		r.applyOne(entries[i])
+	}
+	if len(entries) > r.next {
+		r.next = len(entries)
+	}
+	r.flush()
+}
+
+// Applied is how many entries this replay has consumed.
+func (r *Replay) Applied() int { return r.next }
+
+// State is the replayed state machine.
+func (r *Replay) State() (RangeDescriptor, hlc.Timestamp, []kv.Record, bool) {
+	r.flush()
+	out, err := r.s.Records()
+	if err != nil {
+		return r.desc, r.s.GCMark(), nil, false
+	}
+	return r.desc, r.s.GCMark(), out, true
+}
+
+func (r *Replay) flush() {
+	if r.b.Empty() {
+		return
+	}
+	if _, err := r.db.Apply(r.b, false); err != nil {
+		panic("store: replay cannot apply into its own engine: " + err.Error())
+	}
+	r.b.Reset()
+}
+
+func (r *Replay) applyOne(e raft.Entry) {
+	if len(e.Data) == 0 {
+		return
+	}
+	switch {
+	case isTxnCommand(e.Data):
+		c, ok := decodeTxnCommand(e.Data)
+		if !ok || !r.desc.Contains([]byte(c.Key)) {
 			return
 		}
-		if _, err := db.Apply(b, false); err != nil {
-			panic("store: replay cannot apply into its own engine: " + err.Error())
+		r.flush()
+		applyTxnTo(r.s, r.b, c, r.desc)
+		r.flush()
+
+	case isSplitCommand(e.Data):
+		spec, ok := decodeSplitCommand(e.Data)
+		if !ok {
+			return
 		}
-		b.Reset()
-	}
-
-	b := engine.NewBatch()
-	for _, e := range entries {
-		if len(e.Data) == 0 {
-			continue
+		if spec.Left.Epoch != r.desc.Epoch+1 ||
+			string(spec.Left.Start) != string(r.desc.Start) ||
+			string(spec.Right.End) != string(r.desc.End) {
+			return
 		}
-		switch {
-		case isTxnCommand(e.Data):
-			c, ok := decodeTxnCommand(e.Data)
-			if !ok || !desc.Contains([]byte(c.Key)) {
-				continue
+		r.flush()
+		all, err := r.s.Records()
+		if err != nil {
+			return
+		}
+		var kept []kv.Record
+		for _, rec := range all {
+			userKey, ok := r.s.UserKeyOf(rec.Key)
+			if ok && spec.Left.Contains(userKey) {
+				kept = append(kept, rec)
 			}
-			flush(b)
-			applyTxnTo(s, b, c, desc)
-			flush(b)
+		}
+		r.s.IngestRecordsInto(r.b, kept, r.s.GCMark())
+		r.flush()
+		r.desc = spec.Left
 
-		case isSplitCommand(e.Data):
-			spec, ok := decodeSplitCommand(e.Data)
-			if !ok {
-				continue
+	default:
+		op, k, v, at := decodeCmd(e.Data)
+		switch op {
+		case opGC:
+			r.flush()
+			if _, err := r.s.AdvanceGCInto(r.b, at); err == nil {
+				r.flush()
+			} else {
+				r.b.Reset()
 			}
-			if spec.Left.Epoch != desc.Epoch+1 ||
-				string(spec.Left.Start) != string(desc.Start) ||
-				string(spec.Right.End) != string(desc.End) {
-				continue
-			}
-			flush(b)
-			all, err := s.Records()
-			if err != nil {
-				return desc, mark, nil, false
-			}
-			var kept []kv.Record
-			for _, rec := range all {
-				userKey, ok := s.UserKeyOf(rec.Key)
-				if ok && spec.Left.Contains(userKey) {
-					kept = append(kept, rec)
-				}
-			}
-			s.IngestRecordsInto(b, kept, s.GCMark())
-			flush(b)
-			desc = spec.Left
-
-		default:
-			op, k, v, at := decodeCmd(e.Data)
-			switch op {
-			case opGC:
-				flush(b)
-				if _, err := s.AdvanceGCInto(b, at); err == nil {
-					flush(b)
-				} else {
-					b.Reset()
-				}
-			case "put":
-				if desc.Contains([]byte(k)) {
-					_ = s.PutInto(b, []byte(k), at, []byte(v))
-				}
+		case "put":
+			if r.desc.Contains([]byte(k)) {
+				_ = r.s.PutInto(r.b, []byte(k), at, []byte(v))
 			}
 		}
 	}
-	flush(b)
-
-	out, err := s.Records()
-	if err != nil {
-		return desc, mark, nil, false
-	}
-	return desc, s.GCMark(), out, true
 }
 
 // applyTxnTo is the apply path for a transaction step, with no Replica around

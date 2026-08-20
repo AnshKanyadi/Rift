@@ -3,6 +3,7 @@ package raftcheck
 import (
 	"bytes"
 	"fmt"
+	"sort"
 
 	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/raft"
@@ -507,7 +508,11 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // is the honest behaviour for a caller that has no model -- a checker with no
 // expectation cannot conclude anything, and pretending otherwise is the
 // vacuous-green class again.
-func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt, recovered RecoveredAt) []sim.Oracle {
+// PercolatorInvariants is deliberately NOT in this list. It is a FINAL-STATE
+// check -- the harness runs it once after the loop, because evaluating it per
+// step would assert an eventual property against a run caught mid-cleanup and
+// would replay every range's whole log to do it.
+func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt) []sim.Oracle {
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -521,7 +526,6 @@ func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads Reads
 		NewSplitPartition(l, splits, extent),
 		NewMVCCReadCorrectness(l, reads),
 		NewTransactionAtomicity(l, facts),
-		NewPercolatorInvariants(l, recovered),
 	}
 }
 
@@ -914,7 +918,26 @@ func (o *RebalanceSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 // harness re-implements what a command DOES, so a defect in applying commands
 // cannot cancel out on both sides of the comparison. What it shares with the
 // system is the wire format, which is not the thing under test.
-type StateAt func(base []byte, entries []raft.Entry) uint64
+type StateAt func(base []byte) StateCursor
+
+// StateCursor replays one range's committed log incrementally.
+//
+// # Why a cursor and not a function
+//
+// The first shape was `func(base, entries) uint64`, rebuilt from the birth
+// payload for every snapshot. A range takes a snapshot every few applied
+// entries, so that is quadratic in the log -- fine when a command was a put, and
+// measured at A6 as the difference between 0.35 seconds a seed and 5.2, with a
+// 2,000-seed sweep failing to finish inside two hours.
+//
+// A cursor advances through the prefix once. Nothing about the CHECK changes:
+// each snapshot is still compared against the state its own committed prefix
+// produces. Snapshots are fed in index order, because a cursor only moves
+// forward.
+type StateCursor interface {
+	// DigestThrough advances to cover prefix and returns the state's digest.
+	DigestThrough(prefix []raft.Entry) uint64
+}
 
 // SnapshotEquivalence: a snapshot's contents are exactly the state the committed
 // log produces at its index.
@@ -933,6 +956,12 @@ type StateAt func(base []byte, entries []raft.Entry) uint64
 type SnapshotEquivalence struct {
 	base
 	state StateAt
+
+	// cursors is one incremental replay per range, and digests memoises the
+	// answer per (range, index) so several replicas snapshotting one index cost
+	// one replay between them.
+	cursors map[uint64]StateCursor
+	digests map[snapKey]uint64
 
 	// done remembers what has already been verified. A snapshot's contents do
 	// not change once recorded, so re-deriving the log's state at its index on
@@ -963,7 +992,18 @@ func (o *SnapshotEquivalence) check(rangeID uint64, l *rangeLedger) *sim.Violati
 	if o.done == nil {
 		o.done = map[snapKey]bool{}
 	}
-	for _, s := range l.snaps {
+	if o.cursors == nil {
+		o.cursors = map[uint64]StateCursor{}
+	}
+	if o.digests == nil {
+		o.digests = map[snapKey]uint64{}
+	}
+	// Index order, because the cursor only moves forward. The ledger records a
+	// snapshot when it first sees one, and "first seen" is a property of the
+	// schedule rather than of the log.
+	snaps := append([]snapRecord(nil), l.snaps...)
+	sort.Slice(snaps, func(i, j int) bool { return snaps[i].rec.Index < snaps[j].rec.Index })
+	for _, s := range snaps {
 		k := snapKey{rangeID: rangeID, node: s.node, index: s.rec.Index, digest: s.rec.Digest}
 		if o.done[k] {
 			continue
@@ -975,7 +1015,19 @@ func (o *SnapshotEquivalence) check(rangeID uint64, l *rangeLedger) *sim.Violati
 			// rather than passed: the run is not asserting anything here.
 			continue
 		}
-		got := o.state(l.base, prefix)
+		// One replay per (range, index): several replicas snapshot the same
+		// index, and the state a prefix produces does not depend on who asked.
+		ik := snapKey{rangeID: rangeID, index: s.rec.Index}
+		got, seen := o.digests[ik]
+		if !seen {
+			cur := o.cursors[rangeID]
+			if cur == nil {
+				cur = o.state(l.base)
+				o.cursors[rangeID] = cur
+			}
+			got = cur.DigestThrough(prefix)
+			o.digests[ik] = got
+		}
 		o.done[k] = true
 		if got != s.rec.Digest {
 			verb := "installed"
@@ -1360,10 +1412,31 @@ func NewPercolatorInvariants(l *Ledger, recovered RecoveredAt) *PercolatorInvari
 	return &PercolatorInvariants{base: base{l: l, name: "percolator-invariants"}, recovered: recovered}
 }
 
-func (o *PercolatorInvariants) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
-	if !o.stale() {
-		return nil
-	}
+// Interested returns false for every kind: these are properties of the FINAL
+// state, and evaluating them mid-run is both meaningless and ruinously
+// expensive.
+//
+// # Both halves of that sentence are load-bearing
+//
+// Meaningless, because "a committed transaction leaves no lock" is eventual and
+// a run caught mid-cleanup is not a failure -- see invariant 1's own comment.
+// The instantaneous forms are true at every step, but checking them at every
+// step buys nothing a final check does not.
+//
+// Ruinously expensive, because each evaluation REPLAYS every range's entire
+// committed log through the real apply path. Called per step that changed the
+// ledger, that is quadratic in the log, and it took the A6 sweep from half a
+// second a seed to five: measured, 2,000 seeds did not finish inside two hours.
+//
+// Returning false here means the loop never calls OnStep, and Check is what the
+// harness calls once at the end.
+func (o *PercolatorInvariants) Interested(sim.Kind) bool { return false }
+
+// OnStep is never called: see Interested.
+func (o *PercolatorInvariants) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+// Check evaluates the invariants once, over the final recovered state.
+func (o *PercolatorInvariants) Check() *sim.Violation {
 	states := o.recovered()
 
 	// Decisions are cluster-wide: a lock's primary can be on any range, and
