@@ -507,7 +507,7 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // is the honest behaviour for a caller that has no model -- a checker with no
 // expectation cannot conclude anything, and pretending otherwise is the
 // vacuous-green class again.
-func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt) []sim.Oracle {
+func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt) []sim.Oracle {
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -520,6 +520,7 @@ func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads Reads
 		NewRebalanceSafety(l),
 		NewSplitPartition(l, splits, extent),
 		NewMVCCReadCorrectness(l, reads),
+		NewTransactionAtomicity(l, facts),
 	}
 }
 
@@ -1161,4 +1162,137 @@ func (o *MVCCReadCorrectness) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 		}
 	}
 	return nil
+}
+
+// --- transaction atomicity -----------------------------------------------------
+
+// CommitFact is what the harness's model found in one range's committed log
+// about one transaction's key.
+type CommitFact struct {
+	Key      string
+	StartTS  hlc.Timestamp
+	CommitTS hlc.Timestamp
+	Rollback bool
+}
+
+// TxnFactsAt is supplied by the harness: given a range's birth state and its
+// committed entries, every commit or rollback record the log produces, and every
+// transaction record it decides.
+//
+// Injected for the reason every model function here is: the harness restates
+// what a prewrite and a commit DO, so a defect in applying them cannot cancel
+// out on both sides of the comparison. What crosses the boundary is the wire
+// format, which is not the thing under test.
+type TxnFactsAt func(base []byte, entries []raft.Entry) (commits []CommitFact, decided map[string]CommitFact)
+
+// TransactionAtomicity: a transaction's keys all move to one commit timestamp,
+// or none does.
+//
+// # The commit point is the whole check
+//
+// DESIGN-A6 D-A6-3: *a transaction is committed if and only if the write record
+// for its PRIMARY key exists.* So the oracle asks two questions of the committed
+// logs, and takes nothing from any coordinator:
+//
+//  1. If the primary is committed at C, then every key the transaction wrote is
+//     either committed at C or still locked -- and a key committed at anything
+//     other than C is atomicity broken, because a reader between the two
+//     timestamps sees half the transaction.
+//  2. If the primary is rolled back, no key may be committed at all.
+//
+// A key still locked is NOT a violation. It is a transaction whose bookkeeping
+// is unfinished, which is exactly the state resolution exists to clean up, and
+// calling it a violation would make every crashed coordinator a safety failure
+// instead of a recovery case.
+type TransactionAtomicity struct {
+	base
+	facts TxnFactsAt
+}
+
+func NewTransactionAtomicity(l *Ledger, facts TxnFactsAt) *TransactionAtomicity {
+	return &TransactionAtomicity{base: base{l: l, name: "transaction-atomicity"}, facts: facts}
+}
+
+func (o *TransactionAtomicity) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
+	if !o.stale() {
+		return nil
+	}
+	// Gather every commit fact and every decision across all ranges. A
+	// transaction's keys can live on any of them, and after a split they can
+	// have moved -- which is why this is assembled per run rather than per
+	// range.
+	byKey := map[string][]CommitFact{}
+	decided := map[string]CommitFact{}
+	for _, rl := range o.l.ranges {
+		commits, dec := o.facts(rl.base, rl.Committed())
+		for _, c := range commits {
+			byKey[c.Key] = append(byKey[c.Key], c)
+		}
+		for k, v := range dec {
+			decided[k] = v
+		}
+	}
+
+	for _, t := range o.l.txns {
+		d, ok := decided[txnDecisionKey(t.Primary, t.StartTS)]
+		if !ok {
+			// Undecided: the coordinator died before the primary's record
+			// landed, and nobody has resolved it yet. Locks may be outstanding
+			// and no key may be committed at this start timestamp.
+			for _, k := range t.Keys {
+				for _, c := range byKey[k] {
+					if c.StartTS == t.StartTS && !c.Rollback {
+						return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+							"transaction %d (start %s) has no decision on its primary %q, and key %q "+
+								"is committed at %s. A key committed for a transaction nobody has "+
+								"decided is a write that appeared without a commit point",
+							t.ID, t.StartTS, t.Primary, k, c.CommitTS)}
+					}
+				}
+			}
+			continue
+		}
+
+		if d.Rollback {
+			for _, k := range t.Keys {
+				for _, c := range byKey[k] {
+					if c.StartTS == t.StartTS && !c.Rollback {
+						return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+							"transaction %d (start %s) is ROLLED BACK on its primary %q, and key %q "+
+								"is committed at %s. Half of an aborted transaction is visible",
+							t.ID, t.StartTS, t.Primary, k, c.CommitTS)}
+					}
+				}
+			}
+			continue
+		}
+
+		// Committed at d.CommitTS. Every key is at that timestamp or nowhere.
+		for _, k := range t.Keys {
+			for _, c := range byKey[k] {
+				if c.StartTS != t.StartTS || c.Rollback {
+					continue
+				}
+				if c.CommitTS != d.CommitTS {
+					return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+						"transaction %d is committed at %s on its primary %q and at %s on key %q. A "+
+							"reader between those two timestamps sees half of it",
+						t.ID, d.CommitTS, t.Primary, c.CommitTS, k)}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// txnDecisionKey is how a decision is looked up: primary key AND start
+// timestamp, because a key is the primary of many transactions over its life and
+// the first draft of the record layout forgot that (kv/encoding.go).
+func txnDecisionKey(primary string, startTS hlc.Timestamp) string {
+	return primary + "@" + startTS.String()
+}
+
+// TxnDecisionKey is the harness's spelling of the same thing.
+func TxnDecisionKey(primary string, startTS hlc.Timestamp) string {
+	return txnDecisionKey(primary, startTS)
 }

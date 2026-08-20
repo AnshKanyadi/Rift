@@ -79,6 +79,17 @@ type Config struct {
 	// which is the harness lying in the system's favour.
 	Clock clock.Clock
 
+	// OnTxnApplied is how a transaction coordinator learns that its step landed.
+	//
+	// The coordinator spans ranges, so it lives outside the store: a range's
+	// state machine may not read another's, and a protocol that needed it to
+	// would not be a protocol this system can run. Each step therefore arrives
+	// as an ordinary client request, is proposed into the range that holds its
+	// key, and reports back HERE -- on the node that proposed it, at the instant
+	// its own entry applied, inside the event loop. No goroutine and no polling,
+	// and the same position every replica agrees on.
+	OnTxnApplied func(c TxnCommand, at clock.Instant, s sim.Scheduler)
+
 	// NewTimestampSource builds a range's timestamp source. Nil means the HLC.
 	//
 	// # This is the A6 escape hatch, and it is a seam rather than a promise
@@ -266,6 +277,15 @@ type Replica struct {
 	gcApplied         int
 	versionsCollected int
 
+	// The A6 transaction counters.
+	writeConflicts  int
+	prewriteBlocked int
+	txnCommitted    int
+	txnRolledBack   int
+	txnRaceLost     int
+	txnRefused      int
+	resolveWaits    int
+
 	// envelopeRefusals counts peers whose timestamp was beyond maxOffset ahead.
 	// Zero in a bounded run is the bound holding; nonzero in a skew run is the
 	// check being reachable. Both directions are asserted.
@@ -371,6 +391,21 @@ func (n *Replica) onClient(req Request) {
 	// The cheap fix is read index (A7): confirm leadership with a quorum, then
 	// read locally. That is not A1's scope, so A1 pays the honest price and
 	// replicates reads. BENCHMARKS.md will state that cost when A7 removes it.
+	// A transaction step carries its own timestamps: they were chosen by the
+	// coordinator, at the position the transaction began, and re-stamping here
+	// would give one transaction two clocks.
+	if req.Txn != nil {
+		n.propSeq++
+		id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
+		if err := n.raft.Propose(id, encodeTxnCommand(*req.Txn)); err != nil {
+			return
+		}
+		n.inflight = append(n.inflight, clientOp{
+			id: id, histIdx: req.HistIdx, key: req.Key, value: req.Value, op: req.Op,
+		})
+		return
+	}
+
 	// The leader stamps HERE, once, and the timestamp travels in the entry.
 	// Every replica then applies a fact derived at a position rather than
 	// re-deriving it from its own clock, which would give the same value two
@@ -573,6 +608,20 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 				op, k, v, owned := "", "", "", true
 				var cmdTS hlc.Timestamp
 				switch {
+				case isTxnCommand(e.Data):
+					// A transaction step is a command to the state machine like
+					// any other. Everything it needs travels in the entry, so
+					// every replica reaches the same conclusion from the same
+					// position -- which is the whole reason the command is as
+					// wide as it is (store/txncmd.go).
+					if c, ok := decodeTxnCommand(e.Data); ok {
+						owned = n.desc.Contains([]byte(c.Key))
+						if owned {
+							n.applyTxn(mb, c)
+						}
+						k = c.Key
+					}
+
 				case isSplitCommand(e.Data):
 					// A split is a command to the state machine like any other,
 					// and raft has no business knowing what a range is.
@@ -752,6 +801,30 @@ func (n *Replica) flushApply(b *engine.Batch) {
 			n.cfg.ID, n.rng, err))
 	}
 	b.Reset()
+}
+
+// answerTxn tells the coordinator its step landed, if this node is the one that
+// proposed it.
+//
+// The inflight match is what makes it the proposer's: every replica applies the
+// entry, and only one of them has a client waiting on it.
+func (n *Replica) answerTxn(e raft.Entry, c TxnCommand, at clock.Instant, s sim.Scheduler) {
+	if e.ID.Zero() || n.cfg.OnTxnApplied == nil {
+		return
+	}
+	kept := n.inflight[:0]
+	found := false
+	for _, op := range n.inflight {
+		if op.id != e.ID {
+			kept = append(kept, op)
+			continue
+		}
+		found = true
+	}
+	n.inflight = kept
+	if found {
+		n.cfg.OnTxnApplied(c, at, s)
+	}
 }
 
 // rerouteAt answers a command applied outside this range's extent by sending the
@@ -1621,6 +1694,13 @@ type Request struct {
 	// from the workload so the path is exercised before the phase that depends
 	// on it.
 	ReadTS hlc.Timestamp
+
+	// Txn, when set, makes this request a transaction step rather than a plain
+	// put or get. The coordinator lives outside the store -- it spans ranges,
+	// and a range's state machine may not read another's -- so each step arrives
+	// here as an ordinary client request and is proposed into the range that
+	// holds its key.
+	Txn *TxnCommand
 
 	// Range and Epoch are what the client BELIEVED when it routed this request.
 	// They are the client's claim, not the cluster's fact, and the replica

@@ -241,16 +241,123 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 // onSplit is called for every split entry with the model's verdict on whether it
 // takes effect, so the two oracles that need splits and the one that needs the
 // final state all read the same replay rather than three drifting copies of it.
+// modelLock is the harness's own notion of a prewritten intent.
+type modelLock struct {
+	primary  string
+	startTS  hlc.Timestamp
+	deadline hlc.Timestamp
+}
+
+// newestCommitOf is the latest commit timestamp among a key's records.
+func newestCommitOf(cs []raftcheck.CommitFact) (hlc.Timestamp, bool) {
+	var best hlc.Timestamp
+	ok := false
+	for _, c := range cs {
+		if !ok || best.Less(c.CommitTS) {
+			best, ok = c.CommitTS, true
+		}
+	}
+	return best, ok
+}
+
 func replay(base []byte, entries []raft.Entry,
 	onSplit func(raft.Index, bool, store.SplitSpec),
 	onRead func(raftcheck.ReadExpectation),
 ) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+	return replayFull(base, entries, onSplit, onRead, nil, nil)
+}
+
+func replayFull(base []byte, entries []raft.Entry,
+	onSplit func(raft.Index, bool, store.SplitSpec),
+	onRead func(raftcheck.ReadExpectation),
+	commits map[string][]raftcheck.CommitFact,
+	decided map[string]raftcheck.CommitFact,
+) (store.RangeDescriptor, hlc.Timestamp, []kv.Version, bool) {
+	if commits == nil {
+		commits = map[string][]raftcheck.CommitFact{}
+	}
+	if decided == nil {
+		decided = map[string]raftcheck.CommitFact{}
+	}
+	locks := map[string]*modelLock{}
 	desc, mark, vs, ok := store.DecodeMachine(base)
 	if !ok {
 		return desc, mark, nil, false
 	}
 	for _, e := range entries {
 		if len(e.Data) == 0 {
+			continue
+		}
+		if c, ok := store.DecodeTxnCommand(e.Data); ok {
+			// # The transaction steps, restated
+			//
+			// The model applies what a prewrite, a commit and a rollback DO --
+			// it does not call the store's. A defect in applying them would then
+			// cancel out on both sides of the comparison, which is the whole
+			// reason every model function here is injected rather than imported.
+			//
+			// Extent and mark checks apply exactly as they do to a put: a step
+			// for a key this range no longer owns is refused at the log
+			// position, and so is one at or below the collection mark.
+			if !desc.Contains([]byte(c.Key)) {
+				continue
+			}
+			switch c.Op {
+			case store.OpPrewrite:
+				if c.StartTS.LessEq(mark) || locks[c.Key] != nil {
+					continue
+				}
+				if newest, ok := newestCommitOf(commits[c.Key]); ok && c.StartTS.Less(newest) {
+					continue // write conflict
+				}
+				locks[c.Key] = &modelLock{primary: c.Primary, startTS: c.StartTS, deadline: c.Deadline}
+				vs = insertVersion(vs, kv.Version{Key: []byte(c.Key), At: c.StartTS, Value: []byte(c.Value)})
+			case store.OpCommitKey:
+				commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+					Key: c.Key, StartTS: c.StartTS, CommitTS: c.CommitTS,
+				})
+				delete(locks, c.Key)
+			case store.OpRollbackKey:
+				commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+					Key: c.Key, StartTS: c.StartTS, CommitTS: c.StartTS, Rollback: true,
+				})
+				delete(locks, c.Key)
+			case store.OpPutTxnRecord:
+				dk := raftcheck.TxnDecisionKey(c.Key, c.StartTS)
+				if _, seen := decided[dk]; seen {
+					continue // a resolver may only make a record EXIST
+				}
+				decided[dk] = raftcheck.CommitFact{
+					Key: c.Key, StartTS: c.StartTS, CommitTS: c.CommitTS,
+					Rollback: c.Status != kv.TxnCommitted,
+				}
+			case store.OpResolve:
+				l := locks[c.Key]
+				if l == nil {
+					continue
+				}
+				dk := raftcheck.TxnDecisionKey(l.primary, l.startTS)
+				d, ok := decided[dk]
+				switch {
+				case ok && !d.Rollback:
+					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+						Key: c.Key, StartTS: l.startTS, CommitTS: d.CommitTS,
+					})
+					delete(locks, c.Key)
+				case ok:
+					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+						Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
+					})
+					delete(locks, c.Key)
+				case c.ReadTS.LessEq(l.deadline):
+					// wait
+				default:
+					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+						Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
+					})
+					delete(locks, c.Key)
+				}
+			}
 			continue
 		}
 		if spec, ok := store.DecodeSplitCommand(e.Data); ok {
@@ -433,6 +540,26 @@ func readExpectations(base []byte, entries []raft.Entry) []raftcheck.ReadExpecta
 	return out
 }
 
+// txnFacts is raftcheck.TxnFactsAt.
+func txnFacts(base []byte, entries []raft.Entry) ([]raftcheck.CommitFact, map[string]raftcheck.CommitFact) {
+	commits := map[string][]raftcheck.CommitFact{}
+	decided := map[string]raftcheck.CommitFact{}
+	if _, _, _, ok := replayFull(base, entries, nil, nil, commits, decided); !ok {
+		panic("hunt: a range was replayed with no birth state recorded")
+	}
+	var flat []raftcheck.CommitFact
+	for _, cs := range commits {
+		flat = append(flat, cs...)
+	}
+	sort.Slice(flat, func(i, j int) bool {
+		if flat[i].Key != flat[j].Key {
+			return flat[i].Key < flat[j].Key
+		}
+		return flat[i].CommitTS.Less(flat[j].CommitTS)
+	})
+	return flat, decided
+}
+
 // extentOf is raftcheck.ExtentOf.
 func extentOf(base []byte) (start, end []byte, epoch uint64, ok bool) {
 	desc, _, _, ok := store.DecodeMachine(base)
@@ -563,7 +690,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations))
+	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts))
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {

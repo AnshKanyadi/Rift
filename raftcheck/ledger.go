@@ -55,6 +55,9 @@ type Ledger struct {
 	// observed them leaving the nodes.
 	reads []ReadRecord
 
+	// txns is every transaction the harness's coordinator issued.
+	txns []TxnRecord
+
 	// moves is every replica movement the HARNESS commanded, in the order it
 	// commanded them.
 	//
@@ -104,6 +107,29 @@ type ReadRecord struct {
 	Found   bool
 	Refused bool
 	When    clock.Instant
+}
+
+// TxnRecord is one transaction the harness's coordinator issued, and what it
+// was later observed to decide.
+//
+// # What is observed here, and what is not
+//
+// The harness ISSUED the transaction, so the harness witnessed its start, its
+// primary, its key set and its commit timestamp. Those are its own facts, the
+// same provenance as a move order.
+//
+// What it never takes from the system is whether the transaction is committed.
+// That is read from the committed logs -- the primary's write record, which is
+// the commit point (DESIGN-A6 D-A6-3) -- because it is the thing under test.
+type TxnRecord struct {
+	ID       int
+	StartTS  hlc.Timestamp
+	CommitTS hlc.Timestamp // what the coordinator intended, zero if it never got there
+	Primary  string
+	Keys     []string
+	Began    clock.Instant
+	Decided  clock.Instant
+	Reached  bool // the coordinator observed its primary record land
 }
 
 // MoveRecord is one replica movement the harness ordered.
@@ -229,6 +255,35 @@ func (l *Ledger) RecordMove(mO provenance.Observed[MoveRecord]) {
 	l.rev++
 	l.moves = append(l.moves, mO.Fact())
 }
+
+// RecordTxnBegin records a transaction the harness issued.
+//
+// Observed: the harness is the thing that issued it.
+func (l *Ledger) RecordTxnBegin(r provenance.Observed[TxnRecord]) {
+	l.rev++
+	l.txns = append(l.txns, r.Fact())
+}
+
+// RecordTxnCommit records that the coordinator observed its primary record land.
+//
+// This is the coordinator's own account of reaching the commit point, and it is
+// EVIDENCE rather than a verdict: the oracle checks the committed log for the
+// primary's write record and never takes this as proof of anything. It exists so
+// a sweep can say how many transactions got that far.
+func (l *Ledger) RecordTxnCommit(id int, commitTS hlc.Timestamp, at clock.Instant) {
+	l.rev++
+	for i := range l.txns {
+		if l.txns[i].ID == id {
+			l.txns[i].CommitTS = commitTS
+			l.txns[i].Decided = at
+			l.txns[i].Reached = true
+			return
+		}
+	}
+}
+
+// Txns is every transaction the harness issued.
+func (l *Ledger) Txns() []TxnRecord { return l.txns }
 
 // RecordRead records an answer a replica gave a client.
 //
