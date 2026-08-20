@@ -62,10 +62,18 @@ type Store struct {
 	// a position anybody else can compute (DESIGN-A5 sections 6 and 7).
 	gcMark hlc.Timestamp
 
-	reads         int
-	readsRefused  int
-	versionsWrote int
-	versionsGCd   int
+	reads        int
+	readsRefused int
+	prewrites    int
+	commits      int
+	rollbacks    int
+	readsBlocked int
+
+	uncertaintyRestarts int
+	rollForwards        int
+	rollBacks           int
+	versionsWrote       int
+	versionsGCd         int
 }
 
 // NewStore builds an MVCC store over an engine.

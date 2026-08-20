@@ -100,15 +100,95 @@ func DecodeKey(ns, b []byte) (key []byte, ts hlc.Timestamp, ok bool) {
 	return key, ts, true
 }
 
-// MetaKey is where a key's non-versioned bookkeeping lives. A5 has none; A6's
-// lock and write records land here, and the prefix is reserved now so that
-// adding them is not a change to how data keys sort.
-func MetaKey(ns, key []byte) []byte {
-	b := make([]byte, 0, len(ns)+1+lenBytes+len(key))
+// The transaction record kinds, in the namespace A5 reserved.
+//
+//	lock   l <len> <key>                 at most one per key, or the key is not locked
+//	write  w <len> <key> <^commit_ts>    newest-commit-first within a key, like data
+//	txn    t <len> <primary key>         the transaction record: committed or rolled back
+//
+// # Why write records sort newest-first and data does too
+//
+// A read at T wants the newest COMMIT at or before T, then the data version at
+// that commit's start timestamp. Both lookups are one seek in the same
+// direction, which is A5's D-A5-3 reasoning applied to the second index rather
+// than restated for it.
+const (
+	lockPrefix  byte = 'l'
+	writePrefix byte = 'w'
+	txnPrefix   byte = 't'
+)
+
+// LockKey is where a key's lock lives. At most one exists at a time: a second
+// prewrite on a locked key is a write conflict, not a second lock.
+func LockKey(ns, key []byte) []byte { return metaKey(ns, lockPrefix, key) }
+
+// TxnKey is where a transaction's record lives: its PRIMARY key and its START
+// timestamp.
+//
+// Keyed by the key and not by a range identifier, deliberately. A split can move
+// the primary after a secondary's lock was written, and a lock naming a range
+// would then point at a range that no longer holds the record -- a position that
+// ages, which is BUG-011's class. The key does not age; resolution re-routes it.
+//
+// # And keyed by the start timestamp, which the first draft left out
+//
+// A key is the primary of MANY transactions over its life. Without the start
+// timestamp the second transaction to use a key as its primary finds the first
+// one's record sitting there and is refused as already-decided -- and worse, a
+// resolver holding a lock from the second reads the FIRST one's verdict and
+// applies it. Two transactions would share one decision.
+//
+// The lock already carries the start timestamp, so a resolver can always build
+// this key from what it holds. Found by the first test that used one key as the
+// primary of two transactions, which is the ordinary case rather than an exotic
+// one.
+func TxnKey(ns, key []byte, startTS hlc.Timestamp) []byte {
+	return appendInvertedTS(metaKey(ns, txnPrefix, key), startTS)
+}
+
+// WriteKey is the commit record for key at commitTS.
+func WriteKey(ns, key []byte, commitTS hlc.Timestamp) []byte {
+	return appendInvertedTS(metaKey(ns, writePrefix, key), commitTS)
+}
+
+// WritePrefix is every commit record for key, and nothing else.
+func WritePrefix(ns, key []byte) []byte { return metaKey(ns, writePrefix, key) }
+
+// DecodeWriteKey reads a commit record's key back.
+func DecodeWriteKey(ns, b []byte) (key []byte, commitTS hlc.Timestamp, ok bool) {
+	key, rest, ok := takeMetaKey(ns, writePrefix, b)
+	if !ok || len(rest) != tsBytes {
+		return nil, hlc.Timestamp{}, false
+	}
+	commitTS.Wall = hlcWall(^binary.BigEndian.Uint64(rest[:wallBytes]))
+	commitTS.Logical = ^binary.BigEndian.Uint32(rest[wallBytes:])
+	return key, commitTS, true
+}
+
+// MetaKey is retained as the generic form. A5 reserved the prefix; A6 uses it
+// through the three named constructors above, which is what keeps the layout in
+// one place.
+func MetaKey(ns, key []byte) []byte { return metaKey(ns, 'm', key) }
+
+func metaKey(ns []byte, kind byte, key []byte) []byte {
+	b := make([]byte, 0, len(ns)+1+lenBytes+len(key)+tsBytes)
 	b = append(b, ns...)
-	b = append(b, 'm')
+	b = append(b, kind)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(key)))
 	return append(b, key...)
+}
+
+func takeMetaKey(ns []byte, kind byte, b []byte) (key, rest []byte, ok bool) {
+	if len(b) < len(ns)+1+lenBytes || string(b[:len(ns)]) != string(ns) || b[len(ns)] != kind {
+		return nil, nil, false
+	}
+	b = b[len(ns)+1:]
+	n := int(binary.BigEndian.Uint32(b[:lenBytes]))
+	b = b[lenBytes:]
+	if n < 0 || len(b) < n {
+		return nil, nil, false
+	}
+	return b[:n], b[n:], true
 }
 
 func (s *Store) String() string { return fmt.Sprintf("kv.Store(mark=%s)", s.gcMark) }
