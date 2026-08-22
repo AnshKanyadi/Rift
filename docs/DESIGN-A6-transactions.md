@@ -323,6 +323,27 @@ Ansh's, verbatim.
 8. **25,000 seeds** at exit, zero violations, inconclusive explained. Mid-phase iteration stays at
    2,000.
 
+### 12.1 Status against each, at the time of writing
+
+| # | criterion | state |
+|---|---|---|
+| 1 | 2PC, primary locks, cleanup by a competitor, rollforward and rollback both exercised and asserted | **done** — §15.3's two-step resolution; 890 roll-forwards and 1,038 roll-backs across 200 seeds, both asserted nonzero |
+| 2 | SI over harness-observed client operations, never engine state | **done** — §9; stability made non-vacuous by the second pass, and asserted to have compared something |
+| 3 | the bank, conservation from client-observed history only | **done** — and it found BUG-019 (§19) |
+| 4 | uncertainty from the advertised `maxOffset`, envelope checker on plan-derived offsets | **done** — `uncertainty-envelope` takes the bound from the plan and does its own arithmetic; and §18 fixed the sweep that was not producing any skew for it to bound |
+| 5 | the escape hatch stated, decision point surfaced | **done, and restated every report** |
+| 6 | every printed count asserted or deleted | **done** |
+| 7a | every new oracle induced | **done** |
+| 7b | every bug in BUGS.md with its mutant class | **done** — BUG-019 added `M65`/`M66` in the same commit as the fix |
+| 7c | both corpus lanes green | **one entry red**: BUG-015, blocked on the mutant power measurement, recorded rather than retired (§16.2) |
+| 7d | power floors and ceilings under A6's shape | **owed** — §21.3, needs the solo slot |
+| 7e | the move-racing-churn interleaving attempted | **done and reached** — 3 of 9 moves raced, 1 unattributable, 0 violations |
+| 7f | one reduced-seed unthrottled GC run | **owed** — §21.3, starved by the exit run, first in the solo slot |
+| 8 | 25,000 seeds at exit | **running** — ten contiguous shards, aggregate asserted to cover exactly `[0,25000)` |
+
+Two owed measurements and one red corpus entry. None of them is a thing to
+discover at sign-off, which is why they are here rather than in a report only.
+
 ---
 
 ## 13. Snapshot equivalence judges an independent EXECUTION, not an independent model
