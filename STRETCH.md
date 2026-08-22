@@ -153,3 +153,36 @@ working with a different clock story.
 Pre-authorizing it now is the point. The decision is cheap today and expensive in November, and an
 interface that was designed with the fallback in mind is not the same interface as one retrofitted
 under time pressure.
+
+**Status at A6, and it stayed shut.** BUG-021 needed the timestamp source changed, and the TSO was
+the smallest available change. It was **refused**, in Ansh's words: *"the TSO fallback was
+pre-authorized on the condition that uncertainty machinery is not green by Dec 1, and it is green and
+sweep-exercised, so taking it for a different reason is a new decision rather than an application of
+the old one. A pre-authorization consumed for a purpose it was not granted for is an escape hatch
+widening itself."*
+
+The condition is not met — the uncertainty machinery is green and, since A6, sweep-exercised rather
+than only unit-green. The hatch stays shut and its status line is restated in every report.
+
+---
+
+## A time-independent transaction identity
+
+**The correct long-term answer to BUG-021, deferred.** A transaction id in the transaction record's
+key, in the lock, and in the data version — independent of the clock entirely, which is what
+CockroachDB does and why it does it.
+
+A6 fixed the defect by tagging the HLC's logical counter with the minting node's ordinal (DESIGN-A6
+§22, option A). **A fixes the defect and C fixes the class, and those are different claims.** What A
+buys is uniqueness under the clock model the phase already has; what it does not buy is independence
+from that model.
+
+**A's correctness rests on node ordinals being unique and stable.** Anything that recycles an
+ordinal — a node removed and a new one taking its number, a rebuild that renumbers, a
+configuration that reuses a slot — reopens BUG-021 exactly, and reopens it silently, because the
+timestamps look perfectly well-formed. That is the standing condition on the fix and the reason C
+remains the right answer eventually.
+
+Deferred rather than done because C widens the MVCC key encoding, which A5 fixed and A6 has built an
+entire phase of locks, write records and version scans on top of. Changing it mid-phase would put a
+frozen-shaped decision under a bug fix, which is the trade this project keeps refusing.

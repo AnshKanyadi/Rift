@@ -102,7 +102,7 @@ type Config struct {
 	// So the constructor is injectable and TestATimestampSourceCanBeSwapped
 	// drives the store on a source that is not an HLC. Same distinction this
 	// project keeps making, between a mechanism declared and one invoked.
-	NewTimestampSource func(clock.Clock) (hlc.Source, error)
+	NewTimestampSource func(c clock.Clock, node uint32) (hlc.Source, error)
 	Ledger             *raftcheck.Ledger
 	History            *sim.History
 

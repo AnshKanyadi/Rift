@@ -893,6 +893,36 @@ left the assumption is rejected rather than absorbed, so the bound the rest of t
 cluster rests on does not ratchet outward. That is the whole argument in
 `hlc.ErrBeyondEnvelope`'s comment, now with a number under it.
 
+### 18.2b The rule paid for itself in hours, and here is the chain
+
+The strongest evidence for §18.3's rule is not an argument; it is the elapsed
+time.
+
+| | |
+|---|---|
+| `cfg.Holds = 0` had been in the tree since | **A1** |
+| turned on | this cycle |
+| BUG-021 surfaced | **within hours**, on a five-seed probe taken to measure something else |
+
+The chain is exact. The sweep had been injecting **no clock skew at all** — only
+±200 ppm of free drift, under three milliseconds against a five-hundred
+millisecond bound. BUG-021 requires two nodes to mint the identical
+`(wall, logical)` pair, which requires their walls to be close *and* their HLCs
+to sit at the same logical counter. **That is exactly what a hold arranges**: it
+pulls a pair of clocks together and holds them there while traffic keeps both
+counters moving.
+
+Before the holds went on, the class was not rare in the sweep. It was
+**unreachable** — the same distinction `sim/hunt/floors.go` makes about M34,
+where widening the schedule mix "did not make the numbers look better; it made a
+real defect reachable".
+
+So the rule's value is not that a stale comment is untidy. It is that a fault mix
+which does not reach a phase's own mechanisms converts real defects into absent
+ones, and the conversion is invisible from every instrument in the repository —
+including a printed count asserted at zero, which is what `EnvelopeRefusals` was
+doing correctly and for the wrong reason.
+
 ### 18.3 The rule, stated to be re-asked
 
 > **A configuration comment asserting that a mechanism is unnecessary is a claim
@@ -1274,7 +1304,27 @@ the lock and the version key, independent of time.
   phase on; it is the largest of the three by a distance; and the version key
   ordering (`^ts` newest-first) has to keep meaning what it means.
 
-### 22.3 Recommendation
+### 22.3 Why B is refused, recorded verbatim
+
+Ansh's ruling, in his words, because the reasoning is the point and paraphrasing
+it would soften exactly the part that matters:
+
+> *"the TSO fallback was pre-authorized on the condition that uncertainty
+> machinery is not green by Dec 1, and it is green and sweep-exercised, so taking
+> it for a different reason is a new decision rather than an application of the
+> old one. A pre-authorization consumed for a purpose it was not granted for is
+> an escape hatch widening itself, and this project has spent six phases refusing
+> to let mechanisms drift like that. Keep the hatch closed and keep restating its
+> status line."*
+
+The mechanism-drift shape is the same one this document has caught three times in
+other clothes: a justification that was true when written, applied later to a
+case it was never about (§18.3); a mechanism declared and never invoked (§20); a
+criterion loosened by one word and passing a bundle that proved nothing (§16.4).
+An authorisation spent on the wrong purpose is that shape at the level of the
+plan.
+
+### 22.4 Recommendation
 
 **A.** It is the only candidate that fixes the defect without giving up the
 property the phase exists to test. B is a bigger retreat than the bug warrants
@@ -1285,13 +1335,67 @@ minting **and** minted-rather-than-derived restart timestamps. Without the secon
 half the same collision returns through `RestartAt`, one level further out —
 which is precisely how §15.6's guard came to be watching the wrong pair.
 
-### 22.4 Until it is ruled on
+### 22.5 Ratified, and what landed
 
-- The assertion is widened to the start timestamp alone and reports 1 on seed
-  90004, where the old form reported 0.
-- `TestBUG021` pins the reproduction, and asserts **both** halves: the collision
-  is detected, and the atomicity violation is the system being wrong rather than
-  the checker.
-- No mutant class is added yet. Amendment A2 requires one in the same PR as the
-  **fix**, and there is no fix to attach it to; a mutant for a defect still
-  present would be a patch that changes nothing.
+Ansh ratified **A**, both halves as one decision. What landed:
+
+| half | change | induced by |
+|---|---|---|
+| node-tagged minting | the low `hlc.IDBits` of `Logical` carry the minting node's ordinal; `Now` and `Update` both route through one `nextTagged` | `TestTwoNodesNeverMintTheSameTimestamp`, `TestAbsorbingAPeerKeepsThisNodesTag` |
+| minted, not derived | `store.NowAbove(lb)` folds the bound in with `Update` and then mints; restarts no longer adopt `RestartAt` | `TestARestartTimestampIsMintedNotDerived`, `TestRestartsMintTheirOwnStartTimestamp` |
+
+**`Update` is where the tag is easiest to lose**, and the version this replaced
+would have lost it: four cases, three of which set `c.last` to the peer's value
+outright. One absorbed message and every timestamp afterwards carries a foreign
+tag — so the property would hold in a quiet unit test and fail in a cluster.
+That is why `TestAbsorbingAPeerKeepsThisNodesTag` exists separately from the
+minting test.
+
+### 22.6 M68 survived, which is the ratification's own warning coming true
+
+The ruling said to induce the second half specifically, *"since a partial
+implementation of A looks exactly like a complete one until a restart lands on a
+foreign tag."*
+
+It does. `M68` — a restart adopting `RestartAt` instead of minting above it —
+was pinned to `TestBUG021`, the schedule that found the bug, and **survived**:
+**seed 90004 does not restart.** The mutant passed cleanly on the exact seed the
+class was discovered on.
+
+Answered as §13.4 requires, with an assertion rather than a better-chosen seed.
+The assertion is the property: **a start timestamp carries the tag of the node
+the client asked for it.** `nowAbove` checks it on every mint and counts
+`ForeignTagStarts`; `TestRestartsMintTheirOwnStartTimestamp` sweeps for it and
+fails if the sweep contained no restarts at all — because a test that passes on a
+workload with no restarts is how M68 survived the first time.
+
+Second surviving mutant of the phase, after `M61`. The list has now made a hole
+visible twice, which is the most that can honestly be said for a list.
+
+### 22.7 The guard that read zero, and the class it belongs to
+
+§15.6 predicted this class, guarded it, and **guarded the wrong pair.** The
+counter keyed on `(primary, startTS)` on the reasoning that that pair addresses
+the transaction record — which it does. It is not what the *version* is addressed
+by, and txn 14 and txn 29 have different primaries, so the counter read **zero**
+on precisely the seed that had the collision.
+
+Ansh's general form, and it is a class this project had not catalogued:
+
+> **An assertion keyed on a compound identity is only as strong as the narrowest
+> thing the identity actually addresses. The key must be derived from what the
+> data structure is addressed by, not from what the concept feels like it is
+> owned by.**
+
+A transaction *feels* owned by its primary — that is where its record lives and
+where every resolution routes. But `EncodeKey(ns, key, startTS)` has no primary
+in it, and neither does `Lock.StartTS`. The concept has two fields; the structure
+is addressed by one.
+
+**This is the nineteenth entry in the vacuous-green register, and it is a
+different shape from the eighteen before it.** Those were mechanisms that ran and
+measured nothing, or did not run at all. Here the prediction was *right*, the
+guard was *written*, and it was watching a key one field too wide — so it
+reported green with full confidence about the one seed it should have caught.
+
+Widened to the start timestamp alone, it reports 1 on seed 90004.

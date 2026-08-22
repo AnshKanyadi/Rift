@@ -122,11 +122,21 @@ func (m *Node) newReplicaFor(d RangeDescriptor) (*Replica, error) {
 	// node share a clock and not a logical counter, so a busy range cannot
 	// inflate a quiet one's timestamps -- and both are bounded by the same
 	// maxOffset, which is what makes the cluster-wide argument work.
+	// # The node ordinal reaches the clock, and that is load-bearing
+	//
+	// Every HLC on this machine carries the same tag, and no other machine's
+	// does. That is what makes a start timestamp unique cluster-wide, which is
+	// what BUG-021 needed and did not have.
+	//
+	// Two ranges on one node share the tag, and that is correct: they mint into
+	// separate namespaces, and the timestamps a CLIENT sees all come from
+	// replicas[0] (Node.Now), so the identity a transaction is addressed by has
+	// exactly one source per node.
 	newSource := m.cfg.NewTimestampSource
 	if newSource == nil {
-		newSource = func(c clock.Clock) (hlc.Source, error) { return hlc.New(c) }
+		newSource = func(c clock.Clock, node uint32) (hlc.Source, error) { return hlc.New(c, node) }
 	}
-	h, err := newSource(m.cfg.Clock)
+	h, err := newSource(m.cfg.Clock, uint32(m.cfg.Ordinal))
 	if err != nil {
 		return nil, err
 	}
@@ -612,6 +622,35 @@ func (m *Node) Now() (hlc.Timestamp, bool) {
 		return hlc.Timestamp{}, false
 	}
 	return m.replicas[0].hlc.Now(), true
+}
+
+// NowAbove mints a timestamp strictly greater than lb, from this node.
+//
+// # Why a restart may not simply use the value it was told to restart above
+//
+// `RestartAt` is `observedCommit.Next()` -- Logical plus one -- so it carries
+// the tag of whichever node minted the commit that caused the restart. Using it
+// as the restarted transaction's START timestamp hands that transaction another
+// node's identity, and BUG-021 returns one level out: two transactions with one
+// start timestamp, sharing a key's lock and its version.
+//
+// So it is MINTED. Update folds the lower bound into this node's clock, which is
+// what Update is for, and Now then issues the next value above it carrying this
+// node's own tag. The refusal path is honoured: a lower bound beyond the
+// envelope is not absorbed, and the caller gets this node's clock instead --
+// which is still above the bound it needs, because a bound that far ahead was
+// never this cluster's to accept.
+func (m *Node) NowAbove(lb hlc.Timestamp) (hlc.Timestamp, bool) {
+	if m.down || len(m.replicas) == 0 {
+		return hlc.Timestamp{}, false
+	}
+	h := m.replicas[0].hlc
+	if lb.IsSet() {
+		if err := h.Update(lb); err != nil {
+			m.replicas[0].envelopeRefusals++
+		}
+	}
+	return h.Now(), true
 }
 
 // RequestTransfer hands leadership of a led range to target.

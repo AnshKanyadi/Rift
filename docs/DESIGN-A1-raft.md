@@ -345,9 +345,17 @@ rhetorical:
 | 16 | **`cfg.Holds = 0`**, carrying its own justification: *A1 Raft has no clock-sensitive logic* | true when written; A6's phase headline is *hybrid logical clocks with uncertainty intervals* and its sweep injected **no clock skew at all**, so every uncertainty restart it ever produced came from HLC ordering rather than from clocks disagreeing | DESIGN-A6 §18 |
 | 17 | **`tools/provcheck`**, the lane that enforces oracle-input provenance | **red across a whole commit** and nobody saw it, because there is no remote and the lane only runs when somebody remembers to type it | DESIGN-A6 §20 |
 | 18 | **`make test` itself**, the every-change lane | `go test ./...` with nothing set runs the exit sweep at its 10,000-seed default — about 26 hours at A6's cost, and dead on Go's ten-minute timeout long before that. Unrunnable since A1, unnoticed for the same reason as 17 | DESIGN-A6 §20 |
+| 19 | **the guard for BUG-021's own class**, keyed on `(primary, startTS)` | the class was predicted and guarded, and the key was one field too wide: a version is addressed by `EncodeKey(ns, key, startTS)`, which has no primary in it, so the counter read **zero** on precisely the seed that had the collision | DESIGN-A6 §22.7 |
 
 Seven of the first eight were in the harness. The eighth was in a **verdict**, which is the difference
 between a machine that finds less than it should and a machine that certifies something false.
+
+**Instance 19 is a third shape.** Sixteen were instruments that ran and measured nothing; two were
+instruments that did not run. This one **ran, was aimed at the right class, and was keyed one field
+too wide** — the prediction was right and the guard was wrong, which is the most confident kind of
+green there is. The general form: *an assertion keyed on a compound identity is only as strong as the
+narrowest thing the identity actually addresses, so the key must come from what the data structure is
+addressed by, not from what the concept feels like it is owned by.*
 
 **Instances 17 and 18 are a different shape from the sixteen before them.** Those were instruments
 that ran and measured nothing. These two are instruments that **did not run at all** — and the

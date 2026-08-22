@@ -288,6 +288,8 @@ type coordinator struct {
 	auditsRetried      int
 	identityCollisions int
 	secondPass         int
+	foreignTagStarts   int
+	staleRestarts      int
 	resolveWaited      int
 	resolvedForward    int
 	resolvedBack       int
@@ -429,9 +431,22 @@ func (c *coordinator) prewrite(t *transfer, at clock.Instant, s sim.Scheduler) {
 // readTS+maxOffset would be a guess that is both too large and, on a node whose
 // clock is behind, still too small.
 func (c *coordinator) restartAbove(t *transfer, ts hlc.Timestamp, at clock.Instant, s sim.Scheduler) {
+	// # The new start timestamp is MINTED above the bound, not the bound itself
+	//
+	// `ts` is the observed commit's successor, so it carries the tag of whichever
+	// node minted that commit. Adopting it as this transaction's start would give
+	// the transaction another node's identity and reopen BUG-021 one level out --
+	// the half of option A that is easy to leave out, because a partial
+	// implementation looks exactly like a complete one until a restart lands on a
+	// foreign tag.
+	minted, ok := c.nowAbove(t.ts, ts)
+	if !ok {
+		c.abandon(t)
+		return
+	}
 	t.restarts++
 	c.restarts++
-	t.startTS = ts
+	t.startTS = minted
 	t.resolves = map[string]int{}
 	t.blocked = map[string]string{}
 	t.phase = phaseRead
@@ -728,15 +743,74 @@ func (c *coordinator) applied(cmd store.TxnCommand, r store.TxnResult, at clock.
 // The fallback is a scan and not a retry, because a crashed node has no answer
 // and a client that insisted on one would stall for the length of the crash.
 func (c *coordinator) now(i int) (hlc.Timestamp, bool) {
+	ts, _, ok := c.nowFrom(i)
+	return ts, ok
+}
+
+// nowFrom is now, reporting WHICH node answered.
+//
+// The caller needs it to check the tag: a start timestamp's low bits are the
+// minting node's ordinal, and the only way to notice that a timestamp came from
+// somewhere other than where it was asked for is to know where it was asked for.
+func (c *coordinator) nowFrom(i int) (hlc.Timestamp, int, bool) {
 	if len(c.drivers) == 0 {
-		return hlc.Timestamp{}, false
+		return hlc.Timestamp{}, 0, false
 	}
 	for k := 0; k < len(c.drivers); k++ {
-		if ts, ok := c.drivers[(i+k)%len(c.drivers)].Now(); ok {
-			return ts, true
+		n := (i + k) % len(c.drivers)
+		if ts, ok := c.drivers[n].Now(); ok {
+			return ts, n, true
 		}
 	}
-	return hlc.Timestamp{}, false
+	return hlc.Timestamp{}, 0, false
+}
+
+// nowAbove mints a timestamp above lb, falling back across the cluster as now
+// does.
+func (c *coordinator) nowAbove(i int, lb hlc.Timestamp) (hlc.Timestamp, bool) {
+	ts, n, ok := c.nowAboveFrom(i, lb)
+	if ok {
+		c.checkTag(ts, n, lb)
+	}
+	return ts, ok
+}
+
+func (c *coordinator) nowAboveFrom(i int, lb hlc.Timestamp) (hlc.Timestamp, int, bool) {
+	if len(c.drivers) == 0 {
+		return hlc.Timestamp{}, 0, false
+	}
+	for k := 0; k < len(c.drivers); k++ {
+		n := (i + k) % len(c.drivers)
+		if ts, ok := c.drivers[n].NowAbove(lb); ok {
+			return ts, n, true
+		}
+	}
+	return hlc.Timestamp{}, 0, false
+}
+
+// checkTag counts a start timestamp that does not carry the tag of the node that
+// was asked for it.
+//
+// # Why this exists rather than a test of the restart path
+//
+// `M68` — a restart adopting `RestartAt` instead of minting above it — SURVIVED
+// its first covering test. Seed 90004 is the schedule that found BUG-021 and it
+// does not happen to restart, so a test pinned to it says nothing about the
+// second half of the fix. That is the surrendered-property rule in DESIGN-A6
+// §13.4 doing its job: a surviving mutant is the gap made visible, and the
+// answer is an assertion rather than a better-chosen seed.
+//
+// The assertion is the property itself: **a transaction's start timestamp is
+// minted by the node the client asked**, so its low bits are that node's
+// ordinal. A derived one carries whichever node minted the commit it was derived
+// from, and this counts it.
+func (c *coordinator) checkTag(ts hlc.Timestamp, node int, lb hlc.Timestamp) {
+	if hlc.NodeOf(ts) != uint32(node) {
+		c.foreignTagStarts++
+	}
+	if lb.IsSet() && !lb.Less(ts) {
+		c.staleRestarts++
+	}
 }
 
 // beginAudit reads every account at one timestamp.
@@ -908,8 +982,12 @@ func (c *coordinator) auditApplied(cmd store.TxnCommand, r store.TxnResult, at c
 		if a.restarts >= maxAuditRestarts {
 			return
 		}
+		restartTS, ok := c.nowAbove(a.id, r.RestartAt)
+		if !ok {
+			return
+		}
 		c.nextOrigin++
-		b := &audit{id: a.id, origin: c.nextOrigin, readTS: r.RestartAt,
+		b := &audit{id: a.id, origin: c.nextOrigin, readTS: restartTS,
 			seen: map[string]int{}, need: c.accounts, resolves: map[string]int{},
 			restarts: a.restarts + 1, ceiling: a.ceiling, blocked: map[string]string{}}
 		c.audits[b.origin] = b
@@ -1176,6 +1254,8 @@ func (c *coordinator) AuditsLocked() int       { return c.auditsLocked }
 func (c *coordinator) AuditsUncertain() int    { return c.auditsUncertain }
 func (c *coordinator) AuditsRetried() int      { return c.auditsRetried }
 func (c *coordinator) SecondPass() int         { return c.secondPass }
+func (c *coordinator) ForeignTagStarts() int   { return c.foreignTagStarts }
+func (c *coordinator) StaleRestarts() int      { return c.staleRestarts }
 func (c *coordinator) IdentityCollisions() int { return c.identityCollisions }
 
 // ForeignLocksKept is BUG-019's evidence, summed over the cluster: how often a

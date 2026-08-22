@@ -22,10 +22,12 @@ func (f *fixed) Wall() clock.Wall         { return f.wall }
 func (f *fixed) Mono() clock.Mono         { return 0 }
 func (f *fixed) MaxOffset() time.Duration { return f.max }
 
+func (f *fixed) advance(d clock.Wall) { f.wall += d }
+
 func newAt(t *testing.T, ns int64, max time.Duration) (*hlc.Clock, *fixed) {
 	t.Helper()
 	f := &fixed{wall: clock.NewWall(ns), max: max}
-	c, err := hlc.New(f)
+	c, err := hlc.New(f, 0)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -243,5 +245,107 @@ func TestTheEnvelopeIsMeasuredAgainstThePhysicalClock(t *testing.T) {
 	}
 	if drift := c.Last().Wall.Sub(f.wall); drift > bound {
 		t.Errorf("the clock ended %s ahead of its own physical reading, past the %s bound", drift, bound)
+	}
+}
+
+// TestTwoNodesNeverMintTheSameTimestamp is BUG-021's first half, induced.
+//
+// # What it would look like without the tag
+//
+// Two clocks over ONE physical clock is the worst case and the realistic one:
+// nodes whose clocks a hold has pulled together, HLCs sitting at the same
+// logical counter because they have seen the same traffic. Before the tag, that
+// configuration produced identical timestamps freely -- and a transaction's
+// start timestamp is what its lock and its data version are addressed by, so two
+// transactions then shared a key.
+//
+// The union of everything two differently-tagged clocks mint must contain no
+// value twice, however their calls interleave.
+func TestTwoNodesNeverMintTheSameTimestamp(t *testing.T) {
+	phys := &fixed{}
+	a, err := hlc.New(phys, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := hlc.New(phys, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[hlc.Timestamp]string{}
+	note := func(who string, ts hlc.Timestamp) {
+		t.Helper()
+		if prev, dup := seen[ts]; dup {
+			t.Fatalf("%s and %s both minted %s. Two transactions started at one timestamp share "+
+				"the lock and the data version of every key they both touch, which is BUG-021",
+				prev, who, ts)
+		}
+		seen[ts] = who
+	}
+
+	// Interleaved minting, and interleaved absorbing: Update is the path the
+	// four-case version lost the tag on, so it gets the same exercise as Now.
+	for i := 0; i < 200; i++ {
+		note("a", a.Now())
+		note("b", b.Now())
+		if i%3 == 0 {
+			if err := a.Update(b.Last()); err != nil {
+				t.Fatalf("a absorbing b: %v", err)
+			}
+			note("a", a.Now())
+		}
+		if i%5 == 0 {
+			if err := b.Update(a.Last()); err != nil {
+				t.Fatalf("b absorbing a: %v", err)
+			}
+			note("b", b.Now())
+		}
+		if i%7 == 0 {
+			phys.advance(1)
+		}
+	}
+	if len(seen) < 400 {
+		t.Errorf("only %d distinct timestamps; the loop is not exercising what it thinks", len(seen))
+	}
+
+	// And the tag says who, which is what makes a collision diagnosable rather
+	// than merely impossible.
+	if got := hlc.NodeOf(a.Last()); got != 1 {
+		t.Errorf("a's last timestamp is tagged %d, want 1", got)
+	}
+	if got := hlc.NodeOf(b.Last()); got != 2 {
+		t.Errorf("b's last timestamp is tagged %d, want 2", got)
+	}
+}
+
+// TestAbsorbingAPeerKeepsThisNodesTag is the path the tag is easiest to lose on.
+//
+// Update folds in a peer's timestamp, and the version this replaced set c.last
+// to the peer's value outright on three of its four branches. One absorbed
+// message was then enough for every subsequent timestamp to carry a foreign tag
+// -- so the property would hold in a quiet test and fail in a cluster.
+func TestAbsorbingAPeerKeepsThisNodesTag(t *testing.T) {
+	phys := &fixed{}
+	me, err := hlc.New(phys, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := hlc.New(phys, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		peer.Now()
+		if err := me.Update(peer.Last()); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		ts := me.Now()
+		if got := hlc.NodeOf(ts); got != 3 {
+			t.Fatalf("after absorbing node 4, node 3 minted %s tagged %d. Every timestamp it "+
+				"issues from here collides with node 4's", ts, got)
+		}
+		if !peer.Last().Less(ts) {
+			t.Fatalf("minted %s, which is not above the peer's %s", ts, peer.Last())
+		}
 	}
 }

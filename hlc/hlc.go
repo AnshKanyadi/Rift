@@ -134,6 +134,59 @@ type Source interface {
 	MaxOffset() time.Duration
 }
 
+// # The logical counter carries the minting node's ordinal in its low bits
+//
+// BUG-021: two nodes minted the identical (wall, logical) pair, and two
+// transactions therefore shared one key's lock and its data version -- which are
+// addressed by the start timestamp, not by anything that knows which transaction
+// owns them. One committed, one was rolled back, and the version belonged to
+// both.
+//
+// A transaction's start timestamp has to be unique cluster-wide. Percolator gets
+// that free from a single TSO; a per-node HLC guarantees it per node and nothing
+// across nodes. So the low IDBits of Logical are the minting node's ordinal, and
+// two nodes cannot produce the same timestamp at the same wall.
+//
+// Nothing else changes: the order is the same order, monotonicity per node is
+// unchanged, and the counter keeps 32-IDBits of range -- which only advances
+// when two events share a nanosecond, so it is not close to a constraint.
+//
+// **The correctness of this rests on node ordinals being unique and stable.**
+// Anything that recycles an ordinal -- a node removed and a new one taking its
+// number -- reopens BUG-021 exactly. That is recorded in STRETCH.md beside
+// option C, which is the fix for the CLASS rather than for the defect.
+const (
+	// IDBits is how much of Logical the node ordinal occupies.
+	IDBits = 8
+
+	// MaxNodeID is the largest ordinal a tagged clock can carry.
+	MaxNodeID = (1 << IDBits) - 1
+
+	logicalStep = uint32(1) << IDBits
+	logicalMask = logicalStep - 1
+)
+
+// nextTagged is the smallest timestamp at after's wall that carries id in its
+// low bits and is strictly greater than after.
+//
+// It is the whole of the tagging scheme, and it is separated out because both
+// Now and Update need exactly this and getting it subtly different in two places
+// is how a monotonicity bug is written.
+func nextTagged(after Timestamp, id uint32) Timestamp {
+	base := after.Logical &^ logicalMask
+	if cand := base | id; cand > after.Logical {
+		return Timestamp{Wall: after.Wall, Logical: cand}
+	}
+	return Timestamp{Wall: after.Wall, Logical: base + logicalStep + id}
+}
+
+// NodeOf reports which node minted a timestamp, from its tag.
+//
+// For assertions and for reading a trace. No verdict rests on it: it is a fact
+// the SYSTEM writes into the value, so treating it as evidence about the system
+// would be the provenance rule's failure with extra steps.
+func NodeOf(t Timestamp) uint32 { return t.Logical & logicalMask }
+
 // Clock is the HLC implementation of Source.
 //
 // It holds no lock. In sim mode a node's logic runs single-threaded off the
@@ -143,6 +196,10 @@ type Source interface {
 type Clock struct {
 	phys clock.Clock
 	last Timestamp
+
+	// id is this node's ordinal, carried in the low bits of every timestamp
+	// this clock mints. See the block above IDBits.
+	id uint32
 
 	// updatesRefused counts peers refused for being beyond the envelope. It is
 	// evidence, not a verdict: nonzero in a skew run means the envelope check is
@@ -156,12 +213,22 @@ type Clock struct {
 	physRegressions int
 }
 
-// New builds an HLC over a physical clock.
-func New(phys clock.Clock) (*Clock, error) {
+// New builds an HLC over a physical clock, tagged with the minting node's
+// ordinal.
+//
+// The ordinal is required rather than defaulted. A defaulted one would make
+// every clock in a test cluster share a tag, which is the configuration BUG-021
+// is about, and it would do it silently.
+func New(phys clock.Clock, node uint32) (*Clock, error) {
 	if phys == nil {
 		return nil, errors.New("hlc: no physical clock; the HLC wraps Wall and cannot invent one")
 	}
-	return &Clock{phys: phys}, nil
+	if node > MaxNodeID {
+		return nil, fmt.Errorf(
+			"hlc: node ordinal %d does not fit in %d bits; two nodes sharing a tag can mint the "+
+				"same timestamp, which is BUG-021", node, IDBits)
+	}
+	return &Clock{phys: phys, id: node}, nil
 }
 
 // Now returns the next timestamp from this source.
@@ -173,12 +240,14 @@ func New(phys clock.Clock) (*Clock, error) {
 // positions (DESIGN-A5 section 7).
 func (c *Clock) Now() Timestamp {
 	phys := Timestamp{Wall: c.phys.Wall()}
-	if c.last.Less(phys) {
-		c.last = phys
+	if c.last.Wall < phys.Wall {
+		// The physical clock has moved past everything this clock has issued, so
+		// the counter restarts -- at this node's slot, not at zero.
+		c.last = Timestamp{Wall: phys.Wall, Logical: c.id}
 		return c.last
 	}
 	c.physRegressions++
-	c.last = c.last.Next()
+	c.last = nextTagged(c.last, c.id)
 	return c.last
 }
 
@@ -198,17 +267,21 @@ func (c *Clock) Update(m Timestamp) error {
 			ErrBeyondEnvelope, m, phys, c.phys.MaxOffset())
 	}
 
-	switch max := Max(Max(c.last, m), phys); {
-	case max == phys && phys.Wall != c.last.Wall && phys.Wall != m.Wall:
-		// The physical clock is ahead of both and the logical counter resets.
-		c.last = phys
-	case c.last.Wall == m.Wall:
-		c.last = Timestamp{Wall: c.last.Wall, Logical: maxU32(c.last.Logical, m.Logical) + 1}
-	case c.last.Wall > m.Wall:
-		c.last = c.last.Next()
-	default:
-		c.last = m.Next()
+	// # One rule, and it keeps the tag
+	//
+	// The result must exceed everything this clock knows -- what it last issued,
+	// and what the peer sent -- and it must carry this node's tag, or the next
+	// timestamp it mints could collide with another node's (BUG-021).
+	//
+	// The four-case version this replaced could produce an untagged value on
+	// three of its four paths, so absorbing one peer message was enough to lose
+	// the property for every timestamp afterwards.
+	lb := Max(c.last, m)
+	if lb.Wall < phys.Wall {
+		c.last = Timestamp{Wall: phys.Wall, Logical: c.id}
+		return nil
 	}
+	c.last = nextTagged(lb, c.id)
 	return nil
 }
 

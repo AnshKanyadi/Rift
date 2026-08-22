@@ -1048,6 +1048,8 @@ type RaftResult struct {
 	ForeignLocksKept      int
 	SnapshotsCompared     int
 	SecondPassReads       int
+	ForeignTagStarts      int
+	StaleRestarts         int
 	ResolveWaited         int
 	ResolvedForward       int
 	ResolvedBack          int
@@ -1422,6 +1424,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		}
 		res.SnapshotsCompared = si.Compared()
 		res.SecondPassReads = coord.SecondPass()
+		res.ForeignTagStarts = coord.ForeignTagStarts()
+		res.StaleRestarts = coord.StaleRestarts()
 	}
 	if res.Violated == nil && coord != nil {
 		res.Violated = raftcheck.NewUncertaintyEnvelope(
@@ -1636,6 +1640,8 @@ type RaftCensus struct {
 	ForeignLocksKept      int
 	SnapshotsCompared     int
 	SecondPassReads       int
+	ForeignTagStarts      int
+	StaleRestarts         int
 	ResolveWaited         int
 	ResolvedForward       int
 	ResolvedBack          int
@@ -1728,6 +1734,8 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 		c.ForeignLocksKept += r.ForeignLocksKept
 		c.SnapshotsCompared += r.SnapshotsCompared
 		c.SecondPassReads += r.SecondPassReads
+		c.ForeignTagStarts += r.ForeignTagStarts
+		c.StaleRestarts += r.StaleRestarts
 		c.ResolveWaited += r.ResolveWaited
 		c.ResolvedForward += r.ResolvedForward
 		c.ResolvedBack += r.ResolvedBack
@@ -1847,6 +1855,7 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.ForeignLocksKept, b.ForeignLocksKept},
 		{&out.SnapshotsCompared, b.SnapshotsCompared},
 		{&out.SecondPassReads, b.SecondPassReads},
+		{&out.ForeignTagStarts, b.ForeignTagStarts}, {&out.StaleRestarts, b.StaleRestarts},
 		{&out.ResolveWaited, b.ResolveWaited},
 		{&out.ResolvedForward, b.ResolvedForward}, {&out.ResolvedBack, b.ResolvedBack},
 		{&out.UnparseableReads, b.UnparseableReads},

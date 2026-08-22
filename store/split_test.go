@@ -196,7 +196,7 @@ func TestATimestampSourceCanBeSwapped(t *testing.T) {
 		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
 		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
 		Nodes: 1, Clock: mustSimClock(t),
-		NewTimestampSource: func(clock.Clock) (hlc.Source, error) { return src, nil },
+		NewTimestampSource: func(clock.Clock, uint32) (hlc.Source, error) { return src, nil },
 	})
 	if err != nil {
 		t.Fatalf("new: %v", err)
