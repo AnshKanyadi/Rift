@@ -188,6 +188,14 @@ soak: ## $(SOAK_SEEDS)-seed nightly soak
 mutants: ## Mutant suite: every planted defect must be caught by its declared test
 	@$(MUTANTS)
 
+.PHONY: hooks
+hooks: ## Install the pre-push hook that runs the every-change lanes
+	@mkdir -p .git/hooks
+	@cp scripts/hooks/pre-push .git/hooks/pre-push
+	@chmod +x .git/hooks/pre-push
+	@printf '  installed .git/hooks/pre-push -- the every-change lanes now run on push.\n'
+	@printf '  It is not a remote. It is the half of a remote that can be had without one.\n'
+
 .PHONY: solo
 solo: ## The three measurements that need the machine to themselves, in order
 	@printf '\n  SOLO SLOT: three measurements, none of which may share a machine.\n'

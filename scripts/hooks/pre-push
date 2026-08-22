@@ -1,0 +1,41 @@
+#!/usr/bin/env sh
+# The every-change lanes, run on every push, because nobody should have to
+# remember.
+#
+# # Why this exists
+#
+# There is no remote, so .github/workflows/ci.yml has never executed. Three
+# findings came out of that in one sitting: `tools/provcheck` red across a whole
+# commit, `make test` unrunnable since A1, and two lanes in `make ci` that the
+# workflow does not contain (DESIGN-A6 §20).
+#
+# A hook is not a remote. It runs the fast half of the list on the machine that
+# is pushing, which is strictly better than a list nobody runs, and it stops
+# being needed the day a remote lands.
+#
+# # What is here and what is not
+#
+# Here: the lanes that finish in minutes. Not here: `race`, `power`, `mutants`,
+# `soak`, `exit-run` -- hours each, and the point of a hook is that it is cheap
+# enough not to be bypassed. Those are the nightly and solo tiers.
+#
+# Install with `make hooks`. Skip a single push with `RIFT_SKIP_HOOK=1 git push`,
+# which is deliberately loud rather than silent.
+set -eu
+
+if [ "${RIFT_SKIP_HOOK:-}" = "1" ]; then
+  printf '\n  pre-push: SKIPPED by RIFT_SKIP_HOOK=1. The lanes did not run.\n\n'
+  exit 0
+fi
+
+printf '\n  pre-push: the every-change lanes\n'
+for lane in build lint lane-coverage assertions provenance test corpus; do
+  printf '  ---- make %s\n' "$lane"
+  if ! make "$lane" >/tmp/rift-hook.log 2>&1; then
+    printf '\n  FAILED: make %s\n\n' "$lane"
+    tail -40 /tmp/rift-hook.log
+    printf '\n  Push refused. RIFT_SKIP_HOOK=1 overrides, and says so when it does.\n\n'
+    exit 1
+  fi
+done
+printf '  pre-push: green\n\n'

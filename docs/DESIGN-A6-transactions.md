@@ -1011,8 +1011,15 @@ live until a remote exists:
   `.github/workflows/ci.yml`. It is itself in `ci`, and it was induced against an
   empty workflow before being believed: 17 lanes checked, 17 missing.
 
-None of that substitutes for the remote. It makes the *list* honest, which is the
-part that can be made honest without one.
+- **`make hooks`** installs a pre-push hook that runs the fast half of the list —
+  build, lint, lane-coverage, assertions, provenance, test, corpus — on the
+  machine doing the pushing. `race`, `power`, `mutants`, `soak` and the exit run
+  stay out of it, because a hook expensive enough to bypass is a hook that gets
+  bypassed. `RIFT_SKIP_HOOK=1` overrides it and prints that it did.
+
+None of that substitutes for the remote. The first three make the *list* honest;
+the hook makes some of it *run*, which is the part of a remote that can be had
+without one. The lanes it leaves out are exactly the ones a remote is for.
 
 ---
 
