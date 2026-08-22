@@ -135,7 +135,9 @@ func (s *Store) CommitInto(b *engine.Batch, key []byte, startTS, commitTS hlc.Ti
 			"before it began, and a reader would see the write appear in its own past", commitTS, startTS)
 	}
 	b.Set(WriteKey(s.ns, key, commitTS), encodeWrite(startTS, false))
-	b.Delete(LockKey(s.ns, key))
+	if err := s.releaseLockOf(b, key, startTS); err != nil {
+		return err
+	}
 	s.commits++
 	return nil
 }
@@ -152,9 +154,51 @@ func (s *Store) RollbackInto(b *engine.Batch, key []byte, startTS hlc.Timestamp)
 		return ErrUnsetTimestamp
 	}
 	b.Set(WriteKey(s.ns, key, startTS), encodeWrite(startTS, true))
-	b.Delete(LockKey(s.ns, key))
+	if err := s.releaseLockOf(b, key, startTS); err != nil {
+		return err
+	}
+	// The VERSION delete is already keyed by the start timestamp, so it can
+	// never touch another transaction's write. Only the lock was ambiguous.
 	b.Delete(EncodeKey(s.ns, key, startTS))
 	s.rollbacks++
+	return nil
+}
+
+// releaseLockOf drops the key's lock if -- and only if -- startTS owns it.
+//
+// # BUG-019: "delete the lock" is ambiguous and the wrong reading is the
+// # default one
+//
+// A key holds at most one lock, so the lock record has no transaction in its
+// address: LockKey(ns, key) names the slot, not the holder. Both resolution
+// paths deleted the slot, which reads as "delete MY lock" and executes as
+// "delete WHOEVER'S lock".
+//
+// It takes no fault to reach. T1 prewrites k. T2 prewrites k, is refused
+// because the key is locked -- correct, that is first-committer-wins working --
+// and aborts, rolling back its own key. T2's rollback takes T1's lock. T1 is
+// now a transaction with an orphaned version: no lock means no reader will ever
+// discover it, and no resolver will ever finish it, so a value it committed is
+// invisible forever. Found by bank-conservation on seed 7, as nine units of
+// money that stopped existing.
+//
+// A stale delete is worse than a missed one here, so the check is a read of
+// applied state rather than an assumption. That read is only correct because the
+// apply loop flushes around every transaction step -- which is BUG-018's fix,
+// and this is the first thing built on top of it.
+func (s *Store) releaseLockOf(b *engine.Batch, key []byte, startTS hlc.Timestamp) error {
+	l, ok, err := s.Lock(key)
+	if err != nil {
+		return err
+	}
+	if !ok || l.StartTS != startTS {
+		// Nothing of ours to release. Not an error: a lock already cleaned up
+		// by a resolver is the ordinary case, and a lock belonging to somebody
+		// else is not ours to touch.
+		s.foreignLocksKept++
+		return nil
+	}
+	b.Delete(LockKey(s.ns, key))
 	return nil
 }
 

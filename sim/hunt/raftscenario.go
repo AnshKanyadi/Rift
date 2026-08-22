@@ -351,47 +351,43 @@ func replayFull(base []byte, entries []raft.Entry,
 					Key: c.Key, StartTS: c.StartTS, CommitTS: c.CommitTS,
 					Rollback: c.Status != kv.TxnCommitted,
 				}
-			case store.OpResolve:
+			case store.OpResolveStatus:
+				// The primary's range, deciding. A record that already exists
+				// wins -- a resolver may only ever make one EXIST -- and an
+				// undecided owner past its deadline is declared dead here.
+				dk := raftcheck.TxnDecisionKey(c.Key, c.StartTS)
+				if _, seen := decided[dk]; seen {
+					continue
+				}
+				if c.ExpireAt.LessEq(c.Deadline) {
+					continue // alive by its own TTL; waiting is the verdict
+				}
+				decided[dk] = raftcheck.CommitFact{
+					Key: c.Key, StartTS: c.StartTS, CommitTS: c.StartTS, Rollback: true,
+				}
+
+			case store.OpApplyResolution:
+				// The locked key's range, applying a verdict reached elsewhere.
+				// It carries the verdict rather than looking it up, which is
+				// what lets it work when the primary is on another range -- and
+				// is why the lock's own start timestamp has to match: a verdict
+				// about one transaction may not be applied to another's lock.
 				l := locks[c.Key]
-				if l == nil {
+				if l == nil || l.startTS != c.StartTS {
 					continue
 				}
-				// A resolver can only read a record on its OWN range. When the
-				// primary lives elsewhere the step is a no-op here and the
-				// coordinator routes the primary half separately -- D-A6-4's
-				// split between deciding and applying.
-				//
-				// The model skipped this check and rolled back locks whose
-				// primary it could not see, on the strength of an absence that
-				// only meant "not here". Same shape as BUG-012: a model that
-				// applies a step the replicas refuse computes a state no replica
-				// ever held.
-				if !desc.Contains([]byte(l.primary)) {
+				if c.Status == kv.TxnCommitted {
+					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+						Key: c.Key, StartTS: l.startTS, CommitTS: c.CommitTS,
+					})
+					delete(locks, c.Key)
 					continue
 				}
-				dk := raftcheck.TxnDecisionKey(l.primary, l.startTS)
-				d, ok := decided[dk]
-				switch {
-				case ok && !d.Rollback:
-					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
-						Key: c.Key, StartTS: l.startTS, CommitTS: d.CommitTS,
-					})
-					delete(locks, c.Key)
-				case ok:
-					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
-						Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
-					})
-					delete(locks, c.Key)
-					vs = dropVersion(vs, c.Key, l.startTS)
-				case c.ReadTS.LessEq(l.deadline):
-					// wait
-				default:
-					commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
-						Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
-					})
-					delete(locks, c.Key)
-					vs = dropVersion(vs, c.Key, l.startTS)
-				}
+				commits[c.Key] = append(commits[c.Key], raftcheck.CommitFact{
+					Key: c.Key, StartTS: l.startTS, CommitTS: l.startTS, Rollback: true,
+				})
+				delete(locks, c.Key)
+				vs = dropVersion(vs, c.Key, l.startTS)
 			}
 			continue
 		}
@@ -975,6 +971,42 @@ type RaftResult struct {
 	EnvelopeRefusals  int
 	SnapshotReads     int
 
+	// A6's evidence, and the same rule again: every count below is asserted in
+	// the exit run or deleted. They divide into three groups -- what the bank
+	// did, what its READS ran into, and what the recovery path did about it --
+	// because a green sweep in which no read ever found a lock says nothing
+	// about the half of Percolator that matters.
+	TxnStarted            int
+	TxnCommitted          int
+	TxnAbandoned          int
+	TxnAborted            int
+	TxnLostToResolver     int
+	TxnReads              int
+	ReaderResolves        int
+	UncertaintyRestarts   int
+	TxnReadsRefused       int
+	AuditsStarted         int
+	AuditsComplete        int
+	AuditsLocked          int
+	AuditsUncertain       int
+	AuditsRetried         int
+	IdentityCollisions    int
+	ForeignLocksKept      int
+	ResolveWaited         int
+	ResolvedForward       int
+	ResolvedBack          int
+	UnparseableReads      int
+	WriteConflicts        int
+	PrewriteBlocked       int
+	TxnRaceLost           int
+	ResolveWaits          int
+	ResolveAlreadyDecided int
+	ResolveDeclaredDead   int
+	ResolveNoLock         int
+	RollForwards          int
+	RollBacks             int
+	ReadsBlocked          int
+
 	Seed     uint64
 	Outcome  sim.Outcome
 	Reports  []sim.Report
@@ -1061,9 +1093,9 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
 			Transport:         run.Transport, Ledger: ledger, History: hist,
-			OnTxnApplied: func(c store.TxnCommand, at clock.Instant, s sim.Scheduler) {
+			OnTxnApplied: func(c store.TxnCommand, r store.TxnResult, at clock.Instant, s sim.Scheduler) {
 				if coordRef != nil {
-					coordRef.applied(c, at, s)
+					coordRef.applied(c, r, at, s)
 				}
 			},
 			// The node's own clock, with its own timeline: skew between nodes
@@ -1311,11 +1343,47 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	// optimisation dressed as a principle: evaluating them mid-run would assert
 	// an eventual property against a run caught mid-cleanup, and it cost ten
 	// times the runtime for the privilege (raftcheck.PercolatorInvariants.Interested).
+	// The A6 oracles are all whole-history or final-state properties, so they
+	// are evaluated once, here. Ordered cheapest-evidence-first: a conservation
+	// failure names one audit and one number, and is the easiest of the four to
+	// read on the way to a seed.
+	if res.Violated == nil && coord != nil {
+		res.Violated = raftcheck.NewBankConservation(ledger, opt.Accounts).Check()
+	}
+	if res.Violated == nil && coord != nil {
+		res.Violated = raftcheck.NewSnapshotIsolation(ledger).Check()
+	}
+	if res.Violated == nil && coord != nil {
+		res.Violated = raftcheck.NewUncertaintyEnvelope(
+			ledger, time.Duration(p.Config.MaxOffsetNS)).Check()
+	}
 	if res.Violated == nil {
 		inv := raftcheck.NewPercolatorInvariants(ledger, func() []raftcheck.RecoveredState {
 			return recoveredStates(ledger)
 		})
 		res.Violated = inv.Check()
+	}
+	if coord != nil {
+		res.TxnStarted = coord.Started()
+		res.TxnCommitted = coord.Committed()
+		res.TxnAbandoned = coord.Abandoned()
+		res.TxnAborted = coord.Aborted()
+		res.TxnLostToResolver = coord.LostToResolver()
+		res.TxnReads = coord.Reads()
+		res.ReaderResolves = coord.ReaderResolves()
+		res.UncertaintyRestarts = coord.Restarts()
+		res.TxnReadsRefused = coord.RefusedReads()
+		res.AuditsStarted = coord.AuditsStarted()
+		res.AuditsComplete = coord.AuditsComplete()
+		res.AuditsLocked = coord.AuditsLocked()
+		res.AuditsUncertain = coord.AuditsUncertain()
+		res.AuditsRetried = coord.AuditsRetried()
+		res.IdentityCollisions = coord.IdentityCollisions()
+		res.ForeignLocksKept = coord.ForeignLocksKept()
+		res.ResolveWaited = coord.ResolveWaited()
+		res.ResolvedForward = coord.ResolvedForward()
+		res.ResolvedBack = coord.ResolvedBack()
+		res.UnparseableReads = coord.Unparseable()
 	}
 	res.Census = ledger.Census()
 
@@ -1351,6 +1419,16 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.MVCCReadsRefused += d.MVCCReadsRefused()
 		res.MVCCWritesRefused += d.MVCCWritesRefused()
 		res.EnvelopeRefusals += d.EnvelopeRefusals()
+		res.WriteConflicts += d.WriteConflicts()
+		res.PrewriteBlocked += d.PrewriteBlocked()
+		res.TxnRaceLost += d.TxnRaceLost()
+		res.ResolveWaits += d.ResolveWaits()
+		res.ResolveAlreadyDecided += d.ResolveAlreadyDecided()
+		res.ResolveDeclaredDead += d.ResolveDeclaredDead()
+		res.ResolveNoLock += d.ResolveNoLock()
+		res.RollForwards += d.RollForwards()
+		res.RollBacks += d.RollBacks()
+		res.ReadsBlocked += d.ReadsBlocked()
 		if c := d.RangeCount(); c > res.Ranges {
 			res.Ranges = c
 		}
@@ -1466,6 +1544,38 @@ type RaftCensus struct {
 	EnvelopeRefusals  int
 	SnapshotReads     int
 
+	// A6's evidence.
+	TxnStarted            int
+	TxnCommitted          int
+	TxnAbandoned          int
+	TxnAborted            int
+	TxnLostToResolver     int
+	TxnReads              int
+	ReaderResolves        int
+	UncertaintyRestarts   int
+	TxnReadsRefused       int
+	AuditsStarted         int
+	AuditsComplete        int
+	AuditsLocked          int
+	AuditsUncertain       int
+	AuditsRetried         int
+	IdentityCollisions    int
+	ForeignLocksKept      int
+	ResolveWaited         int
+	ResolvedForward       int
+	ResolvedBack          int
+	UnparseableReads      int
+	WriteConflicts        int
+	PrewriteBlocked       int
+	TxnRaceLost           int
+	ResolveWaits          int
+	ResolveAlreadyDecided int
+	ResolveDeclaredDead   int
+	ResolveNoLock         int
+	RollForwards          int
+	RollBacks             int
+	ReadsBlocked          int
+
 	FirstViolation     uint64
 	FoundAViolation    bool
 	InconclusiveCauses []string
@@ -1510,6 +1620,36 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.MVCCReadsRefused += r.MVCCReadsRefused
 		c.MVCCWritesRefused += r.MVCCWritesRefused
 		c.EnvelopeRefusals += r.EnvelopeRefusals
+		c.TxnStarted += r.TxnStarted
+		c.TxnCommitted += r.TxnCommitted
+		c.TxnAbandoned += r.TxnAbandoned
+		c.TxnAborted += r.TxnAborted
+		c.TxnLostToResolver += r.TxnLostToResolver
+		c.TxnReads += r.TxnReads
+		c.ReaderResolves += r.ReaderResolves
+		c.UncertaintyRestarts += r.UncertaintyRestarts
+		c.TxnReadsRefused += r.TxnReadsRefused
+		c.AuditsStarted += r.AuditsStarted
+		c.AuditsComplete += r.AuditsComplete
+		c.AuditsLocked += r.AuditsLocked
+		c.AuditsUncertain += r.AuditsUncertain
+		c.UnparseableReads += r.UnparseableReads
+		c.WriteConflicts += r.WriteConflicts
+		c.PrewriteBlocked += r.PrewriteBlocked
+		c.TxnRaceLost += r.TxnRaceLost
+		c.ResolveWaits += r.ResolveWaits
+		c.ResolveAlreadyDecided += r.ResolveAlreadyDecided
+		c.ResolveDeclaredDead += r.ResolveDeclaredDead
+		c.ResolveNoLock += r.ResolveNoLock
+		c.AuditsRetried += r.AuditsRetried
+		c.IdentityCollisions += r.IdentityCollisions
+		c.ForeignLocksKept += r.ForeignLocksKept
+		c.ResolveWaited += r.ResolveWaited
+		c.ResolvedForward += r.ResolvedForward
+		c.ResolvedBack += r.ResolvedBack
+		c.RollForwards += r.RollForwards
+		c.RollBacks += r.RollBacks
+		c.ReadsBlocked += r.ReadsBlocked
 		c.SnapshotReads += r.SnapshotReads
 		if r.Ranges > c.Ranges {
 			c.Ranges = r.Ranges

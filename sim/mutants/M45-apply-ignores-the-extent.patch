@@ -9,7 +9,7 @@
 # mutates: a committed command is applied whatever its key, so a range keeps writing keys it has already given away. The key then sits in the wrong range forever, because the next split moves out only what its own right half contains and a key outside both halves is moved by nothing (BUG-014). The split-time partition assertion is removed with it, since that assertion exists only to make this residue loud
 --- a/store/node.go
 +++ b/store/node.go
-@@ -621,7 +621,7 @@
+@@ -708,7 +708,7 @@
  						n.answerAt(e, "", "", cmdTS, at)
  						continue
  					}
@@ -20,17 +20,16 @@
  							// A write the state machine refuses is not a crash:
 --- a/store/machine.go
 +++ b/store/machine.go
-@@ -625,12 +625,8 @@
+@@ -705,12 +705,8 @@
  		switch {
- 		case spec.Right.Contains(v.Key):
- 			rightVs = append(rightVs, v)
--		case spec.Left.Contains(v.Key):
--			leftKept = append(leftKept, v)
+ 		case spec.Right.Contains(userKey):
+ 			rightVs = append(rightVs, reNamespace(rec, left.mvcc.Namespace(), rangePrefix(spec.Right.ID)))
+-		case spec.Left.Contains(userKey):
+-			leftKept = append(leftKept, rec)
  		default:
 -			panic(fmt.Sprintf(
 -				"store: node %d splitting range %d holds key %q, which neither %s nor %s covers",
--				m.cfg.ID, left.rng, v.Key, spec.Left, spec.Right))
-+			leftKept = append(leftKept, v)
+-				m.cfg.ID, left.rng, userKey, spec.Left, spec.Right))
++			leftKept = append(leftKept, rec)
  		}
  	}
- 	// The mark travels with the versions. A right range born with a zero mark

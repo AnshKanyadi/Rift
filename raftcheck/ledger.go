@@ -53,7 +53,9 @@ type Ledger struct {
 
 	// reads is every answer a replica gave a client, in the order the harness
 	// observed them leaving the nodes.
-	reads []ReadRecord
+	reads    []ReadRecord
+	txnReads []TxnReadRecord
+	audits   []AuditRecord
 
 	// txns is every transaction the harness's coordinator issued.
 	txns []TxnRecord
@@ -130,6 +132,79 @@ type TxnRecord struct {
 	Began    clock.Instant
 	Decided  clock.Instant
 	Reached  bool // the coordinator observed its primary record land
+}
+
+// TxnReadRecord is one snapshot read a transaction issued, and the answer the
+// cluster gave it.
+//
+// # This is the whole client-observed history the A6 oracles judge
+//
+// Snapshot isolation and bank conservation are asserted over THESE and nothing
+// else. Not over engine state, not over the recovered records, not over what
+// the coordinator believed: over what a client asked and what it was told, which
+// is the only evidence a real user of this database would ever have.
+//
+// # Locked, Uncertain and Refused are recorded because they are answers
+//
+// A history containing only the successful reads would let a store pass by
+// refusing everything, which is the shape BUG-016 made a standing rule about.
+// Each is the outcome of one of the three questions kv.GetTxn asks, and each is
+// checkable: a lock names a primary, an uncertainty names a commit inside the
+// interval and a restart strictly above it, a refusal names a timestamp at or
+// below the mark.
+type TxnReadRecord struct {
+	Range uint64
+	Node  int
+
+	// Index is the log position whose applied state produced this answer. The
+	// same reason ReadRecord carries one: an answer is compared against the
+	// state a POSITION produces, never against a wall-clock moment.
+	Index raft.Index
+
+	Key string
+
+	// At is the timestamp the read named; StartTS is the transaction it belongs
+	// to. They are equal for a transaction's own reads and differ for an audit,
+	// which names a timestamp without being a transaction.
+	At      hlc.Timestamp
+	StartTS hlc.Timestamp
+
+	Value string
+	Found bool
+
+	Locked      bool
+	LockPrimary string
+	LockStartTS hlc.Timestamp
+
+	Uncertain bool
+	CommitTS  hlc.Timestamp
+	RestartAt hlc.Timestamp
+
+	// Ceiling is the top of the uncertainty interval this read used. Recorded
+	// because the envelope checker's job is to compare it against a bound
+	// derived from the PLAN, and it cannot do that if the only place the number
+	// exists is inside the node that chose it.
+	Ceiling hlc.Timestamp
+
+	Refused bool
+
+	When clock.Instant
+}
+
+// AuditRecord is one complete audit: every account read at ONE timestamp, and
+// what they summed to.
+//
+// # Only complete audits are recorded
+//
+// A sum over a subset of the accounts conserves nothing, so a partial audit
+// never reaches the ledger at all. Accounts is carried anyway, and the oracle
+// checks it, because "complete" is a claim the harness makes and a claim the
+// harness makes is a claim the checker verifies.
+type AuditRecord struct {
+	ReadTS   hlc.Timestamp
+	Total    int
+	Accounts int
+	When     clock.Instant
 }
 
 // MoveRecord is one replica movement the harness ordered.
@@ -295,6 +370,24 @@ func (l *Ledger) RecordRead(r provenance.Observed[ReadRecord]) {
 
 // Reads is every answer the harness observed.
 func (l *Ledger) Reads() []ReadRecord { return l.reads }
+
+// RecordTxnRead appends one snapshot read and its answer.
+func (l *Ledger) RecordTxnRead(r provenance.Observed[TxnReadRecord]) {
+	l.rev++
+	l.txnReads = append(l.txnReads, r.Fact())
+}
+
+// TxnReads is the client-observed history of snapshot reads.
+func (l *Ledger) TxnReads() []TxnReadRecord { return l.txnReads }
+
+// RecordAudit appends one complete audit.
+func (l *Ledger) RecordAudit(r provenance.Observed[AuditRecord]) {
+	l.rev++
+	l.audits = append(l.audits, r.Fact())
+}
+
+// Audits is every complete audit this run produced.
+func (l *Ledger) Audits() []AuditRecord { return l.audits }
 
 // ReadsRefused counts the answers that were refusals.
 func (l *Ledger) ReadsRefused() int {

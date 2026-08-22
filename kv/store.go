@@ -62,6 +62,11 @@ type Store struct {
 	// a position anybody else can compute (DESIGN-A5 sections 6 and 7).
 	gcMark hlc.Timestamp
 
+	// foreignLocksKept counts how often a commit or a rollback found a lock
+	// belonging to another transaction and left it alone. Every one of these
+	// was a lock BUG-019 would have stolen.
+	foreignLocksKept int
+
 	reads        int
 	readsRefused int
 	prewrites    int
@@ -229,6 +234,10 @@ func (s *Store) Reads() int             { return s.reads }
 func (s *Store) ReadsRefused() int      { return s.readsRefused }
 func (s *Store) VersionsWritten() int   { return s.versionsWrote }
 func (s *Store) VersionsCollected() int { return s.versionsGCd }
+
+// ForeignLocksKept is BUG-019's non-vacuity evidence: a sweep in which it is
+// zero never reached the schedule the fix exists for.
+func (s *Store) ForeignLocksKept() int { return s.foreignLocksKept }
 
 // prefixEnd is the exclusive upper bound for a prefix scan.
 func prefixEnd(p []byte) []byte {

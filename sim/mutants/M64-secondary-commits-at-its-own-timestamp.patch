@@ -9,10 +9,9 @@
 # mutates: a transaction's secondaries commit one logical tick after its primary. Each key's own history is perfectly ordinary -- one prewrite, one commit, ascending timestamps -- so nothing that looks at a single key can see it, and every replica agrees. A reader between the two timestamps sees half the transaction, which is the definition of atomicity broken
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go
-@@ -169,9 +169,13 @@
- 		c.ledger.RecordTxnCommit(t.id, t.commitTS, at)
+@@ -686,9 +686,13 @@
  		t.phase = phaseCommitKeys
- 		t.pending = len(t.keys)
+ 		t.ack = map[string]bool{}
 -		for _, k := range t.keys {
 +		for i, k := range t.keys {
 +			ct := t.commitTS

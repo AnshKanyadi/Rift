@@ -1,0 +1,22 @@
+# id: M66-commit-takes-any-lock
+# covering-test: TestRaftExitCriteria
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 300
+# power-floor: 1
+# power-ceiling: 60
+# power-measured: PENDING
+# mutates: BUG-019 on the roll-FORWARD path, which is worse than the rollback one: a commit can be issued by a RESOLVER acting on somebody else's behalf, so the lock it steals belongs to a transaction that is not even a party to the operation. Same consequence -- an orphaned committed version -- and the same single detector
+--- a/kv/txn.go
++++ b/kv/txn.go
+@@ -134,9 +134,7 @@
+ 			"before it began, and a reader would see the write appear in its own past", commitTS, startTS)
+ 	}
+ 	b.Set(WriteKey(s.ns, key, commitTS), encodeWrite(startTS, false))
+-	if err := s.releaseLockOf(b, key, startTS); err != nil {
+-		return err
+-	}
++	b.Delete(LockKey(s.ns, key))
+ 	s.commits++
+ 	return nil
+ }

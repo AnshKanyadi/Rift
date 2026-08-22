@@ -207,15 +207,41 @@ func applyTxnTo(s *kv.Store, b *engine.Batch, c TxnCommand, desc RangeDescriptor
 		_ = s.PutTxnInto(b, []byte(c.Key), kv.TxnRecord{
 			Status: c.Status, StartTS: c.StartTS, CommitTS: c.CommitTS,
 		})
-	case OpResolve:
+	case OpTxnGet:
+		// A snapshot read changes nothing. Named rather than left to the
+		// default, because the default is "apply the command" and a read
+		// falling through to it would be a silent write.
+
+	case OpResolveStatus:
+		// The primary's range decides. If the owner is undecided and past its
+		// deadline, the decision is MADE here, by writing a rollback record --
+		// which is what "the TTL is expiry, not permission" means: nobody
+		// concludes the owner is dead, somebody makes it dead, through the log
+		// (DESIGN-A6 section 5).
+		l := kv.Lock{Primary: []byte(c.Key), StartTS: c.StartTS, Deadline: c.Deadline}
+		r, _, err := s.ResolveLock([]byte(c.Key), l, c.ExpireAt, true)
+		if err != nil || r != kv.ResolveBack {
+			return
+		}
+		if _, ok, err := s.Txn([]byte(c.Key), c.StartTS); err == nil && !ok {
+			_ = s.PutTxnInto(b, []byte(c.Key), kv.TxnRecord{
+				Status: kv.TxnRolledBack, StartTS: c.StartTS,
+			})
+		}
+
+	case OpApplyResolution:
+		// The locked key's range applies a verdict reached elsewhere. It still
+		// reads its own lock: the verdict says what to do with THIS
+		// transaction's version, and a lock that has since gone means somebody
+		// already did it.
 		l, ok, err := s.Lock([]byte(c.Key))
-		if err != nil || !ok {
+		if err != nil || !ok || l.StartTS != c.StartTS {
 			return
 		}
-		r, commitTS, err := s.ResolveLock([]byte(c.Key), l, c.ReadTS, desc.Contains(l.Primary))
-		if err != nil || r == kv.ResolveWait {
-			return
+		r := kv.ResolveForward
+		if c.Status == kv.TxnRolledBack {
+			r = kv.ResolveBack
 		}
-		_ = s.ApplyResolutionInto(b, []byte(c.Key), l, r, commitTS)
+		_ = s.ApplyResolutionInto(b, []byte(c.Key), l, r, c.CommitTS)
 	}
 }

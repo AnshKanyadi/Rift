@@ -88,7 +88,7 @@ type Config struct {
 	// key, and reports back HERE -- on the node that proposed it, at the instant
 	// its own entry applied, inside the event loop. No goroutine and no polling,
 	// and the same position every replica agrees on.
-	OnTxnApplied func(c TxnCommand, at clock.Instant, s sim.Scheduler)
+	OnTxnApplied func(c TxnCommand, r TxnResult, at clock.Instant, s sim.Scheduler)
 
 	// NewTimestampSource builds a range's timestamp source. Nil means the HLC.
 	//
@@ -278,13 +278,16 @@ type Replica struct {
 	versionsCollected int
 
 	// The A6 transaction counters.
-	writeConflicts  int
-	prewriteBlocked int
-	txnCommitted    int
-	txnRolledBack   int
-	txnRaceLost     int
-	txnRefused      int
-	resolveWaits    int
+	writeConflicts        int
+	prewriteBlocked       int
+	txnCommitted          int
+	txnRolledBack         int
+	txnRaceLost           int
+	txnRefused            int
+	resolveWaits          int
+	resolveAlreadyDecided int
+	resolveDeclaredDead   int
+	resolveNoLock         int
 
 	// envelopeRefusals counts peers whose timestamp was beyond maxOffset ahead.
 	// Zero in a bounded run is the bound holding; nonzero in a skew run is the
@@ -635,9 +638,9 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 							// which is not a function of the log, and is exactly
 							// what snapshot equivalence is for.
 							n.flushApply(mb)
-							n.applyTxn(mb, c)
+							res := n.applyTxn(mb, c)
 							n.flushApply(mb)
-							n.answerTxn(e, c, at, s)
+							n.answerTxn(e, c, res, at, s)
 						}
 						k = c.Key
 						op = "txn"
@@ -829,7 +832,7 @@ func (n *Replica) flushApply(b *engine.Batch) {
 //
 // The inflight match is what makes it the proposer's: every replica applies the
 // entry, and only one of them has a client waiting on it.
-func (n *Replica) answerTxn(e raft.Entry, c TxnCommand, at clock.Instant, s sim.Scheduler) {
+func (n *Replica) answerTxn(e raft.Entry, c TxnCommand, res TxnResult, at clock.Instant, s sim.Scheduler) {
 	if e.ID.Zero() || n.cfg.OnTxnApplied == nil {
 		return
 	}
@@ -843,9 +846,64 @@ func (n *Replica) answerTxn(e raft.Entry, c TxnCommand, at clock.Instant, s sim.
 		found = true
 	}
 	n.inflight = kept
-	if found {
-		n.cfg.OnTxnApplied(c, at, s)
+	if !found {
+		return
 	}
+	if c.Op == OpTxnGet {
+		res = n.readTxn(c, e, at)
+	}
+	n.cfg.OnTxnApplied(c, res, at, s)
+}
+
+// readTxn evaluates a snapshot read against the state this entry's position
+// produced, and records what the client was told.
+//
+// # Everything here happens on the PROPOSER only
+//
+// Every replica applied the entry; only one of them has a client waiting. That
+// asymmetry is safe precisely because a read stages nothing: the state machines
+// stay identical whether or not this ran.
+//
+// # The bound comes from the source, not from a clock
+//
+// hlc.Source.MaxOffset is what the cluster ADVERTISES, and clock.Clock's own
+// bound is what one node's oscillator assumes. They are equal today and would
+// not be under a TSO, whose uncertainty is a property of the TSO. Reaching past
+// the interface for the bound is the type switch A5's exit criteria treat as a
+// defect, wearing a different hat.
+func (n *Replica) readTxn(c TxnCommand, e raft.Entry, at clock.Instant) TxnResult {
+	ceiling := c.MaxTS
+	if !ceiling.IsSet() {
+		ceiling = kv.UncertaintyCeiling(
+			c.ReadTS, hlc.Timestamp{Wall: clock.Wall(n.hlc.MaxOffset())})
+	}
+	v, ok, err := n.mvcc.GetTxn([]byte(c.Key), c.ReadTS, ceiling)
+	res := TxnResult{Value: string(v), Found: ok && err == nil, Ceiling: ceiling}
+	var locked *kv.LockedError
+	var unc *kv.UncertaintyError
+	switch {
+	case errors.As(err, &locked):
+		res.Locked = true
+		res.LockPrimary = string(locked.Lock.Primary)
+		res.LockStartTS = locked.Lock.StartTS
+		res.LockDeadline = locked.Lock.Deadline
+	case errors.As(err, &unc):
+		res.Uncertain = true
+		res.CommitTS = unc.CommitTS
+		res.RestartAt = unc.RestartAt()
+	case err != nil:
+		res.Refused = true
+		n.readsRefused++
+	}
+	n.cfg.Ledger.RecordTxnRead(provenance.Witness(raftcheck.TxnReadRecord{
+		Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: e.Index,
+		Key: c.Key, At: c.ReadTS, StartTS: c.StartTS,
+		Value: res.Value, Found: res.Found,
+		Locked: res.Locked, LockPrimary: res.LockPrimary, LockStartTS: res.LockStartTS,
+		Uncertain: res.Uncertain, CommitTS: res.CommitTS, RestartAt: res.RestartAt,
+		Ceiling: ceiling, Refused: res.Refused, When: at,
+	}))
+	return res
 }
 
 // rerouteAt answers a command applied outside this range's extent by sending the

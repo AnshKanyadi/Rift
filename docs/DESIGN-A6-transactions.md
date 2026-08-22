@@ -484,3 +484,111 @@ shorter prefix with **the state at the later index**. Ten seeds in a hundred.
 Fixed by restarting from a fresh replay whenever a request goes backwards: the cursor is an
 optimization for the forward case only, and it is never allowed to answer a question it has already
 passed.
+
+---
+
+## 15. Five decisions the oracles forced, and one gap they left
+
+Everything in this section was written **after** the oracles ran. §8's discipline — name the fact
+before the code — closed four timestamp-position facts with zero defects. These are the ones nothing
+predicted, and each was produced by making a checker actually watch something.
+
+### 15.1 D-A6-7: the uncertainty ceiling is fixed at the transaction's first snapshot
+
+A read at `T` restarts on a commit in `(T, T+maxOffset]`, above the observed commit. Restart, and the
+new read is at `T' > T` — so what is its window?
+
+If it is `(T', T'+maxOffset]`, **the top moves up by exactly as much as the bottom**. The set of
+commits that can restart the transaction again never shrinks, and under steady write traffic the
+transaction restarts forever.
+
+So the ceiling is `T₀ + maxOffset`, computed once at the first snapshot and carried unchanged through
+every restart. Each restart then strictly reduces the interval, and a transaction can restart at most
+as many times as there are commits inside its first window. `kv.UncertaintyCeiling` holds the
+argument; `TestTheUncertaintyCeilingDoesNotMoveWhenAReadRestarts` holds the counterfactual.
+
+Measured before it was carried: audits restarted **202 times and completed 13** across 20 seeds.
+
+**And the ceiling must be learned from ANY answer, not only a successful one.** The first version
+learned it from a read that returned a value, so a transaction whose first answer was *uncertain*
+restarted without one — and the node, seeing no ceiling, computed a fresh window from the new
+timestamp. The fix for a moving window was in place and the one path that needed it most walked
+around it.
+
+### 15.2 D-A6-8: the commit timestamp is allocated at commit time
+
+It was `startTS.Next()`, which is a transaction **committing into its own past**: a reader whose
+snapshot sits between the two sees a write appear below a timestamp it has already read at.
+
+Percolator allocates the commit timestamp after prewrite for exactly this reason. Allocating it here
+is also what makes an uncertain commit possible at all — a commit derived from a start timestamp is
+never ahead of anybody, so with the old rule **the uncertainty machinery was unreachable by
+construction**. It fired 0 times across 20 seeds before, and fires in every sweep since.
+
+### 15.3 D-A6-9: resolution is two commands, because a primary can be on another range
+
+The single `OpResolve` read the lock, read the primary's record, and applied the verdict — all on one
+range. When the primary was elsewhere it returned *wait*, forever: **a cross-range lock could never be
+cleared by anybody**, and after a split most locks are cross-range.
+
+`OpResolveStatus` runs on the primary's range and decides (reading the record, or *making* the
+decision by writing a rollback record when the owner is past its deadline). `OpApplyResolution` runs
+on the locked key's range and applies a verdict it carries rather than re-deriving — which is what
+lets it work at all, and is the same rule every other A6 command follows.
+
+Measured: completed audits went from **44 in 320 to 235 in 320** on the same seeds.
+
+### 15.4 D-A6-10: the expiry timestamp is not the reader's snapshot
+
+The resolve carried one timestamp, used both as the reader's snapshot and as the value a lock's TTL
+was judged against. A lock's deadline is fixed and a snapshot is fixed, so **a resolver that waited
+once waits forever**, however long the owner has been dead — and an audit reading a past instant could
+never expire anything.
+
+The determinism requirement was never that the two be the same value. It is that the value be
+**carried** rather than read from a clock at apply time, and both of them are. `ReadTS` is the
+snapshot; `ExpireAt` is chosen at propose time and carried. Measured before separating them: **8977
+waits and 9 completed audits** across 20 seeds.
+
+### 15.5 D-A6-11: an audit names its instant, so its uncertainty window is empty
+
+An audit reads every account at one timestamp, deliberately in the recent past. It is not asking
+"what is true now" — it names the instant, the way a read `AS OF SYSTEM TIME` does, and the way the
+plain workload's snapshot reads have always done.
+
+Applying an uncertainty window to it makes every commit of the following half-second uncertain, so
+nearly every audit restarts and each restart is a fresh round of N reads. The interval was being
+applied to a question it is not the answer to. **Transfers** exercise uncertainty, because their
+snapshots are at now, which is the case it exists for.
+
+### 15.6 The gap: an HLC start timestamp is not a transaction identity
+
+> **UNCAUGHT BY CONSTRUCTION: two transactions can share a `(primary, start timestamp)`.**
+
+Percolator identifies a transaction by its start timestamp, and the transaction record is addressed by
+`(primary key, start timestamp)`. That is safe there because **a single TSO issues start timestamps**.
+
+Here every node has its own HLC, and two nodes can mint the identical `(wall, logical)` pair. Two
+transactions that also share a primary would then share a record: the second's decision is refused as
+already made, and it **silently adopts the first's fate** — committed when it should have aborted, or
+the reverse.
+
+It is not hypothetical at one remove: the *harness* routed answers by start timestamp and delivered
+one transaction's read to another within the first twenty seeds (BUG-020). The database-side collision
+needs the primaries to match as well, which is rarer, and has not been observed.
+
+**So it is asserted rather than assumed.** `IdentityCollisions` counts every transaction whose
+`(primary, startTS)` matches an earlier one, and the exit run fails if it is ever nonzero. The day it
+fires, the fix is the **identity** — a transaction id in the record key, or the TSO fallback
+Amendment A6 pre-authorises — and never the assertion.
+
+### 15.7 What this section is evidence for
+
+Four oracles were wired in one cycle. Between them they produced one database bug (BUG-019), one
+harness bug in three parts (BUG-020), four design decisions above that no one had written down, and
+one named gap. None of it came from reading the code again.
+
+The reason is stated in §7 and is worth repeating with the numbers attached: **the conservation check
+is over client-observed history only.** Not one of these was visible in the engine's state, which was
+internally consistent throughout. BUG-019 produced a perfectly coherent database with nine units of
+money missing from it.

@@ -396,6 +396,52 @@ func (m *Node) EnvelopeRefusals() int {
 	return m.sum(func(r *Replica) int { return r.EnvelopeRefusals() })
 }
 
+// A6's per-node totals. Each is a sum over this node's replicas of a counter
+// the apply path keeps, and each is asserted in the exit run or deleted.
+func (m *Node) WriteConflicts() int {
+	return m.sum(func(r *Replica) int { return r.WriteConflicts() })
+}
+
+func (m *Node) PrewriteBlocked() int {
+	return m.sum(func(r *Replica) int { return r.PrewriteBlocked() })
+}
+
+func (m *Node) TxnRaceLost() int {
+	return m.sum(func(r *Replica) int { return r.TxnRaceLost() })
+}
+
+func (m *Node) ResolveWaits() int {
+	return m.sum(func(r *Replica) int { return r.ResolveWaits() })
+}
+
+func (m *Node) ResolveAlreadyDecided() int {
+	return m.sum(func(r *Replica) int { return r.ResolveAlreadyDecided() })
+}
+
+func (m *Node) ResolveDeclaredDead() int {
+	return m.sum(func(r *Replica) int { return r.ResolveDeclaredDead() })
+}
+
+func (m *Node) ForeignLocksKept() int {
+	return m.sum(func(r *Replica) int { return r.mvcc.ForeignLocksKept() })
+}
+
+func (m *Node) ResolveNoLock() int {
+	return m.sum(func(r *Replica) int { return r.ResolveNoLock() })
+}
+
+func (m *Node) RollForwards() int {
+	return m.sum(func(r *Replica) int { return r.RollForwards() })
+}
+
+func (m *Node) RollBacks() int {
+	return m.sum(func(r *Replica) int { return r.RollBacks() })
+}
+
+func (m *Node) ReadsBlocked() int {
+	return m.sum(func(r *Replica) int { return r.mvcc.ReadsBlocked() })
+}
+
 // StaleEpochRefusals is how many requests this machine refused for arriving
 // under a descriptor the range has moved past.
 func (m *Node) StaleEpochRefusals() int { return m.staleEpochs }

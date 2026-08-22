@@ -1121,3 +1121,101 @@ every acknowledgement look covered. Across 10,000 seeds the read-back was ahead 
 DESIGN-A1 §5c has the full account, including why this is the eighth instance of the vacuous-green
 class and the first one inside an oracle. `internal/provenance` and `tools/provcheck` are the part of
 the fix that a future change has to get past.
+
+---
+
+### BUG-019 — a transaction's rollback took another transaction's lock, and the money it was holding stopped existing
+
+| field | value |
+|---|---|
+| **Found by** | sim — `bank-conservation`, on 2 of the first 20 A6 seeds, on the oracle's first outing |
+| **Phase** | A6 |
+| **Reproduce (unit)** | `go test ./kv -run 'StealSomebodyElsesLock'` |
+| **Reproduce (seed)** | seed **7**: the audit at `1600000003877395934.0` reads all eight accounts and they sum to **-9** |
+| **Invariant that caught it** | bank conservation over client-observed history — the accounts sum to what they summed to at the beginning |
+| **Mutant class** | none existed — added `M65-rollback-takes-any-lock` and `M66-commit-takes-any-lock` |
+| **Fix commit** | *(this commit)* |
+| **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Symptom.** Nine units of money stopped existing. An audit reading all eight accounts at one
+timestamp summed to -9 where every transfer in the run had moved an amount from one account to
+another, so the total could only ever be zero.
+
+**Root cause, and it is one word.** *The* lock.
+
+A key holds at most one lock, so the lock record has no transaction in its address:
+`LockKey(ns, key)` names **the slot**, not the holder. Both resolution paths ended with
+
+```go
+b.Delete(LockKey(s.ns, key))
+```
+
+which reads as *delete my lock* and executes as *delete whoever's lock*.
+
+**The schedule, which needs no fault at all:**
+
+1. T1 prewrites `k` and holds the lock.
+2. T2 prewrites `k`, is refused because the key is locked — **this is first-committer-wins working
+   correctly** — and aborts.
+3. T2's abort rolls back its own key, and takes T1's lock with it.
+
+T1 is now a committed transaction with an **orphaned version**: no lock, so no reader will ever
+discover it and no resolver will ever finish it. The value it committed is invisible for the rest of
+time. On seed 7 that value was nine units of somebody's balance.
+
+**Fix.** `releaseLockOf` reads the lock and drops it only if the start timestamp matches. One place,
+because both callers had the same defect for the same reason. The version delete never needed the
+check — it is already addressed by start timestamp, and only the lock was ambiguous.
+
+The read is only correct because the apply loop flushes around every transaction step, which is
+**BUG-018's fix**. This is the first thing built on top of it.
+
+**Why the surrounding oracles did not catch it.** Transaction atomicity checks that a transaction's
+keys are all at its commit timestamp or nowhere; an orphaned version is *nowhere*, which satisfies it.
+The Percolator invariants check that no state is internally contradictory; an orphan contradicts
+nothing. Both are right, and both are blind to it, because the defect does not produce an inconsistent
+state — **it produces a consistent state with the wrong amount of money in it.** Only a checker that
+knows the workload's own conservation law can see that, which is exactly the argument for the bank.
+
+**What it would have caused in production.** Silent data loss on any key two transactions contend
+for, with no error anywhere and no inconsistency any internal check could detect. A committed write
+that no reader can see is worse than a lost one: the transaction was acknowledged.
+
+---
+
+### BUG-020 — (harness) a transfer prewrote a balance it had never read, and the workload invented money
+
+| field | value |
+|---|---|
+| **Found by** | sim — `bank-conservation`, seed 9, while investigating BUG-019 |
+| **Phase** | A6 |
+| **Reproduce (seed)** | seed **9**: the audit at `1600000006499641460.0` sums to **-23** |
+| **Invariant that caught it** | bank conservation, and then the new one-line assertion in `prewrite` |
+| **Mutant class** | not applicable — the defect is in the workload, not the system |
+| **Fix commit** | *(this commit)* |
+
+**In the observer, not the observed**, and recorded here anyway: it is the ninth harness defect, and
+BUG-016's standing rule is that a checker firing on correct behaviour costs more than no checker.
+Here the checker was right and the *client* was wrong, which is a third case worth naming.
+
+**Two defects, both the same shape.**
+
+1. **A counter of answers is not a count of distinct facts.** The transfer tracked read completion
+   with `pending--`. Two answers for one key — which happens whenever two resolutions of the same
+   lock both come back — counted as two keys read. The transaction then prewrote a key it had never
+   read, using Go's zero value, and invented twenty-three units of money.
+2. **A start timestamp is not a transaction identity.** Answers were routed to the waiting client by
+   start timestamp. Percolator can do that because a single TSO issues them; **here every node has
+   its own HLC and two nodes can mint the identical `(wall, logical)` pair**, so one transaction's
+   read was delivered to another and landed in its read set under a key it did not own.
+
+**Fixes.** Completion is a set keyed by the key, in every phase — the audit had this right from the
+start with `seen`, and the two structures answer the same question. Routing is by an explicit request
+identity (`TxnCommand.Origin`), never by a timestamp. And `prewrite` now asserts, in one line, that
+every key it is about to write was read: the assertion caught a *third* instance the moment it landed.
+
+**The database-side consequence, which is not a harness defect.** The same non-uniqueness reaches the
+transaction record: it is addressed by `(primary, start timestamp)`, so two transactions sharing that
+pair share a record, and the second's decision is refused as already made — it silently adopts the
+first's fate. That is asserted at zero in the exit run and recorded in DESIGN-A6 §15 as a named gap
+with the two fixes that would close it.

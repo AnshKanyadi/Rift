@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
+	"time"
 
+	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/sim"
@@ -1592,4 +1595,244 @@ func coversKey(states []RecoveredState, key []byte) bool {
 		}
 	}
 	return false
+}
+
+// --- The A6 oracles over client-observed history --------------------------------
+
+// BankConservation asserts that every audit summed to the same total.
+//
+// # Where the evidence comes from, and where it deliberately does not
+//
+// Audits, and nothing else. Not the engine, not the recovered records, not the
+// coordinator's arithmetic: a client asked every account what it held at one
+// timestamp, the cluster answered, and those answers must sum to what they
+// summed to at the beginning.
+//
+// # Why the expected total is zero and there is no genesis transaction
+//
+// Every account starts absent, an absent account holds nothing, and a transfer
+// moves an amount from one to another. So the sum is zero before the first
+// transfer and after every one of them, and a bank whose accounts can go
+// negative is still a bank -- it is a ledger, and conservation is the property
+// under test rather than solvency.
+//
+// A genesis transaction would add a startup ordering problem (no leader exists
+// at time zero) and would make the invariant depend on the genesis having
+// committed, which is a second thing to prove before the first can be checked.
+type BankConservation struct {
+	base
+	accounts int
+}
+
+func NewBankConservation(l *Ledger, accounts int) *BankConservation {
+	return &BankConservation{base: base{l: l, name: "bank-conservation"}, accounts: accounts}
+}
+
+func (o *BankConservation) Interested(sim.Kind) bool                  { return false }
+func (o *BankConservation) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+// Check is evaluated once, after the run.
+func (o *BankConservation) Check() *sim.Violation {
+	for _, a := range o.l.Audits() {
+		// "Complete" is a claim the harness makes, so the checker verifies it.
+		// An audit over five of eight accounts that summed to zero would
+		// otherwise be indistinguishable from evidence.
+		if a.Accounts != o.accounts {
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"the audit at %s reached the checker claiming to be complete with %d of %d "+
+					"accounts. A sum over a subset conserves nothing, and a partial audit is "+
+					"supposed to be discarded before it is ever recorded",
+				a.ReadTS, a.Accounts, o.accounts)}
+		}
+		if a.Total != 0 {
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"the audit at %s read all %d accounts and they sum to %d, not 0. Every transfer "+
+					"takes an amount from one account and gives it to another, so a snapshot in "+
+					"which the total has moved has either lost half a transaction or applied half "+
+					"of one twice",
+				a.ReadTS, a.Accounts, a.Total)}
+		}
+	}
+	return nil
+}
+
+// SnapshotIsolation asserts the two properties a client can actually observe.
+//
+// # 1. A snapshot is stable
+//
+// The same key, read at the same timestamp, answers the same thing forever. Not
+// "usually", not "once the transaction finishes": a read at T is a question
+// about a fixed instant, and its answer cannot depend on when it was asked.
+//
+// This is the strongest thing a client-side oracle can say about snapshot
+// isolation, and it catches the failure that matters most: a transaction
+// COMMITTING INTO THE PAST. If a transaction whose snapshot began before T is
+// allowed to commit at a timestamp at or below T, then a read of one of its keys
+// before the commit sees the old value and a read of the same key at the same T
+// afterwards sees the new one -- and a reader that took its snapshot at T sees
+// half of it. No amount of care in the write path prevents that; only the
+// commit timestamp being above every timestamp already read does.
+//
+// # 2. A read only ever blocks on a lock it could have seen
+//
+// A read at T reports a lock only if that lock's transaction began at or below
+// T. A read blocked by a lock ABOVE its timestamp is a read being made to wait
+// for a transaction that is not in its snapshot at all, which is a liveness bug
+// today and an isolation bug the moment the resolution decides anything.
+//
+// # What is deliberately NOT asserted here
+//
+// That a read sees every transaction committed below its timestamp. The harness
+// knows which transactions it issued, but not which of them committed -- that is
+// read from the logs, by transaction-atomicity, and importing it here would put
+// the two oracles one derivation apart (DESIGN-A1 section 0).
+type SnapshotIsolation struct{ base }
+
+func NewSnapshotIsolation(l *Ledger) *SnapshotIsolation {
+	return &SnapshotIsolation{base: base{l: l, name: "snapshot-isolation"}}
+}
+
+func (o *SnapshotIsolation) Interested(sim.Kind) bool                  { return false }
+func (o *SnapshotIsolation) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+func (o *SnapshotIsolation) Check() *sim.Violation {
+	type answer struct {
+		r TxnReadRecord
+	}
+	seen := map[string]answer{}
+	for _, r := range o.l.TxnReads() {
+		if r.Locked {
+			if r.At.Less(r.LockStartTS) {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"the read of %q at %s was blocked by a lock whose transaction began at %s, "+
+						"ABOVE the read's own timestamp. That transaction is not in this read's "+
+						"snapshot, so waiting for it is waiting for something the read is not "+
+						"allowed to see (node %d, index %d)",
+					r.Key, r.At, r.LockStartTS, r.Node, r.Index)}
+			}
+			if r.LockPrimary == "" {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"the read of %q at %s was blocked by a lock naming no primary. A lock whose "+
+						"primary is unknown can never be resolved by anyone, so the key is blocked "+
+						"forever (node %d, index %d)", r.Key, r.At, r.Node, r.Index)}
+			}
+			continue
+		}
+		// Only settled answers are comparable. Locked, uncertain and refused are
+		// each legitimately time-varying: a lock gets decided, a commit inside
+		// the interval stops being ahead as the clock moves, and the collection
+		// mark only travels forward.
+		if r.Uncertain || r.Refused {
+			continue
+		}
+		k := r.Key + "@" + r.At.String()
+		prev, ok := seen[k]
+		if !ok {
+			seen[k] = answer{r: r}
+			continue
+		}
+		if prev.r.Found == r.Found && prev.r.Value == r.Value {
+			continue
+		}
+		return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+			"the key %q read at %s answered %s at index %d on node %d and %s at index %d on "+
+				"node %d. A snapshot is a question about a fixed instant and its answer cannot "+
+				"change: something committed at or below %s AFTER that timestamp had already been "+
+				"read, so a reader at %s sees half of it",
+			r.Key, r.At, describeRead(prev.r), prev.r.Index, prev.r.Node,
+			describeRead(r), r.Index, r.Node, r.At, r.At)}
+	}
+	return nil
+}
+
+func describeRead(r TxnReadRecord) string {
+	if !r.Found {
+		return "absent"
+	}
+	return strconv.Quote(r.Value)
+}
+
+// UncertaintyEnvelope judges the uncertainty machinery against the bound the
+// PLAN advertises.
+//
+// # Why the bound comes from the plan and never from a node
+//
+// The node's advertised maxOffset is the thing under test. A checker that took
+// the bound from the node it is checking would agree with any bound the node
+// chose, including a bound it had drifted to, and would be unable to notice the
+// one failure that matters: an interval computed against something other than
+// what the cluster agreed to assume. The plan is the only place the assumption
+// exists independently of the code (DESIGN-A1 section 0).
+//
+// # The two properties
+//
+//  1. Every restart names a commit strictly inside (readTS, readTS+maxOffset].
+//     Above that window there is no uncertainty -- the commit is plainly in the
+//     future and the older value is correct. At or below it the commit is
+//     plainly in the past and should have been READ, not restarted on.
+//  2. The restart timestamp is strictly above the commit that caused it. Not
+//     readTS+maxOffset, not now: CLAUDE.md's sharp-edge list names this one, and
+//     restarting anywhere at or below the observed commit restarts into the same
+//     uncertainty.
+type UncertaintyEnvelope struct {
+	base
+	maxOffset time.Duration
+}
+
+func NewUncertaintyEnvelope(l *Ledger, planMaxOffset time.Duration) *UncertaintyEnvelope {
+	return &UncertaintyEnvelope{
+		base: base{l: l, name: "uncertainty-envelope"}, maxOffset: planMaxOffset}
+}
+
+func (o *UncertaintyEnvelope) Interested(sim.Kind) bool                  { return false }
+func (o *UncertaintyEnvelope) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+func (o *UncertaintyEnvelope) Check() *sim.Violation {
+	bound := hlc.Timestamp{Wall: clock.Wall(o.maxOffset)}
+	for _, r := range o.l.TxnReads() {
+		// # Property zero: the interval the node used is inside the bound the
+		// # PLAN advertises
+		//
+		// Checked on every read, not only the ones that restarted, because a
+		// ceiling computed against the wrong bound is wrong on the reads it
+		// silently let through as well as on the ones it stopped. A ceiling
+		// BELOW the read's own timestamp is legal -- a transaction that has
+		// restarted past its original ceiling has an empty interval, which is
+		// exactly the shrinkage that makes restarts terminate.
+		top := hlc.Timestamp{Wall: r.At.Wall + bound.Wall}
+		if r.Ceiling.IsSet() && top.Less(r.Ceiling) {
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"the read of %q at %s used an uncertainty ceiling of %s, above the %s the plan's "+
+					"maxOffset of %s allows. The interval was computed against a bound the cluster "+
+					"did not agree to assume (node %d, index %d)",
+				r.Key, r.At, r.Ceiling, top, o.maxOffset, r.Node, r.Index)}
+		}
+		if !r.Uncertain {
+			continue
+		}
+		if r.Ceiling.IsSet() {
+			top = r.Ceiling
+		}
+		switch {
+		case !r.At.Less(r.CommitTS):
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"the read of %q at %s restarted on a commit at %s, which is at or BELOW its own "+
+					"timestamp. A commit below the read is in its snapshot and is the answer, not "+
+					"an uncertainty (node %d, index %d)", r.Key, r.At, r.CommitTS, r.Node, r.Index)}
+		case top.Less(r.CommitTS):
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"the read of %q at %s restarted on a commit at %s, which is above its ceiling %s. "+
+					"A commit above the interval is plainly in the future and the older value is "+
+					"the correct answer, so restarting on it is a transaction giving up progress "+
+					"for nothing (node %d, index %d)",
+				r.Key, r.At, r.CommitTS, top, r.Node, r.Index)}
+		case !r.CommitTS.Less(r.RestartAt):
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"the read of %q at %s restarted on a commit at %s and was told to retry at %s, "+
+					"which is not above it. The retry lands in the same uncertainty and the "+
+					"transaction makes no progress (node %d, index %d)",
+				r.Key, r.At, r.CommitTS, r.RestartAt, r.Node, r.Index)}
+		}
+	}
+	return nil
 }

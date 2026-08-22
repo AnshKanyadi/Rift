@@ -67,6 +67,28 @@ func TestRaftExitCriteria(t *testing.T) {
 		"schedule mix keeps skew inside the envelope)", c.EnvelopeRefusals)
 	t.Logf("a3 recovery:  %d restarts recovered a log carrying a configuration change, %d of them "+
 		"cross-checked against a snapshot configuration", c.ConfRecoveries, c.ConfCrossChecks)
+	t.Logf("a6 bank:      %d transfers started, %d reached their commit point, %d aborted after "+
+		"losing a race, %d abandoned, %d lost the record to a resolver",
+		c.TxnStarted, c.TxnCommitted, c.TxnAborted, c.TxnAbandoned, c.TxnLostToResolver)
+	t.Logf("a6 reads:     %d snapshot reads issued, %d blocked by a lock, %d restarted above an "+
+		"uncertain commit, %d refused below the mark, %d unparseable",
+		c.TxnReads, c.ReadsBlocked, c.UncertaintyRestarts, c.TxnReadsRefused, c.UnparseableReads)
+	t.Logf("a6 recovery:  %d resolutions issued by a READER that ran into a lock; the primary's "+
+		"range answered %d already-decided, DECLARED %d owners dead, and left %d alone as alive",
+		c.ReaderResolves, c.ResolveAlreadyDecided, c.ResolveDeclaredDead, c.ResolveWaits)
+	t.Logf("a6 verdicts:  readers carried %d verdicts back to a locked key (%d forward, %d back); "+
+		"%d rolled forward and %d rolled back at the key, %d found the lock already gone",
+		c.ResolvedForward+c.ResolvedBack, c.ResolvedForward, c.ResolvedBack,
+		c.RollForwards, c.RollBacks, c.ResolveNoLock)
+	t.Logf("a6 conflicts: %d prewrites refused for a newer commit, %d for a live lock, %d "+
+		"transaction records lost to somebody who decided first",
+		c.WriteConflicts, c.PrewriteBlocked, c.TxnRaceLost)
+	t.Logf("a6 audits:    %d started, %d read every account at one timestamp, %d hit a lock, "+
+		"%d restarted on an uncertain commit, %d reads re-asked after no answer",
+		c.AuditsStarted, c.AuditsComplete, c.AuditsLocked, c.AuditsUncertain, c.AuditsRetried)
+	t.Logf("a6 bug-019:   %d commits or rollbacks found another transaction's lock and left it "+
+		"alone; %d transactions shared a (primary, start) identity with an earlier one (expected "+
+		"zero: see DESIGN-A6 section 15)", c.ForeignLocksKept, c.IdentityCollisions)
 	for _, why := range c.InconclusiveCauses {
 		t.Logf("inconclusive: %s", why)
 	}
@@ -215,6 +237,115 @@ func TestRaftExitCriteria(t *testing.T) {
 	if c.TransfersAsked == 0 {
 		t.Error("no leadership transfer was requested across the whole sweep, so the transfer path " +
 			"is unexercised and its exit criterion unevidenced")
+	}
+
+	// # A6's mechanisms, on the same rule: asserted or deleted
+	//
+	// The three groups are the phase. A sweep in which transfers committed but
+	// no read ever met a lock has exercised the happy path of a protocol whose
+	// entire difficulty is in the unhappy one.
+	if c.TxnCommitted == 0 {
+		t.Error("no transaction ever reached its commit point across the whole sweep; every " +
+			"transaction oracle in this run judged a workload that never committed")
+	}
+	if c.TxnAbandoned == 0 {
+		t.Error("no coordinator was ever abandoned mid-transaction. Every lock this sweep " +
+			"resolved belonged to a transaction that finished, so the recovery path -- the " +
+			"reason resolution exists -- ran against nothing it was built for")
+	}
+	if c.ReadsBlocked == 0 {
+		t.Error("no read ever found a lock across the whole sweep, so reader-side lock discovery " +
+			"never happened and every resolution path below it is unreachable")
+	}
+	if c.ReaderResolves == 0 {
+		t.Error("no reader ever issued a resolution. Locks were discovered and nothing was done " +
+			"about them, which is the half of Percolator that is not bookkeeping")
+	}
+	// Both directions of the verdict, separately. A sweep that only ever rolled
+	// forward has never executed rollback and vice versa, and A6's exit criteria
+	// name both by name.
+	if c.RollForwards == 0 {
+		t.Error("no lock was ever ROLLED FORWARD: no resolver ever found a committed primary " +
+			"whose secondary was unwritten, which is the case that makes a commit point mean " +
+			"anything")
+	}
+	if c.RollBacks == 0 {
+		t.Error("no lock was ever ROLLED BACK: no transaction was ever cleaned up after its " +
+			"coordinator stopped, so the other half of resolution is unevidenced")
+	}
+	if c.ResolveDeclaredDead == 0 {
+		t.Error("no resolver ever DECLARED an owner dead. The TTL is expiry rather than " +
+			"permission precisely because somebody has to write the rollback record, and nobody " +
+			"in this sweep ever did")
+	}
+	if c.ResolveWaits == 0 {
+		t.Error("no resolver ever left a live owner alone. A sweep that expired everything it " +
+			"met has never exercised the verdict that keeps cleanup from breaking atomicity")
+	}
+	if c.ResolveAlreadyDecided == 0 {
+		t.Error("no resolver ever found a decision already made, so the make-it-exist rule -- " +
+			"the whole safety argument for concurrent resolvers -- was never exercised")
+	}
+	if c.WriteConflicts == 0 {
+		t.Error("no prewrite was ever refused for a commit newer than its snapshot. " +
+			"First-committer-wins never fired, so snapshot isolation's write rule is unevidenced")
+	}
+	if c.PrewriteBlocked == 0 {
+		t.Error("no prewrite ever met a live lock, so two transactions never contended for one " +
+			"key -- which is the only condition under which any of this machinery matters")
+	}
+	if c.TxnAborted == 0 {
+		t.Error("no transaction ever aborted after losing a race; the explicit-abort path is " +
+			"unexercised and every rollback in this sweep came from a dead coordinator")
+	}
+	// # BUG-019's evidence
+	//
+	// A commit or a rollback that found somebody else's lock and left it alone.
+	// Every one of these is a lock the pre-fix code would have stolen, orphaning
+	// a committed version nobody could ever see. Zero means the schedule never
+	// reached the bug, and the fix is unevidenced.
+	if c.ForeignLocksKept == 0 {
+		t.Error("no commit or rollback ever found a lock belonging to another transaction. " +
+			"BUG-019 is the defect where it took that lock anyway, and a sweep that never " +
+			"reaches the condition says nothing about the fix")
+	}
+	// # A6's uncertainty machinery must be REACHED, not merely implemented
+	//
+	// Unit-green and sweep-exercised are different claims, and the second is the
+	// one a phase can rest on.
+	if c.UncertaintyRestarts == 0 {
+		t.Error("no read ever restarted above an uncertain commit across the whole sweep. The " +
+			"uncertainty interval is A6's answer to bounded clock skew and this sweep never " +
+			"executed it, which is the vacuous-green class with a headline claim attached")
+	}
+	// # The conservation evidence itself
+	if c.AuditsComplete == 0 {
+		t.Error("no audit ever read every account at one timestamp, so bank-conservation " +
+			"checked nothing at all: the oracle iterates a list that is empty")
+	}
+	if c.AuditsLocked == 0 {
+		t.Error("no audit ever met a lock, so every conservation check in this sweep was taken " +
+			"over a quiet instant -- which is not the instant the property is interesting at")
+	}
+	// # Bidirectional: the identity Percolator assumes
+	//
+	// A transaction record is addressed by (primary, start timestamp). Two
+	// transactions sharing that pair would share a record and the second would
+	// silently adopt the first's fate. Percolator is safe because a TSO issues
+	// start timestamps; a per-node HLC does not guarantee it, so the assumption
+	// is asserted rather than assumed. DESIGN-A6 section 15 carries the entry.
+	if c.IdentityCollisions != 0 {
+		t.Errorf("%d transactions shared a (primary, start timestamp) with an earlier one. "+
+			"That pair is the transaction record's address, so the second transaction's "+
+			"decision would be refused as already made and it would adopt the first's fate. "+
+			"The fix is the IDENTITY -- a transaction id in the record key, or the TSO fallback "+
+			"Amendment A6 pre-authorises -- and never this assertion", c.IdentityCollisions)
+	}
+	// A read this workload cannot parse is a read answered with another key's
+	// value. Asserted at zero, and it has never been nonzero.
+	if c.UnparseableReads != 0 {
+		t.Errorf("%d reads returned a value this workload never wrote, which means a read was "+
+			"answered from a key it did not name", c.UnparseableReads)
 	}
 
 	// 3. Elections must be observed CONTENDING, not merely completing. A run

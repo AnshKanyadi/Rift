@@ -69,7 +69,11 @@ func (e *LockedError) Unwrap() error { return ErrKeyIsLocked }
 // under a timestamp that existed at prewrite time, and the commit record is what
 // makes it visible. A rollback tombstone is a commit record that makes nothing
 // visible, which is why it can be skipped rather than special-cased.
-func (s *Store) GetTxn(key []byte, readTS hlc.Timestamp, maxOffset hlc.Timestamp) ([]byte, bool, error) {
+// The ceiling is the TOP of the uncertainty interval, and it is passed in
+// rather than computed here because it must not move when a transaction
+// restarts. See D-A6-7 for why that is a termination argument and not a
+// preference.
+func (s *Store) GetTxn(key []byte, readTS hlc.Timestamp, ceiling hlc.Timestamp) ([]byte, bool, error) {
 	if !readTS.IsSet() {
 		return nil, false, ErrUnsetTimestamp
 	}
@@ -108,7 +112,7 @@ func (s *Store) GetTxn(key []byte, readTS hlc.Timestamp, maxOffset hlc.Timestamp
 			// Above the read. Uncertain only if it is inside the envelope AND
 			// it is a real commit: a rollback tombstone made nothing visible,
 			// so there is nothing for the reader to have missed.
-			if !rollback && commitTS.LessEq(uncertaintyBound(readTS, maxOffset)) {
+			if !rollback && commitTS.LessEq(ceiling) {
 				s.uncertaintyRestarts++
 				return nil, false, &UncertaintyError{
 					Key: append([]byte(nil), key...), ReadTS: readTS, CommitTS: commitTS,
@@ -135,13 +139,26 @@ func (s *Store) GetTxn(key []byte, readTS hlc.Timestamp, maxOffset hlc.Timestamp
 	return nil, false, it.Error()
 }
 
-// uncertaintyBound is the top of the interval: readTS advanced by maxOffset.
+// UncertaintyCeiling is the top of the interval for a transaction's FIRST
+// snapshot: readTS advanced by the advertised bound.
+//
+// # It is computed once per transaction, not once per read
+//
+// A transaction that restarted above an uncertain commit keeps the ceiling its
+// first snapshot had. Recomputing it from the new, higher read timestamp would
+// move the top of the window up by exactly as much as the bottom, so the set of
+// commits that can make it restart again would never shrink and a transaction
+// under steady write traffic would restart forever. With the ceiling fixed,
+// each restart strictly reduces the interval and the transaction terminates.
+// That is D-A6-7, and it is a liveness property with a safety consequence: an
+// unbounded restart loop in a simulated run is a hang, and in a real one it is a
+// transaction that never commits under load.
 //
 // maxOffset arrives as a Timestamp rather than a Duration because the caller
 // takes it from hlc.Source.MaxOffset() and converts once. A store that converted
 // per read would be doing clock arithmetic in the one place that must be a pure
 // function of its arguments.
-func uncertaintyBound(readTS, maxOffset hlc.Timestamp) hlc.Timestamp {
+func UncertaintyCeiling(readTS, maxOffset hlc.Timestamp) hlc.Timestamp {
 	return hlc.Timestamp{Wall: readTS.Wall + maxOffset.Wall, Logical: 0}
 }
 

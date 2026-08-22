@@ -333,7 +333,7 @@ func TestAnUncertainCommitRestartsAboveIt(t *testing.T) {
 	apply(t, db, b)
 
 	// A read at 1000 with a 500 window: the commit at 1200 is inside (1000,1500].
-	_, _, err := s.GetTxn([]byte("k"), ts(1000, 0), maxOffset)
+	_, _, err := s.GetTxn([]byte("k"), ts(1000, 0), kv.UncertaintyCeiling(ts(1000, 0), maxOffset))
 	var ue *kv.UncertaintyError
 	if !errors.As(err, &ue) {
 		t.Fatalf("a commit inside the uncertainty interval did not restart the read: %v", err)
@@ -345,11 +345,11 @@ func TestAnUncertainCommitRestartsAboveIt(t *testing.T) {
 
 	// Outside the window it is simply invisible, which is the ordinary case and
 	// must not restart anything.
-	if _, ok, err := s.GetTxn([]byte("k"), ts(600, 0), maxOffset); err != nil || ok {
+	if _, ok, err := s.GetTxn([]byte("k"), ts(600, 0), kv.UncertaintyCeiling(ts(600, 0), maxOffset)); err != nil || ok {
 		t.Errorf("a read well below the commit restarted or saw it: ok=%v err=%v", ok, err)
 	}
 	// At or above the commit it is just visible.
-	if got, ok, err := s.GetTxn([]byte("k"), ts(1200, 0), maxOffset); err != nil || !ok || string(got) != "v" {
+	if got, ok, err := s.GetTxn([]byte("k"), ts(1200, 0), kv.UncertaintyCeiling(ts(1200, 0), maxOffset)); err != nil || !ok || string(got) != "v" {
 		t.Errorf("read at the commit timestamp = (%q,%v,%v)", got, ok, err)
 	}
 }
@@ -372,7 +372,157 @@ func TestARollbackTombstoneIsNotUncertain(t *testing.T) {
 	}
 	apply(t, db, b)
 
-	if _, ok, err := s.GetTxn([]byte("k"), ts(1000, 0), maxOffset); err != nil || ok {
+	if _, ok, err := s.GetTxn([]byte("k"), ts(1000, 0), kv.UncertaintyCeiling(ts(1000, 0), maxOffset)); err != nil || ok {
 		t.Fatalf("a rollback tombstone inside the uncertainty window disturbed a read: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestTheUncertaintyCeilingDoesNotMOVEWhenAReadRestarts is D-A6-7's termination
+// argument, as a test.
+//
+// # What it would look like if the ceiling were recomputed
+//
+// A transaction restarts above an uncertain commit. If the new read recomputed
+// its ceiling from its NEW timestamp, the top of the window would rise by
+// exactly as much as the bottom did, and a key being written steadily would
+// restart the transaction forever. With the ceiling fixed, each restart strictly
+// shrinks the interval, so a transaction can restart at most as many times as
+// there are commits inside its first window.
+//
+// The test asserts the shrinkage directly: after restarting above the first
+// uncertain commit, the second commit is still inside the ORIGINAL ceiling and
+// restarts once more, and the third read -- now above both -- proceeds. A
+// recomputed ceiling would keep pulling in commits that a fixed one has left
+// behind, and the loop below would never reach its answer.
+func TestTheUncertaintyCeilingDoesNotMoveWhenAReadRestarts(t *testing.T) {
+	s, db := newStore(t)
+	maxOffset := hlc.Timestamp{Wall: 500}
+	read := ts(1000, 0)
+	ceiling := kv.UncertaintyCeiling(read, maxOffset)
+
+	// Two commits inside (1000, 1500], and one above it.
+	for _, c := range []struct{ start, commit hlc.Timestamp }{
+		{ts(1100, 0), ts(1200, 0)},
+		{ts(1300, 0), ts(1400, 0)},
+		{ts(1600, 0), ts(1700, 0)},
+	} {
+		if err := prewrite(t, s, db, "k", "k", c.start, ts(9000, 0), "v"); err != nil {
+			t.Fatalf("prewrite at %s: %v", c.start, err)
+		}
+		b := engine.NewBatch()
+		if err := s.PutTxnInto(b, []byte("k"), kv.TxnRecord{
+			Status: kv.TxnCommitted, StartTS: c.start, CommitTS: c.commit}); err != nil {
+			t.Fatalf("put txn at %s: %v", c.start, err)
+		}
+		if err := s.CommitInto(b, []byte("k"), c.start, c.commit); err != nil {
+			t.Fatalf("commit at %s: %v", c.commit, err)
+		}
+		apply(t, db, b)
+	}
+
+	restarts := 0
+	at := read
+	for range 8 {
+		_, _, err := s.GetTxn([]byte("k"), at, ceiling)
+		var ue *kv.UncertaintyError
+		if !errors.As(err, &ue) {
+			break
+		}
+		restarts++
+		at = ue.RestartAt()
+		if !ceiling.Less(at) && !at.LessEq(ceiling) {
+			t.Fatalf("restart timestamp %s is unordered against the ceiling", at)
+		}
+	}
+	// ONE restart, not two: the scan walks commit records newest-first, so it
+	// meets 1400 before 1200 and restarts above the newest uncertain commit
+	// rather than once per commit. That is the shrinkage doing its work in a
+	// single step.
+	//
+	// The counterfactual is the whole point. With a ceiling recomputed from each
+	// new read timestamp, the read at 1401 would carry a window of (1401,1901],
+	// which pulls in the commit at 1700 that the fixed ceiling had left safely
+	// in the future; it would restart to 1701 with a window of (1701,2201], and
+	// under a key being written steadily it would never stop.
+	if restarts != 1 {
+		t.Errorf("restarted %d times, want exactly 1: the newest commit inside the ORIGINAL "+
+			"window (1000,1500] is 1400, and restarting above it clears 1200 as well. The commit "+
+			"at 1700 is above the ceiling and must never be uncertain", restarts)
+	}
+	if want := ts(1400, 0).Next(); at != want {
+		t.Errorf("settled at %s, want %s: strictly above the NEWEST uncertain commit", at, want)
+	}
+	// And having restarted past both, the read answers from the newest commit
+	// at or below it rather than restarting again.
+	if _, ok, err := s.GetTxn([]byte("k"), at, ceiling); err != nil || !ok {
+		t.Errorf("after %d restarts the read at %s still did not answer: ok=%v err=%v",
+			restarts, at, ok, err)
+	}
+}
+
+// TestARollbackDoesNotStealSomebodyElsesLock is BUG-019.
+//
+// A lock is one record per key. "Delete the lock" is therefore ambiguous, and
+// the only correct reading is "delete the lock IF IT IS MINE". Both resolution
+// paths read it the other way and deleted whatever was there.
+//
+// The schedule that reaches it needs no fault at all:
+//
+//  1. T1 prewrites k and holds the lock;
+//  2. T2 prewrites k, is refused because the key is locked, and aborts -- which
+//     is the correct behaviour and the reason first-committer-wins works;
+//  3. T2's abort rolls back its own key, and takes T1's lock with it.
+//
+// After that T1 is a committed transaction with an orphaned version: nothing
+// holds the key, so no reader will ever resolve it, and the value it promised is
+// invisible forever. In the bank that is money vanishing, which is how it was
+// found.
+func TestARollbackDoesNotStealSomebodyElsesLock(t *testing.T) {
+	s, db := newStore(t)
+	if err := prewrite(t, s, db, "k", "k", ts(100, 0), ts(600, 0), "mine"); err != nil {
+		t.Fatalf("first prewrite: %v", err)
+	}
+
+	// A second transaction's rollback, at its own start timestamp. Legitimate:
+	// it is aborting after being refused, and it must be able to clean up.
+	b := engine.NewBatch()
+	if err := s.RollbackInto(b, []byte("k"), ts(200, 0)); err != nil {
+		t.Fatalf("second rollback: %v", err)
+	}
+	apply(t, db, b)
+
+	l, ok, err := s.Lock([]byte("k"))
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if !ok {
+		t.Fatal("the first transaction's lock is GONE, taken by another transaction's rollback. " +
+			"Its version is now orphaned: no lock means no reader will ever resolve it, so a " +
+			"transaction that committed has a key nobody can see")
+	}
+	if l.StartTS != ts(100, 0) {
+		t.Errorf("the lock is now held by %s, want the original holder %s", l.StartTS, ts(100, 0))
+	}
+}
+
+// TestACommitDoesNotStealSomebodyElsesLock is the same defect on the other path.
+//
+// Worse here, because a commit is a resolver's roll-FORWARD: it can be issued by
+// a stranger acting on somebody else's behalf, so the lock it deletes belongs to
+// a transaction that is not even a party to the operation.
+func TestACommitDoesNotStealSomebodyElsesLock(t *testing.T) {
+	s, db := newStore(t)
+	if err := prewrite(t, s, db, "k", "k", ts(100, 0), ts(600, 0), "mine"); err != nil {
+		t.Fatalf("first prewrite: %v", err)
+	}
+	b := engine.NewBatch()
+	if err := s.CommitInto(b, []byte("k"), ts(200, 0), ts(250, 0)); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	apply(t, db, b)
+
+	if _, ok, err := s.Lock([]byte("k")); err != nil || !ok {
+		t.Fatalf("committing a DIFFERENT transaction took the lock at %s: ok=%v err=%v",
+			ts(100, 0), ok, err)
 	}
 }

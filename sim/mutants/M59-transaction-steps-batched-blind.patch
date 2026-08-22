@@ -9,13 +9,13 @@
 # mutates: transaction steps in one Ready are staged into one batch and written once at the end, so a step cannot see the effects of the steps above it. Every step READS the engine before it writes -- a prewrite asks whether the key is locked, a resolve reads the lock and the primary's record -- so two prewrites of one key in one batch both succeed and the second overwrites the first's lock. Two transactions own one key and neither knows (BUG-018). The replica's state then depends on how many entries happened to arrive together, which is not a function of the log
 --- a/store/node.go
 +++ b/store/node.go
-@@ -634,9 +634,7 @@
+@@ -637,10 +637,8 @@
  							// on how many entries happened to arrive together --
  							// which is not a function of the log, and is exactly
  							// what snapshot equivalence is for.
 -							n.flushApply(mb)
- 							n.applyTxn(mb, c)
+ 							res := n.applyTxn(mb, c)
 -							n.flushApply(mb)
- 							n.answerTxn(e, c, at, s)
+ 							n.answerTxn(e, c, res, at, s)
  						}
  						k = c.Key
