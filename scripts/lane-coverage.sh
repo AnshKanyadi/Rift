@@ -22,7 +22,7 @@ WF=${2:-.github/workflows/ci.yml}
 
 expand() {
   case "$1" in
-    lint)  echo "vet fmt-check determinism tooling-only hatches" ;;
+    lint)  echo "vet fmt-check determinism tooling-only hatches hygiene" ;;
     power) echo "power" ;;
     *)     echo "$1" ;;
   esac

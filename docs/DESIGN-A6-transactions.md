@@ -1470,3 +1470,36 @@ guard was *written*, and it was watching a key one field too wide — so it
 reported green with full confidence about the one seed it should have caught.
 
 Widened to the start timestamp alone, it reports 1 on seed 90004.
+
+---
+
+## 23. Three files that should never have been in the tree
+
+`raft/raft.go.orig`, `store/node.go.orig`, `store/codec.go.orig` — **committed at
+A1, A2 and A3, and still there at A6.** A hundred and thirty-seven kilobytes of
+stale duplicate source, including an entire second copy of `raft/raft.go` frozen
+at A3.
+
+`patch` writes `<file>.orig` when it applies with fuzz. This project applies
+patches constantly — every mutant, every corpus reproduction, every power
+measurement — so the litter is produced routinely, and a `git add -A` while one
+is applied commits it.
+
+**That process error is already in the record.** A5 caught a mutant patch
+committed by `git add -A` and recorded it. The mutant was reverted; the `.orig`
+files that the same class of accident had already left behind at A1, A2 and A3
+were not, because nobody was looking for them and nothing would have said so:
+
+- Go ignores a non-`.go` extension, so no build ever failed;
+- no lane inspected the file list;
+- and the contents are *plausible* — a reader opening `raft.go.orig` would find a
+  complete-looking Raft implementation that is silently a phase and a half out of
+  date.
+
+`make hygiene` fails on any tracked `.orig` or `.rej`, is in `lint` and in the
+workflow, and was induced against a planted one before being believed.
+
+The pattern this belongs to is the one §20 is about: **the fix for a process
+error is a mechanism, not a resolution.** A5 recorded "do not `git add -A` while
+a patch is applied" and the recording changed nothing, because it was advice.
+A lane changes it.

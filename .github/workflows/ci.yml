@@ -62,6 +62,11 @@ jobs:
       # local-only and refuses to run with CI set: a lane that can rewrite the
       # list it checks against is not checking anything.
       - run: make hatches
+      # `patch` leaves .orig and .rej behind, and this project applies patches
+      # constantly. Three .orig files were committed at A1, A2 and A3 and sat in
+      # the tree for four phases -- including a whole second copy of raft.go,
+      # frozen at A3 and silently rotting, which no build would ever fail on.
+      - run: make hygiene
 
   smoke:
     name: 500-seed simulator smoke (stub)
