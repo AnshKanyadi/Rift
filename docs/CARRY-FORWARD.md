@@ -98,6 +98,13 @@ regenerated bundle must be re-verified by `CORPUS_REINTRODUCE=1 go test ./cmd/si
 schedule that no longer reaches its defect regenerates exactly as happily as one that does. Measured:
 16 of 16 bundles proved nothing after one blind regeneration.
 
+**The mutant lane's budget under A6's shape.** 36 of the 39 mutants that declare a power expectation
+measure under `current`, which is now A6's shape: **14,700 seed-runs at ~3.75 s/seed, about 15
+CPU-hours**, on a lane CI runs on every push. It was affordable when a seed cost 0.36 s. Either the
+per-mutant seed counts are re-derived under the new cost, or the lane moves to the nightly tier — and
+Amendment A2 says the choice has to keep kill-time monitored either way. Re-measure before A7 widens
+the shape again.
+
 **The batch-boundary technique.** DESIGN-A6 §14.4. When a replica disagrees with a replay of its own
 log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
 **skip** in the node's indices. A7 (read index, where a lease or an index read can be answered

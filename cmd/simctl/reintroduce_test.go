@@ -88,10 +88,33 @@ func TestEveryBundleStillFindsItsBug(t *testing.T) {
 			if out, err := bd.CombinedOutput(); err != nil {
 				t.Fatalf("building with %s applied: %v\n%s", patch, err, out)
 			}
-			run := exec.Command(bin, "replay", "--bundle", filepath.Join(root, b.path))
+			// # The bundle path, absolute, built from the NAME
+			//
+			// b.path is already relative to this package's directory
+			// (../../seeds/NAME). Joining it onto root produced
+			// <root>/../../seeds/NAME, which does not exist -- so every replay
+			// failed to open its bundle, printed nothing about any finding, and
+			// the lane reported all sixteen bundles broken for the second time.
+			run := exec.Command(bin, "replay", "--bundle",
+				filepath.Join(root, "seeds", b.name))
 			run.Dir = dir
-			out, _ := run.CombinedOutput()
+			out, err := run.CombinedOutput()
 			text := string(out)
+			// A nonzero exit is EXPECTED here: replay returns 1 when it finds a
+			// violation the recording did not, which is this lane's success
+			// case. So the exit code is not the signal -- but an exit with no
+			// finding in the output is a broken invocation rather than a broken
+			// bundle, and the two were indistinguishable while the error was
+			// being thrown away.
+			ok := func(t string) bool {
+				u := strings.ToUpper(t)
+				return strings.Contains(u, "VIOLATION") || strings.Contains(u, "INCONCLUSIVE") ||
+					strings.Contains(u, "PANIC")
+			}
+			if err != nil && !ok(text) {
+				t.Fatalf("replaying %s with %s applied did not run: %v\n%s",
+					b.name, b.meta.Mutant, err, indent(text))
+			}
 			// The trace legitimately MOVES: the mutant changes what the cluster
 			// does. What must come back is the finding, in either of the two
 			// shapes a finding takes.
@@ -106,8 +129,16 @@ func TestEveryBundleStillFindsItsBug(t *testing.T) {
 			// was broken was the lane. BUG-016's rule, on the day it was
 			// written: a checker that reports false violations costs more than
 			// no checker, so a new one is induced before it is believed.
+			// # A PANIC is a finding too
+			//
+			// M40's whole defect is that transferring to a removed node panics,
+			// and a panic is the loudest reproduction there is. It arrives as a
+			// stack trace rather than as a checker's verdict, so a lane that
+			// only looked for verdicts would call the clearest reproduction in
+			// the corpus a failure to reproduce.
 			up := strings.ToUpper(text)
-			if !strings.Contains(up, "VIOLATION") && !strings.Contains(up, "INCONCLUSIVE") {
+			if !strings.Contains(up, "VIOLATION") && !strings.Contains(up, "INCONCLUSIVE") &&
+				!strings.Contains(up, "PANIC") {
 				t.Errorf("%s replayed with %s applied and reported NEITHER a violation nor an "+
 					"inconclusive. The bundle's schedule no longer reaches the defect its patch "+
 					"reintroduces, so the entry proves nothing:\n%s",

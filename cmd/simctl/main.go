@@ -490,6 +490,29 @@ func cmdReplay(args []string) int {
 		rc = 1
 	}
 
+	// # The third outcome, printed here too
+	//
+	// A replay whose checkers could not reach a verdict has not replayed clean:
+	// it has replayed INCONCLUSIVE, which Amendment A4 says is never a pass. It
+	// was invisible here for the same reason it was invisible in `run` -- the
+	// comparison above knows about violations and nothing else -- and BUG-001's
+	// whole finding is of this shape: no leader, every operation unanswered, and
+	// a linearizability verdict over a history of unknowns.
+	switch {
+	case got.Inconclusive != nil && recorded.Inconclusive == nil:
+		fmt.Println("THE REPLAY WAS INCONCLUSIVE WHERE THE RECORDING WAS NOT")
+		fmt.Printf("  replayed: %s: %s\n", got.Inconclusive.Checker, got.Inconclusive.Detail)
+		rc = 1
+	case got.Inconclusive != nil:
+		fmt.Printf("inconclusive reproduced: %s: %s\n",
+			got.Inconclusive.Checker, got.Inconclusive.Detail)
+	case recorded.Inconclusive != nil:
+		fmt.Println("INCONCLUSIVE NOT REPRODUCED")
+		fmt.Printf("  recorded: %s: %s\n",
+			recorded.Inconclusive.Checker, recorded.Inconclusive.Detail)
+		rc = 1
+	}
+
 	// A bundle whose defect is already fixed replays clean by design, and the
 	// half of the reproduction that is missing is named rather than left for a
 	// reader to go looking for.
