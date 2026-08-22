@@ -797,17 +797,178 @@ left the assumption is rejected rather than absorbed, so the bound the rest of t
 cluster rests on does not ratchet outward. That is the whole argument in
 `hlc.ErrBeyondEnvelope`'s comment, now with a number under it.
 
-### 18.3 The class, again
+### 18.3 The rule, stated to be re-asked
 
-> **A comment that was true when it was written is not a check.**
+> **A configuration comment asserting that a mechanism is unnecessary is a claim
+> with an expiry date, and it gets re-asked at every phase that adds a
+> mechanism.**
 
-`cfg.Holds = 0` carried its own justification, and the justification expired one
-phase before anybody read it again. Nothing in the repository connects "this
-phase's mechanism is clock-sensitive" to "this phase's plan generates clock
-faults" — the fire-count machinery would have caught an injector that stopped
-working, but this injector was never asked to work.
+`cfg.Holds = 0 // A1 Raft has no clock-sensitive logic` carried its own
+justification and the justification expired one phase before anybody read it
+again. Nothing in the repository connects *this phase's mechanism is
+clock-sensitive* to *this phase's plan generates clock faults*: the fire-count
+machinery catches an injector that stopped working, and this injector was never
+asked to work.
 
-The narrowest thing that would have caught it: A6's exit criteria require every
-printed count to be asserted, and `EnvelopeRefusals` was printed and asserted **at
-zero** — correctly, and for the wrong reason. The assertion was reading a bound
-that held; it could not tell that from a bound nothing had pushed against.
+**This is the second time a stale-but-once-true statement has silently narrowed
+the sweep**, which is what makes it a rule rather than an incident. The first is
+BUG-010's caller-bug classification — a panic that was the right response to a
+condition that could only be a programming error, and the wrong response the
+moment the condition became something a peer could cause. Same shape: a
+justification that is a fact about the *current* phase, written as if it were a
+fact about the code.
+
+So the question is asked at the gate, out loud, in the same place the exit
+criteria live: **which mechanisms does this phase add, and does the fault mix
+reach them?** A7 adds read index, which is not clock-sensitive; STRETCH's leases
+are, and would need this asked again.
+
+The narrowest thing that would have caught it here: A6's exit criteria require
+every printed count to be asserted, and `EnvelopeRefusals` was printed and
+asserted **at zero** — correctly, and for the wrong reason. The assertion was
+reading a bound that held; it could not tell that from a bound nothing had ever
+pushed against.
+
+### 18.4 The method: proving a path unreachable before going looking for it
+
+The refusal reads zero. There are two reasons a count can read zero, and they
+want opposite responses:
+
+| | response |
+|---|---|
+| the mechanism never fires because nothing reaches it | **find what reaches it** |
+| the mechanism never fires because the bound it guards holds | **prove that, and leave it alone** |
+
+The proof here is arithmetic, not a sweep: every generated hold targets **90%** of
+`maxOffset` and every one has the **same sign**, so the widest pairwise skew a
+safety plan can produce is 90% of the bound. The refusal needs more than 100%. It
+is short by a tenth of `maxOffset`, **by construction rather than by luck**.
+
+That is the **M47 pattern applied a second time**: a lane reporting nothing, where
+the right answer was a written argument for why nothing is what it must report,
+rather than a change to make something appear.
+
+The path is then reached by a lane that leaves the assumption on purpose — 150% of
+the bound — and it fires: **12,400 refusals across 12 seeds, with zero safety
+violations**.
+
+> **That is the refusal doing its job rather than the bound ratcheting outward.**
+
+A future reader who finds this zero and reaches for `maxOffset` to make the count
+move needs to meet that sentence. Widening `maxOffset` would make the refusal
+fire by making the *envelope* looser — the peer with the jumped clock would be
+accepted, its timestamp absorbed into every other node's HLC, and every bound
+that rests on the envelope would quietly follow it outward. The count would go up
+and the guarantee would go away. The mechanism is supposed to read zero inside
+the envelope; that is what "the envelope holds" looks like from the inside.
+
+---
+
+## 19. Why the bank exists: structural invariants bound the shape, conservation laws bound the content
+
+BUG-019's aliasing is the smaller half of the finding. The larger half is **what
+saw it, and what could not**.
+
+`transaction-atomicity` asks whether a transaction's keys are all at its commit
+timestamp or nowhere. An orphaned version is *nowhere*, so it passes.
+`percolator-invariants` asks whether any state is internally contradictory. An
+orphan contradicts nothing — no lock points at it, no commit record points at
+it, nothing anywhere claims it should be visible. It passes too.
+
+**Both are correct.** The state BUG-019 produces is a perfectly well-formed
+Percolator database. It simply has nine units of somebody's money missing from
+it.
+
+> **Structural invariants bound the SHAPE of the state. Conservation laws bound
+> its CONTENT. A system can be perfectly well-formed and still have lost your
+> money, and no amount of structural checking will notice, because nothing about
+> the shape is wrong.**
+
+That is the standing argument for domain-specific oracles, and it is worth more
+here than in a design doc because **it was found by a bug rather than asserted**.
+The bank workload was justified in §7 on the grounds that conservation is the
+strongest non-circular claim available. It has now justified itself a second way:
+it is the only instrument in the repository that could see this class at all.
+
+The generalisation for later phases: every phase that adds a *domain* — ranges,
+transactions, secondary indexes, whatever I2 brings — needs at least one oracle
+that knows what the domain's numbers are supposed to mean, not merely what shapes
+its records may take. A checker written only from the data model can only ever
+catch violations of the data model.
+
+### 19.1 And two of A6's three defects needed no fault at all
+
+| bug | fault required |
+|---|---|
+| BUG-018 | **none** — two steps in one `Ready` |
+| BUG-019 | **none** — two transactions contending for one key |
+| BUG-020 | none (harness) |
+
+Every entry in BUGS.md before this phase required an engineered schedule: a crash
+at a particular instant, a partition, a lost unsynced write. Those are found *by
+the injectors*, and the injectors are aimed.
+
+A6's are found under **load**. That is a more serious class — nothing has to go
+wrong for a user to reach it — and it says something about where the remaining
+risk in this phase lives. The fault machinery is not what found them and is not
+what will find the next one; the checkers looking at things the fault machinery
+does not control are.
+
+---
+
+## 20. A lane that is not run is not a lane
+
+`tools/provcheck` — the lane that enforces *every input to a verdict that can
+come out green must be something the harness witnessed* — was **red across a whole
+commit**. It went red when A6's transaction commands added `RecordTxnCommit` with
+three loose arguments, and it stayed red until somebody typed `make provenance`.
+
+Fixing the defect it named is not the finding. The finding is that it took a
+phase to look.
+
+### 20.1 The audit
+
+| lane | runs on every change? |
+|---|---|
+| `build` `vet` `fmt-check` `tidy-check` `determinism` `tooling-only` `hatches` | in the workflow |
+| `test` `race` `blind` `power` `mutants` `smoke` `corpus` `provenance` | in the workflow |
+| **`assertions`** | **in `make ci`, in no workflow job** |
+| **`corpus-reproduces`** | **in `make ci`, in no workflow job** |
+| `exit-run`, `soak`, `bench` | deliberately not per-change |
+
+And underneath all of it: **the workflow has never executed.** There is no remote.
+`make ci` is a list of lanes that runs when a person types it, one lane at a time,
+and nothing has ever run the list.
+
+That is what produced three separate findings in one sitting:
+
+1. `provcheck` red across a commit (register instance 17);
+2. `make test` **unrunnable since A1** — `go test ./...` with nothing set runs the
+   exit sweep at its 10,000-seed default, roughly 26 hours at A6's cost and dead
+   on Go's ten-minute timeout long before that (register instance 18);
+3. two lanes in `make ci` that the workflow does not contain, so even a remote
+   would not have run them.
+
+### 20.2 The second cost of having no remote, recorded as such
+
+The first cost is already in the record: nothing runs on push, so every lane is
+run on memory. This is the second, and it is sharper — **the lanes have drifted
+from the thing that runs them, and drift is invisible from either side.** Reading
+the Makefile tells you `assertions` is in `ci`. Reading the workflow tells you the
+jobs it has. Neither tells you they disagree.
+
+Three fixes, all inside the repository, because that is the only place a fix can
+live until a remote exists:
+
+- **`make test` is bounded** — `TEST_SEEDS=200`, `LANE_SEEDS=12`, an explicit
+  timeout, and the numbers stated in the Makefile rather than hidden in a skip.
+  Full seed coverage was always `soak` and the exit run; the every-change lane
+  now matches what it is for.
+- **The two missing jobs are in the workflow.**
+- **`make lane-coverage`** parses the `ci` target's prerequisites, expands the
+  aggregates, and requires each one to appear as a `run: make <lane>` in
+  `.github/workflows/ci.yml`. It is itself in `ci`, and it was induced against an
+  empty workflow before being believed: 17 lanes checked, 17 missing.
+
+None of that substitutes for the remote. It makes the *list* honest, which is the
+part that can be made honest without one.

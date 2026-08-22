@@ -154,11 +154,15 @@ power-toy: ## The toy's four flaw classes, floored since A0
 power-mutants: ## Every MUTANT class: detection rate against a standing floor, or an explicit opt-out
 	@$(POWERMUTANTS)
 
+.PHONY: lane-coverage
+lane-coverage: ## Every lane in the `ci` target actually runs in .github/workflows/ci.yml
+	sh scripts/lane-coverage.sh
+
 .PHONY: lint
 lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions provenance corpus corpus-reproduces smoke mutants ## Everything the push lane runs
+ci: build lint test race blind power assertions provenance corpus corpus-reproduces smoke mutants lane-coverage ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 

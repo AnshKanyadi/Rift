@@ -125,6 +125,11 @@ simulated seeds answer this lane's question") and the budget is what has always 
 budget cannot absorb this one. The measurement Ansh asked for at A5 is still owed and is now the thing
 that decides which of the two moves.
 
+**There is still no remote, and that is now a three-finding cost.** DESIGN-A6 §20. `provcheck` red
+across a commit, `make test` unrunnable since A1, and two lanes in `make ci` absent from the
+workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
+*run*. Every phase that ships without a remote should expect to find another lane that stopped.
+
 **Does a phase's fault mix cover the phase's own mechanisms?** DESIGN-A6 §18. `cfg.Holds = 0` was
 correct at A1 and wrong from A6, and nothing connected "this phase is clock-sensitive" to "this
 phase's plan generates clock faults". A7 adds read index, which is not clock-sensitive; STRETCH's

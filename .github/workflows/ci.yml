@@ -133,6 +133,51 @@ jobs:
       # bundles had already rotted when the lane was written.
       - run: make corpus
 
+  corpus-reproduces:
+    name: corpus reproduction (every bundle still finds its bug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # `make corpus` asserts a bundle still produces the RUN it recorded. This
+      # asserts it still produces the FINDING: apply its mutant, replay, and
+      # require a violation, an inconclusive, a panic or a refusal. A bundle whose
+      # schedule has stopped reaching its defect replays perfectly and proves
+      # nothing, and regenerating one after a workload change re-records the
+      # schedule without re-checking that it still bites.
+      #
+      # It was in the Makefile's `ci` target and NOT in this file. So was
+      # `assertions`. DESIGN-A6 section 20.
+      - run: make corpus-reproduces
+
+  assertions:
+    name: every declared assertion mechanism is invoked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # A check that is never invoked is indistinguishable from one that always
+      # passes. This lane runs an ordinary run and requires every registered
+      # every-run assertion to have fired at least once.
+      - run: make assertions
+
+  lane-coverage:
+    name: every lane in `make ci` runs in this file
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The two jobs above were missing for a whole phase, and the Makefile's
+      # `ci` target listed them the entire time. A lane that is not run is not a
+      # lane, and a lane list that drifts from the thing that runs it is how a
+      # lane stops being run without anybody deciding to stop running it.
+      - run: make lane-coverage
+
   provenance:
     name: oracle input provenance
     runs-on: ubuntu-latest

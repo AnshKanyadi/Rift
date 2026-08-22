@@ -341,9 +341,19 @@ rhetorical:
 | 12 | the power lane's rate floor could not see a **kill-time** regression | M19's rate held (10 to 7 per 1500, floor 4) while its seeds-to-detection tripled, 145 to 553; the lane was green and the class had left the reach of every short run | DESIGN-A5, and Amendment A2 had named it |
 | 13 | **`make corpus`, guarding the reproducibility claim itself** | **green while a bundle had stopped carrying its finding**: a fixed bug's bundle records no violation by design, so the lane compared a clean replay against a clean recording and matched | DESIGN-A5 §16 |
 | 14 | the power lane's `power-config` default, spelled `a3` | it meant "what the sweep runs" and was written when A3 was what the sweep ran; the probe had no case for `a3` at all, so it fell through to current — correct behaviour under a label that had stopped describing it | DESIGN-A5 §11b |
+| 15 | **snapshot-isolation's stability property** | the same `(key, timestamp)` is almost never asked twice by accident, so the property ran over an **empty set** and reported green; it took a deliberate second pass by the workload before it compared anything | DESIGN-A6 §9, §15 |
+| 16 | **`cfg.Holds = 0`**, carrying its own justification: *A1 Raft has no clock-sensitive logic* | true when written; A6's phase headline is *hybrid logical clocks with uncertainty intervals* and its sweep injected **no clock skew at all**, so every uncertainty restart it ever produced came from HLC ordering rather than from clocks disagreeing | DESIGN-A6 §18 |
+| 17 | **`tools/provcheck`**, the lane that enforces oracle-input provenance | **red across a whole commit** and nobody saw it, because there is no remote and the lane only runs when somebody remembers to type it | DESIGN-A6 §20 |
+| 18 | **`make test` itself**, the every-change lane | `go test ./...` with nothing set runs the exit sweep at its 10,000-seed default — about 26 hours at A6's cost, and dead on Go's ten-minute timeout long before that. Unrunnable since A1, unnoticed for the same reason as 17 | DESIGN-A6 §20 |
 
 Seven of the first eight were in the harness. The eighth was in a **verdict**, which is the difference
 between a machine that finds less than it should and a machine that certifies something false.
+
+**Instances 17 and 18 are a different shape from the sixteen before them.** Those were instruments
+that ran and measured nothing. These two are instruments that **did not run at all** — and the
+distinction matters, because everything this register has taught about writing checkers is useless
+against a lane nobody executes. A lane that is not run is not a lane. DESIGN-A6 §20 carries the audit
+of which lanes run on every change and which run on memory.
 
 **Everything after the eighth has been in an instrument**, and that is the finding the register now
 carries: 9 and 10 in the mutant and power lanes, 12 in the power lane's floor shape, 14 in its config
