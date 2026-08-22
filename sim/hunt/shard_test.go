@@ -141,9 +141,22 @@ func TestRaftExitAggregate(t *testing.T) {
 		total = n
 	}
 
+	// # A relative shard directory is resolved against the REPO ROOT
+	//
+	// `go test` runs with the package directory as its working directory, so a
+	// relative RAFT_SHARD_DIR written by somebody standing at the repo root
+	// silently resolves to sim/hunt/<dir> and finds nothing. "Found nothing" and
+	// "the shards did not run" are the same message, which is the failure that
+	// wastes an afternoon.
 	paths, err := filepath.Glob(filepath.Join(dir, "shard-*.json"))
 	if err != nil {
 		t.Fatalf("globbing %s: %v", dir, err)
+	}
+	if len(paths) == 0 && !filepath.IsAbs(dir) {
+		alt := filepath.Join("..", "..", dir)
+		if p2, err2 := filepath.Glob(filepath.Join(alt, "shard-*.json")); err2 == nil && len(p2) > 0 {
+			dir, paths = alt, p2
+		}
 	}
 	if len(paths) == 0 {
 		t.Fatalf("no shard census in %s: an aggregate over nothing is not an exit run", dir)
