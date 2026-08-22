@@ -103,12 +103,26 @@ never claimed here.)*
 
 ```sh
 make help      # every lane, and which are real vs. still stubs
-make test      # Go unit tests
+make hooks     # install the pre-push hook that runs the every-change lanes
+make test      # Go unit tests (seed searches bounded; full coverage is soak and the exit run)
 make race      # Go unit tests under -race
 make lint      # vet, formatting, the determinism pass, tooling-only dependencies
 make blind     # mutation-test the determinism pass itself
 make smoke     # 500-seed simulator smoke
+make ci        # everything the push lane runs
 ```
+
+Three tiers, and the boundary between them is cost rather than importance:
+
+| tier | lanes | how it runs |
+|---|---|---|
+| **every change** | `make ci` — build, lint, lane coverage, assertions, provenance, test, corpus, corpus reproduction, blind, power, smoke, mutants, race | the pre-push hook runs the fast half; the rest wait on a remote |
+| **nightly** | the 10,000-seed soak, the differential engine lane, the crash-consistency sweep | not yet scheduled — there is no remote |
+| **solo** | `make solo` and `make exit-run` — the unthrottled collector, mutant power floors, the race curve, and the 25,000-seed exit run | hours each, and none of them may share a machine |
+
+`make lane-coverage` requires every lane named in the `ci` target to actually
+appear in `.github/workflows/ci.yml`. Two of them did not, for a phase — a lane
+that is not run is not a lane.
 
 Go is pinned by `go.mod`'s `toolchain` directive and CI runs exactly that version.
 
