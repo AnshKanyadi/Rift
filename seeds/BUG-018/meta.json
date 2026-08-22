@@ -1,6 +1,6 @@
 {
   "seed": 0,
-  "commit": "78cd4719609d94f8387176c5c38a130964760575",
+  "commit": "dd051f0f85e5261dad4c9fb2b413feef84de26b1",
   "workload": "raft",
   "trace_hash": "57970231ed5c73ed73d8adaa4fe9653004a3a63e1a142de92fcf107a139b0f93",
   "step_hashes": [
@@ -23764,5 +23764,5 @@
     "elections_won": 15,
     "split_votes": 2
   },
-  "mutant": "M59-transaction-steps-batched-blind"
+  "mutant": "sim/mutants/M59-transaction-steps-batched-blind.patch"
 }

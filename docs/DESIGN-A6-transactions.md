@@ -623,66 +623,63 @@ money missing from it.
 
 ---
 
-## 16. The corpus proved the wrong thing, and the fifteenth vacuous-green
+## 16. The corpus, a duplicated lane, and a criterion worth a ruling
 
 A6 changed the workload, which moved every raft trace, and the corpus lane did
 exactly what it was built for: sixteen bundles stopped replaying, loudly, in the
 commit that moved them. The prescribed remedy is in the lane's own comment —
 *regenerate the bundle in the same commit that moved it* — and regenerating them
-turned the lane green again.
+turned it green again.
 
-**All sixteen were then worthless, and nothing said so.**
+### 16.1 The correction, first
 
-### 16.1 The two claims a bundle makes
+I then built `TestEveryBundleStillFindsItsBug` on the belief that nothing checked
+whether a regenerated bundle still **reaches** its defect.
 
-| claim | who checked it |
-|---|---|
-| the bundle still produces the run it recorded — same trace, same census | `TestEveryStoredBundleReplays`, since A4 |
-| the bundle's **finding** can still be reproduced from it | **nobody** |
+**That was wrong.** `scripts/corpus-reproduces.sh` has checked it since A5, is
+wired into `make ci`, and has already caught one instance — BUG-002's schedule
+stopped exercising M14 entirely, and the bundle was re-recorded at a seed that
+does reproduce. The lane's own header says all of this.
 
-Every raft bundle carries a **fixed** bug. Its schedule therefore runs clean, and
-the entry is only worth keeping because the named mutant reintroduces the defect
-and the schedule then catches it again. That second claim is the one on the
-résumé — *every bug ever found replays from a single seed* — and it was the one
-with no lane under it.
+Recorded as a process error rather than quietly deleted, because it is the
+cheapest kind to avoid and I did not: **before building an instrument, search for
+the one that already exists.** Two lanes for one property is worse than one — the
+weaker rots behind the stronger and nobody notices which is which.
 
-### 16.2 Why regeneration is not a repair
+### 16.2 What the duplicate did establish: the two criteria are not the same
 
-Regenerating a bundle re-records the **schedule**. A schedule that no longer
-reaches the defect regenerates exactly as happily as one that does: same MATCH,
-same green lane, same directory. The replay lane cannot tell the difference,
-because from its side there is no difference.
+The existing lane requires the mutated replay to **differ from the recording in
+some observable way** — a violation, a panic, an error, or a diverged trace. The
+one I wrote requires **the finding to come back**: a violation, an inconclusive,
+or a panic.
 
-`TestEveryBundleStillFindsItsBug` applies each bundle's named patch to a copy of
-the tree, rebuilds, and replays. The trace legitimately moves — the mutant
-changes what the cluster does — so what it requires back is **the finding**. On
-its first run, with the corpus freshly regenerated and the replay lane green:
-**16 of 16 reported no violation.**
+Those are different claims, and the gap between them is measurable. The existing
+lane reported six failures on the A6 tree: `BUG-009`, `BUG-014` and `BUG-015`
+**STALE** — the mutation changes nothing at all on their schedules — plus
+`BUG-018` and `BUG-019` **ROT**, which was my own error recording the mutant as a
+bare name where the lane expects a path.
 
-So the corpus regeneration is now a **search**: for each bundle, seeds are run
-with the mutant applied until one reproduces, and that seed becomes the entry.
-The old seed is kept in BUGS.md as the seed the bug was *found* on, which is a
-different fact and worth keeping separately.
+The stricter criterion adds `BUG-003` and `BUG-008`: their mutants still make the
+replay diverge, so the existing lane passes them, but the divergence never reaches
+a checker.
 
-### 16.3 The fifteenth instance, and what makes it different
+Every stale entry is re-recorded at a seed where its mutant reproduces, which is
+what the existing lane's own message prescribes. The two extra that only the
+stricter criterion flags are **reported rather than acted on**, because tightening
+a criterion Ansh ruled on at A5 is not mine to do quietly. The options are:
+tighten it and re-record those two as well; keep it and record them as
+divergence-only entries; or something else.
 
-Fourteen recorded instances of a mechanism declared, wired, and never invoked.
-This is the fifteenth, and it is the first where the mechanism **ran on every
-push and passed**: the replay lane was not dormant, it was answering a narrower
-question than the one everybody read it as answering.
+### 16.3 The general form, which survives the correction
 
-> **A lane that verifies an artifact reproduces must verify it reproduces the
-> FINDING, not merely that it reproduces.**
+> **A lane that verifies an artifact reproduces must say WHAT it reproduces.**
 
-That is the same sentence as the thirteenth instance one turn further out. A5's
-corpus lane verified that a bundle reproduced *identically to a baseline that was
-also empty*; this one verified that a bundle reproduced *a run*, which is not the
-same as reproducing *a bug*. Both times the missing word was what the artifact was
-supposed to be evidence **of**.
-
-The cost of not having it: an A6 sweep would have shipped with a sixteen-entry
-corpus proving nothing, and the first person to check by hand would have been a
-stranger reading the résumé line.
+"The run" and "the finding" are different artifacts, and a corpus is evidence for
+the second. A5 already knew this — that is why the reproduction lane exists — and
+the thing worth carrying forward is that the distinction has to be re-checked
+whenever the workload moves, because regeneration re-records the schedule and a
+schedule that no longer reaches the defect regenerates just as happily as one that
+does.
 
 ---
 

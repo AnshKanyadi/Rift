@@ -1,6 +1,6 @@
 {
   "seed": 41,
-  "commit": "78cd4719609d94f8387176c5c38a130964760575",
+  "commit": "dd051f0f85e5261dad4c9fb2b413feef84de26b1",
   "workload": "raft",
   "trace_hash": "76768f5af8d21997474457d336d50312fe6c17d80e5e48a3c2264e442b03701c",
   "step_hashes": [
@@ -26066,5 +26066,5 @@
     "elections_won": 17,
     "split_votes": 0
   },
-  "mutant": "M65-rollback-takes-any-lock"
+  "mutant": "sim/mutants/M65-rollback-takes-any-lock.patch"
 }

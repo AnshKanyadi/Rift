@@ -92,11 +92,16 @@ pointed at the orphan. It was answered with `percolator-invariants` #5 rather th
 list is therefore a claim under active test rather than an assertion, which is the most that can
 honestly be said for it.
 
-**Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16. Whenever the workload changes
-enough to move traces, `TestEveryStoredBundleReplays` will fail and the fix is to regenerate — but a
-regenerated bundle must be re-verified by `CORPUS_REINTRODUCE=1 go test ./cmd/simctl`, because a
-schedule that no longer reaches its defect regenerates exactly as happily as one that does. Measured:
-16 of 16 bundles proved nothing after one blind regeneration.
+**Five corpus entries prove less than they claim.** DESIGN-A6 §16.2. `BUG-003`, `BUG-008`,
+`BUG-009`, `BUG-014`, `BUG-015`: their mutants still make the replay diverge, which is what
+`scripts/corpus-reproduces.sh` requires, but no longer make it produce a **finding**. Awaiting a
+ruling on whether the criterion tightens; if it does, those five are re-recorded at seeds where the
+finding returns.
+
+**Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16.3. Whenever the workload moves
+traces, `TestEveryStoredBundleReplays` fails and the fix is to regenerate — but a schedule that no
+longer reaches its defect regenerates exactly as happily as one that does, so the reproduction lane
+has to be re-run afterwards and its verdict read, not assumed.
 
 **The mutant lane's budget under A6's shape.** 36 of the 39 mutants that declare a power expectation
 measure under `current`, which is now A6's shape: **14,700 seed-runs at ~3.75 s/seed, about 15
