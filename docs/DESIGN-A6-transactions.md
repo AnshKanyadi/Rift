@@ -1065,6 +1065,18 @@ a counter added later gets silently left at zero, which is a number that reads
 good at: every numeric field must move when two censuses are folded, with
 non-totals exempted **by name and with a reason**.
 
+**The run's commit is recorded and checked.** `exit-run.sh` refuses a dirty tree —
+an exit run at an uncommitted tree names a commit that does not contain what ran
+— and stamps every shard census with the commit, which the aggregate requires to
+match across all of them. An aggregate across two builds is two experiments
+reported as one.
+
+Work continued after the run launched, so the honest statement is the diff: from
+the exit run's commit to head, **only documentation, lane wiring and scripts
+changed — no Go source at all**, which `git diff --stat <commit>..HEAD` shows and
+anybody can re-check. Had a line of `raft/`, `store/`, `kv/` or `sim/` moved, the
+run would have to be re-launched rather than explained.
+
 ### 21.2 And it is what makes the run finishable
 
 26 CPU-hours in one process is a run that is always still going. The same 26
