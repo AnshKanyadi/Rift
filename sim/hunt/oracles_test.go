@@ -65,6 +65,22 @@ import (
 // What prevents it now is not vigilance: hunt.CurrentOptions is the single
 // source of truth, read by the sweep, by these inductions and by the power
 // probe. They cannot disagree, because there is only one of them.
+// skipIfShort is for a covering test whose assertion is about VOLUME.
+//
+// Capping a silence check is harmless -- fewer seeds, still silent. Capping a
+// test that ends "the guard never fired across the whole range, so this test
+// asserts nothing" turns it into a test that fails for being fast, which is
+// worse than not running it: it trains people to ignore the lane.
+//
+// So those skip, and `make covering` runs them at full range in the nightly
+// tier. The distinction is per test and deliberate, not a blanket.
+func skipIfShort(t *testing.T, what string) {
+	t.Helper()
+	if testing.Short() {
+		t.Skipf("-short: %s needs the full seed range to assert anything; `make covering` runs it", what)
+	}
+}
+
 // shortSeeds is how many seeds a covering test runs under -short: enough to
 // execute the path, not enough to claim anything about detection.
 const shortSeeds = 3
@@ -261,7 +277,7 @@ func TestStateMachineSafetyOracleReportsNothing(t *testing.T) {
 // this is roughly an order of magnitude above the rate needed to catch it.
 func TestClientHistoryIsLinearizable(t *testing.T) {
 	const seeds = 100
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
 		p, err := hunt.MaterializeRaft(seed)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)
@@ -308,7 +324,7 @@ func TestClientHistoryIsLinearizable(t *testing.T) {
 func TestDurableRecordAgreesWithTheEngine(t *testing.T) {
 	const seeds = 300
 	checks := 0
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
 		p, err := hunt.MaterializeRaft(seed)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)
@@ -417,7 +433,7 @@ func TestSingleServerChangeOracleReportsNothing(t *testing.T) {
 func TestConfigurationSurvivesRecovery(t *testing.T) {
 	const seeds = 200
 	checks, recoveries := 0, 0
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
 		p, err := hunt.MaterializeRaft(seed)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)

@@ -33,6 +33,7 @@ import (
 // in the numbers is therefore a difference in the protocol and not in the
 // weather.
 func TestPreVoteAblation(t *testing.T) {
+	skipIfShort(t, "an ablation compares two arms over a range")
 	const seeds = 200
 
 	type arm struct {

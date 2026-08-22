@@ -38,6 +38,7 @@ import (
 // count is a fact about the schedule. What would be a defect is the count being
 // zero -- that would mean these schedules never produce the race.
 func TestStaleDurabilityCompletionIsRefused(t *testing.T) {
+	skipIfShort(t, "the epoch guard must be seen firing")
 	const seeds = 200
 
 	drops, seedsWithDrops := 0, 0

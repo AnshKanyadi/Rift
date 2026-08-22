@@ -218,6 +218,10 @@ hooks: ## Install the pre-push hook that runs the every-change lanes
 	@printf '  installed .git/hooks/pre-push -- the every-change lanes now run on push.\n'
 	@printf '  It is not a remote. It is the half of a remote that can be had without one.\n'
 
+.PHONY: nightly
+nightly: covering soak ## The nightly tier: full seed ranges, then the 10k soak
+	@printf '\n  nightly complete. The three solo measurements are `make solo`.\n\n'
+
 .PHONY: solo
 solo: ## The three measurements that need the machine to themselves, in order
 	@printf '\n  SOLO SLOT: three measurements, none of which may share a machine.\n'

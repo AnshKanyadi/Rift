@@ -33,6 +33,7 @@ import (
 // completeness already checks it, in-run and cluster-wide, and a second weaker
 // version of an existing oracle is a second thing to keep in step.
 func TestLeadershipTransferSkipsTheTimeout(t *testing.T) {
+	skipIfShort(t, "a transfer order must be seen delivered")
 	const seeds = 300
 
 	// One election timeout: 10 ticks at the plan's 10ms tick interval. A target
