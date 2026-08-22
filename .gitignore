@@ -39,3 +39,4 @@ compile_commands.json
 # in-repo layout if we ever switch to it.
 /.worktrees/
 .exitrun
+.exitrun.log
