@@ -167,6 +167,17 @@ jobs:
       # every-run assertion to have fired at least once.
       - run: make assertions
 
+  bundle-seeds:
+    name: BUGS.md's seeds match the bundles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # "Reproduce (seed)" is the instruction a stranger follows and the bundle
+      # is what they get, and nothing compared the two. Four entries had drifted
+      # by A6, because a bundle is re-recorded whenever the workload moves under
+      # it and the prose beside it is not.
+      - run: make bundle-seeds
+
   lane-coverage:
     name: every lane in `make ci` runs in this file
     runs-on: ubuntu-latest

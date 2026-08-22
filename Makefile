@@ -139,6 +139,10 @@ provenance: ## The ledger's inputs are harness-observed; a system-reported fact 
 corpus: ## Replay every bundle in seeds/; a bundle that stops reproducing fails the build
 	$(GO) test -count=1 -run 'TestEveryStoredBundleReplays|TestCorpusLaneDetectsRot' ./cmd/simctl/
 
+.PHONY: bundle-seeds
+bundle-seeds: ## BUGS.md's stated bundle seed matches the bundle it points at
+	sh scripts/bundle-seeds.sh
+
 .PHONY: corpus-reproduces
 corpus-reproduces: ## Every bundle still EXERCISES its defect: apply its mutant, replay, require a difference
 	sh scripts/corpus-reproduces.sh
@@ -166,7 +170,7 @@ lane-coverage: ## Every lane in the `ci` target actually runs in .github/workflo
 lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions provenance corpus corpus-reproduces smoke mutants lane-coverage ## Everything the push lane runs
+ci: build lint test race blind power assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants lane-coverage ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 

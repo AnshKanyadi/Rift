@@ -769,6 +769,24 @@ came out green and that was worth two minutes of looking.
 > **A green that contradicts something you knew an hour ago is evidence about the
 > instrument, not about the system.**
 
+### 16.5 And the prose beside the bundles had drifted too
+
+`BUGS.md`'s **Reproduce (seed)** line is the instruction a stranger follows; the
+bundle is what they get. Nothing compared the two. Four entries had drifted by A6
+— BUG-004 said 0 and carried 2, BUG-005 said 40 and carried 3, BUG-007 said 12
+and carried 1, BUG-015 said 215 and carried 16 — because a bundle is re-recorded
+whenever the workload moves under it and the sentence beside it is not.
+
+`make bundle-seeds` compares them, and it is in `ci` and in the workflow. Its
+first version demanded one exact phrasing and called **seven correct entries
+drifted**, which is a checker enforcing a sentence shape rather than a fact —
+the fourth matcher I have got wrong today, and the reason each one is now induced
+before it is believed. It matches the seed as a number in whatever wording the
+entry uses, and its header states the scope honestly: a drift check, not a
+proof, foolable by a line that happens to contain the seed as an index.
+
+That is the smallest claim in the repository and the one a reader tests first.
+
 BUG-003 and BUG-008 were re-recorded even though the loose criterion passed them,
 because a seed where the finding returns is strictly better evidence than one
 where only the trace moves, and it cost the same search. **Whether the criterion

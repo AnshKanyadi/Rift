@@ -112,7 +112,11 @@ for d in "$SEEDS"/*/; do
   # "THE REPLAY PRODUCED A VIOLATION THE RECORDING DID NOT" against "violation
   # reproduced" -- and only the difference forms count here, plus a panic or a
   # harness error, neither of which a clean recording has.
-  if printf '%s' "$out" | grep -qE 'THE RECORDING DID NOT|WHERE THE RECORDING WAS NOT|NOT REPRODUCED|panic|simctl:'; then
+  # "NOT REPRODUCED" is deliberately absent: it means the mutant made a finding
+  # the recording had go AWAY, which is a difference but is not this bundle
+  # reproducing its finding. For a bundle recorded on fixed code the recording is
+  # clean, so the only honest pass is a finding appearing where there was none.
+  if printf '%s' "$out" | grep -qE 'THE RECORDING DID NOT|WHERE THE RECORDING WAS NOT|panic|simctl:'; then
     printf '   ok       %-12s reproduces its FINDING under %s\n' "$name" "$(basename "$mutant")"
   elif printf '%s' "$out" | grep -qE 'DIVERGED'; then
     printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$(basename "$mutant")"

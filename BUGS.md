@@ -223,7 +223,7 @@ be declared, wired, and never invoked.
 | **Found by** | sim — `raft.AssertQuiescent` |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M23-gated-messages-never-released.patch && go run ./cmd/simctl replay --bundle seeds/BUG-003` (any commit) |
-| **Reproduce (seed)** | `seeds/BUG-003` carries seed 0 |
+| **Reproduce (seed)** | `seeds/BUG-003` carries seed **23**, re-recorded at A6 when the workload moved every raft trace (DESIGN-A6 §16); it carried seed 0 when the bug was found |
 | **Invariant that caught it** | none of the four — a stall, again |
 | **Mutant class** | none existed — added `M23-gated-messages-never-released` in this PR |
 | **Fix commit** | `5264236` (`markHandedOff`) |
@@ -266,7 +266,7 @@ tells us nothing.
 | **Found by** | sim — porcupine, over the client history |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M24-answer-by-position.patch && go run ./cmd/simctl replay --bundle seeds/BUG-004` (any commit) |
-| **Reproduce (seed)** | `seeds/BUG-004` carries seed 0 (was 17; see *the seeds moved* below) |
+| **Reproduce (seed)** | `seeds/BUG-004` carries seed **2**; it has carried 0 and 17 before that — see *the seeds moved* below |
 | **Invariant that caught it** | **Linearizability of single-key reads and writes**, not any of the four safety oracles |
 | **Mutant class** | none existed — added `M24-answer-by-position` in this PR |
 | **Fix commit** | `b1210cf` |
@@ -318,7 +318,7 @@ exported surface, with `Advance` pinned as a required *absence*.
 | **Found by** | sim — the **persist-before-reply** oracle |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M25-restart-recovers-unsynced-writes.patch && go run ./cmd/simctl replay --bundle seeds/BUG-005` |
-| **Reproduce (seed)** | found at seed **92**, instant **2592077256**, step 1086, at commit `f624c0a`. `seeds/BUG-005` now carries seed 40 (see *the seeds moved* below) |
+| **Reproduce (seed)** | found at seed **92**, instant **2592077256**, step 1086, at commit `f624c0a`. `seeds/BUG-005` carries seed **3**; it has carried 40 before that — see *the seeds moved* below |
 | **Invariant that caught it** | persist-before-reply, which is DR-8's **first enumerated gate** |
 | **Mutant class** | none existed — added `M25-restart-recovers-unsynced-writes` |
 | **Fix commit** | `0c55e30` |
@@ -447,7 +447,7 @@ never fires" now has a number behind it saying what it would catch if the other 
 | **Found by** | sim — the assertion fired on the first seed after the watermark it guarded started moving |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M29-truncation-refused-below-the-durable-watermark.patch && go run ./cmd/simctl replay --bundle seeds/BUG-007` |
-| **Reproduce (seed)** | `seeds/BUG-007` carries seed 12 (was 15; see *the seeds moved* below) |
+| **Reproduce (seed)** | `seeds/BUG-007` carries seed **1**; it has carried 12 and 15 before that — see *the seeds moved* below |
 | **Invariant that caught it** | `raft.truncateFrom`'s own assertion — a **false** one, which is the bug |
 | **Mutant class** | none existed — added `M29-truncation-refused-below-the-durable-watermark` |
 | **Fix commit** | `0c55e30` |
@@ -499,7 +499,7 @@ it is safe in a way that releasing it later is not.
 | **Found by** | sim — the driver's durability record compared against the engine's own account |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M26-truncated-suffix-left-in-the-engine.patch && go run ./cmd/simctl replay --bundle seeds/BUG-008` |
-| **Reproduce (seed)** | `seeds/BUG-008` carries seed 12 (was 84; see *the seeds moved* below) |
+| **Reproduce (seed)** | `seeds/BUG-008` carries seed **7**, re-recorded at A6 (DESIGN-A6 §16); it carried 12, and 84 before that — see *the seeds moved* below |
 | **Invariant that caught it** | **Storage recovery** — "after any crash, the engine recovers exactly the acknowledged-synced prefix" |
 | **Mutant class** | none existed — added `M26-truncated-suffix-left-in-the-engine`, and `M27-durable-record-ignores-a-clear` for the mirror direction |
 | **Fix commit** | `0c55e30`, with the continuous cross-check in `56e3c18` |
@@ -549,7 +549,7 @@ between a check that runs twice a run and one that runs whenever there is someth
 | **Found by** | sim — the 10,000-seed exit run, through `raft.truncateFrom`'s assertion |
 | **Phase** | A2 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M34-append-from-zero-over-a-snapshot.patch && go run ./cmd/simctl replay --bundle seeds/BUG-009` |
-| **Reproduce (seed)** | seed **1364**; 1 of 3000 seeds reach it |
+| **Reproduce (seed)** | found at seed **1364**, 1 of 3000 seeds reaching it; `seeds/BUG-009` carries seed **13**, re-recorded at A6 (DESIGN-A6 §16) |
 | **Invariant that caught it** | state machine safety, asserted inside `raft/` — *a truncation may not reach an entry this node was told was committed* |
 | **Mutant class** | none existed — added `M34-append-from-zero-over-a-snapshot` |
 | **Fix commit** | *(this commit)* |
@@ -766,7 +766,7 @@ same defect is now a caught violation rather than a silence.
 | **Found by** | sim — snapshot equivalence, on 13 of 300 seeds after BUG-013 was fixed |
 | **Phase** | A4 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M45-apply-ignores-the-extent.patch && go run ./cmd/simctl replay --bundle seeds/BUG-014` |
-| **Reproduce (seed)** | seed **28**, range 2, index 13 |
+| **Reproduce (seed)** | found at seed **28**, range 2, index 13; `seeds/BUG-014` carries seed **15**, re-recorded at A6 (DESIGN-A6 §16) |
 | **Invariant that caught it** | snapshot equivalence; the invariant it breaks is *no request served under a stale descriptor epoch* |
 | **Mutant class** | none existed — added `M45-apply-ignores-the-extent` |
 | **Fix commit** | ebea8c5 |
@@ -804,7 +804,7 @@ this survive is a loud failure instead of a slow divergence.
 | **Found by** | sim — a raft refusal, seed 9595 of the A4 exit sweep |
 | **Phase** | A4 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M46-split-inherits-the-appended-configuration.patch && go run ./cmd/simctl replay --bundle seeds/BUG-015` |
-| **Reproduce (seed)** | found at seed **9595** of the 10,000-seed exit sweep; the bundle uses seed **215**, the first of 3000 that reaches it |
+| **Reproduce (seed)** | found at seed **9595** of the 10,000-seed exit sweep. `seeds/BUG-015` carries seed **16** and **does not currently reproduce**: A6's workload moved the trace, `M46` detects at 1 in 3,000, and the replacement seed comes from the mutant power measurement under A6's shape (DESIGN-A6 §16.2). The entry is blocked, not retired |
 | **Invariant that caught it** | none — a refusal, from `ApplyConfEntry` declining an illegal transition |
 | **Mutant class** | none existed — added `M46-split-inherits-the-appended-configuration` |
 | **Fix commit** | ebea8c5 |
