@@ -142,6 +142,13 @@ phase's plan generates clock faults". A7 adds read index, which is not clock-sen
 leases are. Ask the question explicitly at every phase gate, because a comment that was true when it
 was written is not a check.
 
+**Where an assertion goes, and what it is keyed on.** DESIGN-A6 §22.7 and §22.6, one class on two
+axes. Key it on what the DATA STRUCTURE is addressed by, not on what the concept feels owned by
+(`(primary, startTS)` read zero on the seed that had the collision, because a version key has no
+primary in it). And put it where the FACT is observable, not inside the mechanism that produces it
+(a counter inside `nowAbove` is deleted by the mutant that deletes the call to `nowAbove`). Both were
+found by the same mutant surviving twice.
+
 **The batch-boundary technique.** DESIGN-A6 §14.4. When a replica disagrees with a replay of its own
 log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
 **skip** in the node's indices. A7 (read index, where a lease or an index read can be answered

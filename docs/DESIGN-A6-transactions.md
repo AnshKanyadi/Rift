@@ -1377,13 +1377,41 @@ class was discovered on.
 
 Answered as §13.4 requires, with an assertion rather than a better-chosen seed.
 The assertion is the property: **a start timestamp carries the tag of the node
-the client asked for it.** `nowAbove` checks it on every mint and counts
-`ForeignTagStarts`; `TestRestartsMintTheirOwnStartTimestamp` sweeps for it and
-fails if the sweep contained no restarts at all — because a test that passes on a
-workload with no restarts is how M68 survived the first time.
+the client asked for it**, counted as `ForeignTagStarts`, with
+`TestRestartsMintTheirOwnStartTimestamp` sweeping for it and failing if the sweep
+contained no restarts at all — because a test that passes on a workload with no
+restarts is how M68 survived the first time.
 
-Second surviving mutant of the phase, after `M61`. The list has now made a hole
-visible twice, which is the most that can honestly be said for a list.
+**Then it survived a second time, for a different reason, and the second reason
+is the more instructive.**
+
+The counter was incremented inside `nowAbove` — the minting helper. M68 deletes
+the *call* to `nowAbove`. So the mutation removed the guard along with the
+behaviour, and `ForeignTagStarts` stayed at zero because nothing was left to
+increment it. The lane was green about a defect that was present and executing.
+
+That is §22.7's class one level out. There the guard's **key** was drawn from
+what the concept feels owned by rather than from what the structure is addressed
+by; here the guard's **placement** was drawn from where the mechanism lives
+rather than from where the fact lives. Same mistake, different axis:
+
+> **An assertion belongs where the FACT is observable, not where the MECHANISM
+> that produces it lives. A guard inside the code path a defect removes is
+> removed by that defect.**
+
+The fact is a property of `t.startTS`. The check now sits wherever `t.startTS` is
+assigned — first snapshot and restart, minted or derived — so no single deletion
+can take both the behaviour and its witness.
+
+The mutant itself had to be repointed too: it originally deleted the whole
+`nowAbove` block, a shape the corrected code cannot express, so it now mutates
+the derivation directly. **A mutant that no longer describes a reachable defect
+is a mutant that tests nothing**, and repointing it is not the same as tuning it
+— the defect it represents is unchanged.
+
+Second surviving mutant of the phase, after `M61`, and the only one to survive
+twice. The list has now made a hole visible three times, which is the most that
+can honestly be said for a list.
 
 ### 22.7 The guard that read zero, and the class it belongs to
 

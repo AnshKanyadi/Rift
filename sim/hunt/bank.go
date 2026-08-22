@@ -439,7 +439,7 @@ func (c *coordinator) restartAbove(t *transfer, ts hlc.Timestamp, at clock.Insta
 	// the half of option A that is easy to leave out, because a partial
 	// implementation looks exactly like a complete one until a restart lands on a
 	// foreign tag.
-	minted, ok := c.nowAbove(t.ts, ts)
+	minted, node, ok := c.nowAboveFrom(t.ts, ts)
 	if !ok {
 		c.abandon(t)
 		return
@@ -447,6 +447,12 @@ func (c *coordinator) restartAbove(t *transfer, ts hlc.Timestamp, at clock.Insta
 	t.restarts++
 	c.restarts++
 	t.startTS = minted
+	c.checkStartTag(t, node)
+	if !ts.Less(t.startTS) {
+		// The restart did not clear the commit it restarted on, so the next read
+		// meets the same uncertainty. Counted rather than assumed away.
+		c.staleRestarts++
+	}
 	t.resolves = map[string]int{}
 	t.blocked = map[string]string{}
 	t.phase = phaseRead
@@ -767,14 +773,6 @@ func (c *coordinator) nowFrom(i int) (hlc.Timestamp, int, bool) {
 
 // nowAbove mints a timestamp above lb, falling back across the cluster as now
 // does.
-func (c *coordinator) nowAbove(i int, lb hlc.Timestamp) (hlc.Timestamp, bool) {
-	ts, n, ok := c.nowAboveFrom(i, lb)
-	if ok {
-		c.checkTag(ts, n, lb)
-	}
-	return ts, ok
-}
-
 func (c *coordinator) nowAboveFrom(i int, lb hlc.Timestamp) (hlc.Timestamp, int, bool) {
 	if len(c.drivers) == 0 {
 		return hlc.Timestamp{}, 0, false
@@ -788,28 +786,27 @@ func (c *coordinator) nowAboveFrom(i int, lb hlc.Timestamp) (hlc.Timestamp, int,
 	return hlc.Timestamp{}, 0, false
 }
 
-// checkTag counts a start timestamp that does not carry the tag of the node that
-// was asked for it.
+// checkStartTag counts a transaction whose START TIMESTAMP does not carry the
+// tag of the node that was asked for it.
 //
-// # Why this exists rather than a test of the restart path
+// # It is called on the transaction, not inside the minting helper, and that
+// # took two goes
 //
-// `M68` — a restart adopting `RestartAt` instead of minting above it — SURVIVED
-// its first covering test. Seed 90004 is the schedule that found BUG-021 and it
-// does not happen to restart, so a test pinned to it says nothing about the
-// second half of the fix. That is the surrendered-property rule in DESIGN-A6
-// §13.4 doing its job: a surviving mutant is the gap made visible, and the
-// answer is an assertion rather than a better-chosen seed.
+// `M68` — a restart adopting `RestartAt` instead of minting above it — survived
+// twice. The first time because its covering test was pinned to seed 90004,
+// which does not restart. The second time because the check lived INSIDE
+// `nowAbove`, and M68 deletes the call to `nowAbove` — so the mutation removed
+// the guard along with the behaviour, and the counter stayed at zero because
+// nothing incremented it.
 //
-// The assertion is the property itself: **a transaction's start timestamp is
-// minted by the node the client asked**, so its low bits are that node's
-// ordinal. A derived one carries whichever node minted the commit it was derived
-// from, and this counts it.
-func (c *coordinator) checkTag(ts hlc.Timestamp, node int, lb hlc.Timestamp) {
-	if hlc.NodeOf(ts) != uint32(node) {
+// That is DESIGN-A6 §22.7's class, one level out: the guard was placed where the
+// MECHANISM is rather than where the FACT is. The fact is a property of
+// `t.startTS`, so the check belongs wherever `t.startTS` is set, and every path
+// that sets it — first snapshot or restart, minted or derived — passes through
+// here.
+func (c *coordinator) checkStartTag(t *transfer, node int) {
+	if hlc.NodeOf(t.startTS) != uint32(node) {
 		c.foreignTagStarts++
-	}
-	if lb.IsSet() && !lb.Less(ts) {
-		c.staleRestarts++
 	}
 }
 
@@ -982,7 +979,7 @@ func (c *coordinator) auditApplied(cmd store.TxnCommand, r store.TxnResult, at c
 		if a.restarts >= maxAuditRestarts {
 			return
 		}
-		restartTS, ok := c.nowAbove(a.id, r.RestartAt)
+		restartTS, _, ok := c.nowAboveFrom(a.id, r.RestartAt)
 		if !ok {
 			return
 		}
@@ -1218,7 +1215,7 @@ func (c *coordinator) beginTransfer(id, from, to, amount int, run *plan.Run) {
 	// The start timestamp comes from a node's clock, which is where a real
 	// client would get it: the coordinator has no clock of its own, and giving
 	// it one would put a time source outside the cluster's envelope.
-	startTS, ok := c.now(id)
+	startTS, tsNode, ok := c.nowFrom(id)
 	if !ok {
 		return
 	}
@@ -1235,6 +1232,7 @@ func (c *coordinator) beginTransfer(id, from, to, amount int, run *plan.Run) {
 		resolves: map[string]int{},
 		blocked:  map[string]string{},
 	}
+	c.checkStartTag(t, tsNode)
 	c.begin(t, run.Loop.Now(), run.Loop)
 }
 

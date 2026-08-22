@@ -9,16 +9,12 @@
 # mutates: BUG-021's SECOND half, and the reason the fix is one decision rather than two. A restarting transaction adopts RestartAt directly instead of minting above it. RestartAt is the observed commit's successor -- Logical plus one -- and Logical's low bits are the node tag, so the restarted transaction is identified by a number from another node's sequence. A tree carrying only the first half of the fix looks complete until a restart lands on a foreign tag
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go
-@@ -437,11 +437,7 @@
+@@ -439,7 +439,7 @@
  	// the half of option A that is easy to leave out, because a partial
  	// implementation looks exactly like a complete one until a restart lands on a
  	// foreign tag.
--	minted, ok := c.nowAbove(t.ts, ts)
--	if !ok {
--		c.abandon(t)
--		return
--	}
-+	minted := ts
- 	t.restarts++
- 	c.restarts++
- 	t.startTS = minted
+-	minted, node, ok := c.nowAboveFrom(t.ts, ts)
++	minted, node, ok := ts, t.ts%len(c.drivers), true
+ 	if !ok {
+ 		c.abandon(t)
+ 		return
