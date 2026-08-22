@@ -246,16 +246,33 @@ that the table got right and the code got wrong.** Not six for six.
 
 ## 9. The oracles
 
-Three new, and each names what it is forbidden from reading.
+Four new, and each names what it is forbidden from reading.
 
 **`transaction-atomicity`** — for every transaction the harness observed issuing writes, either every
 key's write record exists at one commit timestamp, or none does. Reads the committed logs of every
 range and the harness's own record of which keys a transaction touched. Never asks a coordinator what
 it thinks it did.
 
-**`snapshot-isolation`** — no client read observes a partial commit. Judged over
-**harness-observed client operations**: for each read at `T`, the set of values returned must be
-exactly the set some single committed prefix produces at `T`. Never engine state.
+**`snapshot-isolation`** — judged over **harness-observed client operations** and nothing else. Two
+properties, and §15 explains why they ended up being these two rather than the one first written here:
+
+1. **a snapshot is stable** — the same key read at the same timestamp answers the same thing, forever.
+   This is what catches a transaction committing into its own past, which no care in the write path
+   prevents (§15.2). It is only non-vacuous because the workload deliberately re-asks: audits run a
+   **second pass** over every account at their own timestamp, since the same `(key, timestamp)` pair
+   is otherwise almost never asked twice and the property would run over an empty set.
+2. **a read only blocks on a lock it could have seen** — a read at `T` reports a lock only if that
+   lock's transaction began at or below `T`, and that lock names a primary.
+
+Deliberately *not* asserted here: that a read sees every transaction committed below its timestamp.
+The harness knows which transactions it issued but not which committed — that is read from the logs
+by `transaction-atomicity`, and importing it would put the two oracles one derivation apart.
+
+**`uncertainty-envelope`** — every uncertainty ceiling is inside the bound the **PLAN** advertises,
+every restart names a commit strictly inside its interval, and every restart timestamp is strictly
+above the commit that caused it. The bound is plan-derived because a checker that took it from the
+node it is checking would agree with any bound that node had drifted to, and the arithmetic is written
+out in the oracle rather than borrowed from `kv` for the same reason.
 
 **`bank-conservation`** — total balance over every whole-bank snapshot read is the starting total.
 Client-observed history only (§7).
