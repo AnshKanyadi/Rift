@@ -180,7 +180,28 @@ func RaftGenConfig() plan.GenConfig {
 	cfg.ClientOps = 70
 	cfg.Crashes = 8
 	cfg.Partitions = 6 // weighted up, and genFaults alternates so most are single cuts
-	cfg.Holds = 0      // A1 Raft has no clock-sensitive logic; holds land with leases
+	// # Clock holds, which were ZERO through A5 and are the sixteenth instance
+	//
+	// The comment here read "A1 Raft has no clock-sensitive logic; holds land
+	// with leases", and it was true when it was written. A6 made it false and
+	// nothing noticed: uncertainty intervals, lock TTL expiry and the HLC
+	// envelope are all clock-sensitive, and the sweep that exercises them was
+	// injecting no skew at all -- only free drift of at most +-200 ppm, which
+	// over a fourteen-second run is under three milliseconds against a
+	// five-hundred-millisecond bound.
+	//
+	// So A6's headline mechanism was being exercised by HLC ORDERING alone: a
+	// commit timestamp allocated after a read timestamp is above it on one
+	// node's monotone clock, with or without any disagreement between clocks.
+	// The 256 uncertainty restarts across 200 seeds were real restarts against
+	// no real skew.
+	//
+	// Two holds, at 90% of maxOffset, which is inside the envelope and is what
+	// CLAUDE.md means by "bounded by maxOffset in safety runs". floors.go's rule
+	// applies: a schedule mix is a claim about reachability, so this number is a
+	// claim about which defects A6 can find, and changing it silently would
+	// change that claim silently.
+	cfg.Holds = 2
 	return cfg
 }
 

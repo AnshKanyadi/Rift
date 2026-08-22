@@ -744,3 +744,70 @@ Recorded rather than quietly fixed, because it is BUG-016's rule arriving on the
 did: *a checker that reports false violations costs more than no checker.* The lane was believed for
 about ten minutes, and the only reason it was not believed longer is that one of the sixteen had been
 verified by hand an hour earlier and could not be broken.
+
+---
+
+## 18. The sixteenth instance: A6's clock-sensitive phase ran with no clock skew
+
+`RaftGenConfig` carried one line since A1:
+
+```go
+cfg.Holds = 0 // A1 Raft has no clock-sensitive logic; holds land with leases
+```
+
+It was true when it was written. **A6 made it false and nothing noticed.**
+
+Uncertainty intervals, lock TTL expiry and the HLC envelope are all
+clock-sensitive, and the sweep that exercises them injected **no skew at all** —
+only free oscillator drift of at most ±200 ppm, which over a fourteen-second run
+is under three milliseconds against a five-hundred-millisecond bound.
+
+So A6's headline mechanism was being exercised by **HLC ordering alone**: a commit
+timestamp allocated after a read timestamp is above it on one node's monotone
+clock, whether or not any two clocks disagree. The 256 uncertainty restarts across
+200 seeds were real restarts against no real skew.
+
+### 18.1 What turning it on changed
+
+Two holds at 90% of maxOffset, which is inside the envelope and is what CLAUDE.md
+means by *bounded by maxOffset in safety runs*:
+
+| | holds off | holds on |
+|---|---|---|
+| uncertainty restarts, 20 seeds | 17 | **23** |
+| envelope refusals | 0 | **0** |
+| violations | 0 | 0 |
+
+The refusal staying at zero is the prediction in §18.2 confirmed, not a
+disappointment.
+
+### 18.2 Why the refusal is unreachable inside the envelope, exactly
+
+The HLC refuses a peer whose timestamp is more than `maxOffset` ahead of this
+node's physical clock. Every generated hold targets **90%** of the bound and every
+one has the **same sign**, so the widest pairwise skew a safety plan can produce
+is 90% of `maxOffset`. The refusal is short by a tenth of the bound, by
+construction — which is why it has read zero across every sweep since A5, and why
+that zero is the envelope holding rather than a mechanism failing to fire.
+
+`TestEnvelopeExperiment` holds a pair at **150%** and the refusal fires: **12,400
+refusals across 12 seeds**. Outside the envelope the run still produced zero
+safety violations, which is the refusal doing its job — the peer whose clock has
+left the assumption is rejected rather than absorbed, so the bound the rest of the
+cluster rests on does not ratchet outward. That is the whole argument in
+`hlc.ErrBeyondEnvelope`'s comment, now with a number under it.
+
+### 18.3 The class, again
+
+> **A comment that was true when it was written is not a check.**
+
+`cfg.Holds = 0` carried its own justification, and the justification expired one
+phase before anybody read it again. Nothing in the repository connects "this
+phase's mechanism is clock-sensitive" to "this phase's plan generates clock
+faults" — the fire-count machinery would have caught an injector that stopped
+working, but this injector was never asked to work.
+
+The narrowest thing that would have caught it: A6's exit criteria require every
+printed count to be asserted, and `EnvelopeRefusals` was printed and asserted **at
+zero** — correctly, and for the wrong reason. The assertion was reading a bound
+that held; it could not tell that from a bound nothing had pushed against.

@@ -875,20 +875,27 @@ const firstRangeID = 1
 type RebalanceSafety struct {
 	base
 
-	// unattributable counts moves whose removal fell inside a window in which
-	// the churn driver also ordered a change to the same node. Neither pass nor
-	// violation: the log cannot say whose removal it is, and Amendment A4's
-	// answer to "the checker could not tell" is a third outcome rather than a
-	// guess. Reported by the sweep and asserted on there.
-	unattributable int
+	// unattributable is the set of moves whose removal fell inside a window in
+	// which the churn driver also ordered a change to the same node. Neither
+	// pass nor violation: the log cannot say whose removal it is, and Amendment
+	// A4's answer to "the checker could not tell" is a third outcome rather than
+	// a guess.
+	//
+	// A SET, keyed by the move's index, because OnStep re-evaluates every move
+	// on every step it runs. A counter reported 5,651 unattributable moves in a
+	// run that ordered nine, which is not a number anybody can act on -- and is
+	// the same shape as the transfer's read counter in BUG-020: a count of
+	// observations is not a count of things.
+	unattributable map[int]bool
 }
 
 func NewRebalanceSafety(l *Ledger) *RebalanceSafety {
-	return &RebalanceSafety{base: base{l: l, name: "rebalance-safety"}}
+	return &RebalanceSafety{
+		base: base{l: l, name: "rebalance-safety"}, unattributable: map[int]bool{}}
 }
 
-// Unattributable is how many moves this run could not judge.
-func (o *RebalanceSafety) Unattributable() int { return o.unattributable }
+// Unattributable is how many DISTINCT moves this run could not judge.
+func (o *RebalanceSafety) Unattributable() int { return len(o.unattributable) }
 
 func (o *RebalanceSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
@@ -913,7 +920,7 @@ func (o *RebalanceSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 		// -- calling it fine -- would be a pass over a question that was never
 		// answered. So it is neither, and it is counted.
 		if o.l.churnTouched(int(m.From), m.At, until) {
-			o.unattributable++
+			o.unattributable[i] = true
 			continue
 		}
 		added, ok := rl.firstConfChange(m.At, until, raft.ConfChangeAddVoter, m.To)

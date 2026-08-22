@@ -125,6 +125,12 @@ simulated seeds answer this lane's question") and the budget is what has always 
 budget cannot absorb this one. The measurement Ansh asked for at A5 is still owed and is now the thing
 that decides which of the two moves.
 
+**Does a phase's fault mix cover the phase's own mechanisms?** DESIGN-A6 §18. `cfg.Holds = 0` was
+correct at A1 and wrong from A6, and nothing connected "this phase is clock-sensitive" to "this
+phase's plan generates clock faults". A7 adds read index, which is not clock-sensitive; STRETCH's
+leases are. Ask the question explicitly at every phase gate, because a comment that was true when it
+was written is not a check.
+
 **The batch-boundary technique.** DESIGN-A6 §14.4. When a replica disagrees with a replay of its own
 log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
 **skip** in the node's indices. A7 (read index, where a lease or an index read can be answered
