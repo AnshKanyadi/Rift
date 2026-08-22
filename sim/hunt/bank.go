@@ -1033,7 +1033,9 @@ func (a ledgerAdapter) RecordTxnBegin(id int, startTS hlc.Timestamp, primary str
 }
 
 func (a ledgerAdapter) RecordTxnCommit(id int, commitTS hlc.Timestamp, at clock.Instant) {
-	a.l.RecordTxnCommit(id, commitTS, at)
+	a.l.RecordTxnCommit(provenance.Witness(raftcheck.TxnCommitRecord{
+		ID: id, CommitTS: commitTS, At: at,
+	}))
 }
 
 func (a ledgerAdapter) RecordAudit(readTS hlc.Timestamp, total, accounts int, at clock.Instant) {

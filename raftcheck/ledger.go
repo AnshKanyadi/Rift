@@ -370,12 +370,34 @@ func (l *Ledger) RecordTxnBegin(r provenance.Observed[TxnRecord]) {
 // EVIDENCE rather than a verdict: the oracle checks the committed log for the
 // primary's write record and never takes this as proof of anything. It exists so
 // a sweep can say how many transactions got that far.
-func (l *Ledger) RecordTxnCommit(id int, commitTS hlc.Timestamp, at clock.Instant) {
+// TxnCommitRecord is the coordinator's own observation that its primary record
+// landed.
+//
+// # Why it is Observed and not three loose arguments
+//
+// It was three loose arguments, and `tools/provcheck` had been failing on it
+// since the A6 transaction commands landed -- a lane in `make ci`, red across a
+// commit, because nobody ran it. The rule it enforces is DESIGN-A1 §0's: every
+// input to a verdict that can come out GREEN must be something the harness
+// witnessed, and an untyped input is one nobody had to think about.
+//
+// This one IS harness-witnessed -- the coordinator issued the step and saw it
+// apply -- so the fix is the type rather than the fact. What must never be
+// witnessed this way is whether the transaction is COMMITTED: that is read from
+// the committed logs, because it is the thing under test.
+type TxnCommitRecord struct {
+	ID       int
+	CommitTS hlc.Timestamp
+	At       clock.Instant
+}
+
+func (l *Ledger) RecordTxnCommit(r provenance.Observed[TxnCommitRecord]) {
+	c := r.Fact()
 	l.rev++
 	for i := range l.txns {
-		if l.txns[i].ID == id {
-			l.txns[i].CommitTS = commitTS
-			l.txns[i].Decided = at
+		if l.txns[i].ID == c.ID {
+			l.txns[i].CommitTS = c.CommitTS
+			l.txns[i].Decided = c.At
 			l.txns[i].Reached = true
 			return
 		}
