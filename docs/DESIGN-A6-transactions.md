@@ -1149,10 +1149,17 @@ match across all of them. An aggregate across two builds is two experiments
 reported as one.
 
 Work continued after the run launched, so the honest statement is the diff: from
-the exit run's commit to head, **only documentation, lane wiring and scripts
-changed — no Go source at all**, which `git diff --stat <commit>..HEAD` shows and
-anybody can re-check. Had a line of `raft/`, `store/`, `kv/` or `sim/` moved, the
-run would have to be re-launched rather than explained.
+the exit run's commit to head, **no non-test Go source changed at all** — the
+only `.go` files touched are four `_test.go`, and none of them is on the exit
+run's path (`boundSeeds`, `skipIfShort`, and three one-line skips). `git diff
+--name-only <commit>..HEAD -- '*.go' | grep -v _test` returns nothing, and
+anybody can re-check it.
+
+The first version of this paragraph said "no Go source at all", which stopped
+being true the moment the `-short` tiering landed. Corrected rather than left,
+because a claim about what a run's result covers is exactly the kind that has to
+survive being checked. Had a line of non-test `raft/`, `store/`, `kv/` or `sim/`
+moved, the run would be re-launched rather than explained.
 
 ### 21.2 And it is what makes the run finishable
 
