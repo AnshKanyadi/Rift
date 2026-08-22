@@ -29,7 +29,7 @@ if [ "${RIFT_SKIP_HOOK:-}" = "1" ]; then
 fi
 
 printf '\n  pre-push: the every-change lanes\n'
-for lane in build lint lane-coverage assertions provenance test corpus; do
+for lane in build lint lane-coverage bundle-seeds assertions provenance test corpus; do
   printf '  ---- make %s\n' "$lane"
   if ! make "$lane" >/tmp/rift-hook.log 2>&1; then
     printf '\n  FAILED: make %s\n\n' "$lane"
