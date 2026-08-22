@@ -881,8 +881,7 @@ func (n *Replica) answerTxn(e raft.Entry, c TxnCommand, res TxnResult, at clock.
 func (n *Replica) readTxn(c TxnCommand, e raft.Entry, at clock.Instant) TxnResult {
 	ceiling := c.MaxTS
 	if !ceiling.IsSet() {
-		ceiling = kv.UncertaintyCeiling(
-			c.ReadTS, hlc.Timestamp{Wall: clock.Wall(n.hlc.MaxOffset())})
+		ceiling = kv.UncertaintyCeiling(c.ReadTS, n.hlc.MaxOffset())
 	}
 	v, ok, err := n.mvcc.GetTxn([]byte(c.Key), c.ReadTS, ceiling)
 	res := TxnResult{Value: string(v), Found: ok && err == nil, Ceiling: ceiling}

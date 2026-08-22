@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/raft"
 	"github.com/anshkanyadi/rift/sim"
@@ -1835,7 +1834,6 @@ func (o *UncertaintyEnvelope) Interested(sim.Kind) bool                  { retur
 func (o *UncertaintyEnvelope) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
 
 func (o *UncertaintyEnvelope) Check() *sim.Violation {
-	bound := hlc.Timestamp{Wall: clock.Wall(o.maxOffset)}
 	for _, r := range o.l.TxnReads() {
 		// # Property zero: the interval the node used is inside the bound the
 		// # PLAN advertises
@@ -1846,7 +1844,15 @@ func (o *UncertaintyEnvelope) Check() *sim.Violation {
 		// BELOW the read's own timestamp is legal -- a transaction that has
 		// restarted past its original ceiling has an empty interval, which is
 		// exactly the shrinkage that makes restarts terminate.
-		top := hlc.Timestamp{Wall: r.At.Wall + bound.Wall}
+		// # The arithmetic is written out here, not borrowed from kv
+		//
+		// `kv.UncertaintyCeiling` is the function under test. An oracle that
+		// called it would agree with the store by construction, including when
+		// both are wrong -- which is the "a defect cannot cancel out on both
+		// sides" rule that DESIGN-A1 section 0 is built on, and the reason
+		// snapshot equivalence stopped using a model. Two lines of addition is
+		// the whole cost of independence here.
+		top := hlc.Timestamp{Wall: r.At.Wall.Add(o.maxOffset)}
 		if r.Ceiling.IsSet() && top.Less(r.Ceiling) {
 			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
 				"the read of %q at %s used an uncertainty ceiling of %s, above the %s the plan's "+

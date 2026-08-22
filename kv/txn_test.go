@@ -1,6 +1,8 @@
 package kv_test
 
 import (
+	"time"
+
 	"errors"
 	"testing"
 
@@ -316,7 +318,7 @@ func TestAPrewriteOverALockIsRefused(t *testing.T) {
 // CLAUDE.md names: the restart must bump past the OBSERVED VALUE's timestamp.
 func TestAnUncertainCommitRestartsAboveIt(t *testing.T) {
 	s, db := newStore(t)
-	maxOffset := hlc.Timestamp{Wall: 500}
+	maxOffset := 500 * time.Nanosecond
 
 	b := engine.NewBatch()
 	if err := s.PrewriteInto(b, []byte("k"), kv.Lock{Primary: []byte("k"), StartTS: ts(1000, 0), Deadline: ts(9000, 0)}, []byte("v")); err != nil {
@@ -358,7 +360,7 @@ func TestAnUncertainCommitRestartsAboveIt(t *testing.T) {
 // there is nothing a reader could have missed and nothing to restart for.
 func TestARollbackTombstoneIsNotUncertain(t *testing.T) {
 	s, db := newStore(t)
-	maxOffset := hlc.Timestamp{Wall: 500}
+	maxOffset := 500 * time.Nanosecond
 
 	if err := prewrite(t, s, db, "k", "k", ts(1200, 0), ts(9000, 0), "doomed"); err != nil {
 		t.Fatalf("prewrite: %v", err)
@@ -396,7 +398,7 @@ func TestARollbackTombstoneIsNotUncertain(t *testing.T) {
 // behind, and the loop below would never reach its answer.
 func TestTheUncertaintyCeilingDoesNotMoveWhenAReadRestarts(t *testing.T) {
 	s, db := newStore(t)
-	maxOffset := hlc.Timestamp{Wall: 500}
+	maxOffset := 500 * time.Nanosecond
 	read := ts(1000, 0)
 	ceiling := kv.UncertaintyCeiling(read, maxOffset)
 

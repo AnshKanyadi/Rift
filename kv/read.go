@@ -3,6 +3,7 @@ package kv
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/hlc"
@@ -154,12 +155,17 @@ func (s *Store) GetTxn(key []byte, readTS hlc.Timestamp, ceiling hlc.Timestamp) 
 // unbounded restart loop in a simulated run is a hang, and in a real one it is a
 // transaction that never commits under load.
 //
-// maxOffset arrives as a Timestamp rather than a Duration because the caller
-// takes it from hlc.Source.MaxOffset() and converts once. A store that converted
-// per read would be doing clock arithmetic in the one place that must be a pure
-// function of its arguments.
-func UncertaintyCeiling(readTS, maxOffset hlc.Timestamp) hlc.Timestamp {
-	return hlc.Timestamp{Wall: readTS.Wall + maxOffset.Wall, Logical: 0}
+// # maxOffset is a Duration, and the determinism pass is why
+//
+// It was an hlc.Timestamp, so the body added two clock.Wall values -- and the
+// second of them was a DURATION wearing an instant's type. `instantmath` refuses
+// that by name: "the result is typed as an instant but the quantity is a
+// duration, and that lie flows into instant-typed positions." The lie was
+// inherited rather than introduced, and the fix is the signature rather than a
+// hatch: hlc.Source.MaxOffset() already returns a Duration, so the conversion
+// this function existed to centralise was never needed.
+func UncertaintyCeiling(readTS hlc.Timestamp, maxOffset time.Duration) hlc.Timestamp {
+	return hlc.Timestamp{Wall: readTS.Wall.Add(maxOffset), Logical: 0}
 }
 
 // ReadsBlocked and UncertaintyRestarts report what a run exercised. Both are
