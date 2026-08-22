@@ -37,7 +37,13 @@
 # exactly what the A5 fix established, and accepting trace divergence would
 # reopen the thirteenth instance under a weaker test."
 #
-# A divergence with no finding is reported as WEAK rather than as ok, and it
+# And the finding must be one the MUTANT produced: a finding present in the
+# RECORDING as well is not evidence of anything, because the mutation did not
+# cause it. BUG-015's bundle came out green on exactly that -- an inconclusive
+# its quiet schedule produces with or without the mutant, on a replay whose trace
+# matched byte for byte.
+#
+# A divergence with no new finding is reported as WEAK rather than as ok, and it
 # fails the lane. The remedy is to re-record the bundle at a seed where the
 # finding returns; if no seed produces one, the bundle is RETIRED with the reason
 # written down, never kept at a lower standard.
@@ -94,9 +100,21 @@ for d in "$SEEDS"/*/; do
 
   checked=$((checked + 1))
   out=$(cd "$work" && $GO run ./cmd/simctl replay --bundle "$d" 2>&1 || true)
-  if printf '%s' "$out" | grep -qiE 'VIOLATION|INCONCLUSIVE|panic|simctl:'; then
+  # # The finding has to be one the MUTANT produced
+  #
+  # Matching "a finding is present" is not enough, and passing a bundle on that
+  # basis is how BUG-015 came out green on a replay whose trace MATCHED: its
+  # schedule is quiet enough to be linearizability-inconclusive with or without
+  # the mutant, so the finding was in the recording too and the mutation had
+  # changed nothing at all.
+  #
+  # So what counts is a DIFFERENCE. `simctl replay` already says which it is --
+  # "THE REPLAY PRODUCED A VIOLATION THE RECORDING DID NOT" against "violation
+  # reproduced" -- and only the difference forms count here, plus a panic or a
+  # harness error, neither of which a clean recording has.
+  if printf '%s' "$out" | grep -qE 'THE RECORDING DID NOT|WHERE THE RECORDING WAS NOT|NOT REPRODUCED|panic|simctl:'; then
     printf '   ok       %-12s reproduces its FINDING under %s\n' "$name" "$(basename "$mutant")"
-  elif printf '%s' "$out" | grep -qE 'DIVERGED|simctl:'; then
+  elif printf '%s' "$out" | grep -qE 'DIVERGED'; then
     printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$(basename "$mutant")"
     printf '            The bundle is sensitive to SOMETHING; only the finding returning proves\n'
     printf '            it is sensitive to the thing it was recorded for. Re-record it at a seed\n'

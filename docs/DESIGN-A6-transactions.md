@@ -741,6 +741,34 @@ a panic. All four are findings: BUG-015's is a refusal, BUG-001's is an
 inconclusive, M40's is a panic. A criterion that took only violations would retire
 three real entries for not being the shape it expected.
 
+### 16.4 And the criterion was wrong once more, in the other direction
+
+The first tightened version matched *a finding is present*, and the whole corpus
+came out **16 of 16 green — including BUG-015, which had been red an hour
+earlier.**
+
+It was false. BUG-015's replay produces `inconclusive reproduced: linearizability:
+only 6 of 60 operations were decided` — and the trace **MATCHES**. Its schedule is
+quiet enough to be unknown-dominated with or without the mutant, so the finding
+was in the **recording** too and the mutation had changed nothing at all. A
+criterion that asks whether a finding is present cannot tell that from a finding
+the mutant caused.
+
+So the criterion is a **difference**: the mutated replay must produce a finding
+the recording does not have. `simctl replay` already distinguishes them by name —
+*THE REPLAY PRODUCED A VIOLATION THE RECORDING DID NOT* against *violation
+reproduced* — and only the difference forms count, plus a panic or a harness
+error, neither of which a clean recording has.
+
+**This is the third time this lane's matcher has been wrong**: case-sensitivity,
+then a path joined onto itself, then this. The first two reported false failures
+and cost an hour each. This one reported a **false pass**, which is the expensive
+direction, and the only reason it did not stand is that a bundle I knew to be red
+came out green and that was worth two minutes of looking.
+
+> **A green that contradicts something you knew an hour ago is evidence about the
+> instrument, not about the system.**
+
 BUG-003 and BUG-008 were re-recorded even though the loose criterion passed them,
 because a seed where the finding returns is strictly better evidence than one
 where only the trace moves, and it cost the same search. **Whether the criterion
