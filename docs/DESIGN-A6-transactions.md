@@ -680,8 +680,8 @@ The stricter criterion adds `BUG-003` and `BUG-008`: their mutants still make th
 replay diverge, so the existing lane passes them, but the divergence never reaches
 a checker.
 
-All five were re-recorded at seeds where the mutant reproduces, which is what the
-existing lane's own message prescribes:
+Four of the five were re-recorded at seeds where the mutant reproduces, which is
+what the existing lane's own message prescribes:
 
 | bundle | mutant | new seed |
 |---|---|---|
@@ -689,9 +689,29 @@ existing lane's own message prescribes:
 | BUG-008 | M26 truncated suffix left in the engine | 7 |
 | BUG-009 | M34 append from zero over a snapshot | 13 |
 | BUG-014 | M45 apply ignores the extent | 15 |
-| BUG-015 | M46 split inherits the appended configuration | 16 |
+| BUG-015 | M46 split inherits the appended configuration | **still red — see below** |
 
-BUG-003 and BUG-008 were re-recorded even though the ruled criterion passed them,
+**BUG-015 is the one entry still failing, and it is not retired.** Its finding is
+neither a violation nor an inconclusive but a **refusal** — `ApplyConfEntry`
+declining an illegal transition, with no oracle involved at all — and `M46`'s own
+header records the class as FRAGILE at **1 detection in 3,000 seeds**, first at
+seed 215, floored at detected-at-all with a ceiling of 900. A 300-seed search
+found nothing, which against a 1-in-3,000 class **proves nothing**: it is a
+quarter of one expected detection.
+
+So the honest state is *blocked*, not *unreachable*. The seed comes from the
+mutant power measurement under A6's shape — which is one of the three owed
+measurements and needs the machine to itself (§21.3) — and the lane's own message
+has said so all along: *the power lane will name one*. Retiring the entry on a
+300-seed search would be retiring a bug for the crime of being rare, which is the
+opposite of what a corpus is for.
+
+The strict criterion accepts a refusal alongside a violation, an inconclusive and
+a panic. All four are findings: BUG-015's is a refusal, BUG-001's is an
+inconclusive, M40's is a panic. A criterion that took only violations would retire
+three real entries for not being the shape it expected.
+
+BUG-003 and BUG-008 were re-recorded even though the loose criterion passed them,
 because a seed where the finding returns is strictly better evidence than one
 where only the trace moves, and it cost the same search. **Whether the criterion
 itself should tighten is still Ansh's**: it is one line in
@@ -972,3 +992,61 @@ live until a remote exists:
 
 None of that substitutes for the remote. It makes the *list* honest, which is the
 part that can be made honest without one.
+
+---
+
+## 21. The exit run, split, and the three measurements owed a solo slot
+
+### 21.1 Why splitting is sound
+
+Ansh's ruling on the wall-time report: 25,000 seeds may run as contiguous
+non-overlapping ranges in separate invocations, aggregated, with the boundaries
+recorded so the union is provably the full set. Not a reduced count, not a weaker
+workload.
+
+**The argument, stated rather than left implicit.** `MaterializeRaft(seed)`
+derives an entire plan from the seed alone, and the plan is the reproduction unit
+— a bundle carries it, `simctl replay` re-executes it, and no run depends on
+which seeds preceded it in the same process. **So a seed's verdict does not
+depend on which invocation ran it.** Splitting by seed range is therefore not an
+approximation of the full run; it is the full run, evaluated in a different
+order.
+
+**What splitting must not do is lose seeds or double-count them**, and that is
+checked rather than assumed. `TestRaftExitAggregate` requires the shard censuses
+to sort into a contiguous cover of exactly `[0, TOTAL)`, at one commit, each
+shard having completed the range it claims — so "25,000 seeds" is a verified
+partition rather than a sum of numbers somebody hoped were disjoint. A gap fails
+the lane by name; so does an overlap; so does a shard that reports fewer seeds
+than its range.
+
+`AddCensus` folds the shards. It is written out field by field because Terms and
+Ranges are maxima, `FirstViolation` is an earliest-of, and everything else is a
+total — a distinction reflection would erase. The cost of writing it out is that
+a counter added later gets silently left at zero, which is a number that reads
+**low**, so `TestAddCensusCoversEveryField` uses reflection for the part it is
+good at: every numeric field must move when two censuses are folded, with
+non-totals exempted **by name and with a reason**.
+
+### 21.2 And it is what makes the run finishable
+
+26 CPU-hours in one process is a run that is always still going. The same 26
+CPU-hours across ten processes is roughly three hours of wall clock. The seed
+count did not move.
+
+### 21.3 The three owed measurements need a solo slot, scheduled
+
+None of these can share a machine with the exit run — they are all seed sweeps,
+and ten shards already own every core. They are scheduled after it, in this
+order:
+
+| measurement | why it needs the machine to itself | what it decides |
+|---|---|---|
+| **the unthrottled collector**, reduced seeds | it writes a collection entry per apply, which is the shape A5's throttle replaced; it is the slowest seed for its count in the repository | whether the throttle was hiding anything |
+| **mutant power floors and ceilings under A6's shape** | 14,700 seed-runs, ~15 CPU-hours | every floor in `sim/mutants/*.patch`, which are all still measured under A5's cost |
+| **the race lane at 50, 100 and 200** | ~20× instrumentation on a 3.75 s/seed workload | whether `RACE_SEEDS` or `RACE_TIMEOUT` is the thing that moves |
+
+The mutant lane's ~15 CPU-hours is recorded as a **scheduling problem to solve
+when the remote lands**, not as a reason to cut classes. Amendment A2 requires
+kill-time to stay monitored either way, so the answer is a tier — nightly rather
+than per-push — and not a shorter list.

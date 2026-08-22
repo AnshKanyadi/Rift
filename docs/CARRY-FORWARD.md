@@ -99,6 +99,12 @@ Two bundles (`BUG-003`, `BUG-008`) satisfied the first and not the second, and w
 anyway. The criterion is one line in that script and it was ruled on at A5, so it is Ansh's to
 change, not something to tighten quietly.
 
+**BUG-015's bundle is red and blocked, not retired.** DESIGN-A6 §16.2. `M46` detects at 1 in 3,000
+and its finding is a refusal rather than an oracle verdict; a 300-seed search is a quarter of one
+expected detection and proves nothing. The seed comes from the mutant power measurement under A6's
+shape. Until then `make corpus-reproduces` is red on exactly this entry, and that is the correct
+colour for it.
+
 **Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16.3. Whenever the workload moves
 traces, `TestEveryStoredBundleReplays` fails and the fix is to regenerate — but a schedule that no
 longer reaches its defect regenerates exactly as happily as one that does, so the reproduction lane
