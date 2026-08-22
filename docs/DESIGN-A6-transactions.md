@@ -1178,18 +1178,31 @@ an exit run at an uncommitted tree names a commit that does not contain what ran
 match across all of them. An aggregate across two builds is two experiments
 reported as one.
 
-Work continued after the run launched, so the honest statement is the diff: from
-the exit run's commit to head, **no non-test Go source changed at all** — the
-only `.go` files touched are four `_test.go`, and none of them is on the exit
-run's path (`boundSeeds`, `skipIfShort`, and three one-line skips). `git diff
---name-only <commit>..HEAD -- '*.go' | grep -v _test` returns nothing, and
-anybody can re-check it.
+### 21.1b The run that was in flight is a MEASUREMENT, not a gate
 
-The first version of this paragraph said "no Go source at all", which stopped
-being true the moment the `-short` tiering landed. Corrected rather than left,
-because a claim about what a run's result covers is exactly the kind that has to
-survive being checked. Had a line of non-test `raft/`, `store/`, `kv/` or `sim/`
-moved, the run would be re-launched rather than explained.
+The sharded run launched at `90382fc` **is not the exit run**, and this paragraph
+has been rewritten twice as that became clearer, which is itself the point.
+
+- It first said "no Go source at all changed since" — false the moment the
+  `-short` tiering landed, which touched four `_test.go`.
+- It then said "no *non-test* Go source changed" — true when written, and false
+  the moment BUG-021's fix landed in `hlc/`, `store/` and `sim/hunt/`.
+
+**The honest statement is the third one: that run executed code carrying
+BUG-021.** It is evidence about how often the identity collision occurs across
+`[0,25000)` and about per-seed cost, and it is evidence about nothing else. The
+real exit run is the one taken after the fix.
+
+Ansh's framing, and the reason it is worth finishing rather than killing: if the
+frequency turns out to be **one seed in 25,000**, that number belongs beside
+`M34`'s 1-in-3000 as another measurement of what a sweep can and cannot reach —
+and a defect at that rate is one a 2,000-seed mid-phase policy would never have
+found.
+
+A claim about what a run's result covers is exactly the kind that has to survive
+being checked, and this one did not survive twice. The rule the third version
+follows: **state the commit, and re-derive the diff at the moment of reporting
+rather than at the moment of launching.**
 
 ### 21.2 And it is what makes the run finishable
 
