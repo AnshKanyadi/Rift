@@ -38,7 +38,13 @@ SOAK_SEEDS  ?= 10000
 # race on every push; 500-seed smoke on every push; 10k-seed soak nightly.*
 #
 #   make test      -short: every package's unit tests, every covering test
-#                  capped to a handful of seeds -- proves the path RUNS
+#                  capped to a handful of seeds -- proves the path RUNS.
+#                  Measured at A6's cost: 398s for the whole repository, of
+#                  which sim/hunt is 396s, and CPU-bound rather than contended
+#                  (378s user of 398s real). Six and a half minutes is not fast,
+#                  and it is what an every-change lane costs once a seed costs
+#                  four seconds. The alternatives measured 1800s and TIMED OUT,
+#                  twice.
 #   make smoke     500-seed toy sweep, cheap, per push
 #   make covering  sim/hunt at full seed ranges -- proves the paths are SILENT
 #   make soak      10k seeds, nightly

@@ -1074,6 +1074,23 @@ live until a remote exists:
   twenty-five seeds, because its assertions are about mechanisms that need
   thousands to fire. A lane bound low enough to be fast would have been a lane
   that failed for being fast.
+
+  And `-short` alone was not enough either — the third attempt. `boundSeeds`
+  capped three of `sim/hunt`'s nine seed loops; six others swept their own
+  uncapped ranges, and the lane timed out again at 1800s. The fix distinguishes
+  two kinds of covering test, per test rather than as a blanket:
+
+  | | treatment | why |
+  |---|---|---|
+  | asserts **silence** (`…ReportsNothing`) | capped to a handful | fewer seeds, still silent, path still runs |
+  | asserts **volume** (*"the guard never fired across the whole range, so this test asserts nothing"*) | skipped | capping turns it into a test that **fails for being fast**, which is worse than not running it: it trains people to ignore the lane |
+
+  Three tests are in the second class — the epoch guard, the pre-vote ablation,
+  and leadership transfer — and `make covering` runs them at full range nightly.
+
+  **Result: `make test` passes in 398 seconds**, of which `sim/hunt` is 396, and
+  it is CPU-bound rather than contended. That is the first time the every-change
+  lane has been runnable since A1.
 - **The two missing jobs are in the workflow.**
 - **`make lane-coverage`** parses the `ci` target's prerequisites, expands the
   aggregates, and requires each one to appear as a `run: make <lane>` in
