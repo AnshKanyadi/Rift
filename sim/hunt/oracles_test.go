@@ -65,6 +65,10 @@ import (
 // What prevents it now is not vigilance: hunt.CurrentOptions is the single
 // source of truth, read by the sweep, by these inductions and by the power
 // probe. They cannot disagree, because there is only one of them.
+// shortSeeds is how many seeds a covering test runs under -short: enough to
+// execute the path, not enough to claim anything about detection.
+const shortSeeds = 3
+
 // boundSeeds caps a covering test's seed range when RAFT_SEEDS is set.
 //
 // # What this costs, stated rather than implied
@@ -82,7 +86,24 @@ import (
 // reaches core state while this code runs. The detection claims come from the
 // unraced lanes, which run the full ranges, and from the mutant lane, which runs
 // them with the defect planted.
+// # And -short caps them harder, because the every-change lane must be able to run
+//
+// A6 made a seed cost about ten times what it did at A5, and `sim/hunt` holds
+// some fifteen covering tests that each sweep a range. The cost is therefore
+// driven by the NUMBER of sweeping tests, not by any one bound: at 25 seeds
+// apiece the package still takes half an hour, which is not a lane anybody runs
+// before pushing -- and a lane nobody runs is the eighteenth entry in the
+// vacuous-green register.
+//
+// Under -short every search is capped to a handful. That is honest about what it
+// proves: **that the code path runs**, not that it is silent over three thousand
+// seeds. Silence over the full ranges is `make test`, `make smoke` and the soak,
+// which is where CLAUDE.md has always put it -- *Go unit plus race on every
+// push; 500-seed smoke on every push; 10k-seed soak nightly.*
 func boundSeeds(seeds uint64) uint64 {
+	if testing.Short() && seeds > shortSeeds {
+		return shortSeeds
+	}
 	raw := os.Getenv("RAFT_SEEDS")
 	if raw == "" {
 		return seeds

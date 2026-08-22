@@ -32,6 +32,10 @@ jobs:
       - run: make vet
       - run: make fmt-check
       - run: make tidy-check
+      # -short: every path runs, no path is swept. The silence claims over full
+      # seed ranges are `make covering` and the soak, per CLAUDE.md's tiers.
+      # Bounding the seed count was tried first and was not enough: the cost is
+      # driven by the NUMBER of sweeping tests, not by any one bound.
       - run: make test
       # The A1 exit run is bounded here, not skipped: the race lane asks whether
       # anything reaches node state off the mailbox, which a few hundred seeds

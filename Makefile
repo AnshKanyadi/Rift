@@ -15,8 +15,7 @@ WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 SMOKE_SEEDS ?= 500
 SOAK_SEEDS  ?= 10000
 
-# TEST_SEEDS and LANE_SEEDS bound the every-change lane, and the numbers are
-# here rather than hidden in a skip.
+# The tiers, and why `make test` is -short.
 #
 # # `make test` could not run, and CI has never noticed
 #
@@ -27,13 +26,28 @@ SOAK_SEEDS  ?= 10000
 # long before finishing. Nobody saw it because there is no remote: CI has never
 # executed, and `make test` was only ever run per-package by hand.
 #
-# That is the second cost of having no remote, and it is a lane-shaped cost: a
-# lane that is not run is not a lane. The every-change set has to be able to run
-# on every change, so it is bounded here, out loud. Full seed coverage is `soak`
-# and the split exit run, which is where it has always actually lived.
-TEST_SEEDS   ?= 200
-LANE_SEEDS   ?= 12
-TEST_TIMEOUT ?= 1800s
+# # Bounding the seed count was not enough, and the measurement says why
+#
+# The first fix set RAFT_SEEDS=200 and it still timed out. Measured at A6's cost:
+# TestRaftExitCriteria alone takes 233s at TWENTY-FIVE seeds, and `sim/hunt`
+# holds some fifteen covering tests that each sweep a range. **The cost is driven
+# by the number of sweeping tests, not by any one bound** -- so no value of
+# RAFT_SEEDS makes this lane fast.
+#
+# So the tiers follow CLAUDE.md, which had the answer all along: *Go unit plus
+# race on every push; 500-seed smoke on every push; 10k-seed soak nightly.*
+#
+#   make test      -short: every package's unit tests, every covering test
+#                  capped to a handful of seeds -- proves the path RUNS
+#   make smoke     500-seed toy sweep, cheap, per push
+#   make covering  sim/hunt at full seed ranges -- proves the paths are SILENT
+#   make soak      10k seeds, nightly
+#   make exit-run  the phase gate, sharded
+#
+# LANE_SEEDS bounds the three A6 lanes, which are reduced-seed by design.
+LANE_SEEDS     ?= 12
+TEST_TIMEOUT   ?= 1800s
+COVER_TIMEOUT  ?= 360m
 
 # The exit run's split. The seed count is Ansh's and does not move; the SHARD
 # count is a scheduling choice and may.
@@ -54,8 +68,12 @@ build: ## Compile everything
 	$(GO) build ./...
 
 .PHONY: test
-test: ## Go unit tests (seed searches bounded to $(TEST_SEEDS)/$(LANE_SEEDS) seeds; see above)
-	RAFT_SEEDS=$(TEST_SEEDS) LANE_SEEDS=$(LANE_SEEDS) $(GO) test -timeout $(TEST_TIMEOUT) ./...
+test: ## Go unit tests, -short: every path runs, no path is swept (see the tiers above)
+	LANE_SEEDS=$(LANE_SEEDS) $(GO) test -short -timeout $(TEST_TIMEOUT) ./...
+
+.PHONY: covering
+covering: ## sim/hunt at FULL seed ranges: the covering tests' silence claims (nightly)
+	$(GO) test -count=1 -timeout $(COVER_TIMEOUT) ./sim/hunt/
 
 # RACE_SEEDS bounds the A1 exit run inside the race lane, and the number is
 # stated here rather than hidden in a skip.

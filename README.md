@@ -116,8 +116,8 @@ Three tiers, and the boundary between them is cost rather than importance:
 
 | tier | lanes | how it runs |
 |---|---|---|
-| **every change** | `make ci` — build, lint, lane coverage, assertions, provenance, test, corpus, corpus reproduction, blind, power, smoke, mutants, race | the pre-push hook runs the fast half; the rest wait on a remote |
-| **nightly** | the 10,000-seed soak, the differential engine lane, the crash-consistency sweep | not yet scheduled — there is no remote |
+| **every change** | `make ci` — build, lint, lane coverage, bundle seeds, assertions, provenance, test (`-short`), corpus, corpus reproduction, blind, power, smoke, mutants, race | the pre-push hook runs the fast half; the rest wait on a remote |
+| **nightly** | `make covering` (the covering tests at full seed ranges), the 10,000-seed soak, the differential engine lane, the crash-consistency sweep | not yet scheduled — there is no remote |
 | **solo** | `make solo` and `make exit-run` — the unthrottled collector, mutant power floors, the race curve, and the 25,000-seed exit run | hours each, and none of them may share a machine |
 
 `make lane-coverage` requires every lane named in the `ci` target to actually

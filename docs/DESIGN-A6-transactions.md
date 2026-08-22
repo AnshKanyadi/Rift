@@ -1056,10 +1056,24 @@ jobs it has. Neither tells you they disagree.
 Three fixes, all inside the repository, because that is the only place a fix can
 live until a remote exists:
 
-- **`make test` is bounded** — `TEST_SEEDS=200`, `LANE_SEEDS=12`, an explicit
-  timeout, and the numbers stated in the Makefile rather than hidden in a skip.
-  Full seed coverage was always `soak` and the exit run; the every-change lane
-  now matches what it is for.
+- **`make test` is `-short`**, and getting there took two attempts worth
+  recording. The first fix bounded the seed count at 200 and it **still timed
+  out**. Measured at A6's cost: `TestRaftExitCriteria` alone takes **233 seconds
+  at twenty-five seeds**, and `sim/hunt` holds some fifteen covering tests that
+  each sweep a range — so **the cost is driven by the number of sweeping tests,
+  not by any one bound**, and no value of `RAFT_SEEDS` makes the lane fast.
+
+  CLAUDE.md had the answer already: *Go unit plus race on every push; 500-seed
+  smoke on every push; 10k-seed soak nightly.* The every-change lane is unit
+  tests. `boundSeeds` now caps every covering search to a handful under `-short`,
+  which is honest about what that proves — **that the path runs**, not that it is
+  silent over three thousand seeds — and `make covering` runs the full ranges in
+  the nightly tier, named rather than lost.
+
+  The same measurement settles a second thing: `TestRaftExitCriteria` **fails** at
+  twenty-five seeds, because its assertions are about mechanisms that need
+  thousands to fire. A lane bound low enough to be fast would have been a lane
+  that failed for being fast.
 - **The two missing jobs are in the workflow.**
 - **`make lane-coverage`** parses the `ci` target's prerequisites, expands the
   aggregates, and requires each one to appear as a `run: make <lane>` in
