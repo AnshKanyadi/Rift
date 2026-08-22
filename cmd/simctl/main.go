@@ -315,6 +315,8 @@ func cmdRun(args []string) int {
 			SplitThreshold: opt.SplitThreshold, Rebalances: opt.Rebalances,
 			GCRetentionNS:        int64(opt.GCRetention),
 			SnapshotReadPerMille: opt.SnapshotReadPerMille,
+			Accounts:             opt.Accounts,
+			Transfers2PC:         opt.Transfers2PC,
 		}
 		var err error
 		if p, err = hunt.MaterializeRaftWith(*seed, opt); err != nil {

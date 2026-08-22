@@ -92,6 +92,12 @@ pointed at the orphan. It was answered with `percolator-invariants` #5 rather th
 list is therefore a claim under active test rather than an assertion, which is the most that can
 honestly be said for it.
 
+**Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16. Whenever the workload changes
+enough to move traces, `TestEveryStoredBundleReplays` will fail and the fix is to regenerate — but a
+regenerated bundle must be re-verified by `CORPUS_REINTRODUCE=1 go test ./cmd/simctl`, because a
+schedule that no longer reaches its defect regenerates exactly as happily as one that does. Measured:
+16 of 16 bundles proved nothing after one blind regeneration.
+
 **The batch-boundary technique.** DESIGN-A6 §14.4. When a replica disagrees with a replay of its own
 log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
 **skip** in the node's indices. A7 (read index, where a lease or an index read can be answered

@@ -1721,11 +1721,22 @@ func (o *BankConservation) Check() *sim.Violation {
 // knows which transactions it issued, but not which of them committed -- that is
 // read from the logs, by transaction-atomicity, and importing it here would put
 // the two oracles one derivation apart (DESIGN-A1 section 0).
-type SnapshotIsolation struct{ base }
+type SnapshotIsolation struct {
+	base
+
+	// compared is how many times a settled answer was checked against an
+	// earlier settled answer to the same question. A run where it is zero
+	// asserted stability over nothing, which is why the sweep reports it and
+	// the exit run requires it to be nonzero.
+	compared int
+}
 
 func NewSnapshotIsolation(l *Ledger) *SnapshotIsolation {
 	return &SnapshotIsolation{base: base{l: l, name: "snapshot-isolation"}}
 }
+
+// Compared is the oracle's non-vacuity evidence.
+func (o *SnapshotIsolation) Compared() int { return o.compared }
 
 func (o *SnapshotIsolation) Interested(sim.Kind) bool                  { return false }
 func (o *SnapshotIsolation) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
@@ -1766,6 +1777,7 @@ func (o *SnapshotIsolation) Check() *sim.Violation {
 			seen[k] = answer{r: r}
 			continue
 		}
+		o.compared++
 		if prev.r.Found == r.Found && prev.r.Value == r.Value {
 			continue
 		}

@@ -138,6 +138,12 @@ const (
 	auditPoll  = clock.Instant(400 * time.Millisecond)
 	auditPolls = 6
 
+	// secondPassDelay is how long after a completed audit its accounts are
+	// re-read at the same timestamp. Long enough that other transactions have
+	// committed in between, which is the only way the second pass can differ
+	// from the first.
+	secondPassDelay = clock.Instant(600 * time.Millisecond)
+
 	// auditLookback is how far into the past an audit takes its snapshot.
 	//
 	// # An auditor asks about a settled instant, and that is not a trick
@@ -281,6 +287,7 @@ type coordinator struct {
 	auditsUncertain    int
 	auditsRetried      int
 	identityCollisions int
+	secondPass         int
 	resolveWaited      int
 	resolvedForward    int
 	resolvedBack       int
@@ -932,6 +939,27 @@ func (c *coordinator) auditApplied(cmd store.TxnCommand, r store.TxnResult, at c
 			total += v
 		}
 		c.ledger.RecordAudit(a.readTS, total, len(a.seen), at)
+
+		// # The second pass, which is the stability probe
+		//
+		// Every account is asked again, at the SAME timestamp, a beat later. A
+		// snapshot is a question about a fixed instant, so both passes must
+		// answer the same thing -- and the failure that makes them differ is a
+		// transaction committing at or below a timestamp somebody has already
+		// read at, which is the one snapshot-isolation failure no amount of care
+		// in the write path prevents.
+		//
+		// Without it the property is unfalsifiable in practice: the same (key,
+		// timestamp) pair is almost never asked twice by accident, so
+		// snapshot-isolation's stability check would run over an empty set and
+		// report green. That is the vacuous-green class, and the answer to it is
+		// to make the workload ask the question rather than to hope it does.
+		for i := 0; i < c.accounts; i++ {
+			c.secondPass++
+			c.broadcast(store.TxnCommand{Op: store.OpTxnGet, Key: account(i),
+				ReadTS: a.readTS, MaxTS: a.ceiling, Origin: 0}, account(i),
+				at+secondPassDelay, s)
+		}
 	}
 }
 
@@ -1137,6 +1165,7 @@ func (c *coordinator) AuditsComplete() int     { return c.auditsComplete }
 func (c *coordinator) AuditsLocked() int       { return c.auditsLocked }
 func (c *coordinator) AuditsUncertain() int    { return c.auditsUncertain }
 func (c *coordinator) AuditsRetried() int      { return c.auditsRetried }
+func (c *coordinator) SecondPass() int         { return c.secondPass }
 func (c *coordinator) IdentityCollisions() int { return c.identityCollisions }
 
 // ForeignLocksKept is BUG-019's evidence, summed over the cluster: how often a

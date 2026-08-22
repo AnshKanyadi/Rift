@@ -86,6 +86,9 @@ func TestRaftExitCriteria(t *testing.T) {
 	t.Logf("a6 audits:    %d started, %d read every account at one timestamp, %d hit a lock, "+
 		"%d restarted on an uncertain commit, %d reads re-asked after no answer",
 		c.AuditsStarted, c.AuditsComplete, c.AuditsLocked, c.AuditsUncertain, c.AuditsRetried)
+	t.Logf("a6 si:        %d second-pass reads re-asked an audit's accounts at its own timestamp; "+
+		"snapshot-isolation compared %d settled answers against an earlier one",
+		c.SecondPassReads, c.SnapshotsCompared)
 	t.Logf("a6 bug-019:   %d commits or rollbacks found another transaction's lock and left it "+
 		"alone; %d transactions shared a (primary, start) identity with an earlier one (expected "+
 		"zero: see DESIGN-A6 section 15)", c.ForeignLocksKept, c.IdentityCollisions)
@@ -318,6 +321,18 @@ func TestRaftExitCriteria(t *testing.T) {
 			"uncertainty interval is A6's answer to bounded clock skew and this sweep never " +
 			"executed it, which is the vacuous-green class with a headline claim attached")
 	}
+	// # snapshot-isolation's stability check must have COMPARED something
+	//
+	// The same (key, timestamp) pair is almost never asked twice by accident,
+	// so without the deliberate second pass the property runs over an empty set
+	// and reports green. That is the vacuous-green class, and this is the
+	// assertion that keeps it from recurring here.
+	if c.SnapshotsCompared == 0 {
+		t.Error("snapshot-isolation compared no answer against an earlier answer to the same " +
+			"question, so its stability property -- the one that catches a transaction committing " +
+			"into the past -- asserted nothing at all across the whole sweep")
+	}
+
 	// # The conservation evidence itself
 	if c.AuditsComplete == 0 {
 		t.Error("no audit ever read every account at one timestamp, so bank-conservation " +

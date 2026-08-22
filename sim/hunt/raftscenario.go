@@ -1017,6 +1017,8 @@ type RaftResult struct {
 	AuditsRetried         int
 	IdentityCollisions    int
 	ForeignLocksKept      int
+	SnapshotsCompared     int
+	SecondPassReads       int
 	ResolveWaited         int
 	ResolvedForward       int
 	ResolvedBack          int
@@ -1384,8 +1386,13 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	if res.Violated == nil && coord != nil {
 		res.Violated = raftcheck.NewBankConservation(ledger, opt.Accounts).Check()
 	}
-	if res.Violated == nil && coord != nil {
-		res.Violated = raftcheck.NewSnapshotIsolation(ledger).Check()
+	if coord != nil {
+		si := raftcheck.NewSnapshotIsolation(ledger)
+		if v := si.Check(); v != nil && res.Violated == nil {
+			res.Violated = v
+		}
+		res.SnapshotsCompared = si.Compared()
+		res.SecondPassReads = coord.SecondPass()
 	}
 	if res.Violated == nil && coord != nil {
 		res.Violated = raftcheck.NewUncertaintyEnvelope(
@@ -1598,6 +1605,8 @@ type RaftCensus struct {
 	AuditsRetried         int
 	IdentityCollisions    int
 	ForeignLocksKept      int
+	SnapshotsCompared     int
+	SecondPassReads       int
 	ResolveWaited         int
 	ResolvedForward       int
 	ResolvedBack          int
@@ -1688,6 +1697,8 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 		c.AuditsRetried += r.AuditsRetried
 		c.IdentityCollisions += r.IdentityCollisions
 		c.ForeignLocksKept += r.ForeignLocksKept
+		c.SnapshotsCompared += r.SnapshotsCompared
+		c.SecondPassReads += r.SecondPassReads
 		c.ResolveWaited += r.ResolveWaited
 		c.ResolvedForward += r.ResolvedForward
 		c.ResolvedBack += r.ResolvedBack

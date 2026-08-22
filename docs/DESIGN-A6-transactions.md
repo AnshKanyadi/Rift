@@ -592,3 +592,66 @@ The reason is stated in §7 and is worth repeating with the numbers attached: **
 is over client-observed history only.** Not one of these was visible in the engine's state, which was
 internally consistent throughout. BUG-019 produced a perfectly coherent database with nine units of
 money missing from it.
+
+---
+
+## 16. The corpus proved the wrong thing, and the fifteenth vacuous-green
+
+A6 changed the workload, which moved every raft trace, and the corpus lane did
+exactly what it was built for: sixteen bundles stopped replaying, loudly, in the
+commit that moved them. The prescribed remedy is in the lane's own comment —
+*regenerate the bundle in the same commit that moved it* — and regenerating them
+turned the lane green again.
+
+**All sixteen were then worthless, and nothing said so.**
+
+### 16.1 The two claims a bundle makes
+
+| claim | who checked it |
+|---|---|
+| the bundle still produces the run it recorded — same trace, same census | `TestEveryStoredBundleReplays`, since A4 |
+| the bundle's **finding** can still be reproduced from it | **nobody** |
+
+Every raft bundle carries a **fixed** bug. Its schedule therefore runs clean, and
+the entry is only worth keeping because the named mutant reintroduces the defect
+and the schedule then catches it again. That second claim is the one on the
+résumé — *every bug ever found replays from a single seed* — and it was the one
+with no lane under it.
+
+### 16.2 Why regeneration is not a repair
+
+Regenerating a bundle re-records the **schedule**. A schedule that no longer
+reaches the defect regenerates exactly as happily as one that does: same MATCH,
+same green lane, same directory. The replay lane cannot tell the difference,
+because from its side there is no difference.
+
+`TestEveryBundleStillFindsItsBug` applies each bundle's named patch to a copy of
+the tree, rebuilds, and replays. The trace legitimately moves — the mutant
+changes what the cluster does — so what it requires back is **the finding**. On
+its first run, with the corpus freshly regenerated and the replay lane green:
+**16 of 16 reported no violation.**
+
+So the corpus regeneration is now a **search**: for each bundle, seeds are run
+with the mutant applied until one reproduces, and that seed becomes the entry.
+The old seed is kept in BUGS.md as the seed the bug was *found* on, which is a
+different fact and worth keeping separately.
+
+### 16.3 The fifteenth instance, and what makes it different
+
+Fourteen recorded instances of a mechanism declared, wired, and never invoked.
+This is the fifteenth, and it is the first where the mechanism **ran on every
+push and passed**: the replay lane was not dormant, it was answering a narrower
+question than the one everybody read it as answering.
+
+> **A lane that verifies an artifact reproduces must verify it reproduces the
+> FINDING, not merely that it reproduces.**
+
+That is the same sentence as the thirteenth instance one turn further out. A5's
+corpus lane verified that a bundle reproduced *identically to a baseline that was
+also empty*; this one verified that a bundle reproduced *a run*, which is not the
+same as reproducing *a bug*. Both times the missing word was what the artifact was
+supposed to be evidence **of**.
+
+The cost of not having it: an A6 sweep would have shipped with a sixteen-entry
+corpus proving nothing, and the first person to check by hand would have been a
+stranger reading the résumé line.
