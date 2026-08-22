@@ -1050,3 +1050,26 @@ The mutant lane's ~15 CPU-hours is recorded as a **scheduling problem to solve
 when the remote lands**, not as a reason to cut classes. Amendment A2 requires
 kill-time to stay monitored either way, so the answer is a tier — nightly rather
 than per-push — and not a shorter list.
+
+**The slot is a command, not a plan.** `make solo` runs the three in order and
+prints that nothing else should be running. A schedule that lives only in a
+design document is a schedule that gets rediscovered rather than kept, and the
+whole reason these three are still owed is that they lost the machine to
+something else.
+
+### 21.4 The race measurement has a premise problem, stated before the numbers
+
+CARRY-FORWARD says the race lane "has found real races twice". **That claim has no
+record behind it.** Both recorded race-lane failures were clocks rather than races
+(DESIGN-A4 §9.5), and DR-29 keeps tooling defects out of BUGS.md — so a race
+found in tooling, like the announcement-writer race A0.3's own test caught, would
+leave no entry anywhere but a commit message.
+
+So the measurement cannot be *does the lower count still catch the two races*,
+because the two races cannot be identified. `scripts/race-curve.sh` measures what
+is measurable and says so in its header: wall time at 50, 100 and 200, and
+whether any data race is reported at any of them. If the honest answer turns out
+to be "zero at all three", then the lane's value rests on its *structural*
+argument — that a cross-goroutine reach into node state would be caught — and not
+on a detection history, and the seed count should be set from cost rather than
+from a power curve that has nothing to curve.

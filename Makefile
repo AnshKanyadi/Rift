@@ -41,6 +41,10 @@ EXIT_SEEDS  ?= 25000
 EXIT_SHARDS ?= 8
 EXIT_OUT    ?= .exitrun
 
+# The solo slot's own seed count. Reduced on Ansh's A5 ruling: the unthrottled
+# collector answers "what happens at all", not "what happens ten thousand times".
+SOLO_LANE_SEEDS ?= 40
+
 .DEFAULT_GOAL := help
 
 # ---------------------------------------------------------------- real lanes
@@ -183,6 +187,19 @@ soak: ## $(SOAK_SEEDS)-seed nightly soak
 .PHONY: mutants
 mutants: ## Mutant suite: every planted defect must be caught by its declared test
 	@$(MUTANTS)
+
+.PHONY: solo
+solo: ## The three measurements that need the machine to themselves, in order
+	@printf '\n  SOLO SLOT: three measurements, none of which may share a machine.\n'
+	@printf '  Nothing else should be running. This is hours, not minutes.\n\n'
+	LANE_SEEDS=$(SOLO_LANE_SEEDS) $(GO) test -count=1 -timeout 600m -v \
+		-run TestUnthrottledCollector ./sim/hunt/
+	$(MAKE) power-mutants
+	sh scripts/race-curve.sh
+
+.PHONY: race-curve
+race-curve: ## Measure what RACE_SEEDS actually needs to be (50, 100, 200)
+	sh scripts/race-curve.sh
 
 .PHONY: bench
 bench: ## [STUB->B5/I2] Benchmark smoke with regression tracking
