@@ -27,6 +27,15 @@ property, and the replacement immediately found a defect the original was struct
 That is the argument for the swap, made by the swap. §13 is the swap; §14 is the bug, the method that
 found it, and the three corrections it produced.
 
+**And then the bank found the second one.** BUG-019 — *the* lock rather than *my* lock — also needs no
+fault, and is invisible to every structural checker in the repository: the state it produces is a
+perfectly well-formed Percolator database with nine units of money missing from it. §19 is why that
+makes the bank workload the only instrument that could see it, and is the standing argument for
+oracles that know what a domain's numbers mean rather than only what shapes its records may take.
+
+Two of A6's three defects required **no injected fault at all**, which is a different risk profile
+from every phase before it.
+
 ---
 
 ## 1. What changes, and where the failures actually live
