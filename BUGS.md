@@ -1232,8 +1232,8 @@ with the two fixes that would close it.
 | **Reproduce (test)** | `go test ./sim/hunt -run TestBUG021` |
 | **Reproduce (seed)** | seed **90004**: txn 14 and txn 29 both start at `1600000005840000000.26` |
 | **Invariant that caught it** | transaction atomicity — a rolled-back transaction has no committed key |
-| **Mutant class** | none existed — see below; a mutant is added with the fix, not before it |
-| **Fix commit** | **none — the fix is a design decision, reported rather than assumed** |
+| **Mutant class** | none existed — added **two**, `M67-minting-drops-the-node-tag` and `M68-restart-timestamp-derived-not-minted`, in the same commit as the fix |
+| **Fix commit** | option A, both halves (DESIGN-A6 §22) |
 
 **Symptom.** *"transaction 29 (start …840000000.26) is ROLLED BACK on its primary `a07`, and key
 `a05` is committed at …840000000.59. Half of an aborted transaction is visible."*
@@ -1271,7 +1271,14 @@ silently sharing that key's lock and version. One commits and the other aborts, 
 value neither of them can be said to have written. No error, and no structural inconsistency — the
 same shape as BUG-019, and caught by a different oracle for the same reason.
 
-**Why there is no fix commit.** The fix is a change to the **timestamp source**, which Amendment A6
-legislated on directly ("the timestamp source lands behind an interface in A5; TSO fallback is
-pre-authorized if…"). DESIGN-A6 §22 sets out three candidates and a recommendation. Reported, not
-assumed.
+**The fix, and why it was reported before it was made.** The change is to the **timestamp source**,
+which Amendment A6 legislated on directly, so DESIGN-A6 §22 set out three candidates and stopped.
+Ansh ratified **A**: the low 8 bits of `Logical` carry the minting node's ordinal, and restart
+timestamps are **minted rather than derived** — one decision in two halves, because `RestartAt =
+commit.Next()` carries the tag of whoever minted that commit.
+
+**Both mutants had to be earned.** `M67` was killed at once. `M68` survived twice: first because its
+covering test was pinned to seed 90004, which found the bug and does not restart; then because the
+counter answering it lived inside `nowAbove`, which `M68` deletes the call to — so the mutation
+removed the guard along with the behaviour. It is killed now at 7 foreign tags across 10 restarts,
+against 0 of 10 clean. §22.6 has the class both survivals belong to.

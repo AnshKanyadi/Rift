@@ -5,7 +5,7 @@
 # power-seeds: 1
 # power-floor: 1
 # power-ceiling: 1
-# power-measured: deterministic -- a unit test, not a sweep. Two clocks over one physical clock mint the identical value within a handful of calls, so detection is immediate and the floor is exact rather than statistical
+# power-measured: deterministic -- a unit test, not a sweep. Two clocks over one physical clock mint the identical value (0.256) within a handful of calls, so detection is immediate and the floor is exact rather than statistical
 # mutates: BUG-021's first half. The logical counter restarts at zero instead of at this node's slot, so two nodes over clocks a hold has pulled together mint the same (wall, logical). A transaction's start timestamp addresses the lock and the data version of every key it touches, so two transactions then share them: one commits, one is rolled back, and the version belongs to both
 --- a/hlc/hlc.go
 +++ b/hlc/hlc.go
