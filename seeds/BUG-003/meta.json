@@ -1,6 +1,6 @@
 {
   "seed": 0,
-  "commit": "7a809a4f73997551d3afe6cd80f33fb92dfa5a3e",
+  "commit": "c180aaaae2b02b41dcbd0c808b1ca0d3abf0ce7e",
   "workload": "raft",
   "trace_hash": "7d4761fb0ed451d6270a66ceb16da845d1c09a33e2043d25f3015406cb191e65",
   "step_hashes": [
@@ -7984,7 +7984,9 @@
     "split_threshold": 0,
     "rebalances": 0,
     "gc_retention_ns": 0,
-    "snapshot_read_per_mille": 0
+    "snapshot_read_per_mille": 0,
+    "accounts": 0,
+    "transfers_2pc": 0
   },
   "census": {
     "terms": 34,

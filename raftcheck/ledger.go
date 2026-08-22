@@ -53,9 +53,10 @@ type Ledger struct {
 
 	// reads is every answer a replica gave a client, in the order the harness
 	// observed them leaving the nodes.
-	reads    []ReadRecord
-	txnReads []TxnReadRecord
-	audits   []AuditRecord
+	reads      []ReadRecord
+	txnReads   []TxnReadRecord
+	audits     []AuditRecord
+	confOrders []ConfOrder
 
 	// txns is every transaction the harness's coordinator issued.
 	txns []TxnRecord
@@ -205,6 +206,30 @@ type AuditRecord struct {
 	Total    int
 	Accounts int
 	When     clock.Instant
+}
+
+// ConfOrder is one membership change the CHURN driver ordered, as opposed to one
+// a move issued.
+//
+// # Why the harness records its own orders
+//
+// A move's add and an unrelated removal are indistinguishable in a committed
+// log: both are configuration entries and neither says who asked. That is what
+// made the two drivers un-overlappable -- the rebalance oracle blamed churn's
+// removals on moves, 252 seeds in 300 (BUG-016).
+//
+// The wire format is not the place to fix it. A move identifier in a
+// configuration entry would change a frozen format for a checker's convenience,
+// and it would be a fact the system reports about itself. What the HARNESS knows
+// for free is what it ordered and when, and that is recorded here as its own
+// fact -- the same provenance as a move order.
+//
+// It does not make every removal attributable, and it is not supposed to. It
+// makes the AMBIGUOUS ones identifiable, which is what turns a false violation
+// into an honest inconclusive (Amendment A4).
+type ConfOrder struct {
+	Node int
+	At   clock.Instant
 }
 
 // MoveRecord is one replica movement the harness ordered.
@@ -402,6 +427,23 @@ func (l *Ledger) ReadsRefused() int {
 
 // Moves is every replica movement the harness ordered.
 func (l *Ledger) Moves() []MoveRecord { return l.moves }
+
+// RecordConfOrder notes that the churn driver asked for a change to a node.
+func (l *Ledger) RecordConfOrder(o provenance.Observed[ConfOrder]) {
+	l.rev++
+	l.confOrders = append(l.confOrders, o.Fact())
+}
+
+// churnTouched says whether the churn driver ordered a change to node n inside
+// [from, to]. A move whose removal falls in such a window cannot be attributed.
+func (l *Ledger) churnTouched(n int, from, to clock.Instant) bool {
+	for _, o := range l.confOrders {
+		if o.Node == n && o.At >= from && o.At <= to {
+			return true
+		}
+	}
+	return false
+}
 
 // MoveEnds is when move i stops owning its range's membership changes: the
 // instant the NEXT move on the same range was ordered, or forever.

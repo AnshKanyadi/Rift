@@ -349,6 +349,77 @@
         "node": 3
       },
       {
+        "at_ns": 12165274003,
+        "action": "rebalance",
+        "from": 2,
+        "to": 2
+      },
+      {
+        "at_ns": 9240175565,
+        "action": "rebalance",
+        "from": 1,
+        "to": 1
+      },
+      {
+        "at_ns": 8406765559,
+        "action": "rebalance",
+        "from": 2,
+        "to": 1
+      },
+      {
+        "at_ns": 11911925994,
+        "action": "rebalance",
+        "from": 1,
+        "to": 1
+      },
+      {
+        "at_ns": 11272731382,
+        "action": "rebalance",
+        "from": 1,
+        "to": 1
+      },
+      {
+        "at_ns": 9169574655,
+        "action": "rebalance",
+        "from": 1,
+        "to": 2
+      },
+      {
+        "at_ns": 11612711518,
+        "action": "rebalance",
+        "from": 2,
+        "to": 3
+      },
+      {
+        "at_ns": 9151585491,
+        "action": "rebalance",
+        "from": 2,
+        "to": 1
+      },
+      {
+        "at_ns": 11127817298,
+        "action": "rebalance",
+        "from": 1,
+        "to": 2
+      },
+      {
+        "at_ns": 11120359384,
+        "action": "rebalance",
+        "from": 3,
+        "to": 2
+      },
+      {
+        "at_ns": 9040312966,
+        "action": "rebalance",
+        "to": 2
+      },
+      {
+        "at_ns": 10669034851,
+        "action": "rebalance",
+        "from": 1,
+        "to": 1
+      },
+      {
         "at_ns": 4387261421,
         "action": "promote",
         "node": 1

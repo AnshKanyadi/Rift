@@ -49,6 +49,16 @@ type RaftOptions struct {
 	// GCRetention is how far behind its clock a leader collects. Zero disables.
 	GCRetention time.Duration
 
+	// OverlapDrivers lets the churn driver and the rebalance driver run at the
+	// same time, which DESIGN-A4 section 10 records as an unexercised
+	// interleaving and the A5 sign-off put on A6's checklist.
+	OverlapDrivers bool
+
+	// GCUnthrottled runs the collector without the mark-movement condition,
+	// which is the shape A5's throttle replaced. A6 owes one reduced-seed sweep
+	// in this shape (Ansh's A5 ruling); it is never on in a full-size run.
+	GCUnthrottled bool
+
 	// SnapshotReadPerMille is how many client reads name a REMEMBERED timestamp
 	// rather than "now", in parts per thousand.
 	//
@@ -207,6 +217,16 @@ func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
 			// §7 records what this costs: no seed exercises a move racing an
 			// unrelated membership change.
 			at := span/5 + int64(key.Uint64N(3, uint64(i), 0, 0, uint64(span*3/10)))
+			if opt.OverlapDrivers {
+				// # The interleaving DESIGN-A4 section 10 recorded as unexercised
+				//
+				// Churn spread over the WHOLE run instead of its first third, so
+				// it overlaps the rebalance window. It became attemptable when
+				// rebalance-safety stopped guessing whose removal it was looking
+				// at: an ambiguous one is now counted as unattributable rather
+				// than reported as a violation (Amendment A4's third outcome).
+				at = span/5 + int64(key.Uint64N(3, uint64(i), 0, 0, uint64(span*7/10)))
+			}
 			target := int(key.Uint64N(4, uint64(i), 0, 0, uint64(p.Config.Nodes)))
 			p.Faults.Entries = append(p.Faults.Entries, plan.Entry{
 				AtNS: at, Action: "conf", Node: target,
@@ -961,6 +981,11 @@ type RaftResult struct {
 	// zero, and the exit run fails if it is not. DESIGN-A4 section 10.
 	MovesRacingChurn int
 
+	// MovesUnattributable is how many moves rebalance-safety could not judge
+	// because the churn driver had also ordered a change to the same node in
+	// the same window. Neither a pass nor a violation (Amendment A4).
+	MovesUnattributable int
+
 	// A5's evidence. Every one of these is asserted in the exit run: a count
 	// nobody asserts on is decoration that looks like evidence.
 	GCProposed        int
@@ -1051,7 +1076,9 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	run.Loop.SetOracles(raftcheck.All(ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts))
+	oracles, reb := raftcheck.AllWithRebalance(
+		ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts)
+	run.Loop.SetOracles(oracles)
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {
@@ -1089,6 +1116,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			PromotionLag:      opt.PromotionLag,
 			SplitThreshold:    opt.SplitThreshold,
 			GCRetention:       opt.GCRetention,
+			GCUnthrottled:     opt.GCUnthrottled,
 			PreVote:           opt.PreVote,
 			SnapshotThreshold: opt.SnapshotThreshold,
 			SyncLatency:       syncLatency,
@@ -1116,6 +1144,12 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	// A scheduled promote is A2's leadership transfer: whoever is leading hands
 	// off to the named node. The plan carries it as an action, so it replays.
 	run.OnConfChange = func(target sim.NodeID) {
+		// Recorded whether or not anybody acts on it. An order the cluster
+		// ignored still makes a later removal of that node ambiguous, because
+		// the oracle cannot see which orders were acted on either.
+		ledger.RecordConfOrder(provenance.Witness(raftcheck.ConfOrder{
+			Node: int(target) + 1, At: run.Loop.Now(),
+		}))
 		for _, d := range drivers {
 			if d.IsLeader() {
 				d.RequestConfChange(raft.NodeID(int(target) + 1))
@@ -1449,6 +1483,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	res.MovesOrdered = len(ledger.Moves())
 	res.MovesCompleted = ledger.MovesCompleted()
 	res.MovesRacingChurn = ledger.MovesRacingUnrelatedChanges()
+	res.MovesUnattributable = reb.Unattributable()
+
 	res.SnapshotReads = snapshotReads
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())
 
@@ -1535,6 +1571,7 @@ type RaftCensus struct {
 	MovesOrdered        int
 	MovesCompleted      int
 	MovesRacingChurn    int
+	MovesUnattributable int
 
 	GCProposed        int
 	GCApplied         int
@@ -1583,13 +1620,19 @@ type RaftCensus struct {
 
 // SweepRaft runs a seed range and aggregates it.
 func SweepRaft(from, to uint64) (RaftCensus, error) {
+	return SweepRaftWith(from, to, CurrentOptions())
+}
+
+// SweepRaftWith sweeps a seed range under explicit options, for the lanes that
+// vary the build: the unthrottled collector and the overlapped drivers.
+func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 	var c RaftCensus
 	for seed := from; seed < to; seed++ {
-		p, err := MaterializeRaft(seed)
+		p, err := MaterializeRaftWith(seed, opt)
 		if err != nil {
 			return c, err
 		}
-		r, err := RunRaft(p, nil)
+		r, err := RunRaftWith(p, opt, nil)
 		c.Seeds++
 		if err != nil {
 			c.Errors++
@@ -1614,6 +1657,7 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 		c.MovesOrdered += r.MovesOrdered
 		c.MovesCompleted += r.MovesCompleted
 		c.MovesRacingChurn += r.MovesRacingChurn
+		c.MovesUnattributable += r.MovesUnattributable
 		c.GCProposed += r.GCProposed
 		c.GCApplied += r.GCApplied
 		c.VersionsCollected += r.VersionsCollected

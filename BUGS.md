@@ -1022,7 +1022,7 @@ single seed" is a claim about *bundle plus mutant*, and the lane was looking at 
 | **Found by** | sim — snapshot equivalence, on 12 of the first 30 A6 seeds, **on the first outing of `store.ReplayMachine`** |
 | **Phase** | A6 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M59-transaction-steps-batched-blind.patch && go run ./cmd/simctl replay --bundle seeds/BUG-018` |
-| **Reproduce (seed)** | seed **5**, range 8, entries 9 through 16 applied in one Ready |
+| **Reproduce (seed)** | found on seed **5**, range 8, entries 9 through 16 applied in one Ready; the bundle carries seed **0**, where the mutant reproduces it under the workload as it stands today |
 | **Invariant that caught it** | snapshot equivalence — a snapshot is the state the committed log produces at its index |
 | **Mutant class** | none existed — added `M59-transaction-steps-batched-blind` |
 | **Fix commit** | *(this commit)* |
@@ -1131,7 +1131,8 @@ the fix that a future change has to get past.
 | **Found by** | sim — `bank-conservation`, on 2 of the first 20 A6 seeds, on the oracle's first outing |
 | **Phase** | A6 |
 | **Reproduce (unit)** | `go test ./kv -run 'StealSomebodyElsesLock'` |
-| **Reproduce (seed)** | seed **7**: the audit at `1600000003877395934.0` reads all eight accounts and they sum to **-9** |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M65-rollback-takes-any-lock.patch && go run ./cmd/simctl replay --bundle seeds/BUG-019` |
+| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **41**, where the mutant reproduces it under the workload as it stands today |
 | **Invariant that caught it** | bank conservation over client-observed history — the accounts sum to what they summed to at the beginning |
 | **Mutant class** | none existed — added `M65-rollback-takes-any-lock` and `M66-commit-takes-any-lock` |
 | **Fix commit** | *(this commit)* |

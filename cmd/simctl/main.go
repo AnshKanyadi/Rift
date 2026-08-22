@@ -168,6 +168,13 @@ type RaftMeta struct {
 	// single-version store against a schedule recorded on an MVCC one.
 	GCRetentionNS        int64  `json:"gc_retention_ns"`
 	SnapshotReadPerMille uint64 `json:"snapshot_read_per_mille"`
+
+	// A6's two. Same reasoning a third time, and the sharpest instance of it: a
+	// bundle that did not carry these would replay a cluster with NO
+	// TRANSACTIONS against a schedule recorded on one running the bank, and
+	// every A6 finding in seeds/ would reproduce as a clean run.
+	Accounts     int `json:"accounts"`
+	Transfers2PC int `json:"transfers_2pc"`
 }
 
 // CensusMeta is what the run's elections looked like.
@@ -248,6 +255,8 @@ func cmdRun(args []string) int {
 	rebalances := fs.Int("rebalances", 12, "raft workload: manual replica-movement orders the plan schedules")
 	gcRetention := fs.Int64("gc-retention-ns", int64(2*time.Second), "raft workload: how far behind its clock a leader collects; 0 disables")
 	snapReads := fs.Uint64("snapshot-reads-per-mille", 400, "raft workload: share of reads naming a remembered timestamp")
+	accounts := fs.Int("accounts", 8, "raft workload: bank accounts, one key each; 0 disables the bank")
+	transfers2pc := fs.Int("transfers-2pc", 40, "raft workload: transactions the bank runs; 0 disables the bank")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
@@ -296,6 +305,8 @@ func cmdRun(args []string) int {
 			Rebalances:           *rebalances,
 			GCRetention:          time.Duration(*gcRetention),
 			SnapshotReadPerMille: *snapReads,
+			Accounts:             *accounts,
+			Transfers2PC:         *transfers2pc,
 		}
 		meta.Raft = &RaftMeta{
 			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
@@ -530,6 +541,8 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 				Rebalances:           meta.Raft.Rebalances,
 				GCRetention:          time.Duration(meta.Raft.GCRetentionNS),
 				SnapshotReadPerMille: meta.Raft.SnapshotReadPerMille,
+				Accounts:             meta.Raft.Accounts,
+				Transfers2PC:         meta.Raft.Transfers2PC,
 			}
 		}
 		res, err := hunt.RunRaftWith(p, opt, tr)

@@ -128,6 +128,13 @@ type Config struct {
 	// read at T is answerable, and answering that is the mark's whole job.
 	GCRetention time.Duration
 
+	// GCUnthrottled removes the mark-movement condition, so a leader proposes a
+	// collection on every apply once the window has passed. It is the shape
+	// A5's throttle replaced, kept runnable so the idealization can be measured
+	// rather than argued about. Never set in a full-size sweep: it produces a
+	// log made mostly of bookkeeping.
+	GCUnthrottled bool
+
 	// PreVote turns on the extra election round. It is a build parameter rather
 	// than a plan entry: the ablation runs the same schedules with it on and off,
 	// so it must not perturb the schedule itself.
@@ -1186,7 +1193,15 @@ func (n *Replica) maybeGC() {
 	if !to.IsSet() {
 		return
 	}
-	if !n.mvcc.GCMark().Wall.Add(n.cfg.GCRetention / 4).Before(to.Wall) {
+	// # The throttle, and the switch that turns it off
+	//
+	// Ansh's A5 ruling kept the throttle on two conditions: it is a named
+	// idealization in DESIGN-A0 section 7, and A6 runs one sweep WITHOUT it at a
+	// reduced seed count. This is the switch that second condition needs, and it
+	// exists so the experiment is a configuration rather than a patch --
+	// a measurement you have to edit code to take is a measurement nobody
+	// repeats.
+	if !n.cfg.GCUnthrottled && !n.mvcc.GCMark().Wall.Add(n.cfg.GCRetention/4).Before(to.Wall) {
 		return
 	}
 	n.propSeq++

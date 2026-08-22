@@ -516,6 +516,17 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // step would assert an eventual property against a run caught mid-cleanup and
 // would replay every range's whole log to do it.
 func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt) []sim.Oracle {
+	os, _ := AllWithRebalance(l, state, splits, extent, reads, facts)
+	return os
+}
+
+// AllWithRebalance is All plus a handle on the rebalance oracle, whose
+// unattributable count the sweep reports. Returned rather than reachable from
+// the slice, because finding an oracle by type-asserting over a []sim.Oracle is
+// how a checker's internals become everybody's business.
+func AllWithRebalance(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt,
+	facts TxnFactsAt) ([]sim.Oracle, *RebalanceSafety) {
+	reb := NewRebalanceSafety(l)
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -525,11 +536,11 @@ func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads Reads
 		NewApplyContinuity(l),
 		NewSnapshotEquivalence(l, state),
 		NewSingleServerChange(l),
-		NewRebalanceSafety(l),
+		reb,
 		NewSplitPartition(l, splits, extent),
 		NewMVCCReadCorrectness(l, reads),
 		NewTransactionAtomicity(l, facts),
-	}
+	}, reb
 }
 
 // --- apply continuity across snapshots ---------------------------------------
@@ -862,11 +873,23 @@ const firstRangeID = 1
 // wasteful and completely safe -- it is the direction the invariant WANTS to
 // fail in. So a missing removal passes here, and the sweep's non-vacuity check
 // is what stops "every move stalled" from reading as evidence.
-type RebalanceSafety struct{ base }
+type RebalanceSafety struct {
+	base
+
+	// unattributable counts moves whose removal fell inside a window in which
+	// the churn driver also ordered a change to the same node. Neither pass nor
+	// violation: the log cannot say whose removal it is, and Amendment A4's
+	// answer to "the checker could not tell" is a third outcome rather than a
+	// guess. Reported by the sweep and asserted on there.
+	unattributable int
+}
 
 func NewRebalanceSafety(l *Ledger) *RebalanceSafety {
-	return &RebalanceSafety{base{l: l, name: "rebalance-safety"}}
+	return &RebalanceSafety{base: base{l: l, name: "rebalance-safety"}}
 }
+
+// Unattributable is how many moves this run could not judge.
+func (o *RebalanceSafety) Unattributable() int { return o.unattributable }
 
 func (o *RebalanceSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	if !o.stale() {
@@ -880,6 +903,18 @@ func (o *RebalanceSafety) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 		until := o.l.moveEnds(i)
 		removed, ok := rl.firstConfChange(m.At, until, raft.ConfChangeRemoveNode, m.From)
 		if !ok {
+			continue
+		}
+		// # Whose removal is this?
+		//
+		// If the churn driver also ordered a change to this node inside the
+		// move's window, the committed log holds a removal that either driver
+		// could have caused, and nothing in it says which. Judging it anyway is
+		// how 252 of 300 seeds became false violations; judging it the other way
+		// -- calling it fine -- would be a pass over a question that was never
+		// answered. So it is neither, and it is counted.
+		if o.l.churnTouched(int(m.From), m.At, until) {
+			o.unattributable++
 			continue
 		}
 		added, ok := rl.firstConfChange(m.At, until, raft.ConfChangeAddVoter, m.To)
