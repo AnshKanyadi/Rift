@@ -1413,6 +1413,36 @@ Second surviving mutant of the phase, after `M61`, and the only one to survive
 twice. The list has now made a hole visible three times, which is the most that
 can honestly be said for a list.
 
+### 22.6b A decision in two halves needs a mutant per half
+
+The two halves of option A were induced **independently**, and that is what makes
+it a complete decision rather than a fix with a note attached:
+
+| half | mutant | measured |
+|---|---|---|
+| node-tagged minting | `M67` | two clocks over one physical clock mint `0.256` twice; killed immediately |
+| minted, not derived | `M68` | **7 foreign tags across 10 uncertainty restarts**, against **0 of 10** on the clean tree, same seeds |
+
+The reason this is not bookkeeping: **a partial implementation of option A is
+indistinguishable from a complete one until a restart lands on a foreign tag.**
+Every timestamp a node mints carries its own ordinal, every test of minting
+passes, and the property holds — right up to the first restart. A single mutant
+phrased as *option A is implemented* would have been satisfied by the minting
+half alone and would have passed on half the fix.
+
+> **A decision that lands in two halves needs a mutant per half. One mutant for
+> the decision tests whichever half the schedule happens to reach.**
+
+That generalizes past this fix. A6 has three others of the same shape — the
+commit point is *primary record exists* **and** *secondaries follow*; resolution
+is *decide on the primary's range* **and** *apply on the key's*; the uncertainty
+ceiling is *fixed at the first snapshot* **and** *learned from any answer*. Each
+is one decision whose halves fail independently, and each is one mutant short of
+being covered the way this one now is. Recorded rather than fixed here, because
+the right moment to write a mutant is the moment its blind spot is precise, and
+these three are precise now: they go in the same commit as the next change that
+touches them.
+
 ### 22.7 The guard that read zero, and the class it belongs to
 
 §15.6 predicted this class, guarded it, and **guarded the wrong pair.** The

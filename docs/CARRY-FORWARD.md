@@ -142,6 +142,12 @@ phase's plan generates clock faults". A7 adds read index, which is not clock-sen
 leases are. Ask the question explicitly at every phase gate, because a comment that was true when it
 was written is not a check.
 
+**Three A6 decisions still have one mutant where they need two.** DESIGN-A6 §22.6b. The commit point
+(*primary record exists* + *secondaries follow*), resolution (*decide on the primary's range* +
+*apply on the key's*), and the uncertainty ceiling (*fixed at the first snapshot* + *learned from any
+answer*). Each is one decision whose halves fail independently. Each gets its second mutant in the
+same commit as the next change that touches it.
+
 **Where an assertion goes, and what it is keyed on.** DESIGN-A6 §22.7 and §22.6, one class on two
 axes. Key it on what the DATA STRUCTURE is addressed by, not on what the concept feels owned by
 (`(primary, startTS)` read zero on the seed that had the collision, because a version key has no
