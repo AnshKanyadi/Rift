@@ -663,12 +663,23 @@ The stricter criterion adds `BUG-003` and `BUG-008`: their mutants still make th
 replay diverge, so the existing lane passes them, but the divergence never reaches
 a checker.
 
-Every stale entry is re-recorded at a seed where its mutant reproduces, which is
-what the existing lane's own message prescribes. The two extra that only the
-stricter criterion flags are **reported rather than acted on**, because tightening
-a criterion Ansh ruled on at A5 is not mine to do quietly. The options are:
-tighten it and re-record those two as well; keep it and record them as
-divergence-only entries; or something else.
+All five were re-recorded at seeds where the mutant reproduces, which is what the
+existing lane's own message prescribes:
+
+| bundle | mutant | new seed |
+|---|---|---|
+| BUG-003 | M23 gated messages never released | 23 |
+| BUG-008 | M26 truncated suffix left in the engine | 7 |
+| BUG-009 | M34 append from zero over a snapshot | 13 |
+| BUG-014 | M45 apply ignores the extent | 15 |
+| BUG-015 | M46 split inherits the appended configuration | 16 |
+
+BUG-003 and BUG-008 were re-recorded even though the ruled criterion passed them,
+because a seed where the finding returns is strictly better evidence than one
+where only the trace moves, and it cost the same search. **Whether the criterion
+itself should tighten is still Ansh's**: it is one line in
+`scripts/corpus-reproduces.sh`, and tightening it silently would be changing a
+ruled-on lane while nobody was looking.
 
 ### 16.3 The general form, which survives the correction
 

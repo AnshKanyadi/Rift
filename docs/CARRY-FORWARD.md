@@ -92,11 +92,12 @@ pointed at the orphan. It was answered with `percolator-invariants` #5 rather th
 list is therefore a claim under active test rather than an assertion, which is the most that can
 honestly be said for it.
 
-**Five corpus entries prove less than they claim.** DESIGN-A6 §16.2. `BUG-003`, `BUG-008`,
-`BUG-009`, `BUG-014`, `BUG-015`: their mutants still make the replay diverge, which is what
-`scripts/corpus-reproduces.sh` requires, but no longer make it produce a **finding**. Awaiting a
-ruling on whether the criterion tightens; if it does, those five are re-recorded at seeds where the
-finding returns.
+**Should the corpus reproduction criterion tighten?** DESIGN-A6 §16.2.
+`scripts/corpus-reproduces.sh` requires the mutated replay to *differ observably* — a violation, a
+panic, an error, or a diverged trace. The stricter reading is that it must produce **the finding**.
+Two bundles (`BUG-003`, `BUG-008`) satisfied the first and not the second, and were re-recorded
+anyway. The criterion is one line in that script and it was ruled on at A5, so it is Ansh's to
+change, not something to tighten quietly.
 
 **Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16.3. Whenever the workload moves
 traces, `TestEveryStoredBundleReplays` fails and the fix is to regenerate — but a schedule that no
