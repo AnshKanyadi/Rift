@@ -344,16 +344,24 @@ type txnLedger interface {
 func (c *coordinator) begin(t *transfer, at clock.Instant, s sim.Scheduler) {
 	// # The identity Percolator assumes, asserted rather than assumed
 	//
-	// A transaction record is addressed by (primary key, start timestamp), and
-	// two transactions sharing that pair would share a record: the second's
-	// decision would be refused as already made, and it would silently adopt
-	// the first's fate. Percolator is safe here because a single TSO issues
-	// start timestamps; with a per-node HLC nothing guarantees it.
+	// A START TIMESTAMP ALONE, and this assertion was wrong once before.
 	//
-	// The exit run asserts this at zero. The day it fires, the identity is the
-	// thing to fix -- a transaction id in the record key, or the TSO fallback
-	// Amendment A6 pre-authorises -- and not this assertion.
-	if key := t.primary + "@" + t.startTS.String(); c.identities[key] {
+	// It keyed on (primary, start timestamp), on the reasoning that that pair
+	// addresses the transaction record. It does -- but the record is not the
+	// only thing keyed by the start timestamp. So is the LOCK's owner field, and
+	// so is the data version, `EncodeKey(ns, key, startTS)`. Two transactions
+	// sharing a start timestamp and touching one key in common therefore share
+	// that key's version slot and its lock, whatever their primaries are.
+	//
+	// BUG-021 is exactly that: txn 14 (primary a05) and txn 29 (primary a07)
+	// both minted at start ...840000000.26 on different nodes, both writing a05.
+	// One committed, one was rolled back, and a05's version at .26 belongs to
+	// both. The old assertion read ZERO on that seed, because the primaries
+	// differ.
+	//
+	// Percolator is safe here because a single TSO issues start timestamps. A
+	// per-node HLC guarantees uniqueness per node and nothing across nodes.
+	if key := t.startTS.String(); c.identities[key] {
 		c.identityCollisions++
 	} else {
 		c.identities[key] = true

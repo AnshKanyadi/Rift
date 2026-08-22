@@ -1206,3 +1206,92 @@ to be "zero at all three", then the lane's value rests on its *structural*
 argument — that a cross-goroutine reach into node state would be caught — and not
 on a detection history, and the seed count should be set from cost rather than
 from a power curve that has nothing to curve.
+
+---
+
+## 22. D-A6-12: the start timestamp must be unique, and that is the timestamp source's job **[REPORTED, not assumed]**
+
+BUG-021. Two transactions minted at the same `(wall, logical)` by two nodes,
+both writing one key, sharing that key's lock and its data version. §15.6
+predicted the class and guarded the wrong pair.
+
+**Reported rather than assumed** because Amendment A6 legislated on the timestamp
+source by name — *"the timestamp source lands behind an interface in A5; TSO
+fallback is pre-authorized if A6's uncertainty machinery is not green by Dec
+1"* — so changing it engages a decision already made and conditioned.
+
+### 22.1 The requirement, stated exactly
+
+Three things are addressed by a transaction's start timestamp:
+
+| addressed by | where |
+|---|---|
+| the transaction record | `(primary key, startTS)` |
+| the lock's owner | `Lock.StartTS` |
+| the data version | `EncodeKey(ns, key, startTS)` |
+
+So the requirement is not that `(primary, startTS)` be unique. It is that
+**`startTS` be unique cluster-wide**, because two transactions sharing one and
+touching one key in common share that key's version slot whatever their
+primaries are. Percolator gets this free from a single TSO.
+
+### 22.2 The candidates
+
+**A. Tag the logical counter with the node ordinal.** Reserve the low *k* bits of
+`Logical` for the minting node: `Logical = counter<<k | nodeID`. Two nodes cannot
+produce the same timestamp at the same wall, monotonicity per node is unchanged,
+and the total order is unchanged.
+
+- *for*: uniqueness by construction, no coordination, and it **keeps timestamps
+  multi-source** — which is what makes the uncertainty interval mean anything
+  (§15.2: with one source, a commit above a read timestamp is one the reader
+  provably need not see, and the interval is theatre).
+- *against*: touches `hlc.Clock` and its constructor, so every node build site
+  changes; `Logical` loses *k* bits of counter; and **derived timestamps stop
+  being safe as identities** — `RestartAt = CommitTS.Next()` increments `Logical`
+  by one and so carries another node's tag. Restarts would have to *mint*
+  (`Update(restartAt)` then `Now()`) rather than derive, which is what
+  `hlc.Source.Update` is for and is a two-line change at the call site.
+
+**B. Take the TSO fallback.** One source issues every transaction timestamp; the
+`hlc.Source` interface that A5 built for exactly this makes it a construction
+change.
+
+- *for*: pre-authorised, smallest diff, uniqueness by monotonicity, and it is
+  what Percolator actually does.
+- *against*: it retires the multi-source property mid-phase, and with it most of
+  what the uncertainty machinery is testing. The condition Amendment A6 attached
+  to the fallback — *if A6's uncertainty machinery is not green by Dec 1* — is
+  **not met**: the machinery is green and now sweep-exercised. Taking the
+  fallback for a different reason than the one it was authorised for is a
+  decision, not an application of an existing one.
+
+**C. Give the transaction its own identity.** A transaction id in the record key,
+the lock and the version key, independent of time.
+
+- *for*: correct regardless of the clock, and CockroachDB does exactly this.
+- *against*: it widens the MVCC key encoding, which A5 fixed and A6 has built a
+  phase on; it is the largest of the three by a distance; and the version key
+  ordering (`^ts` newest-first) has to keep meaning what it means.
+
+### 22.3 Recommendation
+
+**A.** It is the only candidate that fixes the defect without giving up the
+property the phase exists to test. B is a bigger retreat than the bug warrants
+and its authorising condition is not met. C is right and is A7-or-later work.
+
+The two-part shape of A matters and is easy to under-implement: node-tagged
+minting **and** minted-rather-than-derived restart timestamps. Without the second
+half the same collision returns through `RestartAt`, one level further out —
+which is precisely how §15.6's guard came to be watching the wrong pair.
+
+### 22.4 Until it is ruled on
+
+- The assertion is widened to the start timestamp alone and reports 1 on seed
+  90004, where the old form reported 0.
+- `TestBUG021` pins the reproduction, and asserts **both** halves: the collision
+  is detected, and the atomicity violation is the system being wrong rather than
+  the checker.
+- No mutant class is added yet. Amendment A2 requires one in the same PR as the
+  **fix**, and there is no fix to attach it to; a mutant for a defect still
+  present would be a patch that changes nothing.

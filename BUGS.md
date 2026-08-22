@@ -1220,3 +1220,58 @@ transaction record: it is addressed by `(primary, start timestamp)`, so two tran
 pair share a record, and the second's decision is refused as already made — it silently adopts the
 first's fate. That is asserted at zero in the exit run and recorded in DESIGN-A6 §15 as a named gap
 with the two fixes that would close it.
+
+---
+
+### BUG-021 — two transactions were minted at the same start timestamp, and shared a key's version
+
+| field | value |
+|---|---|
+| **Found by** | sim — `transaction-atomicity`, seed **90004**, on a probe run taken to measure per-seed cost |
+| **Phase** | A6 |
+| **Reproduce (test)** | `go test ./sim/hunt -run TestBUG021` |
+| **Reproduce (seed)** | seed **90004**: txn 14 and txn 29 both start at `1600000005840000000.26` |
+| **Invariant that caught it** | transaction atomicity — a rolled-back transaction has no committed key |
+| **Mutant class** | none existed — see below; a mutant is added with the fix, not before it |
+| **Fix commit** | **none — the fix is a design decision, reported rather than assumed** |
+
+**Symptom.** *"transaction 29 (start …840000000.26) is ROLLED BACK on its primary `a07`, and key
+`a05` is committed at …840000000.59. Half of an aborted transaction is visible."*
+
+**Root cause.** Two transactions were minted at the **same start timestamp** by **different nodes**:
+
+| | start | primary | keys | outcome |
+|---|---|---|---|---|
+| txn 14 | `…000.26` | `a05` | `a05`, `a01` | committed at `…000.59` |
+| txn 29 | `…000.26` | `a07` | `a07`, `a05` | rolled back |
+
+Both wrote `a05`. A key's **lock owner**, its **data version** (`EncodeKey(ns, key, startTS)`) and its
+**write record** are all addressed by the start timestamp — so for `a05` the two transactions share
+every one of them. Txn 14 committed the version at `.26`; txn 29 was rolled back. The version belongs
+to both, and no reader can tell whose it is.
+
+The oracle is not confused. **The state is.**
+
+**Why the guard I had did not see it.** DESIGN-A6 §15.6 predicted this class and asserted it at zero —
+but keyed on `(primary, start timestamp)`, reasoning that that pair addresses the transaction
+*record*. It does. It is not the only thing keyed by the start timestamp, and these two transactions
+have **different primaries**, so the counter read zero on the seed that has the collision.
+
+The assertion is now on the **start timestamp alone**, which is what the version and the lock are
+addressed by. On seed 90004 it reports 1.
+
+**Why it appeared now.** DESIGN-A6 §18 turned on clock holds, because A6's phase headline is hybrid
+logical clocks and its sweep had been injecting no skew at all. Two nodes minting the same
+`(wall, logical)` needs their clocks close together and their HLCs at the same logical counter —
+which is exactly what a hold arranges. **The fault-mix fix found a real defect within hours**, which
+is the strongest argument available for §18's rule.
+
+**What it would have caused in production.** Two concurrent transactions touching a common key,
+silently sharing that key's lock and version. One commits and the other aborts, and the key keeps a
+value neither of them can be said to have written. No error, and no structural inconsistency — the
+same shape as BUG-019, and caught by a different oracle for the same reason.
+
+**Why there is no fix commit.** The fix is a change to the **timestamp source**, which Amendment A6
+legislated on directly ("the timestamp source lands behind an interface in A5; TSO fallback is
+pre-authorized if…"). DESIGN-A6 §22 sets out three candidates and a recommendation. Reported, not
+assumed.
