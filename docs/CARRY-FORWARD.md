@@ -111,6 +111,20 @@ per-mutant seed counts are re-derived under the new cost, or the lane moves to t
 Amendment A2 says the choice has to keep kill-time monitored either way. Re-measure before A7 widens
 the shape again.
 
+**The transaction identity gap.** DESIGN-A6 §15.6. A transaction record is addressed by `(primary
+key, start timestamp)`, which Percolator can rely on because a single TSO issues start timestamps.
+Per-node HLCs do not guarantee it: two nodes can mint the identical `(wall, logical)` pair. Asserted
+at zero in the exit run as `IdentityCollisions`; the day it fires the fix is the identity — a
+transaction id in the record key, or the TSO fallback Amendment A6 pre-authorises — and never the
+assertion.
+
+**The race lane no longer fits its own budget.** `RACE_SEEDS` is 200 and `RACE_TIMEOUT` is 5400s. At
+A5's 0.36 s/seed that was comfortable; A6's shape costs ~3.75 s/seed uninstrumented and the lane runs
+at roughly 20×, so 200 seeds is several hours. The seed count was ruled on at A1 ("a few hundred
+simulated seeds answer this lane's question") and the budget is what has always moved — but the
+budget cannot absorb this one. The measurement Ansh asked for at A5 is still owed and is now the thing
+that decides which of the two moves.
+
 **The batch-boundary technique.** DESIGN-A6 §14.4. When a replica disagrees with a replay of its own
 log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
 **skip** in the node's indices. A7 (read index, where a lease or an index read can be answered
