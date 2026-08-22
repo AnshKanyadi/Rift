@@ -15,6 +15,32 @@ WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 SMOKE_SEEDS ?= 500
 SOAK_SEEDS  ?= 10000
 
+# TEST_SEEDS and LANE_SEEDS bound the every-change lane, and the numbers are
+# here rather than hidden in a skip.
+#
+# # `make test` could not run, and CI has never noticed
+#
+# It was `go test ./...` with nothing set. The A1 exit run defaults to TEN
+# THOUSAND seeds and only shortens when RAFT_SEEDS says so, which at A6's cost is
+# roughly twenty-six hours -- so the lane CI runs on every push has been
+# unrunnable since A1, and would have died on Go's ten-minute default timeout
+# long before finishing. Nobody saw it because there is no remote: CI has never
+# executed, and `make test` was only ever run per-package by hand.
+#
+# That is the second cost of having no remote, and it is a lane-shaped cost: a
+# lane that is not run is not a lane. The every-change set has to be able to run
+# on every change, so it is bounded here, out loud. Full seed coverage is `soak`
+# and the split exit run, which is where it has always actually lived.
+TEST_SEEDS   ?= 200
+LANE_SEEDS   ?= 12
+TEST_TIMEOUT ?= 1800s
+
+# The exit run's split. The seed count is Ansh's and does not move; the SHARD
+# count is a scheduling choice and may.
+EXIT_SEEDS  ?= 25000
+EXIT_SHARDS ?= 8
+EXIT_OUT    ?= .exitrun
+
 .DEFAULT_GOAL := help
 
 # ---------------------------------------------------------------- real lanes
@@ -24,8 +50,8 @@ build: ## Compile everything
 	$(GO) build ./...
 
 .PHONY: test
-test: ## Go unit tests
-	$(GO) test ./...
+test: ## Go unit tests (seed searches bounded to $(TEST_SEEDS)/$(LANE_SEEDS) seeds; see above)
+	RAFT_SEEDS=$(TEST_SEEDS) LANE_SEEDS=$(LANE_SEEDS) $(GO) test -timeout $(TEST_TIMEOUT) ./...
 
 # RACE_SEEDS bounds the A1 exit run inside the race lane, and the number is
 # stated here rather than hidden in a skip.
@@ -139,6 +165,12 @@ ci: build lint test race blind power assertions provenance corpus corpus-reprodu
 .PHONY: smoke
 smoke: ## $(SMOKE_SEEDS)-seed simulator smoke: the correct toy, all checkers on
 	$(GO) run ./cmd/simctl hunt --from 0 --to $(SMOKE_SEEDS) --workers $(WORKERS)
+
+.PHONY: exit-run
+exit-run: ## The A6 exit run: $(EXIT_SEEDS) seeds across $(EXIT_SHARDS) contiguous shards, aggregated
+	sh scripts/exit-run.sh $(EXIT_SEEDS) $(EXIT_SHARDS) $(EXIT_OUT)
+	RAFT_SHARD_DIR=$(EXIT_OUT) RAFT_TOTAL=$(EXIT_SEEDS) \
+		$(GO) test -count=1 -run TestRaftExitAggregate -v ./sim/hunt/
 
 .PHONY: soak
 soak: ## $(SOAK_SEEDS)-seed nightly soak

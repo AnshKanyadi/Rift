@@ -22,9 +22,29 @@
 #
 # # What counts as reproducing
 #
-# The mutated replay must differ from the recording in some observable way: a
-# violation, a panic, an error, or a diverged trace. A mutated replay that is
-# byte-identical to the unmutated recording is a mutation that did nothing.
+# **The mutated replay must produce the FINDING**: a violation, an inconclusive,
+# a panic, or a refusal the run could not continue past. Not merely a diverged
+# trace.
+#
+# All four are findings. BUG-015's was a REFUSAL -- `ApplyConfEntry` declining an
+# illegal transition -- and no oracle fired at all; BUG-001's is an inconclusive;
+# M40's is a panic. A criterion that only accepted violations would retire three
+# real entries for not being the shape it expected.
+#
+# That criterion was loosened once and tightened back. Ansh's ruling at A6: "A
+# diverging trace proves the bundle is sensitive to something; only the finding
+# returning proves it is sensitive to the thing it was recorded for. That is
+# exactly what the A5 fix established, and accepting trace divergence would
+# reopen the thirteenth instance under a weaker test."
+#
+# A divergence with no finding is reported as WEAK rather than as ok, and it
+# fails the lane. The remedy is to re-record the bundle at a seed where the
+# finding returns; if no seed produces one, the bundle is RETIRED with the reason
+# written down, never kept at a lower standard.
+#
+# An inconclusive counts, and has to: Amendment A4 makes it a first-class
+# outcome, and BUG-001's entire finding is a green verdict over a history of
+# unknowns, which the fix turned into an inconclusive rather than a violation.
 #
 # Bundles with no mutant are toy bundles and harness-defect bundles: the toy's
 # flaw is a scenario flag carried in the plan, and a harness defect has no patch
@@ -74,8 +94,14 @@ for d in "$SEEDS"/*/; do
 
   checked=$((checked + 1))
   out=$(cd "$work" && $GO run ./cmd/simctl replay --bundle "$d" 2>&1 || true)
-  if printf '%s' "$out" | grep -qE 'DIVERGED|VIOLATION|violation reproduced|panic|simctl:'; then
-    printf '   ok       %-12s reproduces under %s\n' "$name" "$(basename "$mutant")"
+  if printf '%s' "$out" | grep -qiE 'VIOLATION|INCONCLUSIVE|panic|simctl:'; then
+    printf '   ok       %-12s reproduces its FINDING under %s\n' "$name" "$(basename "$mutant")"
+  elif printf '%s' "$out" | grep -qE 'DIVERGED|simctl:'; then
+    printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$(basename "$mutant")"
+    printf '            The bundle is sensitive to SOMETHING; only the finding returning proves\n'
+    printf '            it is sensitive to the thing it was recorded for. Re-record it at a seed\n'
+    printf '            where the finding returns, or retire it with the reason written down.\n'
+    failed=$((failed + 1))
   else
     printf '   STALE    %-12s replays IDENTICALLY with %s applied.\n' "$name" "$(basename "$mutant")"
     printf '            The mutation changed nothing on this schedule, so the bundle no longer\n'

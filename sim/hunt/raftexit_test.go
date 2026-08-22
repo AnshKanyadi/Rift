@@ -37,6 +37,18 @@ func TestRaftExitCriteria(t *testing.T) {
 
 	t.Logf("seeds:        %d in %s (%d seeds/sec)", c.Seeds, elapsed.Round(time.Millisecond),
 		int64(c.Seeds)*int64(time.Second)/int64(elapsed))
+	reportExitCensus(t, c)
+	assertExitCriteria(t, c)
+}
+
+// reportExitCensus prints what the run did.
+//
+// Split out of TestRaftExitCriteria so the SHARDED exit run reports and asserts
+// through exactly the same code. Two copies of the exit criteria, one for the
+// whole-run form and one for the aggregate, is two chances to let them drift --
+// and the aggregate is the one the phase is signed off on.
+func reportExitCensus(t *testing.T, c hunt.RaftCensus) {
+	t.Helper()
 	t.Logf("verdicts:     pass=%d violation=%d inconclusive=%d errors=%d",
 		c.Pass, c.Violations, c.Inconclusive, c.Errors)
 	t.Logf("elections:    highest-term=%d started=%d won=%d split-votes=%d",
@@ -96,6 +108,11 @@ func TestRaftExitCriteria(t *testing.T) {
 		t.Logf("inconclusive: %s", why)
 	}
 
+}
+
+// assertExitCriteria is every exit assertion, over a census.
+func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
+	t.Helper()
 	// 1. Zero safety violations.
 	if c.Violations != 0 {
 		t.Errorf("SAFETY VIOLATION: %d across %d seeds; first at seed %d", c.Violations, c.Seeds, c.FirstViolation)

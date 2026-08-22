@@ -1775,3 +1775,91 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 	}
 	return c, nil
 }
+
+// AddCensus folds one census into another, for the sharded exit run.
+//
+// # Why it lives here and not in the test
+//
+// Because it has to be right, and "right" is field-by-field: Terms and Ranges
+// are MAXIMA, FirstViolation is the lowest seed of any shard that saw one, and
+// every other number is a total. A summation written in the aggregating test
+// would be a second place that has to be updated whenever a counter is added --
+// and the failure mode of forgetting is a number that silently reads low, which
+// is the shape of every count this project has learned not to trust.
+//
+// Reflection would remove the maintenance and remove the distinction with it, so
+// it is written out.
+func AddCensus(a, b RaftCensus) RaftCensus {
+	out := a
+
+	if b.Terms > out.Terms {
+		out.Terms = b.Terms
+	}
+	if b.Ranges > out.Ranges {
+		out.Ranges = b.Ranges
+	}
+	// The lowest seed anybody violated at. A shard covering a later range that
+	// found the first violation IN ITS RANGE must not overwrite an earlier one.
+	if b.FoundAViolation && (!out.FoundAViolation || b.FirstViolation < out.FirstViolation) {
+		out.FoundAViolation, out.FirstViolation = true, b.FirstViolation
+	}
+	out.InconclusiveCauses = append(out.InconclusiveCauses, b.InconclusiveCauses...)
+	if len(out.InconclusiveCauses) > 10 {
+		out.InconclusiveCauses = out.InconclusiveCauses[:10]
+	}
+
+	for _, p := range []struct {
+		dst *int
+		src int
+	}{
+		{&out.Seeds, b.Seeds}, {&out.Violations, b.Violations},
+		{&out.Inconclusive, b.Inconclusive}, {&out.Pass, b.Pass}, {&out.Errors, b.Errors},
+		{&out.ElectionsStart, b.ElectionsStart}, {&out.ElectionsWon, b.ElectionsWon},
+		{&out.SplitVotes, b.SplitVotes},
+		{&out.SeedsWithNoLeader, b.SeedsWithNoLeader},
+		{&out.SeedsWithContention, b.SeedsWithContention},
+		{&out.SnapshotsTaken, b.SnapshotsTaken}, {&out.SnapshotsApplied, b.SnapshotsApplied},
+		{&out.TransfersAsked, b.TransfersAsked},
+		{&out.ConfProposed, b.ConfProposed}, {&out.ConfRefused, b.ConfRefused},
+		{&out.LagRefused, b.LagRefused}, {&out.ConfRecoveries, b.ConfRecoveries},
+		{&out.ConfCrossChecks, b.ConfCrossChecks},
+		{&out.SplitsProposed, b.SplitsProposed}, {&out.SplitsApplied, b.SplitsApplied},
+		{&out.StaleEpochRefusals, b.StaleEpochRefusals},
+		{&out.OutOfExtentRefusals, b.OutOfExtentRefusals},
+		{&out.MovesOrdered, b.MovesOrdered}, {&out.MovesCompleted, b.MovesCompleted},
+		{&out.MovesRacingChurn, b.MovesRacingChurn},
+		{&out.MovesUnattributable, b.MovesUnattributable},
+		{&out.GCProposed, b.GCProposed}, {&out.GCApplied, b.GCApplied},
+		{&out.VersionsCollected, b.VersionsCollected},
+		{&out.MVCCReadsRefused, b.MVCCReadsRefused},
+		{&out.MVCCWritesRefused, b.MVCCWritesRefused},
+		{&out.EnvelopeRefusals, b.EnvelopeRefusals}, {&out.SnapshotReads, b.SnapshotReads},
+		{&out.TxnStarted, b.TxnStarted}, {&out.TxnCommitted, b.TxnCommitted},
+		{&out.TxnAbandoned, b.TxnAbandoned}, {&out.TxnAborted, b.TxnAborted},
+		{&out.TxnLostToResolver, b.TxnLostToResolver},
+		{&out.TxnReads, b.TxnReads}, {&out.ReaderResolves, b.ReaderResolves},
+		{&out.UncertaintyRestarts, b.UncertaintyRestarts},
+		{&out.TxnReadsRefused, b.TxnReadsRefused},
+		{&out.AuditsStarted, b.AuditsStarted}, {&out.AuditsComplete, b.AuditsComplete},
+		{&out.AuditsLocked, b.AuditsLocked}, {&out.AuditsUncertain, b.AuditsUncertain},
+		{&out.AuditsRetried, b.AuditsRetried},
+		{&out.IdentityCollisions, b.IdentityCollisions},
+		{&out.ForeignLocksKept, b.ForeignLocksKept},
+		{&out.SnapshotsCompared, b.SnapshotsCompared},
+		{&out.SecondPassReads, b.SecondPassReads},
+		{&out.ResolveWaited, b.ResolveWaited},
+		{&out.ResolvedForward, b.ResolvedForward}, {&out.ResolvedBack, b.ResolvedBack},
+		{&out.UnparseableReads, b.UnparseableReads},
+		{&out.WriteConflicts, b.WriteConflicts}, {&out.PrewriteBlocked, b.PrewriteBlocked},
+		{&out.TxnRaceLost, b.TxnRaceLost},
+		{&out.ResolveWaits, b.ResolveWaits},
+		{&out.ResolveAlreadyDecided, b.ResolveAlreadyDecided},
+		{&out.ResolveDeclaredDead, b.ResolveDeclaredDead},
+		{&out.ResolveNoLock, b.ResolveNoLock},
+		{&out.RollForwards, b.RollForwards}, {&out.RollBacks, b.RollBacks},
+		{&out.ReadsBlocked, b.ReadsBlocked},
+	} {
+		*p.dst += p.src
+	}
+	return out
+}
