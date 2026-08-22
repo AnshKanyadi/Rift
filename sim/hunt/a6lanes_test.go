@@ -144,3 +144,60 @@ func TestOverlappedDrivers(t *testing.T) {
 			"the oracle is green over a mechanism that never finished", c.MovesOrdered)
 	}
 }
+
+// TestEnvelopeExperiment is the run that reaches the HLC's refusal.
+//
+// # Why this is a lane and not part of the sweep
+//
+// The refusal fires when a peer's timestamp is more than maxOffset ahead of the
+// receiving node's physical clock — that is, when the cluster's skew leaves the
+// envelope. CLAUDE.md: skew is "bounded by maxOffset in safety runs,
+// deliberately exceeding it in envelope experiments." A safety sweep that
+// reached this refusal would be a safety sweep whose bounded-skew claim is
+// false, so the sweep asserts it at ZERO and this lane asserts it fires.
+//
+// # Why the sweep's zero is correct and not a dormant mechanism
+//
+// It is unreachable there by construction, not by luck: every generated hold
+// targets 90% of maxOffset and every one has the same sign, so the widest
+// pairwise skew a safety plan can produce is 90% of the bound. The refusal is
+// short by a tenth of maxOffset. Measured over 200 seeds: 0.
+//
+// # What the experiment is allowed to conclude
+//
+// That the refusal fires, and what the cluster does when the assumption every
+// A6 bound rests on is false. It is NOT a safety run: outside the envelope,
+// uncertainty intervals do not bound anything and snapshot isolation is not
+// guaranteed. So safety findings here are REPORTED rather than asserted, which
+// is the honest scoping and is also why this is not a place to go looking for
+// green.
+func TestEnvelopeExperiment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("the envelope experiment is not a -short test")
+	}
+	seeds := lanesSeeds(t, 40)
+
+	opt := hunt.CurrentOptions()
+	opt.EnvelopeExceeded = true
+	c, err := hunt.SweepRaftWith(0, seeds, opt)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	t.Logf("outside the envelope: %d seeds, %d peer timestamps refused for exceeding maxOffset",
+		c.Seeds, c.EnvelopeRefusals)
+	t.Logf("what it did to the run: %d uncertainty restarts, %d complete audits, "+
+		"verdicts pass=%d violation=%d inconclusive=%d",
+		c.UncertaintyRestarts, c.AuditsComplete, c.Pass, c.Violations, c.Inconclusive)
+
+	// The one assertion. Everything else is reported.
+	if c.EnvelopeRefusals == 0 {
+		t.Errorf("no peer timestamp was refused across %d seeds held at 150%% of maxOffset. The "+
+			"refusal is the only thing standing between one node's jumped clock and every bound "+
+			"in the cluster, and this lane exists because nothing else reaches it", c.Seeds)
+	}
+	if c.Violations != 0 {
+		t.Logf("REPORTED, not asserted: %d safety violations outside the envelope, first at seed "+
+			"%d. Outside the assumption these are expected rather than alarming, and the finding "+
+			"is what they are, not that they exist", c.Violations, c.FirstViolation)
+	}
+}

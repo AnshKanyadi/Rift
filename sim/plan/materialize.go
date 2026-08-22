@@ -28,6 +28,26 @@ type GenConfig struct {
 	Partitions int
 	Holds      int
 	ClientOps  int
+
+	// EnvelopeExceeded targets holds at 150% of maxOffset instead of 90%,
+	// deliberately outside the assumption every uncertainty bound rests on.
+	//
+	// # Why the ordinary mix cannot reach the refusal, and why that is right
+	//
+	// The HLC refuses a peer whose timestamp is more than maxOffset ahead of
+	// this node's physical clock. Every generated hold targets 90% of the bound
+	// and every one has the SAME SIGN, so the widest pairwise skew a safety plan
+	// can produce is 90% of maxOffset -- the refusal is short by a tenth of the
+	// bound, by construction. That is why the count has read zero across every
+	// sweep since A5, and why the zero is the envelope holding rather than a
+	// mechanism failing to fire.
+	//
+	// CLAUDE.md: skew is "bounded by maxOffset in safety runs, deliberately
+	// exceeding it in envelope experiments". This flag is the second, and it
+	// belongs to a lane rather than to a fraction of the safety mix, because a
+	// run outside the envelope is a run in which every bound means something
+	// else.
+	EnvelopeExceeded bool
 }
 
 // DefaultGenConfig is a small three-node run with every fault kind present.
@@ -145,13 +165,18 @@ func genClocks(p *Plan, r rng.Rand, cfg GenConfig) {
 
 		width := int64(time.Second) + int64(r.IntN(int(2*time.Second)))
 		from := ramp + int64(r.IntN(int(p.Config.DurationNS/2)))
+		target, envelope := clock.Percent(90), false
+		if cfg.EnvelopeExceeded {
+			target, envelope = clock.Percent(150), true
+		}
 		p.Clock.Holds = append(p.Clock.Holds, Hold{
 			A: a, B: b,
-			AtPPB:   clock.Percent(90),
-			FromNS:  from,
-			ToNS:    from + width,
-			RampNS:  ramp,
-			Realize: realize,
+			AtPPB:    target,
+			FromNS:   from,
+			ToNS:     from + width,
+			RampNS:   ramp,
+			Realize:  realize,
+			Envelope: envelope,
 		})
 		// No fire count for a hold, deliberately.
 		//

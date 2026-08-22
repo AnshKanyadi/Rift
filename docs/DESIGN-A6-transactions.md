@@ -214,6 +214,34 @@ table:
 | a transaction's commit timestamp | the coordinator's clock at the end | the timestamp in the **primary's write record**, which is in the log |
 | which range holds the primary record | the range id recorded in the lock | the **primary key**, re-routed at resolution time (A4's BUG-011 class) |
 
+### 8.1 The result, with the exclusions stated
+
+**Six facts named before the code. Zero became defects.** A5 named four and got zero; A6 named six and
+got zero. The practice has now closed ten facts across two phases without one of them producing a bug,
+which is the second phase in a row where the class was closed *before* it could.
+
+What the count does **not** cover, stated because a count is only worth what its exclusions are:
+
+- **BUG-018** is a batch-visibility defect, not a timestamp-position one. A step could not see the
+  steps above it in the same `Ready`. No entry in the table above would have caught it, and pretending
+  otherwise would make the ten look like ten out of ten.
+- **BUG-019** is an addressing defect — *the* lock rather than *my* lock — and it has no timestamp in
+  it at all.
+- **BUG-020** is the harness's.
+- Row three moved after the fact: the interval's top is the **ceiling fixed at the transaction's first
+  snapshot**, not `read_ts + maxOffset` recomputed per read (§15.1). The row was right about where the
+  fact comes from and wrong about how long it lives, and the correction came from running it rather
+  than from reading it. That is one of six **amended**, not one of six failed, and it is recorded as
+  such rather than quietly rewritten.
+- Row five was **wrong in the code and right in the table**: §15.2 found `commitTS = startTS.Next()`,
+  which is not "the timestamp in the primary's write record" but a value derived from the start. The
+  table said the right thing and the implementation did not follow it. That is the one place where
+  naming the fact in advance did not prevent the defect — it only made it one line to describe once a
+  checker pointed at it.
+
+So the honest form of the claim: **six named, four held exactly, one amended by experience, and one
+that the table got right and the code got wrong.** Not six for six.
+
 ---
 
 ## 9. The oracles
@@ -655,3 +683,39 @@ supposed to be evidence **of**.
 The cost of not having it: an A6 sweep would have shipped with a sixteen-entry
 corpus proving nothing, and the first person to check by hand would have been a
 stranger reading the résumé line.
+
+---
+
+## 17. `simctl` could express two of the three outcomes
+
+Amendment A4 made *inconclusive* a first-class result: a checker reports pass, violation, or
+inconclusive, and an inconclusive is never counted as a pass. SOAK.md carries the column, the sweep
+census carries the count, and the public claim quotes the rate.
+
+`simctl run` could not say it. `Meta` had a `violation` field and nothing else, so a run whose entire
+finding was *the checker could not tell* came out of the tool looking like a clean run — and was
+recorded in a bundle as one.
+
+**BUG-001's bundle is exactly that shape.** Its finding is a green linearizability verdict over a
+history of unknowns; the fix made that an inconclusive rather than a pass. Reintroduce M21 today and
+the run produces no violation at all — it produces an inconclusive, which the bundle could not
+record and the tool did not print. Searching for a seed that "reproduces the finding" therefore
+reported the class **unreachable in 80 seeds**, when it was reachable in the first one.
+
+`Meta.Inconclusive` and an `INCONCLUSIVE` line close it. The general form is worth keeping, because it
+is the same shape as the corpus lane one section up:
+
+> **A tool that cannot express one of a checker's outcomes reports two-thirds of the truth, and the
+> third it drops is the one the amendment exists for.**
+
+### 17.1 And the lane that found it was wrong first
+
+`TestEveryBundleStillFindsItsBug` reported **16 of 16 bundles broken** on its first run. Every one was
+a false report: the lane matched the lowercase `violation` a normal replay prints, and the message a
+*reintroduced* defect produces is `THE REPLAY PRODUCED A VIOLATION THE RECORDING DID NOT` — the
+success case, in capitals.
+
+Recorded rather than quietly fixed, because it is BUG-016's rule arriving on the same day the lane
+did: *a checker that reports false violations costs more than no checker.* The lane was believed for
+about ten minutes, and the only reason it was not believed longer is that one of the sixteen had been
+verified by hand an hour earlier and could not be broken.

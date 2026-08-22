@@ -107,6 +107,11 @@ type Meta struct {
 	// corpus entry is one of these with this field set.
 	Violation *ViolationMeta `json:"violation,omitempty"`
 
+	// Inconclusive is a checker that could not reach a verdict, when none
+	// reached a violation. Amendment A4's third outcome, which this tool could
+	// not express until A6.
+	Inconclusive *InconclusiveMeta `json:"inconclusive,omitempty"`
+
 	// Raft is the build the raft workload ran against: what the cluster IS, as
 	// opposed to what happens to it.
 	//
@@ -175,6 +180,18 @@ type RaftMeta struct {
 	// every A6 finding in seeds/ would reproduce as a clean run.
 	Accounts     int `json:"accounts"`
 	Transfers2PC int `json:"transfers_2pc"`
+}
+
+// InconclusiveMeta is a checker that could not reach a verdict.
+//
+// Amendment A4: an inconclusive result is never a pass, and a bundle that
+// recorded only violations would file the whole class of "the checker could not
+// tell" under "nothing happened". BUG-001's bundle is exactly that shape -- its
+// finding is a green verdict over a history of unknowns, which is now reported
+// as inconclusive rather than as a violation.
+type InconclusiveMeta struct {
+	Checker string `json:"checker"`
+	Detail  string `json:"detail"`
 }
 
 // CensusMeta is what the run's elections looked like.
@@ -575,6 +592,24 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 				break
 			}
 		}
+		// # Inconclusive is recorded too, and it was not
+		//
+		// Amendment A4 makes it a first-class outcome: a checker reports pass,
+		// violation, or inconclusive, and an inconclusive is never counted as a
+		// pass. This tool could express two of the three. A run whose whole
+		// finding is "the checker could not tell" -- which is exactly BUG-001's
+		// finding, and what its bundle exists to carry -- came out of `simctl
+		// run` looking like a clean run.
+		if meta.Violation == nil {
+			for _, rep := range res.Reports {
+				if rep.Verdict == sim.VerdictInconclusive {
+					meta.Inconclusive = &InconclusiveMeta{
+						Checker: rep.Checker, Detail: rep.Detail,
+					}
+					break
+				}
+			}
+		}
 		return nil
 
 	case workloadNone:
@@ -674,6 +709,9 @@ func report(m Meta) {
 	}
 	if m.Violation != nil {
 		fmt.Printf("VIOLATION %s\n", describeViolation(m.Violation))
+	}
+	if m.Inconclusive != nil {
+		fmt.Printf("INCONCLUSIVE %s: %s\n", m.Inconclusive.Checker, m.Inconclusive.Detail)
 	}
 }
 

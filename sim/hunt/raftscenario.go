@@ -54,6 +54,12 @@ type RaftOptions struct {
 	// interleaving and the A5 sign-off put on A6's checklist.
 	OverlapDrivers bool
 
+	// EnvelopeExceeded holds a pair at a skew ABOVE maxOffset, deliberately
+	// outside the assumption every A6 bound rests on. Never set in a safety
+	// sweep: CLAUDE.md says skew is bounded by maxOffset in safety runs and
+	// deliberately exceeds it in envelope experiments, and this is the second.
+	EnvelopeExceeded bool
+
 	// GCUnthrottled runs the collector without the mark-movement condition,
 	// which is the shape A5's throttle replaced. A6 owes one reduced-seed sweep
 	// in this shape (Ansh's A5 ruling); it is never on in a full-size run.
@@ -189,7 +195,9 @@ func MaterializeRaft(seed uint64) (*plan.Plan, error) {
 // The transfer entries are derived from the seed's own key stream, so a plan is
 // still a total repro and replay takes no live draw.
 func MaterializeRaftWith(seed uint64, opt RaftOptions) (*plan.Plan, error) {
-	p, err := plan.Materialize(seed, RaftGenConfig())
+	gc := RaftGenConfig()
+	gc.EnvelopeExceeded = opt.EnvelopeExceeded
+	p, err := plan.Materialize(seed, gc)
 	if err != nil {
 		return nil, fmt.Errorf("hunt: materialize: %w", err)
 	}

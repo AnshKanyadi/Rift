@@ -93,11 +93,25 @@ func TestEveryBundleStillFindsItsBug(t *testing.T) {
 			out, _ := run.CombinedOutput()
 			text := string(out)
 			// The trace legitimately MOVES: the mutant changes what the cluster
-			// does. What must come back is the finding.
-			if !strings.Contains(text, "violation") {
-				t.Errorf("%s replayed with %s applied and reported NO violation. The bundle's "+
-					"schedule no longer reaches the defect its patch reintroduces, so the entry "+
-					"proves nothing:\n%s", b.name, b.meta.Mutant, indent(text))
+			// does. What must come back is the finding, in either of the two
+			// shapes a finding takes.
+			//
+			// # Matched case-insensitively, and that is not a detail
+			//
+			// The first version matched the lowercase "violation" that a
+			// reproduced-as-recorded replay prints. The message a reintroduced
+			// defect produces is "THE REPLAY PRODUCED A VIOLATION THE RECORDING
+			// DID NOT" -- the success case for this lane, in capitals -- so the
+			// lane reported 16 of 16 bundles broken on its first run, when what
+			// was broken was the lane. BUG-016's rule, on the day it was
+			// written: a checker that reports false violations costs more than
+			// no checker, so a new one is induced before it is believed.
+			up := strings.ToUpper(text)
+			if !strings.Contains(up, "VIOLATION") && !strings.Contains(up, "INCONCLUSIVE") {
+				t.Errorf("%s replayed with %s applied and reported NEITHER a violation nor an "+
+					"inconclusive. The bundle's schedule no longer reaches the defect its patch "+
+					"reintroduces, so the entry proves nothing:\n%s",
+					b.name, b.meta.Mutant, indent(text))
 			}
 		})
 	}
