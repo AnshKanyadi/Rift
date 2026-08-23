@@ -1664,6 +1664,14 @@ cost 0.36.
 Amendment A2's requirement is that kill-time stays **monitored**, not that it is monitored on every
 push. The tier is the answer and a shorter list of classes is not.
 
+**And a tier still has to finish.** `COVER_JOBS` does for this lane what `POWER_JOBS` does for the
+power lane, on the same argument: **whether a test executes a line is a function of the test and the
+tree**, so a parallel run and a sequential run reach identical verdicts, and the report is printed in
+patch order afterwards so they produce identical *text*. Verified on three mutants and the canary
+before being used on sixty. What parallelism costs is per-mutant wall time, which this lane does not
+claim and does not print — kill-time lives in `make mutants`, at `POWER_JOBS=1`, or it is not
+claimed.
+
 ### 25.3 So it is mechanical now: `make mutant-covered`
 
 Restating the rule a fifth time would not have helped. Coverage answers it
