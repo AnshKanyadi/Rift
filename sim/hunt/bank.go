@@ -290,6 +290,7 @@ type coordinator struct {
 	secondPass         int
 	foreignTagStarts   int
 	staleRestarts      int
+	staleIncarnation   int
 	resolveWaited      int
 	resolvedForward    int
 	resolvedBack       int
@@ -507,6 +508,23 @@ func (c *coordinator) applied(cmd store.TxnCommand, r store.TxnResult, at clock.
 	}
 	switch {
 	case cmd.Op == store.OpTxnGet && t.phase == phaseRead:
+		// # An answer belongs to the incarnation that asked for it
+		//
+		// A transaction that restarts above an uncertain commit takes a NEW
+		// start timestamp and re-reads. The reads it issued before the restart
+		// are still in flight, and their answers arrive afterwards carrying the
+		// OLD snapshot. Nothing here checked, so those values landed in the new
+		// snapshot's read set and the transfer computed its writes from two
+		// different instants — which conserves nothing, in whichever direction
+		// the two snapshots happen to differ.
+		//
+		// That is BUG-024, and it is BUG-020's family: an answer accepted for the
+		// wrong incarnation. The epoch guard in `store` exists for the same shape
+		// one layer down, which is where the phrase comes from.
+		if cmd.ReadTS != t.startTS {
+			c.staleIncarnation++
+			return
+		}
 		if !t.ceiling.IsSet() && r.Ceiling.IsSet() {
 			t.ceiling = r.Ceiling
 		}
@@ -1254,6 +1272,7 @@ func (c *coordinator) AuditsRetried() int      { return c.auditsRetried }
 func (c *coordinator) SecondPass() int         { return c.secondPass }
 func (c *coordinator) ForeignTagStarts() int   { return c.foreignTagStarts }
 func (c *coordinator) StaleRestarts() int      { return c.staleRestarts }
+func (c *coordinator) StaleIncarnation() int   { return c.staleIncarnation }
 func (c *coordinator) IdentityCollisions() int { return c.identityCollisions }
 
 // ForeignLocksKept is BUG-019's evidence, summed over the cluster: how often a

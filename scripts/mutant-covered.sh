@@ -59,10 +59,16 @@ for patch in sim/mutants/*.patch; do
   if [ -z "$test_name" ] || [ -z "$pkg" ] || [ -z "$target" ]; then
     skipped=$((skipped + 1)); continue
   fi
-  # Multi-file patches: this checks the first file it names.
+  # Every file the patch names is copied, not only the first: a multi-file patch
+  # applied against a partial copy fails, and the failure looks like a rotted
+  # patch rather than a lane that did not lay the ground out.
   work="$tmp/$name"
-  mkdir -p "$(dirname "$work/$target")"
-  cp "$ROOT/$target" "$work/$target" 2>/dev/null || { skipped=$((skipped+1)); continue; }
+  ok=1
+  for f in $(sed -n 's|^--- a/||p' "$patch"); do
+    mkdir -p "$(dirname "$work/$f")"
+    cp "$ROOT/$f" "$work/$f" 2>/dev/null || ok=0
+  done
+  [ "$ok" = 1 ] || { skipped=$((skipped+1)); continue; }
   cp "$ROOT/$target" "$work/orig" 2>/dev/null || { skipped=$((skipped+1)); continue; }
   if ! (cd "$work" && patch -p1 --silent --forward -i "$ROOT/$patch") >/dev/null 2>&1; then
     printf '   ERROR    %-44s patch does not apply cleanly\n' "$name"

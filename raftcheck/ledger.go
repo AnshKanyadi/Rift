@@ -133,6 +133,11 @@ type TxnRecord struct {
 	Began    clock.Instant
 	Decided  clock.Instant
 	Reached  bool // the coordinator observed its primary record land
+
+	// Restarts is how many times this transaction took a new start timestamp.
+	// Recorded because a transaction's identity MOVED, and an oracle matching on
+	// the original would be matching a value the system abandoned.
+	Restarts int
 }
 
 // TxnReadRecord is one snapshot read a transaction issued, and the answer the
