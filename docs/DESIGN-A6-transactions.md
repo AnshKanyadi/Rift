@@ -1503,3 +1503,51 @@ The pattern this belongs to is the one §20 is about: **the fix for a process
 error is a mechanism, not a resolution.** A5 recorded "do not `git add -A` while
 a patch is applied" and the recording changed nothing, because it was advice.
 A lane changes it.
+
+---
+
+## 24. The pre-fix measurement, and what it says about §18
+
+The sharded run that was in flight when BUG-021 was found is **not the exit run**
+(§21.1b). It executed code carrying the defect, and its value is as a measurement
+of how often the class occurs.
+
+**It occurs about once in ninety seeds.**
+
+| | |
+|---|---|
+| seeds | 25,000, in ten contiguous shards |
+| violations | **~1.1% of seeds** |
+| wall clock per shard | ~6 hours, ten in parallel |
+
+Ansh's framing when he told me to let it finish: *"If the frequency turns out to
+be one seed in 25,000, that number is worth recording beside M34's 1-in-3000: it
+is another measurement of what a sweep can and cannot reach, and a defect at that
+rate is one a 2,000-seed policy would never have found."*
+
+**The answer inverts the conclusion.** At one in ninety, a 2,000-seed mid-phase
+sweep would have found this defect roughly twenty times over. The seed policy was
+never the constraint. What kept it hidden for an entire phase was `cfg.Holds = 0`
+— the fault mix not reaching the phase's own mechanism (§18).
+
+So the number belongs beside M34's 1-in-3000 for the opposite reason. M34 is the
+case where **widening the mix made a rare defect reachable**. This is the case
+where a mix that did not reach a mechanism hid a **common** one, and no amount of
+seeds would have helped:
+
+> **Seed count buys depth within the schedules a mix can produce. It buys nothing
+> at all outside them.** A defect at one in ninety and a defect at zero in
+> infinity look identical from inside a sweep that cannot reach either.
+
+### 24.1 What the number does not yet establish
+
+The 30 identity collisions the run counted are from the **old, narrow** assertion
+— the `(primary, startTS)` form that §22.7 records as keyed one field too wide,
+and which read zero on the very seed that had the collision. So the counter
+undercounts by construction and the 223-in-20,000 violations are not yet
+*attributed* to BUG-021, only correlated with it.
+
+**The post-fix exit run settles it.** If the violations go to zero, they were this
+class. If they do not, what remains is a second finding and A6 does not close.
+That is the honest form of the claim until the run lands, and it is why the
+attribution is stated as pending rather than asserted.
