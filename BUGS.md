@@ -1295,15 +1295,33 @@ against 0 of 10 clean. §22.6 has the class both survivals belong to.
 | **Invariant that caught it** | bank conservation over client-observed history |
 | **Status** | **OPEN — root cause unknown** |
 
-Fixing BUG-021 removed about 40% of the exit run's violations: **~27 per 2,500 seeds before, 16
-after**. The remainder is not the identity collision — `IdentityCollisions`, `ForeignTagStarts` and
+**BUG-021's fix is credited with exactly what it removed: about 40%.** ~27 violations per 2,500
+seeds before, **16 after**, with identity collisions **38 to 0** across the run and foreign tags and
+stale restarts at zero. Crediting the fix with the whole residue would have been wrong, and crediting
+it with nothing would have been wrong too. The remainder is not the identity collision — `IdentityCollisions`, `ForeignTagStarts` and
 `StaleRestarts` are all **zero** in the post-fix shards.
 
 **Both directions occur.** Seed 2521 loses 19 units; seed 10303 creates 10. A pure lost-write class
 would only ever lose.
 
-**It pre-dates today's work.** Seed 2521 reproduces identically at commit `90382fc`, before the HLC
-was tagged, so it is neither caused by that change nor fixed by it.
+**Independence from BUG-021, established rather than assumed.** Reproducing at a commit where
+BUG-021 was live proves nothing on its own — the pre-fix run carried 38 collisions — so the seeds
+were checked for shared start timestamps directly, using the WIDENED definition, since the pre-fix
+counter used the narrow key that reads zero on collisions:
+
+| seed | shared-start collisions pre-fix | pre-fix verdict |
+|---|---|---|
+| **2521** | **0** | **bank-conservation violation** |
+| 10303 | 0 | **clean** |
+
+So **seed 2521 establishes independence**: it violated before the fix, with no collision anywhere in
+the run, so BUG-021 contributed nothing to it.
+
+**Seed 10303 does not, and is recorded as the weaker evidence it is.** It is clean at `90382fc` and
+fails only after the fix. That is expected without being reassuring: tagging the logical counter
+changes every timestamp, so the schedule a seed produces changes with it, and seeds shuffle in and
+out of failing. The aggregate is what says the fix did not add violations — 16 per 2,500 after
+against ~27 before — and 10303 on its own says nothing either way.
 
 ### BUG-023 — a completed write was invisible to a later read, on a range at log index 1 **[OPEN]**
 
@@ -1341,4 +1359,5 @@ holds) is what surfaced it.
 linearizability history by construction, and the ledger shows this one carrying a node-tagged
 timestamp — a live read, not a snapshot read.
 
-**It pre-dates today's work.** Seed 12504 reproduces identically at `90382fc`.
+**Independence from BUG-021, established.** Seed 12504 has **zero shared start timestamps** pre-fix
+under the widened definition, and fails there anyway. BUG-021 contributed nothing to it.
