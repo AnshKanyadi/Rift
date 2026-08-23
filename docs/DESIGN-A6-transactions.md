@@ -2137,8 +2137,10 @@ the phase's own mechanisms* — was paid for three times over in one phase.
   phase.** `MovesRacingChurn` reads 0 across 200 seeds, the bidirectional assertion in
   `TestRaftExitCriteria` still holds, and the record is therefore still correct — which is the
   property that arrangement exists to guarantee: it can be forgotten loudly and not quietly.
-- **There is still no remote**, and this phase is the third to find a lane that had stopped —
-  `provcheck` (§20), `make test` (§20), and `power-mutants` (§31).
+- **There is still no remote**, and this phase found **three** lanes that had stopped: `provcheck`
+  red across a commit and `make test` unrunnable since A1 (§20), and `power-mutants` red since the day
+  `M67` and `M70` were added (§31). Two more lanes were in `make ci` and in no workflow job. Every
+  phase that ships without a remote should expect to find another one, and this phase found five.
 
 ### 30.4 The sentence this phase is for
 
@@ -2197,8 +2199,7 @@ statistical"* — which is true of the unit test and false of the instrument tha
 when a class stops being detectable. It has been shouting since it was given two classes it cannot
 measure — and the shouting was invisible, because nothing ran it. So the failure mode is not "a lane
 reported green while blind" but "**a lane reported red into a room with nobody in it**", which is what
-having no remote turns every honest failure into. It is §20's finding a second time and it is the
-third lane this phase to be found stopped.
+having no remote turns every honest failure into. It is §20's finding again, on a third lane.
 
 **The resolution is not made here, deliberately.** Two different answers, and each needs the
 measurement that is already owed:
