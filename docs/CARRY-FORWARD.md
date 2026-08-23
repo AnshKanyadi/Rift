@@ -157,6 +157,15 @@ across a commit, `make test` unrunnable since A1, and two lanes in `make ci` abs
 workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
 *run*. Every phase that ships without a remote should expect to find another lane that stopped.
 
+**`read-answers-match-the-history` is designed and not built.** DESIGN-A6 §28.5b. BUG-022 was found
+by a conservation law, which reports one integer and cannot attribute; the oracle that would have
+named it in one sentence is *the value a read was given equals the value the final recovered state
+says was visible at its timestamp*. It needs `RecoveredVersion` to carry its value and three stated
+exclusions. **It was not added in BUG-022's commit because the exit run was in flight at that commit**,
+and an oracle the exit run did not run with makes "25,000 seeds clean" a claim about a different set
+of checkers than the repository has. Building it means re-running the exit run; that is a ruling, not
+a chore.
+
 **The read mark is a function of the log only until A7.** DESIGN-A6 §28.6, DESIGN-A7 D-A7-5.
 BUG-022's guard consults a record staged by the apply path for every `OpTxnGet`, and that is a
 function of the log **because every read is a log entry**. Read index answers reads off the log. A

@@ -394,10 +394,12 @@ Ansh sets these; this is the proposal.
 5. Every count the exit run prints asserted or deleted, and every new oracle induced.
 6. §4's **ten** facts reported before-and-after with exclusions stated, and §4.1's six assumptions
    re-asked against the code that landed.
-6b. **`M71` re-pointed at A7's shape** (D-A7-5): a mutant that serves a mark-leaving read off the log,
-   killed by a conservation failure. BUG-022's guard is the thing A7 is most able to break silently.
-7. A6's three owed measurements taken **before** A7's first commit (§7).
-8. Seed count at exit: Ansh's call. A6 ran 25,000 sharded; the machinery for that is now built and
+7. **`M71` re-pointed at A7's shape** (D-A7-5): a mutant that serves a mark-leaving read off the log,
+   killed by a conservation failure. BUG-022's guard is the thing A7 is most able to break silently,
+   and the boundary between the two read paths should be something the suite kills rather than
+   something the code remembers.
+8. A6's three owed measurements taken **before** A7's first commit (§7).
+9. Seed count at exit: Ansh's call. A6 ran 25,000 sharded; the machinery for that is now built and
    `make exit-run` is one command.
 
 ---

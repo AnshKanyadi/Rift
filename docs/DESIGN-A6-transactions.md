@@ -1641,6 +1641,29 @@ Every one of the six was caught by the mutant surviving — which means the suit
 was the only thing between this repository and dead covering tests, and it only
 notices after somebody runs the whole thing.
 
+### 25.3b And the lane cannot be a per-push lane at A6's cost
+
+Measured while re-running it after BUG-022: **16 of 59 mutants in 105 minutes**, and that is with the
+explicit timeout in place so nothing is being reported as "did not run". It checks each covering test
+by running it *at full seed ranges with coverage instrumentation*, which is the `make covering` tier's
+workload once per mutant.
+
+`make mutants` measured worse in the same sitting: its **baseline alone** — the unpatched tree running
+every covering test in one invocation — did not finish inside `TEST_TIMEOUT=3600s`, with
+`TestLeaderCompletenessOracleReportsNothing` at 34 minutes when the alarm fired. The lane reported
+`INVALID` and refused to attribute anything, which is the lane behaving correctly: *a lane has to be
+able to fail honestly before its green means anything.*
+
+Both numbers were taken with other work on the machine, so they are upper bounds rather than solo
+figures. The conclusion does not depend on the factor: **`mutant-covered` and `mutants` belong in the
+nightly tier beside `covering`, not in the per-push lane.** That is the same conclusion CARRY-FORWARD
+already reached for `power-mutants` — 14,700 seed-runs, ~15 CPU-hours — from the same cause, which is
+that a seed now costs four seconds and every lane that sweeps seeds inherited a budget from when it
+cost 0.36.
+
+Amendment A2's requirement is that kill-time stays **monitored**, not that it is monitored on every
+push. The tier is the answer and a shorter list of classes is not.
+
 ### 25.3 So it is mechanical now: `make mutant-covered`
 
 Restating the rule a fifth time would not have helped. Coverage answers it
@@ -1919,6 +1942,40 @@ Three consequences, none of them in the fix's diff:
   at all. `BUG-019` found a replacement at seed 9. `BUG-009` and `BUG-015` did not, and both are now
   blocked on the same instrument, the mutant power measurement. Recorded as blocked rather than
   retired, because retiring a bug for being rare is the opposite of what a corpus is for.
+
+### 28.5b The oracle that should have caught this, designed and NOT built
+
+BUGS.md rule 4 asks what checker was missing. `bank-conservation` found this, and §29.3 is why that is
+the weakest possible way to find it: its output is one integer, so it says *something is wrong* and
+nothing else. Two unrelated defects sat in one BUGS.md row for a week because of it.
+
+The oracle that would have named it directly is checkable and is worth stating exactly, so that
+whether it gets built is a decision rather than an oversight:
+
+> **`read-answers-match-the-history`** — for every read the ledger recorded an ANSWER for, the value
+> the client was given must equal the value the final recovered state says was visible at that read's
+> timestamp: the version named by the newest non-rollback commit record at or below it.
+
+On seed 2521 it reads: *the read of `a00` at `7750000000.514` was answered `-15@4`, whose version is
+committed at `4798954872.0`; the final state holds a commit for `a00` at `7630000000.3072`, which is
+above that and at or below the read. The read was answered from a version the history says was
+superseded.* That is the defect, in one sentence, with the key and both timestamps.
+
+**What it costs.** `RecoveredVersion` carries `Key` and `At` and not the value, so the comparison
+needs the value added — read by the harness's own replay from a fresh engine, which is the same
+provenance status the rest of the recovered state already has. The read's answer is already a boundary
+observation. Nothing system-asserted enters a verdict that can come out green.
+
+**Three exclusions it must state, or it reports false violations.** Reads at or below the final
+collection mark, whose versions may legitimately be gone; reads that were answered `Locked`,
+`Uncertain` or `Refused`, which are outcomes rather than answers; and rollback tombstones, which are
+commit records that make nothing visible.
+
+**Why it is not in this commit.** The exit run that closes A6 is in flight at the commit this
+paragraph is in. An oracle added afterwards is an oracle the exit run did not run with, and *"25,000
+seeds clean"* would then be a claim about a different set of checkers than the ones the repository
+has. Adding it means re-running the exit run, which is a decision about six hours of machine time and
+about what the phase's green means — so it is Ansh's, and it is recorded rather than slipped in.
 
 ### 28.6 The read mark is a function of the log **only because A7 has not happened yet**
 
