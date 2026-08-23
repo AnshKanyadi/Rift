@@ -2223,3 +2223,47 @@ the seed and the patch alone, because `MaterializeRaftWith(seed, opt)` derives a
 seed — so `POWER_JOBS=N` produces byte-identical output to `POWER_JOBS=1`, verified on two classes
 before being used on sixty. What does *not* survive parallelism is Amendment A2's
 wall-time-to-detection, and that half is either measured at `POWER_JOBS=1` or not claimed.
+
+---
+
+## 32. The exit run, re-run after BUG-022
+
+At `611d0b9`, 10 contiguous non-overlapping shards, aggregated:
+
+```
+aggregate:    10 shards covering [0,25000) at commit 611d0b9
+verdicts:     pass=24903 violation=0 inconclusive=97 errors=0
+contention:   25000 seeds contended, 0 seeds never elected anybody
+```
+
+| | pre-BUG-021 (`90382fc`) | post-BUG-021 (`8e10220`) | post-BUG-022 (`611d0b9`) |
+|---|---|---|---|
+| seeds | 25,000 | 25,000 | 25,000 |
+| **violations** | **271** | **184** | **0** |
+| inconclusive | 105 (4.2‰) | 93 (3.7‰) | **97 (3.9‰)** |
+| transactions committed | 614,337 | 623,913 | 619,176 |
+| commit rate | 0.615 | 0.624 | **0.619** |
+
+**The union is proved rather than asserted.** `TestRaftExitAggregate` requires the shard censuses to
+sort into a contiguous, non-overlapping cover of exactly `[0,25000)`, at one commit, each shard having
+finished the range it claims. A gap, an overlap, a short shard, or two commits each fail by name. The
+boundaries are `[0,2500) [2500,5000) … [22500,25000)`, ten shards of 2,500, and every one reported
+2,500 seeds.
+
+**Cost:** 5h47m–5h53m per shard, 8.33–8.47 s/seed, about **58 CPU-hours** wall-clock across ten
+processes on eleven cores. That is over twice A6's mid-phase 3.75 s/seed figure, and the read mark is
+part of it: every snapshot read now stages a record. **The next phase should measure the per-seed cost
+before planning a sweep, not after** — this run was planned against 3.75 and took six hours.
+
+**The inconclusive rate did not move**, which is the number Amendment A4 requires alongside the
+violation count: 3.9‰ against 4.2‰ and 3.7‰ on the two pre-fix runs. All 97 are the same cause — an
+unknown-dominated history, below the 250-per-mille decided floor — and none is a checker timeout.
+
+**BUG-022's two halves are non-vacuous at scale:** 9,199,798 read marks staged and **226,660**
+prewrites refused because somebody had already been answered above their snapshot. The refusal is not
+a rare corner; it is the third of first-committer-wins that was missing, firing about nine times per
+seed.
+
+**And the identity assertions still read zero:** 0 transactions shared a `(primary, start)` identity,
+0 foreign-tag starts, 0 peer timestamps refused for exceeding maxOffset. BUG-021's fix holds across
+25,000 seeds, which matters here because BUG-022's safety argument rests on it (§28.3).
