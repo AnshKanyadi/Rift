@@ -1,0 +1,16 @@
+# id: M70-ingest-does-not-seed-the-clock
+# covering-test: TestARangeIngestingRecordsRaisesItsClock
+# package: ./store/
+# expect: killed
+# power-seeds: 1
+# power-floor: 1
+# power-ceiling: 1
+# power-measured: killed deterministically by its covering test. Two corrections were needed first, both mine: the test's timestamps were below the simulated clock so the floor never bound, and then five seconds ahead so Update refused them as beyond maxOffset. A hundred milliseconds is the realistic gap and the one that must work
+# mutates: BUG-023's second half. Records arriving by any path -- a split's birth state, an installed snapshot, a restart's recovery -- no longer raise the range's clock to the maximum timestamp among them. A range built from a SNAPSHOT rather than by applying the split entry gets no floor at all, which is the half a fix that only touched the split path would miss
+--- a/store/node.go
++++ b/store/node.go
+@@ -1332,6 +1332,5 @@
+ 	// on every replica that ingests the same payload without anyone maintaining
+ 	// it. `M70` removes exactly this.
+-	n.seedClockAtLeast(maxVersionTimestamp(n.mvcc.Namespace(), rs))
+ }

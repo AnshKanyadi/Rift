@@ -231,6 +231,44 @@ func New(phys clock.Clock, node uint32) (*Clock, error) {
 	return &Clock{phys: phys, id: node}, nil
 }
 
+// NewAt builds an HLC that starts at or above `seed`.
+//
+// # Why a range born from a split needs one
+//
+// BUG-023. There is one HLC per range, and a split created the child through the
+// ordinary constructor — so the child's clock started at ZERO and its first Now()
+// returned the local physical wall. The parent's clock is not at the local
+// physical wall: it is at the maximum of every timestamp it has issued and every
+// peer timestamp it has absorbed, which under skew sits well ahead of local
+// physical time.
+//
+// The child inherited the parent's VERSIONS and none of its CLOCK, so it stamped
+// reads and writes below data it already held. A read at such a timestamp
+// correctly finds nothing, and the linearizability checker correctly calls it a
+// stale read. The store was right; the timestamp was wrong.
+//
+// Nothing closed that gap on its own: a range's clock advances through Update on
+// messages FOR THAT RANGE, and the child's first messages come from its own
+// leader, stamped by the same fresh clock. The window did not close, it expired —
+// once local physical time passed the parent's last stamp.
+//
+// `seed` is required to be set. A child with no inherited value is the defect,
+// and a constructor that accepted one would be the defect with a nicer name.
+func NewAt(phys clock.Clock, node uint32, seed Timestamp) (*Clock, error) {
+	c, err := New(phys, node)
+	if err != nil {
+		return nil, err
+	}
+	if !seed.IsSet() {
+		return nil, errors.New(
+			"hlc: a clock seeded from a parent needs the parent's value; an unset seed is BUG-023")
+	}
+	// Tagged, so the seeded clock's first issue is this node's and above the
+	// parent's. The seed itself carries the PARENT's tag and must not be issued.
+	c.last = nextTagged(seed, c.id)
+	return c, nil
+}
+
 // Now returns the next timestamp from this source.
 //
 // The physical reading is taken ONCE, here, and everything downstream derives

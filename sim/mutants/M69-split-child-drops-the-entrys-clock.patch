@@ -1,0 +1,17 @@
+# id: M69-split-child-drops-the-entrys-clock
+# covering-test: TestASplitChildWithNoRecordsStillInheritsTheClock
+# package: ./store/
+# expect: SURVIVES -- reported, not tuned
+# power-seeds: 1
+# power-floor: 1
+# power-ceiling: 1
+# power-measured: SURVIVES every covering test tried. The half it removes may be redundant: the invariant is *no range's clock below a version it HOLDS*, and a child with no records holds none, so the record-derived floor subsumes the entry's value in every case where the invariant can be violated. Reported for a ruling on whether to justify the second floor or drop it (DESIGN-A6 §25)
+# mutates: BUG-023's first half. A split-born range no longer seeds its clock from the value the split ENTRY carries, so it keeps only the floor derived from the records it ingests. The two floors are separately implementable and this removes one
+--- a/store/machine.go
++++ b/store/machine.go
+@@ -878,7 +878,6 @@
+ 	//
+ 	// Either alone leaves a hole, so `M69` and `M70` remove one each.
+-	r.seedClockAtLeast(spec.ClockAt)
+ 	r.seedClockAtLeast(maxVersionTimestamp(r.mvcc.Namespace(), rightVs))
+ 

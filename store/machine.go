@@ -101,6 +101,52 @@ func containsNode(ns []raft.NodeID, n raft.NodeID) bool {
 	return false
 }
 
+// seedClockAtLeast raises this range's clock to at least ts.
+//
+// # BUG-023, and the invariant this is the enforcement of
+//
+// **No range's clock may sit below a timestamp present in the versions it
+// holds.** A range that stamps a read below data it already has makes a
+// completed write invisible, and MVCC is right to hide it: the store answered
+// the question it was asked, and the question was wrong.
+//
+// A split-born range broke this by construction. It inherited the parent's
+// versions and none of its clock, so its first Now() returned the local physical
+// wall — which under skew sits well below a parent HLC that has absorbed a fast
+// peer. Nothing closed the gap afterwards, because a range's clock only advances
+// on messages FOR THAT RANGE and the child's first messages come from the same
+// fresh clock. The window expired rather than closing.
+//
+// Two callers, deliberately separable, because they fail independently and each
+// has its own mutant: the split path seeds from the value the ENTRY carries, and
+// every path that ingests records seeds from the records themselves.
+func (r *Replica) seedClockAtLeast(ts hlc.Timestamp) {
+	if !ts.IsSet() {
+		return
+	}
+	if err := r.hlc.Update(ts); err != nil {
+		// Beyond the envelope. The refusal is the envelope working and is counted
+		// where every other one is; the clock keeps its own value, which is still
+		// the honest thing for it to report.
+		r.envelopeRefusals++
+	}
+}
+
+// maxVersionTimestamp is the highest timestamp any of these records carries.
+//
+// Derived from the records rather than carried beside them, so it is identical
+// on every replica that ingests the same payload without anything having to keep
+// a second field in step (BUG-023's fix must not be a thing that can drift).
+func maxVersionTimestamp(ns []byte, rs []kv.Record) hlc.Timestamp {
+	var hi hlc.Timestamp
+	for _, rec := range rs {
+		if ts, ok := kv.TimestampOf(ns, rec.Key); ok && hi.Less(ts) {
+			hi = ts
+		}
+	}
+	return hi
+}
+
 func (m *Node) newReplicaFor(d RangeDescriptor) (*Replica, error) {
 	r, err := newReplica(m.cfg)
 	if err != nil {
@@ -653,6 +699,20 @@ func (m *Node) NowAbove(lb hlc.Timestamp) (hlc.Timestamp, bool) {
 	return h.Now(), true
 }
 
+// RangeClocks reports each range this node hosts and the clock it is at.
+//
+// For the invariant that no range's clock sits below a version it holds
+// (BUG-023). A Reported value, and safe as one: it is compared against versions
+// recovered independently from the log, so a wrong value can only make the check
+// FAIL.
+func (m *Node) RangeClocks() map[uint64]hlc.Timestamp {
+	out := make(map[uint64]hlc.Timestamp, len(m.replicas))
+	for _, r := range m.replicas {
+		out[uint64(r.rng)] = r.hlc.Now()
+	}
+	return out
+}
+
 // RequestTransfer hands leadership of a led range to target.
 func (m *Node) RequestTransfer(target raft.NodeID) bool {
 	r := m.leaderReplica()
@@ -807,6 +867,20 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 	m.cfg.Ledger.RecordRangeBase(uint64(spec.Right.ID),
 		provenance.Witness(data), provenance.Witness(raft.EncodeConfiguration(conf)))
 	r.adoptSnapshot(snapMeta, rightVs, mark)
+
+	// # BUG-023: the child inherits the parent's CLOCK, not only its versions
+	//
+	// Both seeds, and they are separable on purpose. `spec.ClockAt` is the
+	// parent's clock when the leader PROPOSED the split, carried in the entry so
+	// every replica seeds identically — a value read from the applying replica's
+	// own parent would differ per replica and the children would diverge. The
+	// record maximum is a second, independent floor derived from the payload,
+	// which is what a range built from a SNAPSHOT gets instead.
+	//
+	// Either alone leaves a hole, so `M69` and `M70` remove one each.
+	r.seedClockAtLeast(spec.ClockAt)
+	r.seedClockAtLeast(maxVersionTimestamp(r.mvcc.Namespace(), rightVs))
+
 	m.addReplica(r)
 	m.splits++
 }

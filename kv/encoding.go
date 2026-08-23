@@ -192,3 +192,34 @@ func takeMetaKey(ns []byte, kind byte, b []byte) (key, rest []byte, ok bool) {
 }
 
 func (s *Store) String() string { return fmt.Sprintf("kv.Store(mark=%s)", s.gcMark) }
+
+// TimestampOf reports the timestamp an engine key carries, whatever kind it is.
+//
+// # Why one function over all four kinds
+//
+// BUG-023's invariant is *no range's clock sits below a timestamp in the
+// versions it holds*, and "versions it holds" means every record — a data
+// version at its start timestamp, a write record at its commit timestamp, a
+// lock at its owner's start. A helper that knew about only one kind would
+// enforce the invariant over a subset and read green over the rest, which is the
+// shape this project has learned to distrust.
+//
+// **Two kinds carry a timestamp in the KEY and two do not.** A data version is
+// addressed by its start timestamp and a write record by its commit timestamp,
+// so both are readable here. A lock and a transaction record carry theirs in
+// their VALUE, so this reports false for them rather than zero — absent and zero
+// are different answers and only one of them is true.
+//
+// That exclusion is safe for the invariant and the reason is worth stating: a
+// lock at start T exists only because a prewrite wrote a data version at the
+// same T, and that version is in the same record set. The bound is therefore
+// unchanged by not reading locks.
+func TimestampOf(ns, key []byte) (hlc.Timestamp, bool) {
+	if _, ts, ok := DecodeKey(ns, key); ok {
+		return ts, true
+	}
+	if _, ts, ok := DecodeWriteKey(ns, key); ok {
+		return ts, true
+	}
+	return hlc.Timestamp{}, false
+}

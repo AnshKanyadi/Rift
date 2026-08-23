@@ -871,7 +871,7 @@ func txnFacts(base []byte, entries []raft.Entry) ([]raftcheck.CommitFact, map[st
 // engine -- and this only decodes the result. The invariants oracle then asserts
 // properties of that result and never of how it was reached, which is the
 // distinction that makes it legitimate where the removed model was not.
-func recoveredStates(l *raftcheck.Ledger) []raftcheck.RecoveredState {
+func recoveredStates(l *raftcheck.Ledger, clocks map[uint64]hlc.Timestamp) []raftcheck.RecoveredState {
 	var out []raftcheck.RecoveredState
 	for _, rl := range l.Ranges() {
 		if rl.Base() == nil {
@@ -883,6 +883,7 @@ func recoveredStates(l *raftcheck.Ledger) []raftcheck.RecoveredState {
 		}
 		st := raftcheck.RecoveredState{
 			Range: rl.ID(), Start: desc.Start, End: desc.End, GCMark: mark,
+			Clock: clocks[rl.ID()],
 		}
 		ns := namespaceOf(desc.ID)
 		for _, r := range recs {
@@ -1432,8 +1433,19 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			ledger, time.Duration(p.Config.MaxOffsetNS)).Check()
 	}
 	if res.Violated == nil {
+		// Every range's clock, from whichever node hosts it. Merged rather than
+		// taken from one node: a range lives on several, and the invariant is
+		// about the clock that will stamp the next read there.
+		clocks := map[uint64]hlc.Timestamp{}
+		for _, d := range drivers {
+			for id, ts := range d.RangeClocks() {
+				if cur, seen := clocks[id]; !seen || ts.Less(cur) {
+					clocks[id] = ts // the LOWEST, which is the one that can go stale
+				}
+			}
+		}
 		inv := raftcheck.NewPercolatorInvariants(ledger, func() []raftcheck.RecoveredState {
-			return recoveredStates(ledger)
+			return recoveredStates(ledger, clocks)
 		})
 		res.Violated = inv.Check()
 	}

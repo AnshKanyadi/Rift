@@ -349,3 +349,29 @@ func TestAbsorbingAPeerKeepsThisNodesTag(t *testing.T) {
 		}
 	}
 }
+
+// TestASeededClockNeverIssuesBelowItsSeed is BUG-023's invariant at the clock.
+func TestASeededClockNeverIssuesBelowItsSeed(t *testing.T) {
+	// A parent that has run far ahead of local physical time, which is what skew
+	// produces and what a fresh child clock does not know about.
+	phys := &fixed{wall: 1000}
+	parent := hlc.Timestamp{Wall: 900000, Logical: 7<<hlc.IDBits | 1}
+
+	c, err := hlc.NewAt(phys, 2, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		ts := c.Now()
+		if !parent.Less(ts) {
+			t.Fatalf("issued %s, at or below the inherited %s. A range that stamps below the "+
+				"versions it holds makes a completed write invisible (BUG-023)", ts, parent)
+		}
+		if got := hlc.NodeOf(ts); got != 2 {
+			t.Fatalf("issued %s tagged %d, want this node's 2", ts, got)
+		}
+	}
+	if _, err := hlc.NewAt(phys, 2, hlc.Timestamp{}); err == nil {
+		t.Error("NewAt accepted an unset seed; a child with no inherited clock IS the defect")
+	}
+}

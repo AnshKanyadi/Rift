@@ -1409,6 +1409,14 @@ type RecoveredState struct {
 	Writes   []CommitFact
 	Decided  []CommitFact
 	Versions []RecoveredVersion
+
+	// Clock is the range's HLC at the end of the run. Reported by the node, and
+	// that is deliberate and safe: the invariant below compares it against the
+	// range's OWN versions, which are recovered independently, so a node lying
+	// about its clock makes the check FAIL rather than pass. A reported value
+	// that can only produce a red verdict is not the provenance rule's concern
+	// (DESIGN-A1 §0).
+	Clock hlc.Timestamp
 }
 
 // RecoveredLock is a lock found in the final state.
@@ -1482,6 +1490,40 @@ func (o *PercolatorInvariants) OnStep(sim.View, sim.Event) *sim.Violation { retu
 // Check evaluates the invariants once, over the final recovered state.
 func (o *PercolatorInvariants) Check() *sim.Violation {
 	states := o.recovered()
+
+	// # Invariant 6: no range's clock sits below a version it holds
+	//
+	// BUG-023's invariant, stated directly. A range that can stamp a read below
+	// data it already holds will hide a completed write, and MVCC will be right
+	// to hide it — the answer is correct for the timestamp it was asked at, and
+	// the timestamp is what is wrong.
+	//
+	// It is here rather than in the linearizability checker because it is a
+	// property of the STATE, checkable by inspection, and it fires whether or not
+	// any client happened to observe the stale read. BUG-023 was found by
+	// porcupine, which needs a client to have watched; this needs nobody to have
+	// been looking.
+	for _, st := range states {
+		if !st.Clock.IsSet() {
+			continue
+		}
+		for _, v := range st.Versions {
+			if st.Clock.Less(v.At) {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d holds a version of %q at %s and its clock is at %s, BELOW it. The "+
+						"next read this range stamps can land under data it already has, and the "+
+						"write will be invisible at a timestamp that is correct for the question "+
+						"asked (BUG-023)", st.Range, v.Key, v.At, st.Clock)}
+			}
+		}
+		for _, w := range st.Writes {
+			if st.Clock.Less(w.CommitTS) {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d holds a commit record for %q at %s and its clock is at %s, BELOW it "+
+						"(BUG-023)", st.Range, w.Key, w.CommitTS, st.Clock)}
+			}
+		}
+	}
 
 	// Decisions are cluster-wide: a lock's primary can be on any range, and
 	// after a split it is on a different one from where it started.

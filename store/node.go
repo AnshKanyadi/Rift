@@ -1247,7 +1247,14 @@ func (n *Replica) maybeSplit(at clock.Instant) {
 	}
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
-	if err := n.raft.Propose(id, encodeSplitCommand(SplitSpec{Key: key, Left: left, Right: right})); err != nil {
+	// The parent's clock at PROPOSE time, carried in the entry so that every
+	// replica seeds the child identically. Reading it at apply time from the
+	// applying replica's own parent would give each child a different clock, and
+	// a range's clock is now part of the state a split has to produce
+	// deterministically (BUG-023). Every entry below this one was proposed
+	// before it, so this is at or above every timestamp the child inherits.
+	spec := SplitSpec{Key: key, Left: left, Right: right, ClockAt: n.hlc.Now()}
+	if err := n.raft.Propose(id, encodeSplitCommand(spec)); err != nil {
 		return
 	}
 	n.splitPending = true
@@ -1313,6 +1320,19 @@ func (n *Replica) ingest(rs []kv.Record, mark hlc.Timestamp) {
 	if _, err := n.db.Apply(b, false); err != nil {
 		panic(fmt.Sprintf("store: node %d cannot ingest range %d's state: %v", n.cfg.ID, n.rng, err))
 	}
+
+	// # BUG-023's invariant, enforced where records ARRIVE
+	//
+	// No range's clock may sit below a timestamp in the versions it holds. Every
+	// way a range acquires records it did not stamp itself passes through here —
+	// a split's birth state, an installed snapshot, a restart's recovery — so
+	// this is the one place that cannot be forgotten by a path added later.
+	//
+	// Derived from the records rather than carried beside them: a second field
+	// to keep in step is a second thing to get wrong, and this one is identical
+	// on every replica that ingests the same payload without anyone maintaining
+	// it. `M70` removes exactly this.
+	n.seedClockAtLeast(maxVersionTimestamp(n.mvcc.Namespace(), rs))
 }
 
 // versions is everything this replica's state machine holds.
