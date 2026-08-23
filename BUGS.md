@@ -1343,7 +1343,55 @@ c0/5  get ""     call=2.765s  return=2.789s  ok     <-- empty, 265ms after the p
 A read that begins after a write completes must observe that write or a later one. This one observed
 nothing.
 
-**The lead.** The ledger records the answering read as:
+### ROOT CAUSE: a split-born range starts with a fresh HLC
+
+**Neither branch of the original hypothesis.** The birth payload is complete and
+the extent check is correct — `k06` genuinely belongs to the child. The third
+cause is the child's **clock**.
+
+The log says it plainly:
+
+```
+range 2  idx 3  put   k06 "v9"  at 1600000002896384689.4096
+range 2  idx 4  SPLIT at "k06" -> left=r2[k03,k06)@2  right=r14[k06,∞)@1
+range 14 idx 1  get   k06       at 1600000002803920401.1280   -> EMPTY
+```
+
+The read is stamped **92 ms of wall clock BELOW the write it should have seen**.
+MVCC then does exactly the right thing: at that timestamp the write does not
+exist, so the answer is empty. The store is correct; the timestamp is wrong.
+
+**Why.** There is one HLC per range — `store/machine.go` says so, and says why:
+*"Two ranges on a node share a clock and not a logical counter, so a busy range
+cannot inflate a quiet one's timestamps."* A split creates the child through
+`newReplicaFor`, which calls `newReplica(m.cfg)`, which builds a **fresh
+`hlc.Clock` whose `last` is zero**. Its first `Now()` therefore returns the local
+*physical* wall.
+
+The parent's HLC is not at the local physical wall. It is at the maximum of every
+timestamp it has issued and every peer timestamp it has absorbed — so under clock
+skew it sits **ahead** of local physical time. The child inherits the parent's
+*versions*, stamped from that advanced clock, and none of its *clock*.
+
+**Why nothing closes the gap.** A range's HLC only advances through `Update` on
+messages **for that range**. The child's first messages come from its own leader,
+stamped by the same fresh clock. **There is no path by which the parent's
+timestamps ever reach the child's HLC.** The gap does not get closed; it expires,
+once local physical time passes the parent's last stamp. Here that took 92 ms,
+and the read arrived inside the window.
+
+**Why A6 surfaced it.** §18 turned clock holds on. A hold puts one node up to 90%
+of `maxOffset` — 450 ms — from another, so a parent HLC that has absorbed a fast
+peer sits far above local physical time and the child's window is correspondingly
+wide. Before the holds, the parent ran within microseconds of local physical time
+and the window was too narrow to hit. **This is the fault-mix rule paying out a
+second time** (DESIGN-A6 §18.3).
+
+**Where the defect lives: A4's split path and A5's per-range clock, not A6.**
+Reachable since A5, invisible until A6's mix. Reported before fixing, per Ansh's
+ruling on defects in signed phases.
+
+**The original lead, for the record.** The ledger records the answering read as:
 
 ```
 READ node=0 index=1 at=1600000002803920401.1280 value="" found=false refused=false
@@ -1354,6 +1402,21 @@ split moments earlier. Either that range's birth state did not carry `k06`'s ver
 outside its extent and the request was answered instead of being refused and rerouted. Both are
 A4-shaped, and both would have been reachable since A4; A6's mix (more splits, more ranges, clock
 holds) is what surfaced it.
+
+**BUG-022 is NOT this defect — they are two findings, not one.** The cross-range
+timestamp inversion this bug leaves behind was counted on all three seeds:
+
+| seed | verdict | inversions | on bank accounts |
+|---|---|---|---|
+| 12504 | linearizability | **2, both on `k06`** | 0 |
+| 2521 | bank-conservation | 12 | **0** |
+| 10303 | bank-conservation | **0** | 0 |
+
+Seed 12504's inversions are on the failing key itself. Seed 2521 has inversions
+but **none on an account**, and seed 10303 has none at all. Bank timestamps come
+from `Node.Now()`, which reads `replicas[0].hlc` — the lowest-numbered range,
+long-lived, never a fresh child — so the bank is structurally not exposed to this
+defect. BUG-022 stays open with its own cause.
 
 **It is not a plain-workload read at a remembered timestamp.** Those are excluded from the
 linearizability history by construction, and the ledger shows this one carrying a node-tagged

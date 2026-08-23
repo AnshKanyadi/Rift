@@ -205,3 +205,4 @@ func hasRange(ds []RangeDescriptor, id RangeID) bool {
 // model: it renders the same records the store writes, and a record's engine key
 // embeds the namespace.
 func RangePrefix(id RangeID) []byte { return rangePrefix(id) }
+
