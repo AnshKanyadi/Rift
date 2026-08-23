@@ -1282,3 +1282,63 @@ covering test was pinned to seed 90004, which found the bug and does not restart
 counter answering it lived inside `nowAbove`, which `M68` deletes the call to — so the mutation
 removed the guard along with the behaviour. It is killed now at 7 foreign tags across 10 restarts,
 against 0 of 10 clean. §22.6 has the class both survivals belong to.
+
+---
+
+### BUG-022 — the bank still loses and creates money after BUG-021 is fixed **[OPEN]**
+
+| field | value |
+|---|---|
+| **Found by** | sim — `bank-conservation`, the post-fix exit run |
+| **Phase** | A6 |
+| **Reproduce (seed)** | seed **2521** (`sum = -19`), seed **10303** (`sum = +10`) |
+| **Invariant that caught it** | bank conservation over client-observed history |
+| **Status** | **OPEN — root cause unknown** |
+
+Fixing BUG-021 removed about 40% of the exit run's violations: **~27 per 2,500 seeds before, 16
+after**. The remainder is not the identity collision — `IdentityCollisions`, `ForeignTagStarts` and
+`StaleRestarts` are all **zero** in the post-fix shards.
+
+**Both directions occur.** Seed 2521 loses 19 units; seed 10303 creates 10. A pure lost-write class
+would only ever lose.
+
+**It pre-dates today's work.** Seed 2521 reproduces identically at commit `90382fc`, before the HLC
+was tagged, so it is neither caused by that change nor fixed by it.
+
+### BUG-023 — a completed write was invisible to a later read, on a range at log index 1 **[OPEN]**
+
+| field | value |
+|---|---|
+| **Found by** | sim — **porcupine**, per-key linearizability, the post-fix exit run |
+| **Phase** | A6 (defect is A4-shaped) |
+| **Reproduce (seed)** | seed **12504**, key `k06` |
+| **Invariant that caught it** | per-key linearizability — the A1 claim |
+| **Status** | **OPEN — root cause unknown, with a specific lead** |
+
+The history is short and unambiguous:
+
+```
+c1/8  put "v9"   call=2.476s  return=2.500s  ok
+c0/5  get ""     call=2.765s  return=2.789s  ok     <-- empty, 265ms after the put COMPLETED
+```
+
+A read that begins after a write completes must observe that write or a later one. This one observed
+nothing.
+
+**The lead.** The ledger records the answering read as:
+
+```
+READ node=0 index=1 at=1600000002803920401.1280 value="" found=false refused=false
+```
+
+**Index 1** — the read was answered as the *first entry of a range's log*, i.e. by a range born from a
+split moments earlier. Either that range's birth state did not carry `k06`'s versions, or `k06` was
+outside its extent and the request was answered instead of being refused and rerouted. Both are
+A4-shaped, and both would have been reachable since A4; A6's mix (more splits, more ranges, clock
+holds) is what surfaced it.
+
+**It is not a plain-workload read at a remembered timestamp.** Those are excluded from the
+linearizability history by construction, and the ledger shows this one carrying a node-tagged
+timestamp — a live read, not a snapshot read.
+
+**It pre-dates today's work.** Seed 12504 reproduces identically at `90382fc`.
