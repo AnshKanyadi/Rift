@@ -55,6 +55,7 @@ for patch in sim/mutants/*.patch; do
   test_name=$(sed -n 's/^# covering-test:[[:space:]]*//p' "$patch" | head -1)
   pkg=$(sed -n 's/^# package:[[:space:]]*//p' "$patch" | head -1)
   target=$(sed -n 's|^--- a/||p' "$patch" | head -1)
+  expect=$(sed -n 's/^# expect:[[:space:]]*//p' "$patch" | head -1)
   if [ -z "$test_name" ] || [ -z "$pkg" ] || [ -z "$target" ]; then
     skipped=$((skipped + 1)); continue
   fi
@@ -101,6 +102,29 @@ for line in open(prof):
     lo=int(span.split(",")[0].split(".")[0]); hi=int(span.split(",")[1].split(".")[0])
     if int(cnt)>0: cov.update(range(lo,hi+1))
 print(",".join(map(str,sorted(want-cov))))' "$prof" "$target" $lines)
+
+  # # The canary is SUPPOSED to be mispointed
+  #
+  # `canary-mispointed` declares `expect: alive`: it names a covering test that
+  # does not cover it, so that the mutant lane can prove it notices a mispointed
+  # mutant. This lane rediscovered it independently on its first full run, which
+  # is the strongest evidence available that the check works — and then it has to
+  # be told, or the canary fails the lane for doing its job.
+  #
+  # So an expect:alive patch is REQUIRED to be uncovered. The exemption is
+  # bidirectional: if the canary ever becomes covered, this fails and says the
+  # canary has stopped being one.
+  if [ "$expect" = "alive" ]; then
+    if [ -z "$miss" ]; then
+      printf '   BROKEN   %-44s the canary is COVERED by %s, so it no longer stands for a\n' \
+        "$name" "$test_name"
+      printf '              mispointed mutant and the lane it guards proves less than it claims\n'
+      fail=$((fail + 1))
+    else
+      printf '   canary   %-44s correctly uncovered by %s\n' "$name" "$test_name"
+    fi
+    continue
+  fi
 
   if [ -z "$miss" ]; then
     printf '   ok       %-44s %s runs it\n' "$name" "$test_name"
