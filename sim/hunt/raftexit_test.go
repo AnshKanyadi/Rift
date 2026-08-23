@@ -92,9 +92,12 @@ func reportExitCensus(t *testing.T, c hunt.RaftCensus) {
 		"%d rolled forward and %d rolled back at the key, %d found the lock already gone",
 		c.ResolvedForward+c.ResolvedBack, c.ResolvedForward, c.ResolvedBack,
 		c.RollForwards, c.RollBacks, c.ResolveNoLock)
-	t.Logf("a6 conflicts: %d prewrites refused for a newer commit, %d for a live lock, %d "+
-		"transaction records lost to somebody who decided first",
+	t.Logf("a6 conflicts: %d prewrites refused for a newer commit or an newer read, %d for a "+
+		"live lock, %d transaction records lost to somebody who decided first",
 		c.WriteConflicts, c.PrewriteBlocked, c.TxnRaceLost)
+	t.Logf("a6 bug-022:   %d read marks staged, %d prewrites refused because somebody had "+
+		"already been answered above their snapshot (the two halves are counted apart because "+
+		"they fail apart)", c.ReadMarks, c.ReadConflicts)
 	t.Logf("a6 audits:    %d started, %d read every account at one timestamp, %d hit a lock, "+
 		"%d restarted on an uncertain commit, %d reads re-asked after no answer",
 		c.AuditsStarted, c.AuditsComplete, c.AuditsLocked, c.AuditsUncertain, c.AuditsRetried)
@@ -314,6 +317,21 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 		t.Error("no prewrite ever met a live lock, so two transactions never contended for one " +
 			"key -- which is the only condition under which any of this machinery matters")
 	}
+	// # BUG-022's evidence, both halves, because they fail independently
+	//
+	// The mark is staged by the apply path and consulted by the prewrite. A tree
+	// with only the first stages marks nobody reads; a tree with only the second
+	// reads marks nobody stages. Neither shows up in a violation count, and one
+	// number cannot tell them apart -- so there are two.
+	if c.ReadMarks == 0 {
+		t.Error("no read mark was staged across the whole sweep, so BUG-022's guard had nothing " +
+			"to consult and every prewrite in this run passed a check that was never true")
+	}
+	if c.ReadConflicts == 0 {
+		t.Error("no prewrite was ever refused because somebody had already been answered a read " +
+			"of the key above its snapshot. That is the interleaving BUG-022 lives in, and a " +
+			"sweep that never reaches it says nothing about the fix")
+	}
 	if c.TxnAborted == 0 {
 		t.Error("no transaction ever aborted after losing a race; the explicit-abort path is " +
 			"unexercised and every rollback in this sweep came from a dead coordinator")
@@ -333,6 +351,20 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	//
 	// Unit-green and sweep-exercised are different claims, and the second is the
 	// one a phase can rest on.
+	// # The ledger's account of restarts must match the coordinator's
+	//
+	// Not a redundancy. `TxnRecord.StartTS` is what an investigation places a
+	// transaction in time by, and a restart MOVES it. When nothing recorded the
+	// move, the ledger held an abandoned timestamp and `Restarts` read zero
+	// however many restarts there had been -- which is how a confidently wrong
+	// lost-update finding got written down. The two counts are kept apart so the
+	// day the recording path stops being called, this says so.
+	if c.LedgerRestarts != c.UncertaintyRestarts {
+		t.Errorf("the coordinator restarted %d transactions and the ledger was told about %d. "+
+			"Every transaction the ledger did not hear about is one whose recorded start "+
+			"timestamp is a value the system abandoned, and reasoning from it places the "+
+			"transaction somewhere it never was", c.UncertaintyRestarts, c.LedgerRestarts)
+	}
 	if c.UncertaintyRestarts == 0 {
 		t.Error("no read ever restarted above an uncertain commit across the whole sweep. The " +
 			"uncertainty interval is A6's answer to bounded clock skew and this sweep never " +

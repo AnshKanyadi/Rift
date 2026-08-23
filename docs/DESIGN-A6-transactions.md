@@ -251,6 +251,39 @@ What the count does **not** cover, stated because a count is only worth what its
 So the honest form of the claim: **six named, four held exactly, one amended by experience, and one
 that the table got right and the code got wrong.** Not six for six.
 
+**And then a seventh fact of exactly this class was never named at all, and it became BUG-022.**
+
+| the derived fact | the wrong place to take it | the right place |
+|---|---|---|
+| whether somebody has already been answered about this key | *nowhere — the store did not keep it* | the key's **read mark**, the highest timestamp this range has answered a read of it at |
+
+The table asks *where is this fact taken from*. It cannot ask about a fact nothing takes, and the
+discipline as practised walks the code looking for derivations. A fact that is **absent** leaves no
+line to walk to. BUG-022 is a commit landing below a read already answered, and the reason no row
+covers it is that the read mark did not exist to be spelled wrongly.
+
+> **Naming every fact you take is not the same as naming every fact you need. The first is an audit of
+> the code; the second is an audit of the argument.**
+
+The corresponding question, which A7's §7 asks in that form: *what does the protocol's correctness
+argument assume about the timestamp source, and does this system's source provide it?* Percolator's
+does — a single TSO makes a commit timestamp later than every start timestamp issued before it — and
+per-node HLCs do not. That assumption is nowhere in Percolator's own statement of the protocol, which
+is why reading it carefully three times did not surface it.
+
+**The final count for A6, with the exclusions stated:**
+
+| | count | |
+|---|---|---|
+| facts **named** before the code | 6 | four held exactly, one amended by experience (§15.1), one the table got right and the code got wrong (§15.2) |
+| facts of this class that became defects **after being named** | 0 | the practice's whole claim, and it held |
+| facts of this class that became defects **without being named** | **1** | BUG-022 — a fact nothing derived, so nothing walked to it |
+| defects excluded as **not** this class | 4 | BUG-018 (batch visibility), BUG-019 (addressing), BUG-020 (harness), BUG-024 (incarnation) |
+| defects excluded as **this class in a different dimension** | 1 | BUG-023 — a clock below the records it holds. A timestamp taken from the wrong *source* rather than the wrong *position*, and DESIGN-A5's table has no column for a source |
+
+So: **six named and zero of them became defects; one of this class was missed entirely; and the miss
+is the one that cost the phase.** The practice is worth keeping and it is not a proof.
+
 ---
 
 ## 9. The oracles
@@ -1715,3 +1748,332 @@ Rows **6**, **7** and **11**, and each gets a lane rather than an argument:
 **None of these is a claim that a defect exists.** Each is a claim that the
 absence of one has not been demonstrated, which after BUG-023 is a distinction
 worth keeping.
+
+---
+
+## 28. BUG-022: the guard nobody wrote, because Percolator did not need it
+
+The phase's last finding, and the one worth the most.
+
+### 28.1 The finding, in five log entries
+
+`bank-conservation` on seed 2521: the audit at `1600000008790243029.0` reads eight accounts and they
+sum to **-19**. The whole cause is five entries of range 1's committed log, and the key is `a00`:
+
+```
+r1 idx=106  txn-get   a00  at 1600000007480000000.1792  -> "-15@4"    (txn 16)
+r1 idx=107  txn-get   a00  at 1600000007750000000.514   -> "-15@4"    (txn 26)
+r1 idx=109  prewrite  a00  start 1600000007480000000.1792  "4@16"
+r1 idx=111  commit    a00  start ...1792 -> commit 1600000007630000000.3072
+r1 idx=112  prewrite  a00  start 1600000007750000000.514   "-20@26"
+```
+
+Txn 26 was told `a00 = -15` **at 7.75**. Txn 16 then committed `a00 = 4` **at 7.63** — *below* the
+timestamp txn 26 had already been answered at. Txn 26's snapshot therefore acquired a commit after the
+fact. It wrote `-20`, computed from `-15`, and txn 16's transfer of 19 units stopped existing.
+
+**No fault of any kind is involved.** Two transactions, one key, two clocks.
+
+### 28.2 Two guards that are each correct and do not compose
+
+`PrewriteInto` had two checks:
+
+- **`ErrKeyIsLocked` covers LOG order.** It refuses a prewrite arriving while somebody else's lock
+  stands — here the window `[109, 111)`. Txn 26's prewrite arrived at **112**, one entry late.
+- **`ErrWriteConflict` covers TIMESTAMP order.** It refuses a prewrite whose start sits below a commit
+  already recorded. Txn 16's commit timestamp is *below* txn 26's start, so there was nothing to
+  refuse.
+
+> **The two are total only where log order and timestamp order agree, and nothing in this system makes
+> them agree.**
+
+Percolator gets the agreement from its **single TSO**: a commit timestamp is drawn *after* the
+prewrite completes, so it is above every start timestamp issued before it, and any read answered
+before the prewrite is therefore below the commit. That is a property of the timestamp source. It is
+**not stated anywhere in the protocol**, which is exactly why three careful readings of the protocol
+did not surface it.
+
+Per-node HLCs do not provide it, and the reason is sharper than "clocks differ". A transaction's
+timestamps come from `Node.Now()`, which reads `m.replicas[0].hlc` — **the lowest-numbered range on
+that node**. Two nodes holding different range sets therefore mint transaction timestamps from two
+clocks that **exchange no messages at all**, because a range's HLC advances only on messages for that
+range. They are coupled by physical time alone, and A6's holds put them up to 450 ms apart. Here the
+gap was 120 ms and the read landed inside it.
+
+This is §15.6's **transaction identity gap** arriving from the other side. That entry predicted two
+nodes minting the *same* timestamp; this is two nodes minting timestamps in the *wrong order*, from
+one cause. The counter §15.6 installed, `IdentityCollisions`, reads **zero** on seed 2521 and is right
+to: nothing collided.
+
+### 28.3 The fix: a reader is a first committer
+
+First-committer-wins was checked against **writers only**. The correction is one sentence:
+
+> **A reader that has already been answered from above my snapshot is as much a first committer as a
+> writer is, because my commit lands above my start and can still land below their read.**
+
+Two halves, independently implementable, and therefore two mutants:
+
+1. **The mark is recorded** (`M71`). A fifth record kind — `r <key> <^read_ts>` — holding the highest
+   timestamp this range has been asked for this key at. Staged by `applyTxnTo`'s `OpTxnGet` case,
+   which is the apply path the driver and the replay **share**, so the mark is a function of the log
+   on both sides rather than a fact one of them remembers.
+2. **The mark is enforced** (`M72`). `PrewriteInto` refuses when the mark is **strictly** above the
+   prewriter's start. Strictly, because a transaction reads its own keys at its own start timestamp:
+   `LessEq` would refuse every prewrite in the system. That is not a detail — it is the difference
+   between a guard and a deadlock, and it has its own case in the covering test.
+
+**Why the three now compose, as an argument rather than a hope.** After the guard,
+`readMark(key) <= startTS < commitTS`. So no read *before* the prewrite was answered at or above the
+commit timestamp; and a read *after* the prewrite either sits at or above `startTS` and blocks on the
+lock, or sits below `startTS` and so below `commitTS`. It rests on `startTS != commitTS`, which holds
+because both are minted and two mints never collide — the node tag separates nodes, the logical
+counter separates mints on one node, and `IdentityCollisions` asserts the cross-node half at zero on
+every exit run. **BUG-021's fix is load-bearing for BUG-022's argument**, which is not a coincidence:
+both are consequences of replacing a TSO with per-node clocks.
+
+### 28.4 What it cost, measured rather than asserted
+
+The obvious worry is that a guard which refuses prewrites refuses too many. Measured over 200 seeds
+against the two pre-fix 25,000-seed runs:
+
+| | pre-fix (`90382fc`) | pre-fix (`8e10220`) | post-fix (200 seeds) |
+|---|---|---|---|
+| commit rate | 0.615 | 0.624 | **0.611** |
+| `WriteConflicts` per 200 seeds | 364 | 356 | 2,120 |
+| `PrewriteBlocked` per 200 seeds | 1,784 | 1,791 | **392** |
+| audits completing | 0.766 | 0.783 | 0.786 |
+| violations per 200 seeds | 2.17 | 1.47 | **0** |
+
+The refusals are almost entirely transactions that were losing anyway by a slower route: the refusal
+moved **earlier**, from "met a live lock" to "lost to a reader", and the commit rate did not move.
+That is the shape a correct first-committer-wins rule should have, and the reason to measure rather
+than reason about it is that the opposite shape — a guard that halves throughput — would have been an
+argument for the other design.
+
+**The starvation shape, named because the measurement does not rule it out.** A key that is read
+continuously at rising timestamps refuses every prewrite whose snapshot is older than the newest read.
+In a workload where one key is read far more often than it is written, a writer can lose the race
+repeatedly and make no progress — first-committer-wins becoming first-*reader*-wins, indefinitely. The
+bank does not produce it: 200 seeds hold the commit rate at 0.611 against a pre-fix 0.615, so nothing
+starved here. But *"this workload does not produce it"* is a much weaker statement than *"it cannot
+happen"*, and it is the design that removes the shape rather than a bigger sweep: alternative B below
+never refuses at all, so it has no starvation shape to have. **If A7's read-volume measurement makes B
+the answer, this is a second reason for it.**
+
+**The design that was not taken, and why.** The precise alternative is TiKV's `min_commit_ts`: the
+prewrite *reports* the mark, and the coordinator mints the commit timestamp above the maximum reported,
+so nothing is ever refused. It is strictly more permissive and it is what a latency-sensitive system
+should do. It was rejected for A6 because it moves a safety-critical decision into the client protocol
+and adds a field to the wire, where the refusal keeps the whole fix inside the state machine, in the
+same function as the two guards it joins, with no protocol change at all. The measurement above is
+what makes that a choice rather than a compromise. **If the commit rate had moved, the answer would
+have been the other one.**
+
+### 28.4b The audit now participates in first-committer-wins, and that has to be said out loud
+
+The bank's audit is a client: it reads all eight accounts at one instant, and under the fix each of
+those reads leaves a mark. So **the checker's own reads can now refuse a transaction's prewrite** —
+any transaction whose snapshot predates an audit that touched one of its keys loses the race.
+
+That is uncomfortable enough to state precisely, because it is adjacent to oracle independence.
+
+**What it is not.** It is not the oracle judging with system-asserted facts, and it is not a path by
+which a violation escapes detection. `bank-conservation` reads recorded audit results and judges them,
+exactly as before. And the damage it detects is a **state** — a sum that has moved — which persists
+after the transactions that caused it are long finished; a lost update is produced by two transactions
+contending with *each other*, not with an audit, so suppressing contention *at audit time* does not
+hide earlier damage.
+
+**What it is.** A power question. Audits are frequent, so a mechanism that refuses transactions
+concurrent with an audit reduces transaction-on-transaction contention across the whole run — which
+is the condition every A6 defect needed. The honest bound on the effect is the measurement: **the
+commit rate did not move** (0.611 against 0.615 and 0.624), and `ReadsBlocked`, `ForeignLocksKept`,
+`RollForwards` and `RollBacks` are all in the same range as before. Contention is still there.
+
+**And the alternative is worse, which is what settles it.** Exempting the audit's reads from the mark
+would make an audit's own snapshot breakable: a commit could land below the timestamp the audit read
+at, so the audit would observe half a transaction and report a conservation failure that never
+happened. **An oracle whose reads are not protected by the rule it is checking reports false
+violations**, and BUG-016 is this project's record of what that costs. The audit is a client and it is
+treated as one.
+
+### 28.5 The fifth record kind cost more than the fix
+
+Three consequences, none of them in the fix's diff:
+
+- **`Records()` promised this.** Its comment says the state machine is *everything under the
+  namespace*, enumerated rather than listed, so *"a fifth record kind added later is carried
+  automatically"*. It was: `owns()`, `IngestRecordsInto` and `UserKeyOf` are the whole integration,
+  and splits, snapshots and restarts moved the mark without further code. **A promise made in a
+  comment two phases ago paid out exactly as written**, which is the rarest event in this file.
+- **The timestamp is in the KEY, and that is BUG-023's invariant.** `kv.TimestampOf` reads it, so a
+  range ingesting a mark raises its clock past it. This is not symmetry for its own sake: a read mark
+  is the **one record kind with no companion data version at its timestamp** — a read above every
+  write leaves a mark and nothing else — so the argument that excuses locks from that invariant does
+  not reach it. `store.TestARangeIngestingAReadMarkRaisesItsClock` covers it separately from the
+  version case for that reason.
+- **Every raft bundle in the corpus stopped replaying.** A read now stages a write, so every trace
+  moved — seventeen bundles at once. §16.3's rule then did what it exists for: regeneration is a
+  **search**, not a re-record, and after regenerating, three bundles no longer reached their defects
+  at all. `BUG-019` found a replacement at seed 9. `BUG-009` and `BUG-015` did not, and both are now
+  blocked on the same instrument, the mutant power measurement. Recorded as blocked rather than
+  retired, because retiring a bug for being rare is the opposite of what a corpus is for.
+
+### 28.6 The read mark is a function of the log **only because A7 has not happened yet**
+
+The whole mechanism rests on one property: **in A6 every read is a log entry**, so every replica
+applies it and stages the identical mark, and the mark is derived from the log exactly as the versions
+are.
+
+A7 serves reads via **read index**, off the log. A read answered that way stages nothing and no
+replica sees it, so the mark stops being maintainable this way the moment the first such read is
+answered. This is not a detail to discover at A7's exit: it is a correctness dependency of A6's fix on
+A7's design, and DESIGN-A7 carries it as an open question with a recommendation rather than as a note.
+
+The general form is worth keeping, because it will recur at every optimisation that takes work off the
+log:
+
+> **A fact maintained by the apply path is a function of the log. The moment an operation is answered
+> off the log, every fact that operation used to maintain becomes a fact somebody has to maintain
+> somewhere else — and the place it used to live will still compile.**
+
+---
+
+## 29. BUG-024, and the ledger that recorded a timestamp the system had abandoned
+
+### 29.1 The defect
+
+A transaction that finds a commit inside its uncertainty interval restarts: new start timestamp,
+re-read everything. The reads it issued *before* the restart are still in flight. Their answers arrive
+afterwards carrying the **old** snapshot, and nothing checked which incarnation an answer belonged to,
+so they landed in the new snapshot's read set. The transfer then computed its writes from two
+different instants, which conserves nothing — in whichever direction the two snapshots happened to
+differ. Seed 10303 gained ten units.
+
+It is **BUG-020's family: an answer accepted for the wrong incarnation**, and the phrase is borrowed
+from `store`'s epoch guard deliberately, because that guard exists for the identical shape one layer
+down — a durability completion from a dead incarnation arriving after a restart. The fix is the same
+one: stamp the request with the incarnation, check the stamp on the way back.
+
+### 29.2 The harness defect it was hiding, which is the more useful half
+
+The same investigation had already produced a **confidently wrong finding** from seed 10303: a lost
+update between txn 0 and txn 31, established from the ledger's recorded start timestamps. It was
+wrong, and the reason is a defect in the ledger:
+
+`RecordTxnBegin` recorded the timestamp a transaction was **first** minted at, and nothing updated it
+when the transaction restarted. So the ledger placed txn 0 before a commit it actually followed, and
+every inference drawn from that placement was about a transaction that never existed.
+
+The correction written at the time said: *check `Restarts` before reasoning about any two
+transactions' relative start times.*
+
+**`TxnRecord.Restarts` was a field nothing ever wrote.** It read zero however many restarts occurred.
+The correction pointed the next reader at a number that could only ever confirm the mistake it was
+warning about.
+
+> **A field that looks like evidence and is never written is worse than no field: it converts "I do
+> not know" into "no".**
+
+That is the **twentieth entry in the vacuous-green register**, and it is a new shape again. Nineteen
+was a guard watching a key one field too wide — it ran, and measured the wrong thing. Twenty is a
+*correction* that was itself vacuous: the process by which this project protects itself from a repeat
+mistake, failing in the same way as the mechanisms it protects.
+
+**The fix is the record, not a stronger warning.** `Ledger.RecordTxnRestart` moves the recorded start
+timestamp and counts the restart, and the exit run asserts `LedgerRestarts == UncertaintyRestarts` —
+two counts of one fact, kept apart, so the day the recording path stops being called the run says so
+instead of quietly describing transactions that never happened. Per DR-29 the harness defect lives in
+its fix commit and here; it is named in BUG-024's entry as well because it is why that entry's own
+investigation went wrong first.
+
+### 29.3 Two seeds, two causes, one number
+
+Seeds 2521 and 10303 sat in one BUGS.md row for a week as *"the bank still loses and creates money"*,
+because `bank-conservation` reports a **number** and a number cannot distinguish mechanisms. They are
+two unrelated defects: 2521 is a commit landing below an answered read, 10303 is a transaction mixing
+two snapshots. Both directions of the symptom — losing 19, creating 10 — were used as evidence for a
+single cause, and both readings were wrong.
+
+> **A conservation law is the strongest thing that can notice, and the weakest thing that can
+> attribute. Its output is one integer, and one integer is one bit of attribution: something is
+> wrong.**
+
+That is not an argument against the bank — §19 is why the bank is the only instrument that could see
+BUG-019 at all. It is an argument for what has to happen next: the committed log for the failing key,
+decoded per entry, which is the technique that cracked BUG-018, BUG-019, BUG-023 and now both of
+these. §14.4's batch-boundary bisection and this are the same instrument at two resolutions, and both
+belong in A7's toolkit before A7 needs them.
+
+---
+
+## 30. The phase, summarised
+
+### 30.1 Seven defects, and what each needed to be reachable
+
+| bug | what it was | fault required | found by |
+|---|---|---|---|
+| **BUG-018** | a whole `Ready` staged into one batch, so a step could not see the steps above it | **none** | snapshot equivalence, first sweep after the ReplayMachine swap |
+| **BUG-019** | commit and rollback deleted *the* lock rather than *their* lock | **none** | `bank-conservation` — nine units missing |
+| **BUG-020** | (harness) a transfer prewrote a balance it never read | **none** | `bank-conservation` — the workload inventing money |
+| **BUG-021** | two transactions minted at one start timestamp shared a key's lock and version | clock holds | `transaction-atomicity` |
+| **BUG-022** | a commit landed below a read that had already been answered | **none** (clock skew widens the window) | `bank-conservation` — 19 units missing |
+| **BUG-023** | a split-born range started with a fresh HLC and stamped below the versions it inherited | clock holds | porcupine, per-key linearizability |
+| **BUG-024** | a read answer from a pre-restart incarnation landed in the post-restart snapshot | clock holds (to cause the restart) | `bank-conservation` — ten units created |
+
+**Four of seven needed no injected fault at all.** Every entry in BUGS.md before this phase required
+an engineered schedule. That is a different risk profile, and the reason is structural: A6 is the
+first phase where two *clients* contend, and contention needs no help from the injectors.
+
+**Three of seven needed clock skew, which the phase's own plan did not generate until §18.** A
+clock-sensitive phase ran with `cfg.Holds = 0` for its first half. Turning holds on produced BUG-021,
+BUG-023 and BUG-024 within days. §18.3's rule — *ask at every phase gate whether the fault mix covers
+the phase's own mechanisms* — was paid for three times over in one phase.
+
+### 30.2 What changed about how this phase is verified
+
+- **Snapshot equivalence judges an independent EXECUTION, not an independent model** (§13). The model
+  produced five divergences in one sitting and all five were the model's own defects; the replacement
+  found BUG-018 on its first sweep, and the retired model was structurally incapable of finding it.
+  The surrendered property — an apply path wrong identically on every replica — is covered by a
+  **list** of mutant classes, which is a claim rather than a proof, and it is a claim under active
+  test: `M61` survived its first run and was answered with a new invariant rather than a tuned test.
+- **`percolator-invariants`** — five assertions about what no correct final state can look like,
+  whatever produced it. The fifth exists because a mutant survived.
+- **`make mutant-covered`** (§25.3) — a covering test must *execute* the line its mutant changes.
+  Built because four covering tests in one day called the guarded function inline rather than through
+  the path their mutant patches, so the mutation could not affect them and they passed proving
+  nothing. It cannot be satisfied by claiming an entry point, because coverage is produced by
+  execution.
+- **The vacuous-green register reached twenty**, four of them in this phase: a clock-sensitive phase
+  with no clock skew (16), `provcheck` red across a commit (17), `make test` unrunnable since A1 (18),
+  a guard keyed one field too wide (19), and a correction whose own evidence field was never written
+  (20).
+
+### 30.3 What A6 leaves open, stated as debts rather than as done
+
+- **`BUG-009` and `BUG-015` bundles are red and blocked** on the mutant power measurement under A6's
+  shape. Both are 1-to-2-in-3,000 classes; a short search proves nothing against them.
+- **The symmetric-apply gap** (§13.4) is covered by a list.
+- **Three clock-dependent mechanisms are not established as exercised** (§27.1).
+- **Three A6 decisions still have one mutant where they need two** (§22.6b).
+- **`modelRecords` in `sim/hunt` is unreferenced.** Found while adding the fifth record kind to the
+  model: the function that renders the model's logical state into engine records has no caller, so
+  the model's records are never digested against the store's. By §25.1's third meaning it is code that
+  cannot be reached, and the response to that is deletion — but deleting it is a change to what the
+  harness *could* check, so it is reported rather than done.
+- **There is still no remote**, and this phase is the second to find a lane that had stopped.
+
+### 30.4 The sentence this phase is for
+
+> **A signed phase is signed against a fault mix and against a set of oracles, not against the world.**
+
+A6 says it twice, from two directions. §26 says it about BUG-023: A4 and A5 were signed on 10,000
+seeds each, and BUG-023 was **unreachable** in both because no clock skew was injected — a defect
+occurring in roughly one seed in ninety, invisible for four phases, because the mix could not produce
+the condition. §28 says it about BUG-022 from the other side: the *oracle* set was complete and the
+*protocol* carried an assumption nobody had written down, so no mix could have helped. Widening the
+mix finds what the old mix could not reach. Nothing widens a mix into finding an assumption you did
+not know you were making; only reading the argument for what it needs, rather than for what it says,
+does that.

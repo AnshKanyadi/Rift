@@ -147,4 +147,10 @@ func (n *Replica) ResolveNoLock() int         { return n.resolveNoLock }
 func (n *Replica) RollForwards() int          { return n.mvcc.RollForwards() }
 func (n *Replica) RollBacks() int             { return n.mvcc.RollBacks() }
 
+// ReadMarks and ReadConflicts are BUG-022's two halves. Reported separately
+// because a fix with two independently implementable halves has two ways of
+// being half-present, and one number cannot tell them apart.
+func (n *Replica) ReadMarks() int     { return n.mvcc.ReadMarks() }
+func (n *Replica) ReadConflicts() int { return n.mvcc.ReadConflicts() }
+
 var _ = fmt.Sprintf

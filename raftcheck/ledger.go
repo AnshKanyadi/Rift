@@ -61,6 +61,10 @@ type Ledger struct {
 	// txns is every transaction the harness's coordinator issued.
 	txns []TxnRecord
 
+	// txnRestarts is the ledger's own count, kept beside the per-transaction
+	// one so a sweep can compare it against the coordinator's.
+	txnRestarts int
+
 	// moves is every replica movement the HARNESS commanded, in the order it
 	// commanded them.
 	//
@@ -408,6 +412,50 @@ func (l *Ledger) RecordTxnCommit(r provenance.Observed[TxnCommitRecord]) {
 		}
 	}
 }
+
+// TxnRestartRecord is a transaction taking a NEW start timestamp.
+//
+// # Why the field alone was worse than nothing
+//
+// `TxnRecord.Restarts` existed and nothing ever wrote it, and `StartTS` kept the
+// timestamp the transaction was FIRST minted at -- the one the system had
+// abandoned. An investigation that placed two transactions by their recorded
+// starts therefore placed one of them where it never was, and concluded a lost
+// update that had not happened. That cost a full investigation once already, and
+// the note warning the next reader to "check Restarts" pointed at a number that
+// is zero however many restarts occurred.
+//
+// So the restart is RECORDED, and recording it moves the start timestamp. A
+// ledger whose StartTS is the live one is the only version of this field that
+// can be reasoned from.
+type TxnRestartRecord struct {
+	ID      int
+	StartTS hlc.Timestamp
+	At      clock.Instant
+}
+
+// RecordTxnRestart moves a transaction's start timestamp and counts the restart.
+//
+// Observed: the coordinator minted the new timestamp and re-issued its reads.
+func (l *Ledger) RecordTxnRestart(r provenance.Observed[TxnRestartRecord]) {
+	c := r.Fact()
+	l.rev++
+	l.txnRestarts++
+	for i := range l.txns {
+		if l.txns[i].ID == c.ID {
+			l.txns[i].StartTS = c.StartTS
+			l.txns[i].Restarts++
+			return
+		}
+	}
+}
+
+// TxnRestarts is how many restarts the ledger was told about.
+//
+// It exists to be compared against the coordinator's own count. Two numbers for
+// one fact is the only way to notice that the recording path stopped being
+// called, which is what happened to the field this replaces.
+func (l *Ledger) TxnRestarts() int { return l.txnRestarts }
 
 // Txns is every transaction the harness issued.
 func (l *Ledger) Txns() []TxnRecord { return l.txns }

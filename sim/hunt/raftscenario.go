@@ -344,6 +344,10 @@ func replayFull(base []byte, entries []raft.Entry,
 		decided = map[string]raftcheck.CommitFact{}
 	}
 	locks := map[string]*modelLock{}
+	// The model's own read marks. BUG-022's third prewrite guard is restated
+	// here rather than imported, for the reason every other step is: a defect in
+	// the store's guard must not cancel out on both sides of the comparison.
+	readMarks := map[string]hlc.Timestamp{}
 	desc, mark, recs, ok := store.DecodeMachine(base)
 	if !ok {
 		return desc, mark, nil, nil, false
@@ -351,7 +355,7 @@ func replayFull(base []byte, entries []raft.Entry,
 	// A birth payload carries the CHILD's namespace, which is the namespace this
 	// replay is about. Decoding with it rather than guessing is the difference
 	// between reading a split-born range's inheritance and reading nothing.
-	vs := seedFrom(namespaceOf(desc.ID), recs, locks, commits, decided)
+	vs := seedFrom(namespaceOf(desc.ID), recs, locks, commits, decided, readMarks)
 	for _, e := range entries {
 		if len(e.Data) == 0 {
 			continue
@@ -371,12 +375,24 @@ func replayFull(base []byte, entries []raft.Entry,
 				continue
 			}
 			switch c.Op {
+			case store.OpTxnGet:
+				// A read marks the key at its own timestamp. Restated: the
+				// store stages a record, the model keeps a number, and the two
+				// have to agree about which prewrites are refused or the
+				// commit facts diverge on every seed that reads a key it is
+				// about to write (BUG-022).
+				if rm, ok := readMarks[c.Key]; !ok || rm.Less(c.ReadTS) {
+					readMarks[c.Key] = c.ReadTS
+				}
 			case store.OpPrewrite:
 				if c.StartTS.LessEq(mark) || locks[c.Key] != nil {
 					continue
 				}
 				if newest, ok := newestCommitOf(commits[c.Key]); ok && c.StartTS.Less(newest) {
 					continue // write conflict
+				}
+				if rm, ok := readMarks[c.Key]; ok && c.StartTS.Less(rm) {
+					continue // somebody was answered above this snapshot (BUG-022)
 				}
 				locks[c.Key] = &modelLock{primary: c.Primary, startTS: c.StartTS, deadline: c.Deadline}
 				vs = insertVersion(vs, kv.Version{Key: []byte(c.Key), At: c.StartTS, Value: []byte(c.Value)})
@@ -497,6 +513,14 @@ func replayFull(base []byte, entries []raft.Entry,
 					delete(decided, dk)
 				}
 			}
+			// Five kinds now, not four. A read mark left behind on the parent
+			// would refuse prewrites for a key the parent no longer owns, and a
+			// mark the child never received would accept one the store refuses.
+			for k := range readMarks {
+				if !spec.Left.Contains([]byte(k)) {
+					delete(readMarks, k)
+				}
+			}
 			desc = spec.Left
 			continue
 		}
@@ -565,7 +589,7 @@ func replayFull(base []byte, entries []raft.Entry,
 
 // seedFrom loads a birth payload into the model's logical state.
 //
-// # All four kinds, because a split-born range INHERITS all four
+// # All five kinds, because a split-born range INHERITS all five
 //
 // The first version pulled out the data versions and dropped the rest. A range
 // born from a split then started with the values and none of the locks, commit
@@ -577,7 +601,8 @@ func replayFull(base []byte, entries []raft.Entry,
 // payload, and the two were made independently. "The state machine is its data"
 // is the intuition, and at A6 it is wrong on both sides of the comparison.
 func seedFrom(ns []byte, recs []kv.Record, locks map[string]*modelLock,
-	commits map[string][]raftcheck.CommitFact, decided map[string]raftcheck.CommitFact) []kv.Version {
+	commits map[string][]raftcheck.CommitFact, decided map[string]raftcheck.CommitFact,
+	readMarks map[string]hlc.Timestamp) []kv.Version {
 	var out []kv.Version
 	for _, r := range recs {
 		kind, ok := kv.KindOf(ns, r.Key)
@@ -623,6 +648,18 @@ func seedFrom(ns []byte, recs []kv.Record, locks map[string]*modelLock,
 			decided[raftcheck.TxnDecisionKey(string(key), rec.StartTS)] = raftcheck.CommitFact{
 				Key: string(key), StartTS: rec.StartTS, CommitTS: rec.CommitTS,
 				Rollback: rec.Status != kv.TxnCommitted,
+			}
+		case kv.KindRead:
+			// The fifth kind, inherited like the other four. A split-born range
+			// that started with no marks would accept a prewrite its parent had
+			// already refused, which is the same mistake seedFrom's own comment
+			// records for locks and commit records, one kind later.
+			_, at, ok := kv.DecodeReadMarkKey(ns, r.Key)
+			if !ok {
+				continue
+			}
+			if rm, seen := readMarks[string(key)]; !seen || rm.Less(at) {
+				readMarks[string(key)] = at
 			}
 		}
 	}
@@ -1039,6 +1076,7 @@ type RaftResult struct {
 	TxnReads              int
 	ReaderResolves        int
 	UncertaintyRestarts   int
+	LedgerRestarts        int
 	TxnReadsRefused       int
 	AuditsStarted         int
 	AuditsComplete        int
@@ -1058,6 +1096,8 @@ type RaftResult struct {
 	UnparseableReads      int
 	WriteConflicts        int
 	PrewriteBlocked       int
+	ReadMarks             int
+	ReadConflicts         int
 	TxnRaceLost           int
 	ResolveWaits          int
 	ResolveAlreadyDecided int
@@ -1460,6 +1500,15 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.TxnReads = coord.Reads()
 		res.ReaderResolves = coord.ReaderResolves()
 		res.UncertaintyRestarts = coord.Restarts()
+		// # Two counts of one fact, because a recording path can stop being
+		// # called and nothing notices
+		//
+		// `TxnRecord.Restarts` existed as a field that nothing wrote, and
+		// `StartTS` kept the abandoned timestamp -- so the ledger described a
+		// transaction that never existed and read zero when asked how often it
+		// had moved. The comparison below is what makes that state impossible to
+		// reach silently.
+		res.LedgerRestarts = ledger.TxnRestarts()
 		res.TxnReadsRefused = coord.RefusedReads()
 		res.AuditsStarted = coord.AuditsStarted()
 		res.AuditsComplete = coord.AuditsComplete()
@@ -1509,6 +1558,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.EnvelopeRefusals += d.EnvelopeRefusals()
 		res.WriteConflicts += d.WriteConflicts()
 		res.PrewriteBlocked += d.PrewriteBlocked()
+		res.ReadMarks += d.ReadMarks()
+		res.ReadConflicts += d.ReadConflicts()
 		res.TxnRaceLost += d.TxnRaceLost()
 		res.ResolveWaits += d.ResolveWaits()
 		res.ResolveAlreadyDecided += d.ResolveAlreadyDecided()
@@ -1644,6 +1695,7 @@ type RaftCensus struct {
 	TxnReads              int
 	ReaderResolves        int
 	UncertaintyRestarts   int
+	LedgerRestarts        int
 	TxnReadsRefused       int
 	AuditsStarted         int
 	AuditsComplete        int
@@ -1663,6 +1715,8 @@ type RaftCensus struct {
 	UnparseableReads      int
 	WriteConflicts        int
 	PrewriteBlocked       int
+	ReadMarks             int
+	ReadConflicts         int
 	TxnRaceLost           int
 	ResolveWaits          int
 	ResolveAlreadyDecided int
@@ -1731,6 +1785,7 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 		c.TxnReads += r.TxnReads
 		c.ReaderResolves += r.ReaderResolves
 		c.UncertaintyRestarts += r.UncertaintyRestarts
+		c.LedgerRestarts += r.LedgerRestarts
 		c.TxnReadsRefused += r.TxnReadsRefused
 		c.AuditsStarted += r.AuditsStarted
 		c.AuditsComplete += r.AuditsComplete
@@ -1739,6 +1794,8 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 		c.UnparseableReads += r.UnparseableReads
 		c.WriteConflicts += r.WriteConflicts
 		c.PrewriteBlocked += r.PrewriteBlocked
+		c.ReadMarks += r.ReadMarks
+		c.ReadConflicts += r.ReadConflicts
 		c.TxnRaceLost += r.TxnRaceLost
 		c.ResolveWaits += r.ResolveWaits
 		c.ResolveAlreadyDecided += r.ResolveAlreadyDecided
@@ -1863,6 +1920,7 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.TxnLostToResolver, b.TxnLostToResolver},
 		{&out.TxnReads, b.TxnReads}, {&out.ReaderResolves, b.ReaderResolves},
 		{&out.UncertaintyRestarts, b.UncertaintyRestarts},
+		{&out.LedgerRestarts, b.LedgerRestarts},
 		{&out.TxnReadsRefused, b.TxnReadsRefused},
 		{&out.AuditsStarted, b.AuditsStarted}, {&out.AuditsComplete, b.AuditsComplete},
 		{&out.AuditsLocked, b.AuditsLocked}, {&out.AuditsUncertain, b.AuditsUncertain},
@@ -1877,6 +1935,7 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.ResolvedForward, b.ResolvedForward}, {&out.ResolvedBack, b.ResolvedBack},
 		{&out.UnparseableReads, b.UnparseableReads},
 		{&out.WriteConflicts, b.WriteConflicts}, {&out.PrewriteBlocked, b.PrewriteBlocked},
+		{&out.ReadMarks, b.ReadMarks}, {&out.ReadConflicts, b.ReadConflicts},
 		{&out.TxnRaceLost, b.TxnRaceLost},
 		{&out.ResolveWaits, b.ResolveWaits},
 		{&out.ResolveAlreadyDecided, b.ResolveAlreadyDecided},

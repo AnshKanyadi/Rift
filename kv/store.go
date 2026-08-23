@@ -79,6 +79,15 @@ type Store struct {
 	rollBacks           int
 	versionsWrote       int
 	versionsGCd         int
+
+	// readMarks counts read marks staged, and readConflicts counts prewrites
+	// refused because somebody had already been answered a read of the key
+	// above the prewriter's snapshot. BUG-022's two halves, each with a number:
+	// a run in which readMarks is zero recorded nothing for the guard to
+	// consult, and one in which readConflicts is zero never reached the
+	// interleaving the guard exists for.
+	readMarks     int
+	readConflicts int
 }
 
 // NewStore builds an MVCC store over an engine.
@@ -235,6 +244,12 @@ func (s *Store) ReadsRefused() int      { return s.readsRefused }
 func (s *Store) VersionsWritten() int   { return s.versionsWrote }
 func (s *Store) VersionsCollected() int { return s.versionsGCd }
 
+// ReadMarks and ReadConflicts are BUG-022's two halves, reported separately
+// because they fail separately: a mark nobody consults and a guard with nothing
+// to consult look identical from a violation count of zero.
+func (s *Store) ReadMarks() int     { return s.readMarks }
+func (s *Store) ReadConflicts() int { return s.readConflicts }
+
 // ForeignLocksKept is BUG-019's non-vacuity evidence: a sweep in which it is
 // zero never reached the schedule the fix exists for.
 func (s *Store) ForeignLocksKept() int { return s.foreignLocksKept }
@@ -287,8 +302,18 @@ func (s *Store) Versions() ([]Version, error) {
 	return out, it.Error()
 }
 
-// IngestInto stages a whole state into a batch: everything this store's
-// namespace holds is cleared and replaced.
+// IngestInto stages a whole state into a batch: this store's DATA VERSIONS are
+// cleared and replaced.
+//
+// # It is A5's shape, and its name overstates what it does
+//
+// It clears the data prefix only. At A5 that was the whole state machine, so the
+// name was accurate; A6 added three record kinds and A6's own fix added a fifth,
+// and none of them is touched here. `IngestRecordsInto` is the one that replaces
+// a state machine, and it is what every non-test caller uses. This survives
+// because tests about versions are clearer with it — and the comment is corrected
+// rather than the function deleted, because a name that overstates is a trap
+// whether or not anything is currently caught by it.
 //
 // Clear-then-ingest in ONE batch is why DeleteRange is in the frozen engine
 // interface (Amendment A3). A best-effort clear followed by a separate write
@@ -375,7 +400,7 @@ func (s *Store) owns(engineKey []byte) bool {
 		return false
 	}
 	switch engineKey[len(s.ns)] {
-	case dataPrefix, lockPrefix, writePrefix, txnPrefix:
+	case dataPrefix, lockPrefix, writePrefix, txnPrefix, readPrefix:
 		return true
 	}
 	return false
@@ -383,7 +408,7 @@ func (s *Store) owns(engineKey []byte) bool {
 
 // IngestRecordsInto replaces this store's whole state in one batch.
 func (s *Store) IngestRecordsInto(b *engine.Batch, rs []Record, mark hlc.Timestamp) {
-	for _, kind := range []byte{dataPrefix, lockPrefix, writePrefix, txnPrefix} {
+	for _, kind := range []byte{dataPrefix, lockPrefix, writePrefix, txnPrefix, readPrefix} {
 		lo := append(append([]byte(nil), s.ns...), kind)
 		b.DeleteRange(lo, prefixEnd(lo))
 	}

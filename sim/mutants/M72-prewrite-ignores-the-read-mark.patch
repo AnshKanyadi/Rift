@@ -1,0 +1,21 @@
+# id: M72-prewrite-ignores-the-read-mark
+# covering-test: TestAPrewriteLosesToAReaderAboveItsSnapshot
+# package: ./kv/
+# expect: killed
+# power-seeds: 200
+# power-floor: 1
+# power-ceiling: 200
+# power-measured: PENDING -- measured by `make power-mutants --measure` under A6's shape
+# mutates: BUG-022's ENFORCING half. The mark is still recorded on every read and nothing consults it, so a transaction may prewrite a key somebody has already been answered a question about from above its snapshot -- and its commit lands underneath that answer. This is the half that looks complete from the recording side
+--- a/kv/txn.go
++++ b/kv/txn.go
+@@ -120,9 +120,6 @@
+ 	// a reader is refused", and the mutant that matters removes the CALL. An
+ 	// inline block would put the mutation on an error line no test can reach,
+ 	// and the coverage lane would then report a live path dead.
+-	if err := s.refuseIfReadAbove(key, l.StartTS); err != nil {
+-		return err
+-	}
+ 
+ 	b.Set(LockKey(s.ns, key), encodeLock(l))
+ 	b.Set(EncodeKey(s.ns, key, l.StartTS), value)

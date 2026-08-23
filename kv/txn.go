@@ -86,14 +86,17 @@ var (
 
 // PrewriteInto stages a lock and a data version for one key.
 //
-// # The two checks, and why both are at the START timestamp
+// # The three checks, and why all three are at the START timestamp
 //
 // A newer COMMIT than our start timestamp means somebody else wrote this key
 // inside our snapshot's lifetime: committing on top would make our transaction's
 // read of the key stale with respect to its own write, which is exactly what
 // snapshot isolation forbids. An existing LOCK means somebody else is mid-flight
 // here; we may not stack on it, and whether it can be broken is the resolver's
-// question, not the prewriter's.
+// question, not the prewriter's. A newer READ MARK means somebody has already
+// been answered a question about this key from above our snapshot, and our
+// commit would land underneath the answer they were given -- BUG-022, and the
+// long comment on the check itself is why the first two do not cover it.
 func (s *Store) PrewriteInto(b *engine.Batch, key []byte, l Lock, value []byte) error {
 	if !l.StartTS.IsSet() {
 		return ErrUnsetTimestamp
@@ -112,11 +115,73 @@ func (s *Store) PrewriteInto(b *engine.Batch, key []byte, l Lock, value []byte) 
 		return fmt.Errorf("%w: %q was committed at %s, after this transaction started at %s",
 			ErrWriteConflict, key, commit, l.StartTS)
 	}
+	// The third guard, BUG-022. It is a call rather than an inline check for the
+	// reason M70's floor is: the fact this enforces is "a prewrite that loses to
+	// a reader is refused", and the mutant that matters removes the CALL. An
+	// inline block would put the mutation on an error line no test can reach,
+	// and the coverage lane would then report a live path dead.
+	if err := s.refuseIfReadAbove(key, l.StartTS); err != nil {
+		return err
+	}
 
 	b.Set(LockKey(s.ns, key), encodeLock(l))
 	b.Set(EncodeKey(s.ns, key, l.StartTS), value)
 	s.prewrites++
 	return nil
+}
+
+// refuseIfReadAbove is the third first-committer-wins guard: somebody has
+// already been answered a read of this key from strictly above this
+// transaction's snapshot.
+//
+// # Why the first two guards do not cover it
+//
+// BUG-022. The lock covers LOG order -- it refuses a prewrite arriving while
+// somebody else's lock stands. The commit record covers TIMESTAMP order -- it
+// refuses a prewrite whose snapshot predates a commit already written.
+// Percolator gets those two to compose from a single TSO: a commit timestamp is
+// drawn AFTER the prewrite, so it is above every start timestamp issued before
+// it, and a read answered before the prewrite is therefore below the commit.
+//
+// Per-node HLCs give no such guarantee. A transaction's timestamps come from
+// whichever node it asked, two nodes' transaction clocks exchange no messages,
+// and A6's clock holds put them up to maxOffset apart. So a commit can land
+// BELOW a read that has already been answered, and the reader's snapshot
+// acquires a value it was told did not exist. On seed 2521 that was 19 units of
+// money.
+//
+// A reader above my snapshot is therefore as much a first committer as a writer
+// is, and losing to one is first-committer-wins working rather than a new
+// failure mode.
+//
+// # STRICTLY above, and the strictness is the whole guard
+//
+// A transaction reads its own keys at its own start timestamp, so the mark for
+// every key it is about to prewrite is at least its own start. `LessEq` here
+// would refuse every prewrite in the system.
+//
+// # What it buys, stated as the argument it is
+//
+// After this check readMark(key) <= startTS < commitTS. So no read BEFORE the
+// prewrite was answered at or above the commit timestamp; and a read AFTER the
+// prewrite either sits at or above startTS and blocks on the lock, or sits below
+// startTS and so below commitTS. The three guards are total.
+//
+// It rests on startTS != commitTS, which holds because both are minted and two
+// mints never collide -- the node tag separates nodes and the logical counter
+// separates mints on one node. `IdentityCollisions` asserts the cross-node half
+// at zero on every exit run (BUG-021).
+func (s *Store) refuseIfReadAbove(key []byte, startTS hlc.Timestamp) error {
+	mark, ok, err := s.ReadMark(key)
+	if err != nil {
+		return err
+	}
+	if !ok || !startTS.Less(mark) {
+		return nil
+	}
+	s.readConflicts++
+	return fmt.Errorf("%w: %q was read at %s, after this transaction started at %s",
+		ErrWriteConflict, key, mark, startTS)
 }
 
 // CommitInto stages the write record for one key and drops its lock.
@@ -231,6 +296,60 @@ func (s *Store) PutTxnInto(b *engine.Batch, primary []byte, r TxnRecord) error {
 	}
 	b.Set(TxnKey(s.ns, primary, r.StartTS), encodeTxn(r))
 	return nil
+}
+
+// NoteReadInto stages this key's read mark at readTS, if readTS is above it.
+//
+// # Why a read writes at all, and why that is safe here
+//
+// It is the half of BUG-022's fix that RECORDS, and it is a write on the read
+// path -- which OpTxnGet's own comment used to say could not happen. The
+// property that comment was protecting is intact and is worth restating,
+// because it is the one A7 will break: a read is a LOG ENTRY, every replica
+// applies it, and every replica stages the identical mark. The mark is
+// therefore a function of the log exactly as the versions are. What made a read
+// stage nothing was a convenience, not an invariant; what makes the state
+// machine deterministic is that its inputs are the log.
+//
+// A7 serves reads via read index, off the log. The mark cannot be maintained
+// this way then, and DESIGN-A7 has to say what replaces it before the first
+// read is answered off-log.
+//
+// At most one record per key: the older one is deleted in the same batch, so a
+// crash between the two cannot leave two marks and a later reader cannot pick
+// the wrong one.
+func (s *Store) NoteReadInto(b *engine.Batch, key []byte, readTS hlc.Timestamp) error {
+	if !readTS.IsSet() {
+		return ErrUnsetTimestamp
+	}
+	cur, ok, err := s.ReadMark(key)
+	if err != nil {
+		return err
+	}
+	if ok && readTS.LessEq(cur) {
+		return nil
+	}
+	if ok {
+		b.Delete(ReadMarkKey(s.ns, key, cur))
+	}
+	b.Set(ReadMarkKey(s.ns, key, readTS), nil)
+	s.readMarks++
+	return nil
+}
+
+// ReadMark is the highest timestamp this range has been asked for key at.
+func (s *Store) ReadMark(key []byte) (hlc.Timestamp, bool, error) {
+	prefix := ReadMarkPrefix(s.ns, key)
+	it := s.db.NewIter(engine.IterOptions{Lower: prefix, Upper: prefixEnd(prefix)})
+	defer func() { _ = it.Close() }()
+	if !it.First() {
+		return hlc.Timestamp{}, false, it.Error()
+	}
+	gotKey, ts, ok := DecodeReadMarkKey(s.ns, it.Key())
+	if !ok || string(gotKey) != string(key) {
+		return hlc.Timestamp{}, false, it.Error()
+	}
+	return ts, true, it.Error()
 }
 
 // Txn reads a transaction record by its primary key and start timestamp.
@@ -410,6 +529,7 @@ const (
 	KindLock  = lockPrefix
 	KindWrite = writePrefix
 	KindTxn   = txnPrefix
+	KindRead  = readPrefix
 )
 
 // DecodeAnyKey extracts the user key from an engine key of any kind.

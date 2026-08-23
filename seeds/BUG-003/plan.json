@@ -150,7 +150,7 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": -51000
+            "slope_ppb": 52000
           }
         ]
       },
@@ -160,19 +160,12 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": -135000
+            "slope_ppb": 20000
           }
         ]
       },
       {
-        "node": 2,
-        "skew": [
-          {
-            "start_ns": 0,
-            "off_ns": 0,
-            "slope_ppb": -8000
-          }
-        ]
+        "node": 2
       },
       {
         "node": 3,
@@ -180,12 +173,22 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": -78000
+            "slope_ppb": -6000
           }
         ]
       }
     ],
-    "holds": null
+    "holds": [
+      {
+        "a": 1,
+        "b": 2,
+        "at_ppb": 900000000,
+        "from_ns": 4137536175,
+        "to_ns": 6099497461,
+        "ramp_ns": 2000000000,
+        "realize": "slew"
+      }
+    ]
   },
   "faults": {
     "entries": [

@@ -1,0 +1,22 @@
+# id: M73-a-read-answer-lands-in-any-incarnation
+# covering-test: TestBUG024
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 200
+# power-floor: 1
+# power-ceiling: 200
+# power-measured: PENDING -- measured by `make power-mutants --measure` under A6's shape
+# mutates: BUG-024. A transaction that restarts above an uncertain commit takes a new start timestamp and re-reads; the reads it issued BEFORE the restart are still in flight and their answers arrive afterwards carrying the old snapshot. Without this check they land in the new snapshot's read set and the transfer computes its writes from two different instants, which conserves nothing -- in whichever direction the two snapshots happen to differ
+--- a/sim/hunt/bank.go
++++ b/sim/hunt/bank.go
+@@ -521,10 +521,6 @@
+ 		// That is BUG-024, and it is BUG-020's family: an answer accepted for the
+ 		// wrong incarnation. The epoch guard in `store` exists for the same shape
+ 		// one layer down, which is where the phrase comes from.
+-		if cmd.ReadTS != t.startTS {
+-			c.staleIncarnation++
+-			return
+-		}
+ 		if !t.ceiling.IsSet() && r.Ceiling.IsSet() {
+ 			t.ceiling = r.Ceiling
+ 		}

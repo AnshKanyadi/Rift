@@ -150,7 +150,7 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": -37000
+            "slope_ppb": -10000
           }
         ]
       },
@@ -160,32 +160,37 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": 37000
+            "slope_ppb": -117000
           }
         ]
       },
       {
-        "node": 2,
-        "skew": [
-          {
-            "start_ns": 0,
-            "off_ns": 0,
-            "slope_ppb": 149000
-          }
-        ]
+        "node": 2
       },
       {
-        "node": 3,
-        "skew": [
-          {
-            "start_ns": 0,
-            "off_ns": 0,
-            "slope_ppb": -162000
-          }
-        ]
+        "node": 3
       }
     ],
-    "holds": null
+    "holds": [
+      {
+        "a": 1,
+        "b": 3,
+        "at_ppb": 900000000,
+        "from_ns": 2667054175,
+        "to_ns": 5412487782,
+        "ramp_ns": 2000000000,
+        "realize": "slew"
+      },
+      {
+        "a": 1,
+        "b": 2,
+        "at_ppb": 900000000,
+        "from_ns": 1427809912,
+        "to_ns": 2465253201,
+        "ramp_ns": 0,
+        "realize": "step"
+      }
+    ]
   },
   "faults": {
     "entries": [

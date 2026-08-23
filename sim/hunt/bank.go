@@ -339,6 +339,7 @@ type audit struct {
 // that nothing here can reach into the ledger for anything but recording.
 type txnLedger interface {
 	RecordTxnBegin(id int, startTS hlc.Timestamp, primary string, keys []string, at clock.Instant)
+	RecordTxnRestart(id int, startTS hlc.Timestamp, at clock.Instant)
 	RecordTxnCommit(id int, commitTS hlc.Timestamp, at clock.Instant)
 	RecordAudit(readTS hlc.Timestamp, total, accounts int, at clock.Instant)
 }
@@ -448,6 +449,14 @@ func (c *coordinator) restartAbove(t *transfer, ts hlc.Timestamp, at clock.Insta
 	t.restarts++
 	c.restarts++
 	t.startTS = minted
+	// # The ledger learns the new start timestamp, and this is not bookkeeping
+	//
+	// A transaction's identity MOVED. The ledger kept the timestamp it was first
+	// minted at -- one the system had abandoned -- so an investigation placing
+	// two transactions in time by their recorded starts placed this one where it
+	// never was. That produced a confidently wrong lost-update finding once, and
+	// the correction is the record rather than a warning to the next reader.
+	c.ledger.RecordTxnRestart(t.id, minted, at)
 	c.checkStartTag(t, node)
 	if !ts.Less(t.startTS) {
 		// The restart did not clear the commit it restarted on, so the next read
@@ -1130,6 +1139,12 @@ func (a ledgerAdapter) RecordTxnBegin(id int, startTS hlc.Timestamp, primary str
 	a.l.RecordTxnBegin(provenance.Witness(raftcheck.TxnRecord{
 		ID: id, StartTS: startTS, Primary: primary,
 		Keys: append([]string(nil), keys...), Began: at,
+	}))
+}
+
+func (a ledgerAdapter) RecordTxnRestart(id int, startTS hlc.Timestamp, at clock.Instant) {
+	a.l.RecordTxnRestart(provenance.Witness(raftcheck.TxnRestartRecord{
+		ID: id, StartTS: startTS, At: at,
 	}))
 }
 

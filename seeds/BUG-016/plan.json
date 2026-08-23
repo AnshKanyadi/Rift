@@ -145,24 +145,10 @@
     "epoch_ns": 1600000000000000000,
     "nodes": [
       {
-        "node": 0,
-        "skew": [
-          {
-            "start_ns": 0,
-            "off_ns": 0,
-            "slope_ppb": 10000
-          }
-        ]
+        "node": 0
       },
       {
-        "node": 1,
-        "skew": [
-          {
-            "start_ns": 0,
-            "off_ns": 0,
-            "slope_ppb": -8000
-          }
-        ]
+        "node": 1
       },
       {
         "node": 2,
@@ -170,7 +156,7 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": 22000
+            "slope_ppb": -153000
           }
         ]
       },
@@ -180,12 +166,31 @@
           {
             "start_ns": 0,
             "off_ns": 0,
-            "slope_ppb": -124000
+            "slope_ppb": 94000
           }
         ]
       }
     ],
-    "holds": null
+    "holds": [
+      {
+        "a": 2,
+        "b": 0,
+        "at_ppb": 900000000,
+        "from_ns": 3337159487,
+        "to_ns": 5449243229,
+        "ramp_ns": 2000000000,
+        "realize": "slew"
+      },
+      {
+        "a": 3,
+        "b": 1,
+        "at_ppb": 900000000,
+        "from_ns": 889497525,
+        "to_ns": 2451830145,
+        "ramp_ns": 0,
+        "realize": "step"
+      }
+    ]
   },
   "faults": {
     "entries": [

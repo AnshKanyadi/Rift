@@ -116,6 +116,26 @@ const (
 	lockPrefix  byte = 'l'
 	writePrefix byte = 'w'
 	txnPrefix   byte = 't'
+
+	// readPrefix is the READ MARK: the highest timestamp at which this range
+	// has been asked for a key.
+	//
+	//	read   r <len> <key> <^read_ts>   at most one per key
+	//
+	// # Why a fifth kind exists, and why the timestamp is in the KEY
+	//
+	// BUG-022. A prewrite's two guards are total only where log order and
+	// timestamp order agree, and per-node HLCs do not make them agree. The third
+	// guard needs one fact the store did not keep: what timestamp somebody has
+	// already been answered at for this key. See PrewriteInto.
+	//
+	// The timestamp rides in the key rather than the value so that
+	// TimestampOf can read it, which is what puts the mark inside BUG-023's
+	// invariant -- no range's clock sits below a timestamp in the records it
+	// holds. A mark is the one record kind with no companion data version at the
+	// same timestamp, so excluding it the way locks are excluded would not be
+	// safe: a read above every version leaves a mark and nothing else.
+	readPrefix byte = 'r'
 )
 
 // LockKey is where a key's lock lives. At most one exists at a time: a second
@@ -163,6 +183,30 @@ func DecodeWriteKey(ns, b []byte) (key []byte, commitTS hlc.Timestamp, ok bool) 
 	commitTS.Wall = hlcWall(^binary.BigEndian.Uint64(rest[:wallBytes]))
 	commitTS.Logical = ^binary.BigEndian.Uint32(rest[wallBytes:])
 	return key, commitTS, true
+}
+
+// ReadMarkKey is where a key's read mark lives, at the timestamp it marks.
+//
+// Inverted like the others so that the FIRST record under the prefix is the
+// newest, which is what makes "what is the mark" one seek. At most one exists
+// per key: noting a newer read deletes the older record in the same batch, so
+// the prefix never holds two.
+func ReadMarkKey(ns, key []byte, readTS hlc.Timestamp) []byte {
+	return appendInvertedTS(metaKey(ns, readPrefix, key), readTS)
+}
+
+// ReadMarkPrefix is every read-mark record for key, and nothing else.
+func ReadMarkPrefix(ns, key []byte) []byte { return metaKey(ns, readPrefix, key) }
+
+// DecodeReadMarkKey reads a read mark's key back.
+func DecodeReadMarkKey(ns, b []byte) (key []byte, readTS hlc.Timestamp, ok bool) {
+	key, rest, ok := takeMetaKey(ns, readPrefix, b)
+	if !ok || len(rest) != tsBytes {
+		return nil, hlc.Timestamp{}, false
+	}
+	readTS.Wall = hlcWall(^binary.BigEndian.Uint64(rest[:wallBytes]))
+	readTS.Logical = ^binary.BigEndian.Uint32(rest[wallBytes:])
+	return key, readTS, true
 }
 
 // MetaKey is retained as the generic form. A5 reserved the prefix; A6 uses it
@@ -219,6 +263,13 @@ func TimestampOf(ns, key []byte) (hlc.Timestamp, bool) {
 		return ts, true
 	}
 	if _, ts, ok := DecodeWriteKey(ns, key); ok {
+		return ts, true
+	}
+	// A read mark is the third kind that carries its timestamp in the key, and
+	// it is the one that MUST be here: it is the only record with no companion
+	// version at the same timestamp, so a clock seeded from everything else
+	// would still sit below a read this range has already answered.
+	if _, ts, ok := DecodeReadMarkKey(ns, key); ok {
 		return ts, true
 	}
 	return hlc.Timestamp{}, false

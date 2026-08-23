@@ -87,3 +87,43 @@ func TestARangeIngestingRecordsRaisesItsClock(t *testing.T) {
 			high, got)
 	}
 }
+
+// TestARangeIngestingAReadMarkRaisesItsClock is the fifth record kind reaching
+// the same invariant.
+//
+// It is not a restatement of the test above. A data version's timestamp is
+// carried by a version the range can also answer with; a read mark's is carried
+// by nothing else at all, so a range that ingests one and does not raise its
+// clock will mint a start timestamp below a read it has already answered — and
+// then every prewrite for that key is refused by BUG-022's own guard until
+// physical time catches up. The window is the same 92ms window BUG-023 had.
+func TestARangeIngestingAReadMarkRaisesItsClock(t *testing.T) {
+	m, err := New(Config{
+		ID: 1, Peers: []raft.NodeID{1}, Ordinal: 0,
+		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
+		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
+		Nodes: 1, Clock: mustSimClock(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.replicaOf(FirstRange)
+	if r == nil {
+		t.Fatal("no first range")
+	}
+	c := r.hlc
+	ns := r.mvcc.Namespace()
+	high := hlc.Timestamp{Wall: c.Now().Wall.Add(100 * time.Millisecond), Logical: 5<<hlc.IDBits | 1}
+
+	// A read mark and NOTHING else: no version, no lock, no commit record. This
+	// is the state a range reaches whenever a read arrives above every write the
+	// key has ever had, which is the ordinary case for an account nobody has
+	// touched yet.
+	r.ingest([]kv.Record{{Key: kv.ReadMarkKey(ns, []byte("k"), high)}}, hlc.Timestamp{})
+
+	if got := c.Now(); !high.Less(got) {
+		t.Errorf("a range holding a read mark at %s stamped %s, at or below it. Every transaction "+
+			"minted here would be refused by its own key's mark until physical time caught up "+
+			"(BUG-022 meeting BUG-023)", high, got)
+	}
+}

@@ -528,3 +528,126 @@ func TestACommitDoesNotStealSomebodyElsesLock(t *testing.T) {
 			ts(100, 0), ok, err)
 	}
 }
+
+// TestAPrewriteLosesToAReaderAboveItsSnapshot is BUG-022's guard, stated
+// directly, and it is M72's covering test.
+//
+// # Why the seed cannot be this test
+//
+// The two halves of the fix are independently implementable, so a tree with only
+// the recording half looks exactly like a complete one until a prewrite has to
+// be refused. Seed 2521 covers the schedule that found the defect; this covers
+// the rule, so a half-present fix fails one of them rather than neither.
+//
+// The three cases are the guard's whole shape: a read STRICTLY above the
+// snapshot refuses, a read AT the snapshot does not -- which is the
+// transaction's own read of its own key, and `LessEq` here would refuse every
+// prewrite in the system -- and a read BELOW it does not.
+func TestAPrewriteLosesToAReaderAboveItsSnapshot(t *testing.T) {
+	s, db := newStore(t)
+
+	// Somebody was answered a read of k at 300.
+	b := engine.NewBatch()
+	if err := s.NoteReadInto(b, []byte("k"), ts(300, 0)); err != nil {
+		t.Fatalf("note read: %v", err)
+	}
+	apply(t, db, b)
+	if mark, ok, err := s.ReadMark([]byte("k")); err != nil || !ok || mark != ts(300, 0) {
+		t.Fatalf("read mark is %s (ok=%v, err=%v), want 300", mark, ok, err)
+	}
+
+	// A transaction whose snapshot is BELOW that read may not write the key: its
+	// commit lands above its own start and can still land below 300, which is a
+	// value the reader at 300 was already told did not exist.
+	b = engine.NewBatch()
+	err := s.PrewriteInto(b, []byte("k"), kv.Lock{
+		Primary: []byte("k"), StartTS: ts(200, 0), Deadline: ts(1000, 0),
+	}, []byte("a"))
+	if !errors.Is(err, kv.ErrWriteConflict) {
+		t.Fatalf("a prewrite under a newer read was accepted: %v", err)
+	}
+	if s.ReadConflicts() != 1 {
+		t.Errorf("ReadConflicts is %d, want 1: the refusal has to be countable or a "+
+			"sweep cannot tell a guard that never fired from one that has nothing to fire on",
+			s.ReadConflicts())
+	}
+
+	// A transaction whose snapshot is EXACTLY the read may. This is the
+	// transaction's own read of its own key, and it is the case that decides
+	// whether the guard is a guard or a deadlock.
+	b = engine.NewBatch()
+	if err := s.PrewriteInto(b, []byte("k"), kv.Lock{
+		Primary: []byte("k"), StartTS: ts(300, 0), Deadline: ts(1000, 0),
+	}, []byte("b")); err != nil {
+		t.Fatalf("a prewrite at its own read's timestamp was refused: %v", err)
+	}
+
+	// And a read below the mark does not lower it. The mark is a high-water
+	// mark; a later reader at an older snapshot is not evidence that nobody has
+	// looked from above.
+	b = engine.NewBatch()
+	if err := s.NoteReadInto(b, []byte("j"), ts(300, 0)); err != nil {
+		t.Fatalf("note read: %v", err)
+	}
+	apply(t, db, b)
+	b = engine.NewBatch()
+	if err := s.NoteReadInto(b, []byte("j"), ts(100, 0)); err != nil {
+		t.Fatalf("note read: %v", err)
+	}
+	apply(t, db, b)
+	if mark, _, _ := s.ReadMark([]byte("j")); mark != ts(300, 0) {
+		t.Errorf("an older read lowered the mark to %s", mark)
+	}
+}
+
+// TestAKeyHoldsExactlyOneReadMark: noting a newer read replaces the older
+// record rather than adding to it.
+//
+// The mark is addressed by (key, timestamp) so that TimestampOf can read it,
+// which is what puts it inside BUG-023's clock invariant -- and a kind addressed
+// by a timestamp is a kind that accumulates unless somebody says otherwise. A
+// prefix holding two marks would also make "the mark" a question about scan
+// order rather than about state.
+func TestAKeyHoldsExactlyOneReadMark(t *testing.T) {
+	s, db := newStore(t)
+	for _, at := range []hlc.Timestamp{ts(100, 0), ts(200, 0), ts(300, 0), ts(250, 0)} {
+		b := engine.NewBatch()
+		if err := s.NoteReadInto(b, []byte("k"), at); err != nil {
+			t.Fatalf("note read at %s: %v", at, err)
+		}
+		apply(t, db, b)
+	}
+	recs, err := s.Records()
+	if err != nil {
+		t.Fatalf("records: %v", err)
+	}
+	marks := 0
+	for _, r := range recs {
+		if kind, ok := kv.KindOf(s.Namespace(), r.Key); ok && kind == kv.KindRead {
+			marks++
+		}
+	}
+	if marks != 1 {
+		t.Errorf("%d read-mark records for one key, want 1", marks)
+	}
+	if mark, _, _ := s.ReadMark([]byte("k")); mark != ts(300, 0) {
+		t.Errorf("the surviving mark is %s, want 300", mark)
+	}
+}
+
+// TestTheReadMarkIsInsideTheClockInvariant: a read mark is a timestamp the range
+// holds, so a range ingesting one must not sit below it.
+//
+// BUG-023's invariant is *no range's clock sits below a timestamp in the records
+// it holds*, and TimestampOf is where "the records it holds" is decided. A read
+// mark is the one kind with NO companion data version at its timestamp -- a read
+// above every version leaves a mark and nothing else -- so the argument that
+// excuses locks and transaction records does not reach it.
+func TestTheReadMarkIsInsideTheClockInvariant(t *testing.T) {
+	ns := []byte("ns")
+	got, ok := kv.TimestampOf(ns, kv.ReadMarkKey(ns, []byte("k"), ts(700, 3)))
+	if !ok || got != ts(700, 3) {
+		t.Fatalf("TimestampOf on a read mark gave (%s, %v), want (700.3, true). A range seeded "+
+			"from everything else would still sit below a read it had already answered", got, ok)
+	}
+}

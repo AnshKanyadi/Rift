@@ -105,6 +105,27 @@ expected detection and proves nothing. The seed comes from the mutant power meas
 shape. Until then `make corpus-reproduces` is red on exactly this entry, and that is the correct
 colour for it.
 
+**BUG-021 has no bundle, and the reason is structural rather than a search that has not finished.**
+One was created at BUG-022's fix so that every A6 entry would have one, and it was **deleted in the
+same pass**. The corpus's arrangement is *the bundle carries the schedule, the mutant carries the
+defect* — and BUG-021's defect is a **pair**: the minting tag (`M67`) and the minted restart timestamp
+(`M68`), each of which leaves a tree that still refuses the collision the other allows. No single
+mutant reintroduces the bug, so no bundle can name one that reproduces it. A 300-seed search under
+`M67` confirmed it, and `M67`'s own header already said so in a different form: its covering test is a
+**unit test in `./hlc/`**, not a sweep.
+
+Three resolutions, none taken without a ruling: a two-half patch that is a reproduction recipe rather
+than a mutant class (which muddies Amendment A2's per-class count); a bundle carrying the
+`transaction-atomicity` violation with the pair applied by hand; or the entry staying bundle-less with
+this reason recorded. **What is not on the list is loosening the corpus matcher** — §16.4 is the record
+of what that costs.
+
+**Three entries have no bundle at all, which BUGS.md rule 2 requires.** `BUG-017` (A5), `BUG-020` (the
+harness defect) and `BUG-021` (above). The first two were noticed while creating bundles for BUG-022
+through BUG-024 and are not fixed in the same pass, because a bundle is only worth having if it
+reproduces and finding a seed that does is the expensive half. The rule says every entry, and three
+entries do not have one.
+
 **Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16.3. Whenever the workload moves
 traces, `TestEveryStoredBundleReplays` fails and the fix is to regenerate — but a schedule that no
 longer reaches its defect regenerates exactly as happily as one that does, so the reproduction lane
@@ -135,6 +156,28 @@ that decides which of the two moves.
 across a commit, `make test` unrunnable since A1, and two lanes in `make ci` absent from the
 workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
 *run*. Every phase that ships without a remote should expect to find another lane that stopped.
+
+**The read mark is a function of the log only until A7.** DESIGN-A6 §28.6, DESIGN-A7 D-A7-5.
+BUG-022's guard consults a record staged by the apply path for every `OpTxnGet`, and that is a
+function of the log **because every read is a log entry**. Read index answers reads off the log. A
+read served that way stages no mark, a later prewrite passes a guard with nothing to consult, and
+BUG-022 returns with no error anywhere. The general form, which will recur at every optimisation that
+takes work off the log:
+
+> **A fact maintained by the apply path is a function of the log. The moment an operation is answered
+> off the log, every fact that operation used to maintain becomes a fact somebody has to maintain
+> somewhere else — and the place it used to live will still compile.**
+
+*Ansh has not ruled on D-A7-5. The recommendation on the table is that read index serves the
+linearizable read path and A6's snapshot reads keep their log entry.*
+
+**`sim/hunt`'s `modelRecords` has no caller.** DESIGN-A6 §30.3. It renders the harness model's logical
+state into engine records so a digest over one is a digest over the other — and nothing calls it, so
+that comparison does not happen. Found while adding the fifth record kind to the model. By §25.1's
+third meaning this is code that cannot be reached and the response is deletion; it is reported rather
+than deleted because removing it is a decision about what the harness *could* check, and the other
+reading — that the comparison was meant to exist and got disconnected — is the more expensive one to
+be wrong about.
 
 **A surviving mutant has three meanings.** DESIGN-A6 §25.1: no checker can see it (add the
 assertion), the test goes around the path (route it through), or **the code cannot be reached**

@@ -35,11 +35,31 @@
 # That the test would FAIL under the mutation. That is the mutant suite's job and
 # it stays the mutant suite's job. This checks the necessary condition all four
 # failures violated: the line has to run at all.
+#
+# # The timeout is EXPLICIT, and it matches the mutant lane's rather than being
+# # a smaller number of its own
+#
+# The first full run never finished: every heavy `sim/hunt` covering test hit
+# Go's 600-second default and was reported `ERROR ... did not run`, so the error
+# count said nothing at all and a lane in `make ci` could not be relied on.
+#
+# The obvious fix is to bound the seed count, and it is the wrong one. This lane
+# asks whether the covering test, AS THE MUTANT SUITE RUNS IT, executes the line
+# its mutant changes. `scripts/mutants.sh` runs it at full seed ranges under
+# `TEST_TIMEOUT=3600s` and no bound, so a bounded run here would answer a
+# different question and could report a live path dead for a reason the mutant
+# lane never sees. The two invocations are therefore kept the same shape, and
+# what moves is the budget.
+#
+# Coverage instrumentation costs roughly 2x on top, which the budget absorbs. If
+# one day it does not, the lane says which test ran out at a number somebody
+# chose, instead of dying at a default nobody did.
 set -eu
 
 GO=${GO:-go}
 ONLY=${1:-}
 ROOT=$(pwd)
+TEST_TIMEOUT=${TEST_TIMEOUT:-3600s}
 
 printf '\n  mutant coverage: every covering test executes the line its mutant changes\n'
 printf '  ----------------------------------------------------------------\n'
@@ -89,7 +109,8 @@ print(" ".join(map(str,out)))' "$work/orig" "$work/$target")
 
   checked=$((checked + 1))
   prof="$tmp/$name.cov"
-  if ! $GO test -count=1 -run "^${test_name}\$" -coverpkg="./$(dirname "$target")/" \
+  if ! $GO test -count=1 -timeout "$TEST_TIMEOUT" -run "^${test_name}\$" \
+        -coverpkg="./$(dirname "$target")/" \
         -coverprofile="$prof" "$pkg" >"$tmp/$name.log" 2>&1; then
     printf '   ERROR    %-44s %s did not run\n' "$name" "$test_name"
     tail -3 "$tmp/$name.log" | sed 's/^/              /'

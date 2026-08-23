@@ -1,0 +1,19 @@
+# id: M71-a-read-leaves-no-mark
+# covering-test: TestBUG022
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 200
+# power-floor: 1
+# power-ceiling: 200
+# power-measured: PENDING -- measured by `make power-mutants --measure` under A6's shape
+# mutates: BUG-022's RECORDING half. A snapshot read no longer stages the key's read mark, so PrewriteInto's third guard has nothing to consult and reads silently as "nobody has looked". The guard is still there and still correct; it is simply never true. This is the half that looks complete from the guard's side, which is why it gets its own mutant
+--- a/store/replay.go
++++ b/store/replay.go
+@@ -221,7 +221,6 @@
+ 		// is: the driver and the replay run the same code, so the mark is a
+ 		// function of the log on both sides rather than a fact one of them
+ 		// remembers.
+-		_ = s.NoteReadInto(b, []byte(c.Key), c.ReadTS)
+ 
+ 	case OpResolveStatus:
+ 		// The primary's range decides. If the owner is undecided and past its

@@ -4,6 +4,12 @@
 **[open]** and waits for a ruling; none is assumed. **Author:** Claude. **Decider:** Ansh.
 **Phase:** A7 — the last Track A phase. **Depends on:** A6.
 
+**Revised after BUG-022.** A6's last defect put a dependency directly in this phase's path: the read
+mark that stops a commit landing below an answered read is a function of the log **only because every
+read is a log entry**, and read index is the phase that stops that being true. `D-A7-5` is the new
+decision, `§4.1` is the audit that would have caught the class it belongs to, and neither existed in
+the first draft.
+
 ---
 
 ## 1. What A7 changes, and what it costs today
@@ -182,6 +188,76 @@ which of those is D-A7-4's real question.
 
 ---
 
+### D-A7-5: the read mark, which A6's last fix put directly in this phase's path **[open]**
+
+**This is the decision A7 exists to make and did not know it had.** It is not a refinement of the
+others; it bounds what read index is allowed to serve.
+
+**The dependency.** BUG-022's fix — the third first-committer-wins guard — rests on a **read mark**: a
+record holding the highest timestamp at which a range has been asked for a key. `PrewriteInto` refuses
+when the mark is above the prewriter's snapshot, and that is what stops a commit landing below an
+answer already given. The mark is a function of the log for exactly one reason:
+
+> **In A6 every read IS a log entry. Every replica applies it and stages the identical mark.**
+
+Read index answers a read **off the log**. It stages nothing, no replica sees it, and the mark it
+would have left does not exist. A prewrite then passes a guard that has nothing to consult — which is
+`M71`, the mutant for the recording half of BUG-022's fix, reintroduced as a design consequence
+rather than as a patch.
+
+**The failure is silent and it is BUG-022 exactly.** No error, no divergence, no structural invariant
+violated: a well-formed database with money missing from it, on a schedule with no faults in it.
+
+**A. Read index serves the linearizable read path only; A6's snapshot reads keep their log entry.**
+
+- *for*: BUG-022's fix is untouched, because the operation that leaves a mark still leaves one. The
+  distinction is principled rather than a carve-out — a **plain read has no timestamp to protect**: it
+  is a linearizable read of the latest value, it participates in no transaction, and no prewrite's
+  correctness depends on whether it happened. A snapshot read at `T` is a promise about `T` that a
+  later commit can break. Only the second needs a mark, and only the second pays.
+- *against*: it is the smaller win. A6's transactions are seven replicated round trips and two are
+  reads; this leaves both on the log, and BENCHMARKS.md must then say the saving is on the plain path
+  and not claim it for transaction reads.
+
+**B. A leaseholder-local timestamp cache, carried on the prewrite.**
+
+The leader keeps the marks in memory and attaches its value to each prewrite it proposes; every
+replica applies `max(recorded, carried)`. The carried-value pattern is already this codebase's — it is
+what `ExpireAt` and the commit timestamp do, and for the same reason: *a fact derived at propose time
+and carried, so every replica compares the same two values.*
+
+- *for*: the full win. No read costs an entry, transaction reads included, and the apply path stays
+  deterministic.
+- *against*: **it needs a leadership-handover argument this phase cannot make.** A new leader's cache
+  starts empty, and it must not start below anything the previous leader served. The known ways to
+  bound that are (i) a lease with a clock bound — which is STRETCH, struck, and the whole reason read
+  index is A7's mechanism — or (ii) a low-water mark carried through the log at term change, which is
+  a new replicated protocol with its own recovery story. Either is a phase, not a decision.
+- and the honest version of the objection: **it puts a clock back under a mechanism chosen for not
+  needing one.** A6 §22.3's rule applies — a deferral spent on a purpose it was not granted for is a
+  mechanism widening itself.
+
+**C. Serve transaction snapshot reads by read index and refuse the prewrites that would be unsafe.**
+
+Refuse any prewrite whose key *might* have been read off-log — which, without a cache, is every key.
+
+- *for*: safe.
+- *against*: it refuses everything. Listed because it is the reflex answer and it needs to be written
+  down as unusable rather than left as a thing somebody proposes in week three.
+
+**Recommendation: A**, and record B as the thing that would lift the restriction along with what it
+would cost. The measurement that would change the recommendation is the share of the read volume that
+is transactional: if the plain path is a small fraction, A buys little and B's price becomes worth
+paying — and that share is measurable **now**, from A6's own census, before a line of A7 is written.
+
+**And a consequence for the exit criteria either way.** `M71` must be re-pointed at A7's shape: a
+mutant that makes a read-index read skip whatever maintains the mark. If the answer is A, that mutant
+is *"a snapshot read is served by read index"* — the design decision itself, planted as a defect. That
+is the strongest form available here, because it makes the boundary between the two read paths a thing
+the suite kills rather than a thing the code remembers.
+
+---
+
 ## 4. The timestamp-position class, applied preemptively a third time
 
 DESIGN-A5 §7 and DESIGN-A6 §8 both named every fact of this shape before the code, and A6's result
@@ -198,9 +274,42 @@ wrong. A7's table:
 | whether a read may be served during a transfer | leadership at arrival | leadership **at the confirming round**; `TransferLeadership` can intervene, and A2's transferee is exactly the case |
 | the applied index a read waits on | the replica's applied index | the **range's** applied index — one node hosts many ranges, and A4's per-range ledger exists because this was got wrong once |
 
-**Seven facts, named before the code.** The before-and-after count is reported at phase end with its
-exclusions stated, as A5's four and A6's six were. The honesty of the count is the only thing that
-makes it worth anything: A6's was *not* six of six, and saying so is what makes the four credible.
+Three more, from D-A7-5, because the read mark is now a fact this phase has to place:
+
+| the derived fact | the wrong place to take it | the right place |
+|---|---|---|
+| whether a key has been read above a snapshot | the mark **as of the last logged read** | the mark as of **every read served, by either path** — a read index answer that leaves no mark makes this fact a lie rather than stale |
+| which read path an operation may take | whether the client asked for a timestamp | whether the operation's answer is a **promise a later commit could break**: a plain read is not, a snapshot read at `T` is |
+| a follower's read mark, if the mark is ever kept off the log | the follower's own memory | **nowhere a follower can hold it** — a follower serving reads and keeping a local mark that no prewrite consults is D-A7-5's failure with a second copy |
+
+### 4.1 The count, and the audit the count does not perform
+
+**Ten facts, named before the code**, against A5's four and A6's six. The before-and-after is reported
+at phase end with its exclusions stated. The honesty of the count is the only thing that makes it
+worth anything: A6's was *not* six of six, and saying so is what makes the four credible.
+
+**And A6 finished by demonstrating what this table cannot do.** Six facts were named, none of them
+became a defect, and BUG-022 happened anyway — because the table asks *where is this fact taken from*,
+and BUG-022's fact was one **nothing took**. There was no derivation to walk to. The discipline is an
+audit of the code; a missing fact is invisible to it.
+
+> **Naming every fact you take is not the same as naming every fact you need.**
+
+So A7 runs a second audit alongside the table, in the form the miss would have been caught by — **what
+does this mechanism's correctness argument assume, and does this system provide it?**
+
+| the assumption | whose argument makes it | does this system provide it? |
+|---|---|---|
+| a leader that has won an election knows its own commit index | read index's, implicitly | **no** — the figure-8 rule forbids counting earlier-term entries, which is §2 and is why the no-op is not optional |
+| a quorum of heartbeat responses means *this* leader is still leader | read index's | only if the responses are **at the broadcast's term**; the assumption is stated in the table and is the one etcd's implementation is careful about |
+| a read that has been answered leaves no trace the rest of the system depends on | read index's, silently | **no, since BUG-022** — an A6 snapshot read leaves a read mark, and D-A7-5 is that assumption failing |
+| a follower's applied index is a sound freshness bound | follower reads' | yes, **because a read index is a fact about a position rather than about a node** (D-A7-2) |
+| the term-start no-op is committed before any read is served in that term | read index's | **not automatically** — a leader can receive a read between `becomeLeader` and the no-op's commit, and the read must wait for it rather than take the inherited `commitIndex` |
+| serving a read locally does not advance any replicated state | read index's | **no, if the mark is ever moved off the log** (D-A7-5B), which is why B is a phase and not a decision |
+
+**Six assumptions, three of which this system does not provide.** That ratio is the argument for
+running the audit at all: the table of facts came out clean at A6 and the phase's most expensive
+defect was in the column the table has no room for.
 
 ---
 
@@ -283,7 +392,10 @@ Ansh sets these; this is the proposal.
 3. Per-key linearizability green with reads served by read index, under partitions and leader churn.
 4. The **differential** against the replicated path green, or its removal decided and recorded.
 5. Every count the exit run prints asserted or deleted, and every new oracle induced.
-6. §4's seven facts reported before-and-after with exclusions stated.
+6. §4's **ten** facts reported before-and-after with exclusions stated, and §4.1's six assumptions
+   re-asked against the code that landed.
+6b. **`M71` re-pointed at A7's shape** (D-A7-5): a mutant that serves a mark-leaving read off the log,
+   killed by a conservation failure. BUG-022's guard is the thing A7 is most able to break silently.
 7. A6's three owed measurements taken **before** A7's first commit (§7).
 8. Seed count at exit: Ansh's call. A6 ran 25,000 sharded; the machinery for that is now built and
    `make exit-run` is one command.
@@ -309,5 +421,25 @@ Every one of these is a decision I am not making.
    so that when every number moves there is exactly one reason.*
 7. **§7 — are A6's three owed measurements taken before A7 starts?** *Recommendation: yes. They
    measure a baseline the no-op is about to move.*
+8. **D-A7-5 — may read index serve A6's transaction snapshot reads, given that those reads leave a
+   read mark BUG-022's guard depends on?** *Recommendation: no. Read index serves the linearizable
+   read path; snapshot reads keep their log entry, because a plain read makes no promise a later
+   commit can break and a snapshot read at `T` does. Record the leaseholder-local timestamp cache as
+   the design that would lift the restriction, together with the fact that its handover argument needs
+   either a lease's clock bound or a new replicated low-water-mark protocol — a phase, not a
+   decision.*
+9. **D-A7-5 — is the share of read volume that is transactional measured before this is ruled on?**
+   *Recommendation: yes, and it is measurable now from A6's own census without writing any A7 code. If
+   the plain path is a small fraction of reads, recommendation 8 buys little and the case for the
+   timestamp cache becomes a real one rather than a deferral. A recommendation that a measurement
+   could overturn should say so before the measurement, not after.*
+10. **§4.1 — does the assumption audit become standing practice, alongside the fact table?**
+    *Recommendation: yes. The fact table came out clean at A6 and the phase's most expensive defect
+    was an assumption in the protocol's own correctness argument that the table has no column for.
+    Two audits, and they fail differently.*
+11. **§8.1 — is `M71` re-pointed at A7's shape as part of this phase?** *Recommendation: yes, and the
+    mutant is the design decision itself planted as a defect — a snapshot read served by read index.
+    That makes the boundary between the two read paths something the suite kills rather than something
+    the code remembers.*
 
 **Stopping here for rulings, as the protocol requires.** No A7 code is written.

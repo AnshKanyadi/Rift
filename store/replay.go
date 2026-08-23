@@ -208,9 +208,20 @@ func applyTxnTo(s *kv.Store, b *engine.Batch, c TxnCommand, desc RangeDescriptor
 			Status: c.Status, StartTS: c.StartTS, CommitTS: c.CommitTS,
 		})
 	case OpTxnGet:
-		// A snapshot read changes nothing. Named rather than left to the
-		// default, because the default is "apply the command" and a read
-		// falling through to it would be a silent write.
+		// # A snapshot read stages its MARK, and nothing else
+		//
+		// It changed nothing until BUG-022. What it now stages is not a version
+		// and not an answer: it is the record that this range has been asked
+		// about this key at this timestamp, which is what PrewriteInto's third
+		// guard consults. The read's ANSWER is still the proposer's alone and
+		// still stages nothing, so the asymmetry Replica.readTxn rests on is
+		// unchanged.
+		//
+		// It is here, in the shared apply path, for the reason everything else
+		// is: the driver and the replay run the same code, so the mark is a
+		// function of the log on both sides rather than a fact one of them
+		// remembers.
+		_ = s.NoteReadInto(b, []byte(c.Key), c.ReadTS)
 
 	case OpResolveStatus:
 		// The primary's range decides. If the owner is undecided and past its

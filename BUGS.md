@@ -30,7 +30,7 @@ Rift's system under test began existing at A1, and this file has been non-empty 
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 18 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4, 1 from A5, 1 from A6. *(The phase gate for A1 requires this file to be nonempty, because a
+**Counts:** 24 entries — 8 from A1, 1 from A2, 1 from A3, 6 from A4, 1 from A5, 7 from A6. *(The phase gate for A1 requires this file to be nonempty, because a
 harness that finds nothing is a harness that is too weak. It is not a target: the gate is satisfied
 by finding real defects, and every entry here is one.)*
 
@@ -549,7 +549,7 @@ between a check that runs twice a run and one that runs whenever there is someth
 | **Found by** | sim — the 10,000-seed exit run, through `raft.truncateFrom`'s assertion |
 | **Phase** | A2 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M34-append-from-zero-over-a-snapshot.patch && go run ./cmd/simctl replay --bundle seeds/BUG-009` |
-| **Reproduce (seed)** | found at seed **1364**, 1 of 3000 seeds reaching it; `seeds/BUG-009` carries seed **13**, re-recorded at A6 (DESIGN-A6 §16) |
+| **Reproduce (seed)** | found at seed **1364**, 1 of 3000 seeds reaching it; `seeds/BUG-009` carries seed **105**, re-recorded at BUG-022's fix. The read mark moved every raft trace and seed 13 regenerated cleanly while no longer reaching `M34` at all — the search §16.3 warns a regeneration is. Found again at 105 of a 0–800 sweep, where the mutant panics `state machine safety failing` |
 | **Invariant that caught it** | state machine safety, asserted inside `raft/` — *a truncation may not reach an entry this node was told was committed* |
 | **Mutant class** | none existed — added `M34-append-from-zero-over-a-snapshot` |
 | **Fix commit** | *(this commit)* |
@@ -1132,7 +1132,7 @@ the fix that a future change has to get past.
 | **Phase** | A6 |
 | **Reproduce (unit)** | `go test ./kv -run 'StealSomebodyElsesLock'` |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M65-rollback-takes-any-lock.patch && go run ./cmd/simctl replay --bundle seeds/BUG-019` |
-| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **41**, where the mutant reproduces it under the workload as it stands today |
+| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **9**, re-recorded at BUG-022's fix — the read mark moved every raft trace, and seed 41 regenerated cleanly while no longer reaching M65 at all, which is the search §16.3 warns a regeneration is |
 | **Invariant that caught it** | bank conservation over client-observed history — the accounts sum to what they summed to at the beginning |
 | **Mutant class** | none existed — added `M65-rollback-takes-any-lock` and `M66-commit-takes-any-lock` |
 | **Fix commit** | *(this commit)* |
@@ -1234,6 +1234,7 @@ with the two fixes that would close it.
 | **Invariant that caught it** | transaction atomicity — a rolled-back transaction has no committed key |
 | **Mutant class** | none existed — added **two**, `M67-minting-drops-the-node-tag` and `M68-restart-timestamp-derived-not-minted`, in the same commit as the fix |
 | **Fix commit** | option A, both halves (DESIGN-A6 §22) |
+| **Reproduce (bundle)** | **none, and the reason is structural.** The corpus arrangement is *bundle carries the schedule, mutant carries the defect*, and this defect is a **pair**: a tree with only `M67` applied still refuses the collision `M68` allows, and vice versa. No single mutant reintroduces the bug, so no bundle can name one that reproduces it. A 300-seed search under `M67` found nothing, and `M67`'s covering test is a **unit test in `./hlc/`** rather than a sweep — which said the same thing earlier, in a form nobody read as this |
 
 **Symptom.** *"transaction 29 (start …840000000.26) is ROLLED BACK on its primary `a07`, and key
 `a05` is committed at …840000000.59. Half of an aborted transaction is visible."*
@@ -1285,62 +1286,139 @@ against 0 of 10 clean. §22.6 has the class both survivals belong to.
 
 ---
 
-### BUG-022 — the bank still loses and creates money after BUG-021 is fixed **[OPEN]**
+### BUG-022 — a transaction committed underneath an answer the database had already given
 
 | field | value |
 |---|---|
 | **Found by** | sim — `bank-conservation`, the post-fix exit run |
 | **Phase** | A6 |
-| **Reproduce (seed)** | seed **2521** (`sum = -19`), seed **10303** (`sum = +10`) |
+| **Reproduce (test)** | `go test ./sim/hunt -run TestBUG022` |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M71-a-read-leaves-no-mark.patch && go run ./cmd/simctl replay --bundle seeds/BUG-022` |
+| **Reproduce (seed)** | seed **2521**: the audit at `1600000008790243029.0` sums to **-19** |
+| **First violating step** | range **1, index 111** — the commit record for `a00` at `1600000007630000000.3072`, written after the read at index 107 had been answered at `1600000007750000000.514` |
 | **Invariant that caught it** | bank conservation over client-observed history |
-| **Status** | **OPEN — root cause unknown** |
+| **Mutant class** | none existed — added **two**, `M71-a-read-leaves-no-mark` and `M72-prewrite-ignores-the-read-mark`, in the same commit as the fix, one per independently implementable half |
+| **Fix commit** | the read mark: a fifth record kind, and a third first-committer-wins guard |
 
-**BUG-021's fix is credited with exactly what it removed: about 40%.** ~27 violations per 2,500
-seeds before, **16 after**, with identity collisions **38 to 0** across the run and foreign tags and
-stale restarts at zero. Crediting the fix with the whole residue would have been wrong, and crediting
-it with nothing would have been wrong too. The remainder is not the identity collision — `IdentityCollisions`, `ForeignTagStarts` and
-`StaleRestarts` are all **zero** in the post-fix shards.
+**Symptom.** *"the audit at 1600000008790243029.0 read all 8 accounts and they sum to -19, not 0."*
 
-**Both directions occur.** Seed 2521 loses 19 units; seed 10303 creates 10. A pure lost-write class
-would only ever lose.
+### ROOT CAUSE: a commit landed below a read that had already been answered
+
+The whole finding is five entries of range 1's committed log, and `a00` is the key:
+
+```
+r1 idx=106  txn-get   a00  at 1600000007480000000.1792  -> "-15@4"    (txn 16)
+r1 idx=107  txn-get   a00  at 1600000007750000000.514   -> "-15@4"    (txn 26)
+r1 idx=109  prewrite  a00  start 1600000007480000000.1792  "4@16"
+r1 idx=111  commit    a00  start ...1792 -> commit 1600000007630000000.3072
+r1 idx=112  prewrite  a00  start 1600000007750000000.514   "-20@26"
+```
+
+Txn 26 was told `a00 = -15` **at 7.75**. Txn 16 then committed `a00 = 4` **at 7.63**, which is
+*below* the timestamp txn 26 had already read at. Txn 26's snapshot therefore acquired a commit after
+the fact: the value at its own timestamp was no longer the value it had been given, and the balance
+it wrote — `-20`, computed from `-15` — silently discarded txn 16's transfer of 19 units. -19 is the
+sum the audit saw, and 19 is the amount txn 16 moved.
+
+**Nothing here is a fault.** No crash, no partition, no drop. Two transactions, one key, and two
+clocks.
+
+### Neither existing guard could fire, and that is the finding
+
+`PrewriteInto` had two checks, and each is correct:
+
+- **`ErrKeyIsLocked` covers LOG order.** It refuses a prewrite that arrives while somebody else's
+  lock stands — here, the window `[109, 111)`. Txn 26's prewrite arrived at **112**, one entry after
+  the lock was released.
+- **`ErrWriteConflict` covers TIMESTAMP order.** It refuses a prewrite whose start timestamp sits
+  below a commit already recorded. Txn 16's commit timestamp (7.63) is *below* txn 26's start
+  (7.75), so there was nothing to refuse.
+
+> **The two are total only where log order and timestamp order agree, and nothing in this system
+> makes them agree.**
+
+Percolator gets the agreement from its **single TSO**: a commit timestamp is drawn *after* the
+prewrite, so it is above every start timestamp issued before it, and any read answered before the
+prewrite is therefore below the commit. That is a property of the timestamp source, not of the
+protocol — and it is nowhere in the protocol's own statement, which is why it survived being read
+carefully three times.
+
+Per-node HLCs do not give it. A transaction's timestamps come from `Node.Now()`, which reads
+`m.replicas[0].hlc` — the **lowest-numbered range on that node**. Two nodes holding different ranges
+therefore mint transaction timestamps from two clocks that **exchange no messages at all**: a range's
+HLC advances only on messages for that range. They are coupled by physical time alone, and A6's clock
+holds put them up to 90% of `maxOffset` — 450 ms — apart. Here the gap was 120 ms, and the read
+landed inside it.
+
+This is CARRY-FORWARD's **transaction identity gap** arriving from the other side. That entry
+predicted two nodes minting the *same* timestamp; this is two nodes minting timestamps in the *wrong
+order*, from the same cause.
+
+### The fix: a read mark, and a third guard
+
+First-committer-wins was checked against writers only. **A reader that has already been answered from
+above my snapshot is as much a first committer as a writer is**, because my commit lands above my
+start and can still land below their read.
+
+Two halves, independently implementable, hence two mutants:
+
+1. **The mark is recorded** (`M71`). A fifth record kind, `r <key> <^read_ts>`: the highest timestamp
+   this range has been asked for this key at. Staged by `applyTxnTo`'s `OpTxnGet` case — the apply
+   path the driver and the replay share — so it is a function of the log on both sides. **It is a
+   function of the log only because in A6 every read IS a log entry**; A7 serves reads off-log via
+   read index, and DESIGN-A7 has to say what replaces this before the first such read is answered.
+2. **The mark is enforced** (`M72`). `PrewriteInto` refuses with `ErrWriteConflict` when the key's
+   mark is **strictly** above the prewriter's start timestamp. Strictly, because a transaction reads
+   its own keys at its own start timestamp, so `LessEq` would refuse every prewrite in the system.
+
+**Why the three now compose, stated as the argument it is.** After the guard,
+`readMark(key) <= startTS < commitTS`. So no read *before* the prewrite was answered at or above the
+commit timestamp; and a read *after* the prewrite either sits at or above `startTS` and blocks on the
+lock, or sits below `startTS` and so below `commitTS`. It rests on `startTS != commitTS`, which holds
+because both are minted and two mints never collide — the node tag separates nodes, the logical
+counter separates mints on one node, and `IdentityCollisions` asserts the cross-node half at zero on
+every exit run.
+
+**What the fix does to the same schedule.** Seed 2521 replays identically up to index 109, where txn
+16's prewrite is now refused by `a00`'s mark, and txn 16 aborts explicitly at index 110. Txn 26 then
+commits `-20@26` from a snapshot nothing contradicted, and the audit sums to zero.
+
+**What it costs, measured rather than assumed.** Across 200 seeds: 71,933 marks staged, 1,802
+prewrites refused by the new guard, and a commit rate of **0.611** against **0.624** and **0.615** on
+the two pre-fix 25,000-seed runs. The refusals are almost entirely transactions that were losing
+anyway by a slower route: `PrewriteBlocked` fell from 1,791 to 392 per 200 seeds as the refusal moved
+earlier.
+
+**The fifth kind is inherited like the other four.** `owns()`, `Records()` and `IngestRecordsInto`
+carry it, so splits, snapshots and restarts move it without further code — which is what
+`Records()`'s own comment promised a fifth kind would get. And its timestamp is in the **key** rather
+than the value, so `kv.TimestampOf` reads it and BUG-023's clock invariant covers it. That is not
+decoration: a read mark is the one record kind with **no companion data version at its timestamp**, so
+the argument that excuses locks from that invariant does not reach it.
 
 ### The wrong-transaction-version hypothesis is DISCONFIRMED
 
-A roll-forward or rollback applied against another transaction's version would move money either way
-depending on which side it landed on, which fits the evidence. It is not what happens:
+Kept, because it was the first hypothesis and it was wrong. A roll-forward or rollback applied against
+another transaction's version would move money either way depending on which side it landed on, which
+fits the evidence. It is not what happens:
 
 | seed | apply-resolutions | landed where the last prewrite was a different transaction |
 |---|---|---|
 | 2521 | 15 | 1 |
 | 10303 | 5 | **0** |
 
-Seed 10303 has **no** mispointed resolution at all and still creates 10 units.
+Seed 10303 had **no** mispointed resolution at all and still created 10 units.
 
-### The lead that replaces it: first-committer-wins may not be holding
+### The lead that replaced it was right in shape and wrong in every detail
 
-The failing audit on seed 10303 sees, at `…005203989560.0`:
+The second hypothesis was *"first-committer-wins may not be holding"*, and it named seed 10303's txn 0
+and txn 31 on `a04`: txn 0 appeared to start before txn 31 committed the key it overwrote. **The shape
+was right and the instance was not.** Txn 0 had *restarted*, and the ledger was recording the start
+timestamp it had abandoned — see BUG-024, which is both the reason that instance was misread and a
+separate defect in its own right. Seed 10303's real cause is BUG-024; seed 2521's is this entry.
 
-```
-a00=-3@38  a01=-29@9  a02=1@5  a03=-27@31  a04=49@0  a05=-4@0  a06=24@22  a07=-1@25   sum = +10
-```
-
-Every writer committed. The suspicious pair is **txn 31** (`[a03,a04]`, commit `…004899782629`) and
-**txn 0** (`[a04,a05]`, start `…004838467554`, commit `…005034783256`).
-
-**Txn 0 started BEFORE txn 31 committed `a04`, and its write to `a04` is the one that survives.** So
-txn 0's value for `a04` was computed from a snapshot that could not have contained txn 31's write to
-the same key. That is a lost update, and it is exactly what `PrewriteInto`'s conflict check exists to
-prevent:
-
-```go
-if commit, _, ok, err := s.newestCommit(key); ... else if ok && l.StartTS.Less(commit) {
-    return ErrWriteConflict
-}
-```
-
-Either that check did not fire, or the interleaving reached a state it does not cover — a prewrite
-landing before the competing commit record exists, with the lock released between. **Not yet
-established, and the next step is the committed log for `a04` on that seed.**
+Two seeds, two causes, one symptom, and the only reason they were ever one line in a table is that
+`bank-conservation` reports a number rather than a mechanism.
 
 ### Why seed 2521's 12 inversions touch no account — structural, not coincidence
 
@@ -1355,7 +1433,8 @@ range 1, long-lived, and never a fresh child.
 So a cross-range timestamp inversion can only appear on a `k*` key, and never on an `a*` account —
 not because the accounts got lucky on that seed, but because nothing stamps them per-range. That is
 also why BUG-023's fix left BUG-022 untouched, which is the prediction the evidence already
-confirmed.
+confirmed. **And it is the same fact that made this bug possible**: `replicas[0]` is a different range
+on different nodes, so "the transaction clock" is several clocks.
 
 **Independence from BUG-021, established rather than assumed.** Reproducing at a commit where
 BUG-021 was live proves nothing on its own — the pre-fix run carried 38 collisions — so the seeds
@@ -1370,21 +1449,26 @@ counter used the narrow key that reads zero on collisions:
 So **seed 2521 establishes independence**: it violated before the fix, with no collision anywhere in
 the run, so BUG-021 contributed nothing to it.
 
-**Seed 10303 does not, and is recorded as the weaker evidence it is.** It is clean at `90382fc` and
-fails only after the fix. That is expected without being reassuring: tagging the logical counter
-changes every timestamp, so the schedule a seed produces changes with it, and seeds shuffle in and
-out of failing. The aggregate is what says the fix did not add violations — 16 per 2,500 after
-against ~27 before — and 10303 on its own says nothing either way.
+**What it would have caused in production.** A silent lost update between two transactions that never
+touched each other's locks, on a cluster whose clocks were inside their advertised bound, with every
+structural invariant of the database intact afterwards. There is no repair procedure, because there is
+no record that anything happened: the database is a perfectly well-formed Percolator store with money
+missing from it. It needs no fault to occur, and its rate scales with clock skew and with read volume
+on contended keys.
 
-### BUG-023 — a completed write was invisible to a later read, on a range at log index 1 **[OPEN]**
+### BUG-023 — a completed write was invisible to a later read, on a range at log index 1
 
 | field | value |
 |---|---|
 | **Found by** | sim — **porcupine**, per-key linearizability, the post-fix exit run |
-| **Phase** | A6 (defect is A4-shaped) |
+| **Phase** | A6 (defect is A4-shaped: reachable since A5, invisible until A6's fault mix) |
+| **Reproduce (test)** | `go test ./sim/hunt -run TestBUG023` |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M70-ingest-does-not-seed-the-clock.patch && go run ./cmd/simctl replay --bundle seeds/BUG-023` |
 | **Reproduce (seed)** | seed **12504**, key `k06` |
+| **First violating step** | range **14, index 1** — a read of `k06` stamped `1600000002803920401.1280`, 92 ms of wall clock below the write it should have seen |
 | **Invariant that caught it** | per-key linearizability — the A1 claim |
-| **Status** | **OPEN — root cause unknown, with a specific lead** |
+| **Mutant class** | none existed — added `M70-ingest-does-not-seed-the-clock`, in the same commit as the fix. Its sibling `M69` (the split entry's own floor) was **deleted with the half it removed**: that path was unreachable, and a mutant nothing can kill is a report of dead code rather than a gap (DESIGN-A6 §25.1) |
+| **Fix commit** | every path that ingests records seeds the range's clock from the maximum timestamp among them |
 
 The history is short and unambiguous:
 
@@ -1469,7 +1553,9 @@ Seed 12504's inversions are on the failing key itself. Seed 2521 has inversions
 but **none on an account**, and seed 10303 has none at all. Bank timestamps come
 from `Node.Now()`, which reads `replicas[0].hlc` — the lowest-numbered range,
 long-lived, never a fresh child — so the bank is structurally not exposed to this
-defect. BUG-022 stays open with its own cause.
+defect. **BUG-022 has its own cause and its own fix** — a commit landing below a
+read already answered — and the prediction this table makes was confirmed by
+fixing this one and watching BUG-022 survive it untouched.
 
 **It is not a plain-workload read at a remembered timestamp.** Those are excluded from the
 linearizability history by construction, and the ledger shows this one carrying a node-tagged
@@ -1477,3 +1563,51 @@ timestamp — a live read, not a snapshot read.
 
 **Independence from BUG-021, established.** Seed 12504 has **zero shared start timestamps** pre-fix
 under the widened definition, and fails there anyway. BUG-021 contributed nothing to it.
+
+### BUG-024 — a transaction computed its writes from two different snapshots
+
+| field | value |
+|---|---|
+| **Found by** | sim — `bank-conservation`, while investigating BUG-022 |
+| **Phase** | A6 |
+| **Reproduce (test)** | `go test ./sim/hunt -run TestBUG024` |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M73-a-read-answer-lands-in-any-incarnation.patch && go run ./cmd/simctl replay --bundle seeds/BUG-024` |
+| **Reproduce (seed)** | seed **10303**: the audit at `1600000005203989560.0` sums to **+10** |
+| **First violating step** | the read answer that arrived after the restart, carrying the abandoned snapshot's timestamp; the guard now counts it as `StaleIncarnation`, and seed 10303 produces exactly **one** |
+| **Invariant that caught it** | bank conservation over client-observed history |
+| **Mutant class** | none existed — added `M73-a-read-answer-lands-in-any-incarnation`, in the same commit as this entry |
+| **Fix commit** | a read answer is rejected unless `cmd.ReadTS == t.startTS` |
+
+**Symptom.** *"the audit at 1600000005203989560.0 read all 8 accounts and they sum to +10, not 0."*
+
+**Root cause.** A transaction that finds a commit inside its uncertainty interval restarts: it takes a
+**new** start timestamp and re-reads every key. The reads it issued *before* the restart are still in
+flight. Their answers arrive afterwards, carrying the old snapshot's values, and nothing checked which
+incarnation an answer belonged to — so they landed in the new snapshot's read set. The transfer then
+computed its writes from **two different instants**, which conserves nothing, in whichever direction
+the two snapshots happened to differ. Seed 10303 gained 10 units; seed 2521 lost 19 by a different
+cause entirely (BUG-022).
+
+**It is BUG-020's family: an answer accepted for the wrong incarnation.** The epoch guard in `store`
+exists for the same shape one layer down — a durability completion from a dead incarnation arriving
+after a restart — and the phrase is borrowed from it deliberately, because the fix is the same one:
+stamp the request with the incarnation and check the stamp on the way back.
+
+**The harness defect it was hiding, and why it is recorded here rather than only in a commit.** The
+same investigation misread seed 10303 as a first-committer-wins failure between txn 0 and txn 31,
+because `RecordTxnBegin` recorded a transaction's **original** start timestamp and nothing updated it
+when the transaction restarted. The ledger therefore placed txn 0 before a commit it actually
+followed. `TxnRecord.Restarts` existed as a field **nothing ever wrote**, so the note left for the
+next reader — *check `Restarts` before reasoning about two transactions' relative start times* —
+pointed at a number that is zero however many restarts occurred. That is the vacuous-evidence class
+wearing the shape of a correction. It is fixed in the same commit: `Ledger.RecordTxnRestart` moves the
+recorded start timestamp and counts the restart, and the exit run asserts the ledger's restart count
+**equals the coordinator's**, so the day the recording path stops being called the run says so
+instead of quietly describing transactions that never existed. Per DR-29 the harness defect belongs in
+its fix commit and the design doc; it is named here because it is the reason this entry's own
+investigation went wrong first, and an entry that hid that would be teaching the wrong lesson.
+
+**What it would have caused in production.** A client library whose retry-on-uncertainty path accepted
+late answers would corrupt a transaction's read set without any error anywhere, on a schedule with no
+faults in it. The corruption is proportional to how much the two snapshots differ, so it is largest
+exactly when the workload is busiest.

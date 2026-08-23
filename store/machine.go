@@ -466,6 +466,14 @@ func (m *Node) TxnRaceLost() int {
 	return m.sum(func(r *Replica) int { return r.TxnRaceLost() })
 }
 
+func (m *Node) ReadMarks() int {
+	return m.sum(func(r *Replica) int { return r.ReadMarks() })
+}
+
+func (m *Node) ReadConflicts() int {
+	return m.sum(func(r *Replica) int { return r.ReadConflicts() })
+}
+
 func (m *Node) ResolveWaits() int {
 	return m.sum(func(r *Replica) int { return r.ResolveWaits() })
 }
