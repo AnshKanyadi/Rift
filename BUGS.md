@@ -1304,6 +1304,59 @@ it with nothing would have been wrong too. The remainder is not the identity col
 **Both directions occur.** Seed 2521 loses 19 units; seed 10303 creates 10. A pure lost-write class
 would only ever lose.
 
+### The wrong-transaction-version hypothesis is DISCONFIRMED
+
+A roll-forward or rollback applied against another transaction's version would move money either way
+depending on which side it landed on, which fits the evidence. It is not what happens:
+
+| seed | apply-resolutions | landed where the last prewrite was a different transaction |
+|---|---|---|
+| 2521 | 15 | 1 |
+| 10303 | 5 | **0** |
+
+Seed 10303 has **no** mispointed resolution at all and still creates 10 units.
+
+### The lead that replaces it: first-committer-wins may not be holding
+
+The failing audit on seed 10303 sees, at `…005203989560.0`:
+
+```
+a00=-3@38  a01=-29@9  a02=1@5  a03=-27@31  a04=49@0  a05=-4@0  a06=24@22  a07=-1@25   sum = +10
+```
+
+Every writer committed. The suspicious pair is **txn 31** (`[a03,a04]`, commit `…004899782629`) and
+**txn 0** (`[a04,a05]`, start `…004838467554`, commit `…005034783256`).
+
+**Txn 0 started BEFORE txn 31 committed `a04`, and its write to `a04` is the one that survives.** So
+txn 0's value for `a04` was computed from a snapshot that could not have contained txn 31's write to
+the same key. That is a lost update, and it is exactly what `PrewriteInto`'s conflict check exists to
+prevent:
+
+```go
+if commit, _, ok, err := s.newestCommit(key); ... else if ok && l.StartTS.Less(commit) {
+    return ErrWriteConflict
+}
+```
+
+Either that check did not fire, or the interleaving reached a state it does not cover — a prewrite
+landing before the competing commit record exists, with the lock released between. **Not yet
+established, and the next step is the committed log for `a04` on that seed.**
+
+### Why seed 2521's 12 inversions touch no account — structural, not coincidence
+
+The ruling asked for this to be explained rather than set aside, and the explanation is structural.
+
+**Plain keys and bank accounts are stamped by different clocks.** A plain put or get is stamped at
+propose by the *range's* HLC (`n.hlc.Now()` in `onClient`), so a key living in a split-born range gets
+that range's clock — which is what BUG-023 was about. A transaction's timestamps come from
+`Node.Now()`, which reads `m.replicas[0].hlc`: the **lowest-numbered** range on the node, which is
+range 1, long-lived, and never a fresh child.
+
+So a cross-range timestamp inversion can only appear on a `k*` key, and never on an `a*` account —
+not because the accounts got lucky on that seed, but because nothing stamps them per-range. That is
+also why BUG-023's fix left BUG-022 untouched, which is the prediction the evidence already
+confirmed.
+
 **Independence from BUG-021, established rather than assumed.** Reproducing at a commit where
 BUG-021 was live proves nothing on its own — the pre-fix run carried 38 collisions — so the seeds
 were checked for shared start timestamps directly, using the WIDENED definition, since the pre-fix
