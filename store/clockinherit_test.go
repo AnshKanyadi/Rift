@@ -100,9 +100,9 @@ func TestARangeIngestingRecordsRaisesItsClock(t *testing.T) {
 	// correct: a parent more than maxOffset ahead of this node would itself have
 	// been refused, so the case cannot arise in a run. A hundred milliseconds is
 	// the realistic gap, and it is the one that has to work.
-	high := hlc.Timestamp{Wall: c.Now().Wall + clock.Wall(100_000_000), Logical: 5<<hlc.IDBits | 1}
+	high := hlc.Timestamp{Wall: c.Now().Wall.Add(100 * time.Millisecond), Logical: 5<<hlc.IDBits | 1}
 	recs := []kv.Record{
-		{Key: kv.EncodeKey(ns, []byte("k"), hlc.Timestamp{Wall: high.Wall - 1_000_000, Logical: 1}), Value: []byte("a")},
+		{Key: kv.EncodeKey(ns, []byte("k"), hlc.Timestamp{Wall: high.Wall.Add(-time.Millisecond), Logical: 1}), Value: []byte("a")},
 		{Key: kv.EncodeKey(ns, []byte("k"), high), Value: []byte("b")},
 	}
 
