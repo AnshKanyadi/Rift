@@ -2134,3 +2134,73 @@ the condition. §28 says it about BUG-022 from the other side: the *oracle* set 
 mix finds what the old mix could not reach. Nothing widens a mix into finding an assumption you did
 not know you were making; only reading the argument for what it needs, rather than for what it says,
 does that.
+
+---
+
+## 31. `make power-mutants` has been red since M67 and M70 landed
+
+Found while making the lane affordable, not while looking for it, which is the only reason it was
+found at all.
+
+**The state.** At `087229a` — the commit the handoff describes as *"tree clean, all fast lanes
+green"* — `power-mutants` fails on two classes:
+
+```
+DROPPED  M67-minting-drops-the-node-tag       rate 0 of 1, floor 1 (current)
+SLOWED   M67-minting-drops-the-node-tag       first detection at seed -1, ceiling 1 (current)
+DROPPED  M70-ingest-does-not-seed-the-clock   rate 0 of 1, floor 1 (current)
+SLOWED   M70-ingest-does-not-seed-the-clock   first detection at seed -1, ceiling 1 (current)
+```
+
+Measured on a worktree at that commit, so this is **not** something BUG-022's fix caused. Both
+mutants landed in this phase, with BUG-021's and BUG-023's fixes. The lane went red the day they were
+added and stayed red, in `make ci` and in the workflow, through every subsequent report.
+
+**The cause is a category error in the declaration, not a power regression.** Both patches declare
+
+```
+# power-seeds: 1
+# power-floor: 1
+# power-ceiling: 1
+# power-measured: ... killed deterministically by its covering test ...
+```
+
+and both covering tests are **unit tests** — `TestTwoNodesNeverMintTheSameTimestamp` in `./hlc/`,
+`TestARangeIngestingRecordsRaisesItsClock` in `./store/`. `TestPowerProbe` measures **sweep**
+detection: it runs `MaterializeRaftWith`/`RunRaftWith` over a seed range and counts the seeds that
+notice. A class covered deterministically by a unit test has no sweep detection at seed 0, so a
+one-seed sweep floor of one is a claim the probe can never satisfy.
+
+The two numbers were written as *"detection is immediate and the floor is exact rather than
+statistical"* — which is true of the unit test and false of the instrument that reads the header.
+**The header and the lane were describing two different measurements with one vocabulary.**
+
+**Why this is the vacuous-green class again, and a new shape of it.** The lane's job is to notice
+when a class stops being detectable. It has been shouting since it was given two classes it cannot
+measure — and the shouting was invisible, because nothing ran it. So the failure mode is not "a lane
+reported green while blind" but "**a lane reported red into a room with nobody in it**", which is what
+having no remote turns every honest failure into. It is §20's finding a second time and it is the
+third lane this phase to be found stopped.
+
+**The resolution is not made here, deliberately.** Two different answers, and each needs the
+measurement that is already owed:
+
+- **M67 → an explicit opt-out with the reason.** Its defect is two nodes minting one timestamp; the
+  pre-fix exit run carried 38 collisions in 25,000 seeds, so sweep detection is order 1 in a thousand
+  and a unit test is the correct instrument. `# power: n/a -- ...` is the mechanism the lane provides
+  for exactly this, and the class stays covered by `make mutants`.
+- **M70 → a real sweep floor.** BUG-023 occurs in roughly one seed in ninety under holds (§26), so
+  this class *is* sweep-detectable and should carry a measured floor and ceiling rather than an
+  opt-out.
+
+Both changes turn a red lane green, which is the one direction that needs the measurement to land
+first rather than the argument. They are taken in the solo slot with the rest of the power
+re-measurement, and not before.
+
+**And it is why `POWER_JOBS` exists.** The lane is 14,700 seed-runs, about fifteen CPU-hours run one
+at a time, and the reason its numbers are all still A5's is that nobody schedules fifteen hours. The
+measurement parallelises **exactly** — a detection count and a first-detecting seed are functions of
+the seed and the patch alone, because `MaterializeRaftWith(seed, opt)` derives a whole plan from the
+seed — so `POWER_JOBS=N` produces byte-identical output to `POWER_JOBS=1`, verified on two classes
+before being used on sixty. What does *not* survive parallelism is Amendment A2's
+wall-time-to-detection, and that half is either measured at `POWER_JOBS=1` or not claimed.

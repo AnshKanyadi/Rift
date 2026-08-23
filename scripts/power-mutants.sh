@@ -63,6 +63,30 @@
 # mutants ended up with four floors between them.
 #
 # usage: power-mutants.sh [--measure] [patch-dir]
+#
+# # POWER_JOBS: the lane's own budget problem, answered
+#
+# 36 classes measure under `current`, which is now A6's shape: about 14,700
+# seed-runs at ~3.75 s/seed, or fifteen CPU-hours run one at a time. That is not
+# a number anybody schedules, and the consequence of not scheduling it is the one
+# CARRY-FORWARD already records -- every floor in the tree is still measured
+# under A5's cost.
+#
+# The measurement parallelises exactly, and the reason is worth stating rather
+# than assumed: **what this lane produces is a detection COUNT and a
+# first-detecting SEED, and both are functions of the seed and the patch alone.**
+# `MaterializeRaftWith(seed, opt)` derives a whole plan from the seed; nothing in
+# a run depends on what else the machine is doing. So N mutants measured
+# concurrently give byte-identical numbers to N measured in turn.
+#
+# What does NOT survive parallelism is wall-time-to-detection, which Amendment A2
+# also asks for. That half is measured with POWER_JOBS=1 or not claimed, and the
+# report says which -- a number taken under contention reported as a solo one is
+# the shape of dishonesty this file exists to avoid.
+#
+# Output order is unchanged: every mutant writes its own result file and the
+# report is printed in patch order afterwards, so a parallel run and a sequential
+# run produce the same text.
 set -eu
 
 GO=${GO:-go}
@@ -70,6 +94,7 @@ MEASURE=no
 if [ "${1:-}" = "--measure" ]; then MEASURE=yes; shift; fi
 PATCHDIR=${1:-sim/mutants}
 ROOT=$(pwd)
+JOBS=${POWER_JOBS:-1}
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT INT TERM
@@ -78,6 +103,41 @@ copy_tree() {
   mkdir -p "$1"
   tar cf - --exclude=./.git --exclude=./.github . | (cd "$1" && tar xf -)
 }
+
+# measure_one runs one patch's probe and writes "status<TAB>detail" to $2.
+measure_one() {
+  patch=$1; out=$2
+  id=$(sed -n 's/^# id: *//p' "$patch")
+  seeds=$(sed -n 's/^# power-seeds: *//p' "$patch")
+  cfg=$(sed -n 's/^# power-config: *//p' "$patch"); [ -n "$cfg" ] || cfg=current
+  case $patch in /*) abs=$patch ;; *) abs=$ROOT/$patch ;; esac
+  work="$scratch/$id"
+  copy_tree "$work"
+  if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
+    printf 'ROT\t\n' > "$out"; rm -rf "$work"; return 0
+  fi
+  probe=$(cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
+    $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER ' || true)
+  rm -rf "$work"
+  if [ -z "$probe" ]; then printf 'ERROR\t\n' > "$out"; return 0; fi
+  printf 'OK\t%s\n' "$probe" > "$out"
+}
+
+# Phase one, when POWER_JOBS > 1: every measurable patch runs concurrently,
+# throttled, into its own result file. The report below then reads the files
+# instead of running the probe, so its shape and its order are unchanged.
+if [ "$JOBS" -gt 1 ]; then
+  running=0
+  for patch in "$PATCHDIR"/*.patch; do
+    id=$(sed -n 's/^# id: *//p' "$patch")
+    [ -n "$(sed -n 's/^# power: *//p' "$patch")" ] && continue
+    [ -n "$(sed -n 's/^# power-seeds: *//p' "$patch")" ] || continue
+    measure_one "$patch" "$scratch/$id.result" &
+    running=$((running + 1))
+    if [ "$running" -ge "$JOBS" ]; then wait; running=0; fi
+  done
+  wait
+fi
 
 printf '\n  harness power, per mutant class\n'
 printf '  ----------------------------------------------------------------\n'
@@ -115,21 +175,31 @@ for patch in "$PATCHDIR"/*.patch; do
     continue
   fi
 
-  case $patch in
-    /*) abs=$patch ;;
-     *) abs=$ROOT/$patch ;;
-  esac
-  work="$scratch/$id"
-  copy_tree "$work"
-  if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
+  if [ "$JOBS" -gt 1 ]; then
+    status=$(cut -f1 "$scratch/$id.result" 2>/dev/null || echo ERROR)
+    out=$(cut -f2- "$scratch/$id.result" 2>/dev/null || true)
+  else
+    case $patch in
+      /*) abs=$patch ;;
+       *) abs=$ROOT/$patch ;;
+    esac
+    work="$scratch/$id"
+    copy_tree "$work"
+    if (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
+      out=$(cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
+        $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER ' || true)
+      status=OK
+      [ -n "$out" ] || status=ERROR
+    else
+      status=ROT
+    fi
+  fi
+  if [ "$status" = ROT ]; then
     printf '   ROT      %s: patch no longer applies\n' "$id"
     failed=$((failed + 1))
     continue
   fi
-
-  out=$(cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
-    $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER ' || true)
-  if [ -z "$out" ]; then
+  if [ "$status" != OK ] || [ -z "$out" ]; then
     printf '   ERROR    %s: the probe produced no measurement.\n' "$id"
     printf '            A power lane that cannot measure is a power lane reporting nothing.\n'
     failed=$((failed + 1))
