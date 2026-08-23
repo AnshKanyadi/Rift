@@ -1551,3 +1551,80 @@ undercounts by construction and the 223-in-20,000 violations are not yet
 class. If they do not, what remains is a second finding and A6 does not close.
 That is the honest form of the claim until the run lands, and it is why the
 attribution is stated as pending rather than asserted.
+
+---
+
+## 25. BUG-023's fix, and the mutant that survives it
+
+`hlc.NewAt` and `Replica.seedClockAtLeast` are the fix, in two floors that are
+separately implementable and were given a mutant each per §22.6b:
+
+| floor | mutant | verdict |
+|---|---|---|
+| the child seeds from the value the split **entry** carries | `M69` | **SURVIVES** |
+| every path that **ingests records** raises the clock to their maximum | `M70` | killed |
+
+**M69 survives, and I think the half it removes is redundant.** The invariant is
+*no range's clock sits below a version it **holds***. A child that inherits an
+empty half holds none, so there is nothing for a low clock to hide; and a child
+that inherits versions gets a floor from those versions directly. In every case
+where the invariant can be violated, the record-derived floor already binds.
+
+So the question for a ruling is whether `spec.ClockAt` is defence in depth worth
+keeping or a mechanism nothing would notice the absence of. **This project's own
+standard says the second is not worth keeping**, and I have not removed it
+because the ruling that asked for two floors is more recent than my analysis.
+
+**Two failed attempts at killing M69 are worth recording**, because both were the
+same mistake and it is the third and fourth time today:
+
+1. `TestBUG023` — the seed the bug was found on. Both mutants survived it, because
+   on that schedule the child inherits records *and* carries the entry's value, so
+   the two floors are redundant there and removing either changes nothing.
+2. `TestASplitChildWithNoRecordsStillInheritsTheClock` — which calls
+   `seedClockAtLeast` **inline** rather than through `applySplit`. The mutant
+   removes the call site; the test replicates it; the test cannot fail.
+
+That second one is exactly §22.6's class — *a guard inside the code path a defect
+removes is removed by that defect* — written down three hours earlier and repeated
+anyway. M70 needed the same correction and got it: it now goes through the real
+`ingest`.
+
+**And M70's test needed two arithmetic corrections before it could fail at all**:
+its timestamps started below the simulated clock, so the floor never bound; then
+five seconds above it, so `Update` refused them as beyond `maxOffset` — correctly,
+since a parent more than `maxOffset` ahead would itself have been refused. A
+hundred milliseconds is the realistic gap and the one that has to work.
+
+---
+
+## 26. What a phase sign-off means
+
+BUG-023 is a defect in A4's split path and A5's per-range clock, found at A6. Both
+phases were signed on 10,000 seeds with zero violations. Ansh's ruling was that the
+**sign-offs stand and the record is amended rather than retracted**, and the
+reasoning generalises past this bug:
+
+> **A verification claim is bounded by the fault mix it ran under. A signed phase
+> is signed against a mix, not against the world.**
+
+Those sweeps were not wrong. Nothing in them failed, and no oracle missed what it
+was pointed at. What was bounded is what the mix could *reach* — and this project
+has said since A0 that a schedule mix is a claim about reachability, not a
+configuration detail.
+
+It has now demonstrated that twice, with numbers:
+
+| | narrow mix | wide mix |
+|---|---|---|
+| **M34** (BUG-009's class) | **0** detections in 3,000 seeds | 1 in 3,000 |
+| **BUG-023** | **unreachable** — no clock skew injected at all | ~1 seed in 90 once holds were on |
+
+M34 is the case where widening a mix made a rare defect reachable. BUG-023 is the
+sharper one: a **common** defect, one in ninety, invisible for four phases because
+the mix could not produce the condition. Seed count buys depth inside the
+schedules a mix can produce and nothing outside them.
+
+**A stranger reading BUGS.md should meet this framing before inferring that a
+green phase means a correct phase.** It does not. It means the phase survived a
+stated mix with stated oracles, and both halves of that sentence are load-bearing.

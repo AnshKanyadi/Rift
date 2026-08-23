@@ -575,3 +575,24 @@ first, both times on a clock rather than a race (§9.5).
 
 **Every other lane:** build, lint (vet, formatting, the determinism pass, tooling-only, hatches),
 blind, provenance, assertions, smoke — all green.
+
+---
+
+## AMENDED AT A6: a defect in this phase's machinery, found under a later mix
+
+**A4's sign-off stands.** It was signed on 10,000 seeds with zero violations against the mix that
+existed then, and that claim was true and remains true: nothing in those sweeps was wrong, and no
+oracle failed to catch what it was pointed at.
+
+**BUG-023** is a defect in the SPLIT path — `applySplit` constructs the child range, reachable since A5, when the per-range HLC arrived, and it was found under **A6's** mix rather
+than this one. A split-born range was constructed with a fresh HLC, so it could stamp a read below a
+version it had just inherited and hide a completed write.
+
+**This phase's sweep could not reach it**, and the reason is exact: `RaftGenConfig` set
+`cfg.Holds = 0`, so the mix injected **no clock skew at all** — only ±200 ppm of free drift, under
+three milliseconds against a five-hundred-millisecond bound. The defect needs a parent clock sitting
+well above local physical time, which is what a hold arranges and what free drift does not. A6 §18
+turned holds on and the defect surfaced within hours.
+
+What this phase was verified against is what it was verified against. See DESIGN-A6 §18 for the fault
+mix, §26 for what a sign-off means, and BUGS.md BUG-023 for the defect.
