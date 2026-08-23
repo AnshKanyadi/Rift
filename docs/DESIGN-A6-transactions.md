@@ -1672,6 +1672,54 @@ before being used on sixty. What parallelism costs is per-mutant wall time, whic
 claim and does not print — kill-time lives in `make mutants`, at `POWER_JOBS=1`, or it is not
 claimed.
 
+### 25.3c The lane's first complete run, and what it found
+
+`56 checked, 2 skipped, 8 failures`, and the eight are two different things.
+
+**Four genuinely mispointed covering tests** — the defect this lane was built for, found four times on
+its first complete run:
+
+| mutant | covering test | line it never executes |
+|---|---|---|
+| `M15-vacuity-rule-removed` | `TestUnknownDominatedHistoryIsInconclusive` | `sim/oracle.go:279` |
+| `M29-truncation-refused-below-the-durable-watermark` | `TestStateMachineSafetyOracleReportsNothing` | `raft/raft.go:2543-2545` |
+| `M55-collection-takes-the-version-a-read-still-needs` | `TestMVCCReadCorrectnessOracleReportsNothing` | `kv/store.go:217` |
+| `M60-commit-does-not-clear-its-lock` | `TestPercolatorInvariantsReportNothing` | `kv/txn.go:204-205` |
+
+**And the canary was correctly uncovered**, which is what makes the four credible: the lane's one
+deliberately mispointed patch reports `canary`, and the lane's own bidirectional check would have
+failed if it had become covered.
+
+**What the four claim, exactly.** Not *"this mutant cannot be killed"* — the lane's header is careful
+about that, and it is the mutant suite's job. The claim is the necessary condition all four of A6's
+dead covering tests violated: **part of what the mutant changes is never executed by the test named
+against it.** A patch with several hunks can still be killed through the hunks that are covered, and
+the class is then covered for a reason nobody wrote down. Each of the four needs its test routed
+through the real call site, and each is a small investigation of its own.
+
+**Four ERRORs, which are a budget failure rather than a coverage verdict:**
+
+| mutant | covering test | what happened |
+|---|---|---|
+| `M19` | `TestLeaderCompletenessOracleReportsNothing` | hit the 3600s timeout |
+| `M46` | `TestSplitInheritsTheConfigurationAtItsIndex` | hit the 3600s timeout |
+| `M65`, `M66` | **`TestRaftExitCriteria`** | hit the 3600s timeout |
+
+`M65` and `M66` are the sharp one and they are not fixable by raising a number: **their covering test
+is the exit run.** At A6's measured 8.4 s/seed, `TestRaftExitCriteria` at its 10,000-seed default is
+about **23 hours**. No timeout this lane could choose would let it finish, and `make mutants` has the
+same problem from the same cause — its baseline runs every covering test in one invocation, and it
+died at 3600s with `TestLeaderCompletenessOracleReportsNothing` at 34 minutes.
+
+> **A covering test that is a phase gate is not a covering test.** It cannot run per push, it cannot
+> run per mutant, and naming it means the class is verified only when somebody runs the gate.
+
+`M65` and `M66` are BUG-019's two mutants and they have precise, cheap covering tests available —
+`TestARollbackDoesNotStealSomebodyElsesLock` and `TestACommitDoesNotStealSomebodyElsesLock`, both
+already in `kv/txn_test.go` and both written for exactly this. Re-pointing them is the fix, and it is
+recorded rather than done because re-pointing a covering test changes what the mutant suite asserts,
+which is a claim about coverage that should land with its own verification rather than in a batch.
+
 ### 25.3 So it is mechanical now: `make mutant-covered`
 
 Restating the rule a fifth time would not have helped. Coverage answers it

@@ -72,6 +72,27 @@ func TestPowerProbe(t *testing.T) {
 		opt = hunt.A5Options()
 	}
 
+	// # POWER_UNTHROTTLED, and the figure it exists to produce
+	//
+	// DESIGN-A0 §7 item 9 records what the A5 collection throttle costs in
+	// DETECTION: M53's class went from 1 detection in 60 seeds to 0 in 3,000
+	// once collection was throttled. That is a number about the harness, and
+	// CARRY-FORWARD requires it re-measured under A6's shape rather than
+	// inherited from A5's.
+	//
+	// `TestUnthrottledCollector` measures the other half — collection VOLUME and
+	// whether the unthrottled shape finds a violation the throttled one hides —
+	// and it cannot measure this one, because detection is per mutant class and
+	// that lane runs no mutant. So the switch goes here, where the class is.
+	//
+	// **After the config switch, not before.** Every case above REPLACES `opt`
+	// wholesale, so a flag set beforehand is silently dropped for any class that
+	// names a shape — which is the same defect as the `a3` default that meant
+	// `current` for a phase, one line down.
+	if os.Getenv("POWER_UNTHROTTLED") != "" {
+		opt.GCUnthrottled = true
+	}
+
 	detected, first := 0, int64(-1)
 	for seed := uint64(0); seed < seeds; seed++ {
 		if noticed(seed, opt) {
