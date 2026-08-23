@@ -136,6 +136,12 @@ across a commit, `make test` unrunnable since A1, and two lanes in `make ci` abs
 workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
 *run*. Every phase that ships without a remote should expect to find another lane that stopped.
 
+**Three clock-dependent mechanisms are not established as exercised.** DESIGN-A6 §27.1: a
+snapshot-built range whose records outrank its clock; two replicas deriving different GC marks under
+skew; a snapshot read routed to a split-born range. Each needs a targeted lane, on the model of the
+150% envelope lane. None is a claim that a defect exists — each is a claim that the absence of one
+has not been shown.
+
 **Does a phase's fault mix cover the phase's own mechanisms?** DESIGN-A6 §18. `cfg.Holds = 0` was
 correct at A1 and wrong from A6, and nothing connected "this phase is clock-sensitive" to "this
 phase's plan generates clock faults". A7 adds read index, which is not clock-sensitive; STRETCH's

@@ -1628,3 +1628,53 @@ schedules a mix can produce and nothing outside them.
 **A stranger reading BUGS.md should meet this framing before inferring that a
 green phase means a correct phase.** It does not. It means the phase survived a
 stated mix with stated oracles, and both halves of that sentence are load-bearing.
+
+---
+
+## 27. What else was verified in a regime where clocks could not disagree
+
+Every phase before A6 ran with `cfg.Holds = 0`. This project's headline is clocks.
+So the retroactive question is not only about splits: **which mechanisms in the
+signed phases behave differently depending on clock state, and does A6's mix now
+exercise them?**
+
+Reported as a list, nothing fixed. Anything not exercised is a candidate for
+BUG-023's class and gets a targeted lane rather than a hope — the 150% envelope
+lane is the model.
+
+| # | mechanism | phase | depends on clocks how | exercised by A6's mix? |
+|---|---|---|---|---|
+| 1 | **election / heartbeat timeouts** | A1 | ticks, not wall clock — `Tick()` counts, and the loop drives it | **N/A**, and that is by design: `raft/` reads no clock at all |
+| 2 | **`syncLatency` and the persist-before-reply window** | A1 | a simulated duration, not a clock reading | N/A |
+| 3 | **HLC `Update` and the envelope refusal** | A5 | directly | **yes** — holds at 90%, and the 150% lane reaches the refusal (§18.2) |
+| 4 | **`Now()`'s physical-regression path** | A5 | fires when the physical clock reads behind the last issue | **yes** — `PhysicalRegressions` is nonzero under holds; it was near-zero before |
+| 5 | **per-range HLC on a split-born range** | A4×A5 | directly — **BUG-023** | **now yes**, and it found the bug |
+| 6 | **per-range HLC on a snapshot-built range** | A2×A5 | same shape as 5: a range acquired by snapshot, never applying the split | **partially** — `M70` covers the floor; whether the sweep *reaches* a snapshot-built range whose records outrank its clock is **not established** |
+| 7 | **GC mark derivation** (`now - retention`) | A5 | directly: the mark is a clock reading | **yes** — reads refused below the mark are nonzero, but whether skew makes two replicas derive *different* marks is **not checked**; the mark travels in the entry, which should make it position-derived, and that is an argument rather than a test |
+| 8 | **lock TTL expiry** | A6 | `ExpireAt` vs `Deadline`, both carried | **yes** — 930 owners declared dead per 200 seeds |
+| 9 | **uncertainty interval and its ceiling** | A6 | directly | **yes** — 256 restarts per 200 seeds |
+| 10 | **transaction start/commit timestamp allocation** | A6 | directly — **BUG-021** | **yes** — holds are what made the collision reachable |
+| 11 | **snapshot-read timestamps in the plain workload** | A5 | a remembered wall reading from a node's timeline | **yes**, but only against range 1's clock; a snapshot read routed to a split-born range is the same shape as 5 and is **not separately checked** |
+| 12 | **`clock.Sim` step vs slew realization** | A0.4 | the two are physically different and both are generated | **yes** — the generator alternates, so a corpus contains both |
+
+### 27.1 The three that are not established
+
+Rows **6**, **7** and **11**, and each gets a lane rather than an argument:
+
+- **6 — a snapshot-built range whose records outrank its clock.** `M70` proves the
+  floor works when called; nothing proves the sweep *produces* the condition. A
+  targeted lane forces a snapshot install into a range whose records were stamped
+  by a faster node.
+- **7 — two replicas deriving different GC marks under skew.** The mark is
+  proposed by the leader and carried in the entry, which should make it
+  position-derived like every other A5 fact. That is an argument, and §8's whole
+  discipline is that arguments about timestamps get written down and then checked.
+- **11 — a snapshot read routed to a split-born range.** The plain workload's
+  remembered timestamps come from node 0's timeline; a range born on another node
+  with a lower clock is BUG-023's shape at a read that is excluded from the
+  linearizability history by construction, so porcupine would never see it.
+  `percolator-invariants` #6 now would — but only if the sweep reaches it.
+
+**None of these is a claim that a defect exists.** Each is a claim that the
+absence of one has not been demonstrated, which after BUG-023 is a distinction
+worth keeping.
