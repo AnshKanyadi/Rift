@@ -2128,7 +2128,17 @@ the phase's own mechanisms* — was paid for three times over in one phase.
   the model's records are never digested against the store's. By §25.1's third meaning it is code that
   cannot be reached, and the response to that is deletion — but deleting it is a change to what the
   harness *could* check, so it is reported rather than done.
-- **There is still no remote**, and this phase is the second to find a lane that had stopped.
+- **The move-racing-churn interleaving was not re-enabled.** CARRY-FORWARD puts it on A6's checklist
+  as a candidate *"once the schedule mix is being reshaped anyway"*, and what has to be solved first
+  is `rebalance-safety`'s attribution — it cannot tell whose removal it is looking at when both
+  membership drivers are live, which produced 252 false violations in 300 seeds (BUG-016). It is not
+  attempted here for a reason that is about sequencing rather than difficulty: **re-enabling it
+  changes the fault mix, which moves every trace, which invalidates the exit run that closes the
+  phase.** `MovesRacingChurn` reads 0 across 200 seeds, the bidirectional assertion in
+  `TestRaftExitCriteria` still holds, and the record is therefore still correct — which is the
+  property that arrangement exists to guarantee: it can be forgotten loudly and not quietly.
+- **There is still no remote**, and this phase is the third to find a lane that had stopped —
+  `provcheck` (§20), `make test` (§20), and `power-mutants` (§31).
 
 ### 30.4 The sentence this phase is for
 

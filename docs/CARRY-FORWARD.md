@@ -74,6 +74,13 @@ reason, add it to the bidirectional-gap ledger so the day it becomes exercised t
 and says so, and put it on A6's checklist as a candidate once the schedule mix is being reshaped
 anyway."*
 
+**Not attempted at A6's close, and the reason is sequencing rather than difficulty.** Re-enabling it
+changes the fault mix, which moves every trace, which invalidates the exit run that closes the phase —
+and the exit run had already started when the question came up. `MovesRacingChurn` reads 0 across 200
+seeds and the bidirectional assertion still holds, so the record is still correct. **It carries
+forward to A7**, where the term-start no-op moves every trace anyway and is therefore the next moment
+the reshape is free. DESIGN-A6 §30.3.
+
 ---
 
 ## Standing, from A6
