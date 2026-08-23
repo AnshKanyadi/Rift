@@ -1,9 +1,10 @@
 # A6 handoff
 
-**Written for a session that knows nothing.** A6 is **not closed**. This says exactly what is left,
-what is established, and what the next step is.
+**Written for a session that knows nothing.** A6 is **not closed** — sessions never close phases. What
+changed since the last handoff is that the blocker is gone: **BUG-022 is root-caused and fixed, and
+the 25,000-seed exit run came back clean.**
 
-**Commit:** `caee53f`. Tree clean, all fast lanes green.
+**Commit:** see `git log`. Tree clean.
 
 ---
 
@@ -14,192 +15,174 @@ decider.** `CLAUDE.md` is the constitution; read it. `docs/CARRY-FORWARD.md` is 
 obligations ledger; read it second. `docs/DESIGN-A6-transactions.md` is this phase's record and is
 long because the phase was.
 
-**Protocol, as trimmed on 2026-08-22:**
+**Protocol:**
 
-- **No ruling echo.** Dropped — it did its job and no paste went missing in five phases.
+- **No ruling echo.**
 - **Keep the escape-hatch status line in every report** (see §7).
-- **Do not restate a rule that is already recorded.** Record once, mechanise, move on. §22.6's
-  sentence existed and was violated four times anyway; the lane fixed it, not the fifth restatement.
-- **Proceed on your own recommendation and report it.** Assume ratification; Ansh overrules in the
-  report if needed.
-- **Four stop conditions, unchanged — stop and report, do not proceed:**
-  1. a frozen interface,
-  2. oracle independence,
-  3. determinism scope,
-  4. **a defect found in a signed phase.**
+- **Do not restate a rule that is already recorded.** Record once, mechanise, move on.
+- **Proceed on your own recommendation and report it.**
+- **Four stop conditions — stop and report, do not proceed:** a frozen interface, oracle
+  independence, determinism scope, **a defect found in a signed phase.**
 
-Standing rules that are not negotiable: no gate counts until its failure has been induced; no checker
-is ever weakened to pass; sessions never mark a phase complete; a fact is recorded, never inferred.
+Standing and non-negotiable: no gate counts until its failure has been induced; no checker is ever
+weakened to pass; sessions never mark a phase complete; a fact is recorded, never inferred.
 
 ---
 
-## 2. What closes A6
-
-Ansh, verbatim: *"When BUG-023 and BUG-022 are both fixed, mutant-classed, in BUGS.md, and the exit
-run comes back clean, report the aggregate. A6 closes on that, not before."*
+## 2. What A6 owed, and where each item stands
 
 | # | item | state |
 |---|---|---|
-| 1 | **BUG-022 root-caused and fixed** | **the only blocker with real work left** — see §3 |
-| 2 | BUG-024 mutant-classed and in BUGS.md | **owed** — fix landed, no mutant, no BUGS.md entry yet |
-| 3 | The exit run re-run clean, 25,000 seeds | owed, ~6 h wall on 10 shards |
-| 4 | The three solo measurements | owed — `make solo`, needs the machine to itself |
-| 5 | `BUG-015`'s bundle | owed — red, blocked on the mutant power measurement in (4) |
-
-Everything else A6 owed is done and recorded.
+| 1 | **BUG-022 root-caused and fixed** | **done** — the read mark, `M71`/`M72`, BUGS.md, bundle |
+| 2 | BUG-024 mutant-classed and in BUGS.md | **done** — `M73`, entry, bundle |
+| 3 | The exit run re-run clean, 25,000 seeds | **done** — 0 violations, 97 inconclusive, at `611d0b9` |
+| 4 | The three solo measurements | **two done, one owed** — see §4 |
+| 5 | `BUG-015`'s bundle | **still red and still blocked** on the power measurement |
+| 6 | `make mutant-covered` finished at full scale | **done** — 56 checked, 8 failures, §5 |
 
 ---
 
-## 3. BUG-022 — established, not yet root-caused
-
-**Do this first.** It is a real safety violation and it is the last one blocking the exit run.
-
-### The finding, established
-
-Seed **2521**, `bank-conservation`: the audit at `1600000008790243029.0` reads all eight accounts and
-they sum to **-19**, not 0.
+## 3. The exit run
 
 ```
-txn 38   start 1600000008260000000.514    commit a06 at 1600000008320000000.770
-txn 8    start 1600000008280137801.1024   commit a06 at 1600000008442578171.768   <- survives
+aggregate:  10 shards covering [0,25000) at commit 611d0b9
+verdicts:   pass=24903 violation=0 inconclusive=97 errors=0
+cost:       8.33-8.47 s/seed, 5h47m-5h53m per shard, ~58 CPU-hours
 ```
 
-- **Both wrote `a06`.** The audit sees txn 8's value (`a06 = -26@8`).
-- **Txn 8 started before txn 38 committed `a06`**, so its read of `a06` cannot have contained txn 38's
-  write, and its write was computed from that read.
-- **Neither guard fired.** It should have been refused by `ErrKeyIsLocked` if it prewrote while txn 38
-  held the lock, or by `newestCommit > startTS` (`ErrWriteConflict`) if it prewrote after the commit.
-- **No restarts are involved**, so the timestamps are genuine — this matters, see below.
+Against **271** violations before BUG-021's fix and **184** after it. The inconclusive rate did not
+move: 3.9‰ against 4.2‰ and 3.7‰, all unknown-dominated histories rather than checker timeouts.
 
-### The next step, and only this
+BUG-022's two halves are non-vacuous at scale: **9,199,798** read marks staged, **226,660** prewrites
+refused for a reader above the prewriter's snapshot. DESIGN-A6 §32.
 
-**Dump the committed log for `a06` on seed 2521 in the window between txn 38's prewrite and its
-commit, and determine which of the two guards was bypassed and how.** The prewrite is at range 7
-index 71 (`start=…8260000000.514, val="-13@38"`) and the commit record at index 72. Txn 8's prewrite
-of `a06` is the entry to find and place relative to those.
-
-Reproduce with a throwaway test in `sim/hunt` that runs `hunt.MaterializeRaft(2521)` +
-`hunt.RunRaft`, then walks `r.Ledger.Ranges()` / `rl.Committed()` decoding with
-`store.DecodeTxnCommand`. That is the technique that cracked BUG-018, BUG-019 and BUG-023.
-
-**Delete the throwaway before running any lane.** A scratch file with a compile error in
-`sim/hunt` breaks the package build, and every lane over that package then reports "did not run" —
-which cost an hour here and nearly caused a working lane to be removed.
-
-### Two wrong turns already taken — do not repeat them
-
-1. **"A roll-forward or rollback applied against the wrong transaction's version."** Disconfirmed:
-   seed 10303 had **zero** mispointed apply-resolutions and still failed.
-2. **A lost update claimed on seed 10303 between txn 0 and txn 31.** Wrong, and the reason is a
-   defect that has since been fixed: `RecordTxnBegin` recorded a transaction's **original** start
-   timestamp and nothing updated it on restart, so the ledger showed a start the system had abandoned.
-   Txn 0 had restarted and its real start was *after* the commit it appeared to precede.
-   `RecordTxnRestart` and `TxnRecord.Restarts` now exist — **check `Restarts` before reasoning about
-   any two transactions' relative start times.**
+**The per-seed cost more than doubled** — 8.4 s/seed against A6's mid-phase 3.75 — and the read mark
+is part of it. **Measure the per-seed cost before planning the next sweep**: this one was planned
+against 3.75 and took six hours.
 
 ---
 
-## 4. What was fixed this cycle
+## 4. The three measurements
 
-| bug | what it was | state |
-|---|---|---|
-| **BUG-018** | the apply loop staged a whole `Ready` into one batch, so a transaction step could not see the steps above it | fixed, `M59` |
-| **BUG-019** | commit/rollback deleted *the* lock rather than *their* lock, orphaning a committed version | fixed, `M65`/`M66` |
-| **BUG-020** | (harness) a transfer prewrote a balance it never read | fixed |
-| **BUG-021** | two transactions minted at one start timestamp shared a key's lock and version | fixed, `M67`/`M68` |
-| **BUG-023** | a split-born range started with a fresh HLC and stamped below versions it inherited | fixed, `M70` |
-| **BUG-024** | a read answer from a pre-restart incarnation landed in the post-restart snapshot | **fixed, NOT yet mutant-classed or in BUGS.md** |
+**1. The unthrottled collector — DONE, solo.** 40 seeds, 49m32s:
 
-**BUG-024 is the outstanding paperwork.** The fix is in `sim/hunt/bank.go`: a read answer is rejected
-unless `cmd.ReadTS == t.startTS`, counted as `staleIncarnation`. `sim/hunt/bug022_test.go`
-(`TestBUG024`) pins both seeds and currently fails on 2521 only. It needs a mutant that removes the
-guard, and a BUGS.md entry. It is BUG-020's family: an answer accepted for the wrong incarnation.
+```
+unthrottled: 124437 collections proposed, 367263 applied, 6098 versions collected
+throttled:     2549 collections proposed,   8194 applied, 5491 versions collected
+ratio:       48.8x as many collections;  0 violations
+```
+
+**And the figure CARRY-FORWARD actually asked for, which that lane cannot produce.** The obligation is
+about *detection*: DESIGN-A0 §7 item 9 records M53's class going from 1 detection in 60 seeds
+unthrottled to 0 in 3,000 throttled. `TestPowerProbe` now takes `POWER_UNTHROTTLED=1`, and under A6's
+shape at 200 seeds:
+
+| | detections |
+|---|---|
+| M53, throttled | **0 of 200** |
+| M53, unthrottled | **0 of 200** |
+
+**A5's figure does not reproduce.** If the class were still 1-in-60 unthrottled, 200 seeds would have
+found about three. The throttle is not what puts M53 out of reach at A6 — the schedule mix is, and
+that is A2's M34 lesson again. What the two numbers do *not* establish is that the throttle costs
+nothing; they establish that 200 seeds cannot tell.
+
+**2. Mutant power floors and ceilings — RUNNING.** `POWER_JOBS=3 sh scripts/power-mutants.sh
+--measure`. The critical path is `M46` at 3,000 seeds under `current`: about **7 hours**, which no
+amount of parallelism shortens because one class is one sequential sweep. `POWER_JOBS` was added for
+this and is verified to produce byte-identical output to a sequential run.
+
+**Its result names three things**: `BUG-015`'s replacement bundle seed, whether `M67` becomes an
+explicit opt-out and `M70` gets a real floor (§31 — the lane has been RED on both since they landed),
+and every floor in the tree, which is still A5's.
+
+**3. The race-lane curve at 50/100/200 — OWED, and the arithmetic says it cannot run as written.**
+`race-curve.sh` runs the whole `sim/hunt` package under `-race` at each count. At A5's 0.36 s/seed the
+lane was 90 minutes; at A6's measured **8.4 s/seed** the same shape is roughly **35 hours at the
+*smallest* point**. That is a prediction from the per-seed cost, **not a measurement**, and it must be
+run before it is believed — but if it holds, the question CARRY-FORWARD asked ("which of `RACE_SEEDS`
+or `RACE_TIMEOUT` moves") has a third answer: **neither; the lane has to be restructured**, because a
+90-minute budget and a 50-seed floor cannot both survive a 23× per-seed cost increase.
+
+**And its premise is still broken**, which §21.4 records: CARRY-FORWARD says the lane "has found real
+races twice" and there is no record behind it. The measurement cannot be *"is what 200 catches still
+caught at 50"* because the two catches cannot be identified.
 
 ---
 
-## 5. `make mutant-covered` — built, working, and not yet trustworthy at full scale
+## 5. `make mutant-covered` — finished, and it found four
 
-**What it is.** A covering test must *execute* the line its mutant changes. It runs the covering test
-on the **unmutated** tree with coverage on and requires the patched lines to have been executed.
-Coverage is produced by execution, so it cannot be satisfied by claiming an entry point — which is
-why it is this and not a sixth restatement of the rule.
+`56 checked, 2 skipped, 8 failures`, and the eight are two different things (DESIGN-A6 §25.3c).
 
-Built because **four covering tests in one day called the guarded function inline rather than through
-the path their mutant patches**, so the mutation could not affect them and they passed proving
-nothing. Every one was caught only by the mutant surviving.
+**Four genuinely mispointed covering tests**, which is the defect the lane exists for:
+`M15` (`sim/oracle.go:279`), `M29` (`raft/raft.go:2543-2545`), `M55` (`kv/store.go:217`),
+`M60` (`kv/txn.go:204-205`). The canary was correctly uncovered, which is what makes the four
+credible. **None is fixed**: re-pointing a covering test changes what the mutant suite asserts, and
+that should land with its own verification rather than in a batch.
 
-**Verified working:**
-- **Induced** against a reconstruction of the exact mistake — a test calling `seedClockAtLeast`
-  inline — which it reports `DEAD`.
-- It **independently rediscovered `canary-mispointed`**, which declares `expect: alive` because it is
-  deliberately aimed at a test that does not cover it. The lane now expects the canary
-  **bidirectionally**: if the canary ever becomes covered, the lane fails and says so.
-- Lines come from **applying the patch and diffing**, not from its `@@` header — headers go stale and
-  `patch` tolerates it with fuzz; the first version read the header and reported a live path dead.
-- **Multi-file patches fixed**: it copies every file the patch names, not only the first. Four
-  patches were failing as "does not apply cleanly" when the ground had simply not been laid.
+**Four ERRORs that are a budget failure.** `M65` and `M66` name **`TestRaftExitCriteria`** as their
+covering test — the exit run, about **23 hours** at 8.4 s/seed. No timeout could let that finish, and
+`make mutants` dies of the same cause: its baseline runs every covering test in one invocation and hit
+3600s with `TestLeaderCompletenessOracleReportsNothing` at 34 minutes.
 
-**Not trustworthy at full scale yet, and this is the known gap.** The full sweep **did not finish**.
-It runs each covering test with no seed bound, so the heavy `sim/hunt` tests hit Go's 600-second
-default and are reported `ERROR … did not run`. **It needs `RAFT_SEEDS` and an explicit `-timeout`
-per invocation, exactly as `make test` and `make race` do** (see the tier comment at the top of the
-`Makefile`). Until then a full run's error count says nothing.
+> **A covering test that is a phase gate is not a covering test.**
 
-It **is** in `make ci` and in `.github/workflows/ci.yml`. Given it cannot complete, **either bound it
-or take it out of `ci`** before relying on a green there. The last partial run, on a clean tree, was
-**1 DEAD (the canary) and 17 ok** before the timeouts began.
+`M65`/`M66` have precise cheap tests already sitting in `kv/txn_test.go`
+(`TestARollbackDoesNotStealSomebodyElsesLock`, `TestACommitDoesNotStealSomebodyElsesLock`).
+
+**`make mutants` has not been run to completion since BUG-022's fix**, for that reason. It is owed.
 
 ---
 
 ## 6. Machine-bound work, and how to run it
 
 ```sh
-make exit-run     # 25,000 seeds, 10 contiguous shards, aggregate asserted; ~6 h
-make solo         # the three owed measurements; needs the machine to ITSELF
-make nightly      # covering tests at full seed ranges, then the 10k soak
+make exit-run                                   # 25,000 seeds, 10 shards; ~6 h at 8.4 s/seed
+COVER_JOBS=8 sh scripts/mutant-covered.sh       # ~3 h; sequential it does not finish
+POWER_JOBS=8 sh scripts/power-mutants.sh --measure   # critical path is one 3,000-seed sweep, ~7 h
+sh scripts/race-curve.sh                        # solo; see section 4
+LANE_SEEDS=40 go test -run TestUnthrottledCollector ./sim/hunt/   # ~50 min
 ```
 
-- **The exit run is sharded and the split is proved sound.** `scripts/exit-run.sh` refuses a dirty
-  tree, stamps every shard with the commit, and `TestRaftExitAggregate` requires the shards to sort
-  into a contiguous cover of exactly `[0,25000)` at one commit. A gap, an overlap, or a short shard
-  each fail by name. Proved end to end on 40 seeds across 4 shards before the real run.
-- **The last full run was pre-fix and is a measurement, not a gate**: 271 violations (1.08%), 105
-  inconclusive (4.2‰), first at seed 55. Preserved under
-  `scratchpad/exitrun-prefix`. Fixing BUG-021 took it to 16 per 2,500.
-- **`make solo`** is the unthrottled collector, the mutant power floors under A6's shape (~15
-  CPU-hours), and the race curve at 50/100/200. All three are owed, all three need the machine alone,
-  and **the power measurement is what names BUG-015's replacement seed**.
+**Both `POWER_JOBS` and `COVER_JOBS` parallelise on the same argument**: a detection count, a
+first-detecting seed, and whether a test executes a line are all functions of the seed and the tree,
+so a parallel run reaches identical verdicts and the report is printed in order afterwards so the text
+is identical too. **Wall-time-to-detection does not survive parallelism** — Amendment A2's other half
+is measured at `POWER_JOBS=1` or not claimed.
 
 ---
 
 ## 7. The escape hatch — restate this line in every report
 
 **Shut, and its condition is unmet.** Amendment A6 pre-authorised the TSO fallback *if A6's
-uncertainty machinery is not green by 2026-12-01*. It is green **and sweep-exercised** — 256
-uncertainty restarts per 200 seeds, and the envelope refusal reached in its own 150% lane at 12,400
-across 12 seeds. It was refused as BUG-021's fix for that reason: *a pre-authorisation consumed for a
-purpose it was not granted for is an escape hatch widening itself.* Dec 1 remains the decision point.
+uncertainty machinery is not green by 2026-12-01*. It is green and sweep-exercised — 28,768
+uncertainty restarts across the 25,000-seed exit run — and Dec 1 remains the decision point.
+
+**BUG-022 is the strongest argument yet for the fallback, and it is still not a reason to spend it.**
+The defect exists because per-node HLCs do not order a commit timestamp after every start timestamp
+issued before it, which a single TSO does by construction. A TSO would have made BUG-021 and BUG-022
+both impossible. The fix that landed does not need one, so the pre-authorisation stays unspent — but
+the next reader should know that the case for it is now made of two shipped defects rather than of
+one hypothetical.
 
 ---
 
 ## 8. Things a fresh session will otherwise get wrong
 
-- **`make test` is `-short`** and takes ~398 s. Bounding the seed count was tried twice and failed;
-  the cost is driven by the *number* of sweeping tests, not by any one bound. Full ranges are
-  `make covering`, nightly.
-- **There is no remote.** CI has never executed. `make hooks` installs a pre-push hook running the
-  fast half. `make lane-coverage` keeps `make ci` and the workflow from drifting — two lanes were in
-  one and not the other for a whole phase.
-- **Never `git add -A` with a patch applied.** Three `.orig` files were committed at A1, A2 and A3
-  and sat in the tree for four phases. `make hygiene` now fails on any tracked `.orig`/`.rej`.
-- **A6's per-seed cost is ~4 s** against A5's 0.36. Plan sweeps accordingly.
-- **A7's design doc is written** (`docs/DESIGN-A7-readindex.md`) to the point of decisions, with seven
-  open questions each carrying a recommendation. **It is waiting for rulings. Do not start A7
-  implementation.** Its §7 says A6's three owed measurements are taken *before* A7's first commit,
-  because the term-start no-op moves the baseline they measure.
-- **Three clock-dependent mechanisms are not established as exercised** (DESIGN-A6 §27.1). §27's third
-  item — a snapshot read routed to a split-born range — needs `percolator-invariants` #6 as its
-  oracle, because those reads are excluded from the linearizability history by construction; a lane's
-  job there is to *reach* the state, not to judge it.
-- **A surviving mutant has three meanings** (§25.1): no checker can see it, the test goes around the
-  path, or **the code cannot be reached**. Only the third's response is deletion.
+- **A seed costs 8.4 s**, not 3.75 and not 0.36. Every lane budget in the tree predates that.
+- **`make test` is `-short`** and takes ~400 s.
+- **There is no remote.** CI has never executed. This phase found **three** lanes that had stopped:
+  `provcheck`, `make test`, and **`power-mutants`, which has been red since `M67` and `M70` landed**
+  (§31) — verified on a worktree at the previous handoff's commit, so it is not something BUG-022's
+  fix caused.
+- **Never `git add -A` with a patch applied.** `make hygiene` fails on any tracked `.orig`/`.rej`.
+- **The corpus regenerates as a SEARCH, not a re-record.** BUG-022's fix moved every raft trace;
+  seventeen bundles were regenerated and three then no longer reached their defects. `BUG-009` and
+  `BUG-019` were re-found at seeds 105 and 9. `BUG-015` is still blocked. **`BUG-021` gets no bundle
+  at all** — its defect is a pair (`M67`+`M68`) and no single mutant reintroduces it.
+- **Three entries have no bundle**: `BUG-017`, `BUG-020`, `BUG-021`. BUGS.md rule 2 says every entry.
+- **A7's design doc is written and waiting for rulings** (`docs/DESIGN-A7-readindex.md`), now with
+  **D-A7-5**: BUG-022's read mark is a function of the log *only because every read is a log entry*,
+  and read index is the phase that stops that being true. **Do not start A7 implementation.**
+- **`sim/hunt`'s `modelRecords` has no caller**, so the model's records are never digested against the
+  store's. Reported, not deleted.
