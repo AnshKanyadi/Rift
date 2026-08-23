@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/anshkanyadi/rift/clock"
-	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/raft"
 )
 
@@ -66,32 +64,13 @@ type SplitSpec struct {
 	Key   []byte
 	Left  RangeDescriptor
 	Right RangeDescriptor
-
-	// ClockAt is the parent's clock when the leader proposed this split, and it
-	// is the value the child's own clock starts from.
-	//
-	// # Why it travels in the ENTRY
-	//
-	// A range's clock state is now part of the state every replica must agree
-	// on, so it cannot be read from the applying replica's own parent — each
-	// replica's parent clock differs, and the children would diverge. It is
-	// stamped once by the proposer and carried, which is the same rule every
-	// other fact in this system follows: derived at a position, then carried
-	// (DESIGN-A5 §7, DESIGN-A6 §8).
-	//
-	// It is an upper bound on every version the child inherits. Entries below
-	// the split entry were proposed before it, so the leader's clock at propose
-	// is at or above all of their stamps. BUG-023 is what happens without it.
-	ClockAt hlc.Timestamp
 }
 
 // encodeSplit and decodeSplit are the split entry's wire and storage form.
 func encodeSplit(s SplitSpec) []byte {
 	b := putBytes(nil, s.Key)
 	b = encodeDescInto(b, s.Left)
-	b = encodeDescInto(b, s.Right)
-	b = putU64(b, uint64(s.ClockAt.Wall))
-	return putU64(b, uint64(s.ClockAt.Logical))
+	return encodeDescInto(b, s.Right)
 }
 
 func decodeSplit(b []byte) (SplitSpec, bool) {
@@ -103,18 +82,8 @@ func decodeSplit(b []byte) (SplitSpec, bool) {
 	if s.Left, b, ok = decodeDescFrom(b); !ok {
 		return s, false
 	}
-	if s.Right, b, ok = decodeDescFrom(b); !ok {
-		return s, false
-	}
-	var w, l uint64
-	if w, b, ok = takeU64(b); !ok {
-		return s, false
-	}
-	if l, _, ok = takeU64(b); !ok {
-		return s, false
-	}
-	s.ClockAt = hlc.Timestamp{Wall: clock.Wall(w), Logical: uint32(l)}
-	return s, true
+	s.Right, _, ok = decodeDescFrom(b)
+	return s, ok
 }
 
 func encodeDescInto(b []byte, d RangeDescriptor) []byte {

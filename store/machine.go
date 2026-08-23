@@ -870,16 +870,15 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
 
 	// # BUG-023: the child inherits the parent's CLOCK, not only its versions
 	//
-	// Both seeds, and they are separable on purpose. `spec.ClockAt` is the
-	// parent's clock when the leader PROPOSED the split, carried in the entry so
-	// every replica seeds identically — a value read from the applying replica's
-	// own parent would differ per replica and the children would diverge. The
-	// record maximum is a second, independent floor derived from the payload,
-	// which is what a range built from a SNAPSHOT gets instead.
+	// One floor, not two. This started as two — the value the split entry
+	// carried, and the maximum among the records — and `M69` proved the first
+	// redundant: the invariant is *no range's clock below a version it HOLDS*, so
+	// a child with no records has nothing to hide and a child with records gets
+	// its floor from them. `spec.ClockAt` was deleted with its mutant (§25).
 	//
-	// Either alone leaves a hole, so `M69` and `M70` remove one each.
-	r.seedClockAtLeast(spec.ClockAt)
-	r.seedClockAtLeast(maxVersionTimestamp(r.mvcc.Namespace(), rightVs))
+	// The floor lives in `ingest` rather than here, because that is the path
+	// every arriving record takes — a split's birth state, an installed snapshot,
+	// a restart's recovery — so a path added later cannot bypass it.
 
 	m.addReplica(r)
 	m.splits++

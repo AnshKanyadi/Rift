@@ -1554,47 +1554,84 @@ attribution is stated as pending rather than asserted.
 
 ---
 
-## 25. BUG-023's fix, and the mutant that survives it
+## 25. BUG-023's fix, and the mutant that had to be deleted
 
-`hlc.NewAt` and `Replica.seedClockAtLeast` are the fix, in two floors that are
-separately implementable and were given a mutant each per §22.6b:
+One floor, in `ingest`: **every path by which records arrive raises the range's
+clock to the maximum timestamp among them.** A split's birth state, an installed
+snapshot, a restart's recovery all pass through it, so a path added later cannot
+bypass the invariant. `M70` removes it and is killed.
 
-| floor | mutant | verdict |
+It started as two floors — the second being a value carried in the split entry —
+and `M69` removed that one. **`M69` could not be killed, and the right response
+was to delete the code rather than to find a better test.** The invariant is *no
+range's clock sits below a version it **holds***. A child inheriting an empty half
+holds none, so a low clock hides nothing; a child inheriting versions gets its
+floor from those versions. In every case where the invariant can be violated, the
+record floor already binds. `spec.ClockAt` was a mechanism whose absence nothing
+could notice.
+
+### 25.1 A surviving mutant has three meanings, not two
+
+Amendment A2's standing rule treats a survivor as a gap in the machinery. This
+phase produced all three kinds, and only one of them is answered by writing a
+better checker:
+
+| the mutant survives because | what it is a finding about | correct response |
 |---|---|---|
-| the child seeds from the value the split **entry** carries | `M69` | **SURVIVES** |
-| every path that **ingests records** raises the clock to their maximum | `M70` | killed |
+| **no checker can see the change** | the machinery | add the assertion (`M61` → invariant 5) |
+| **the test goes around the changed path** | the machinery | route the test through it (`M68`, `M70`) |
+| **the code it removes cannot be reached** | **the code** | **delete the code and the mutant** (`M69`) |
 
-**M69 survives, and I think the half it removes is redundant.** The invariant is
-*no range's clock sits below a version it **holds***. A child that inherits an
-empty half holds none, so there is nothing for a low clock to hide; and a child
-that inherits versions gets a floor from those versions directly. In every case
-where the invariant can be violated, the record-derived floor already binds.
+The third is the one worth adding to the record, because its response is the
+opposite of the other two: a mutant reporting a dead path is not a coverage gap
+to close, it is a defence that was never defending anything, and closing the
+"gap" would mean writing a test to protect code that does nothing.
 
-So the question for a ruling is whether `spec.ClockAt` is defence in depth worth
-keeping or a mechanism nothing would notice the absence of. **This project's own
-standard says the second is not worth keeping**, and I have not removed it
-because the ruling that asked for two floors is more recent than my analysis.
+### 25.2 The four failures that were about the test, not the code
 
-**Two failed attempts at killing M69 are worth recording**, because both were the
-same mistake and it is the third and fourth time today:
+`M68` survived twice and `M70` once for the same reason, and the reason has a
+name now: **the test called the guarded function inline rather than through the
+path the mutant patches.** The mutation deletes a call site; the test replicates
+that call; the test cannot fail. §22.6 states that in its own words three hours
+before two of the four happened.
 
-1. `TestBUG023` — the seed the bug was found on. Both mutants survived it, because
-   on that schedule the child inherits records *and* carries the entry's value, so
-   the two floors are redundant there and removing either changes nothing.
-2. `TestASplitChildWithNoRecordsStillInheritsTheClock` — which calls
-   `seedClockAtLeast` **inline** rather than through `applySplit`. The mutant
-   removes the call site; the test replicates it; the test cannot fail.
+`M70`'s test then needed **two arithmetic corrections before it could fail at
+all**: its timestamps started below the simulated clock, so the floor never
+bound; then five seconds above it, where `Update` correctly refuses them as
+beyond `maxOffset` — since a parent more than `maxOffset` ahead would itself have
+been refused, so the case cannot arise in a run. A hundred milliseconds is the
+realistic gap and the one that has to work.
 
-That second one is exactly §22.6's class — *a guard inside the code path a defect
-removes is removed by that defect* — written down three hours earlier and repeated
-anyway. M70 needed the same correction and got it: it now goes through the real
-`ingest`.
+**A test that cannot fail for arithmetic reasons is the same family as one that
+cannot fail for path reasons**, and the induced-failure discipline caught both.
+Every one of the six was caught by the mutant surviving — which means the suite
+was the only thing between this repository and dead covering tests, and it only
+notices after somebody runs the whole thing.
 
-**And M70's test needed two arithmetic corrections before it could fail at all**:
-its timestamps started below the simulated clock, so the floor never bound; then
-five seconds above it, so `Update` refused them as beyond `maxOffset` — correctly,
-since a parent more than `maxOffset` ahead would itself have been refused. A
-hundred milliseconds is the realistic gap and the one that has to work.
+### 25.3 So it is mechanical now: `make mutant-covered`
+
+Restating the rule a fifth time would not have helped. Coverage answers it
+without annotation:
+
+> **Run the covering test on the UNMUTATED tree with coverage on, and require the
+> lines the patch touches to have executed.**
+
+A test that goes around the path leaves them at zero. It cannot be satisfied by
+*claiming* an entry point, because coverage is produced by execution rather than
+by assertion — which is what makes it mechanical rather than remembered.
+
+Two details that matter:
+
+- **The lines come from applying the patch, not from reading its `@@` header.**
+  Headers go stale as files move and `patch` tolerates that with fuzz; the first
+  version of this check read the header and reported a live path dead.
+- **It does not check that the test would fail under the mutation.** That stays
+  the mutant suite's job. This checks the necessary condition all six failures
+  violated: the line has to run at all.
+
+Induced against a reconstruction of the exact mistake — a test calling
+`seedClockAtLeast` inline — which it reports `DEAD`. In `make ci` and in the
+workflow.
 
 ---
 

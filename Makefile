@@ -182,6 +182,10 @@ power: power-toy power-mutants ## Harness-power floors: every planted flaw class
 power-toy: ## The toy's four flaw classes, floored since A0
 	$(GO) test -count=1 -run 'TestHarnessPower|TestEveryObservableFlawHasAFloor' ./sim/hunt/
 
+.PHONY: mutant-covered
+mutant-covered: ## Every covering test EXECUTES the line its mutant changes (not around it)
+	sh scripts/mutant-covered.sh
+
 .PHONY: power-mutants
 power-mutants: ## Every MUTANT class: detection rate against a standing floor, or an explicit opt-out
 	@$(POWERMUTANTS)
@@ -198,7 +202,7 @@ lane-coverage: ## Every lane in the `ci` target actually runs in .github/workflo
 lint: vet fmt-check determinism tooling-only hatches hygiene ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants lane-coverage ## Everything the push lane runs
+ci: build lint test race blind power assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants mutant-covered lane-coverage ## Everything the push lane runs
 
 # ---------------------------------------------------------------- stub lanes
 

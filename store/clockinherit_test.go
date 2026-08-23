@@ -24,49 +24,14 @@ func (p *pinnedWall) MaxOffset() time.Duration { return time.Second }
 //
 // # Why they need separating, and how I found out
 //
-// `TestBUG023` replays the seed the bug was found on, and **both mutants survive
-// it**: on that schedule the child inherits records, so the record-derived floor
-// alone is enough, and it also carries the entry's value, so that alone is enough
-// too. The seed cannot tell the halves apart because on it they are redundant.
+// `TestBUG023` replays the seed the bug was found on, and the mutant survived
+// it: on that schedule the child inherits records, so the floor binds through
+// the payload and the seed cannot isolate the path. This one goes through the
+// real `ingest`, which is what the mutant removes.
 //
-// That is BUG-021's lesson arriving again — a decision in two halves needs a
-// mutant per half, and a mutant per half needs a test per half. Each of these
-// exercises a path the other cannot reach:
-//
-//	no records inherited  -> only the entry's value can seed  -> kills M69
-//	records but no entry  -> only the record floor can seed   -> kills M70
-
-// TestASplitChildWithNoRecordsStillInheritsTheClock kills M69.
-//
-// A child that inherits an EMPTY half has no records to derive a floor from, so
-// the value the split entry carries is the only thing that can seed it. Without
-// it the child starts at the local physical wall, which under skew is below the
-// parent — and the first key written into that half is stamped in the past.
-func TestASplitChildWithNoRecordsStillInheritsTheClock(t *testing.T) {
-	phys := &pinnedWall{w: 1000}
-	parent := hlc.Timestamp{Wall: 900000, Logical: 3<<hlc.IDBits | 1}
-	if clock.Wall(1000) >= parent.Wall {
-		t.Fatal("the parent must be above the physical clock or the floor cannot bind")
-	}
-
-	c, err := hlc.New(phys, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := &Replica{hlc: c}
-
-	// What applySplit does for a child with nothing in it: the entry's value,
-	// then a record floor over an empty set.
-	r.seedClockAtLeast(parent)
-	r.seedClockAtLeast(maxVersionTimestamp([]byte("ns"), nil))
-
-	got := c.Now()
-	if !parent.Less(got) {
-		t.Errorf("an empty child stamped %s, at or below the parent's %s. The entry's value is "+
-			"the only floor an empty child has, and without it the first write into that half "+
-			"lands in the past (BUG-023, M69)", got, parent)
-	}
-}
+// The entry-carried floor and its mutant M69 are GONE: M69 could not be killed
+// because the half it removed was unreachable, which made it a mutant reporting
+// a dead path rather than a gap. One floor remains and this covers it.
 
 // TestARangeIngestingRecordsRaisesItsClock kills M70.
 //

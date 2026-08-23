@@ -187,6 +187,22 @@ jobs:
       # it and the prose beside it is not.
       - run: make bundle-seeds
 
+  mutant-covered:
+    name: covering tests execute the line their mutant changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # Four covering tests in one day called the guarded function inline rather
+      # than through the path their mutant patches, so the mutation could not
+      # affect them and they passed proving nothing. Coverage answers it without
+      # annotation: run the test unmutated and require the patched lines to have
+      # executed. It cannot be satisfied by claiming an entry point.
+      - run: make mutant-covered
+
   lane-coverage:
     name: every lane in `make ci` runs in this file
     runs-on: ubuntu-latest

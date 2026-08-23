@@ -1247,14 +1247,7 @@ func (n *Replica) maybeSplit(at clock.Instant) {
 	}
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
-	// The parent's clock at PROPOSE time, carried in the entry so that every
-	// replica seeds the child identically. Reading it at apply time from the
-	// applying replica's own parent would give each child a different clock, and
-	// a range's clock is now part of the state a split has to produce
-	// deterministically (BUG-023). Every entry below this one was proposed
-	// before it, so this is at or above every timestamp the child inherits.
-	spec := SplitSpec{Key: key, Left: left, Right: right, ClockAt: n.hlc.Now()}
-	if err := n.raft.Propose(id, encodeSplitCommand(spec)); err != nil {
+	if err := n.raft.Propose(id, encodeSplitCommand(SplitSpec{Key: key, Left: left, Right: right})); err != nil {
 		return
 	}
 	n.splitPending = true

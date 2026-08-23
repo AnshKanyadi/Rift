@@ -136,6 +136,11 @@ across a commit, `make test` unrunnable since A1, and two lanes in `make ci` abs
 workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
 *run*. Every phase that ships without a remote should expect to find another lane that stopped.
 
+**A surviving mutant has three meanings.** DESIGN-A6 §25.1: no checker can see it (add the
+assertion), the test goes around the path (route it through), or **the code cannot be reached**
+(delete the code and the mutant). Only the third's response is deletion, and it extends Amendment
+A2's rule rather than restating it.
+
 **Three clock-dependent mechanisms are not established as exercised.** DESIGN-A6 §27.1: a
 snapshot-built range whose records outrank its clock; two replicas deriving different GC marks under
 skew; a snapshot read routed to a split-born range. Each needs a targeted lane, on the model of the
