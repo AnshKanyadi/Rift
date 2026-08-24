@@ -2738,6 +2738,33 @@ BUGS.md rule 2 asks every entry for one. So `--mutant` repeats, `Meta.Mutants` c
 verdict `M67+M68`. Every existing bundle's `meta.json` is unchanged, because one patch still writes the
 single field.
 
+### 38.1 The correction: BUG-021 did not need a set after all
+
+The mechanism was landed on a premise, and the premise was mine, and it is false.
+
+I wrote — and BUGS.md carried — that no single mutant reintroduces BUG-021, because *"a tree with only
+the first still collides on restarts"*. That was an inference from the fix's own prose, not a
+measurement. The measurement, from a sharded search over `[0,3200)` with both halves removed:
+
+| | result |
+|---|---|
+| the pair | **49 detections in 3,200 seeds**, first at seed 69 |
+| `M68` alone, on all eight first-detecting seeds | **reproduces on 8 of 8** |
+| `M67` alone, on the same eight | **reproduces on 0 of 8** |
+
+The asymmetry has a reason. `M68` makes a restarting transaction adopt a timestamp carrying another
+node's tag, and restarts are common — 42 per 40 seeds. `M67` needs two nodes to mint the identical
+`(wall, logical)` independently, which the pre-fix exit run saw **38 times in 25,000 seeds**. One is a
+near-certainty per sweep and the other is one in six hundred, so the pair's rate is `M68`'s rate and
+the set was never load-bearing.
+
+**The bundle still names the pair**, because the pair is the defect's shape and it keeps the lane's set
+support exercised by a real entry rather than by nothing, and BUGS.md now records that the pair is not
+a reproduction *necessity*. **The mechanism therefore has no entry that requires it**, which by §25.1's
+third meaning is a question about the mechanism rather than about the entry — and it is on the record
+that way rather than quietly kept, because the alternative is a capability whose justification nobody
+can find later.
+
 ---
 
 ## 39. The race lane, split, with the budgets it was measured at

@@ -1230,11 +1230,13 @@ with the two fixes that would close it.
 | **Found by** | sim — `transaction-atomicity`, seed **90004**, on a probe run taken to measure per-seed cost |
 | **Phase** | A6 |
 | **Reproduce (test)** | `go test ./sim/hunt -run TestBUG021` |
-| **Reproduce (seed)** | seed **90004**: txn 14 and txn 29 both start at `1600000005840000000.26` |
+| **Found at seed** | **90004**: txn 14 and txn 29 both start at `1600000005840000000.26` |
 | **Invariant that caught it** | transaction atomicity — a rolled-back transaction has no committed key |
 | **Mutant class** | none existed — added **two**, `M67-minting-drops-the-node-tag` and `M68-restart-timestamp-derived-not-minted`, in the same commit as the fix |
 | **Fix commit** | option A, both halves (DESIGN-A6 §22) |
-| **Reproduce (bundle)** | **none, and the reason is structural.** The corpus arrangement is *bundle carries the schedule, mutant carries the defect*, and this defect is a **pair**: a tree with only `M67` applied still refuses the collision `M68` allows, and vice versa. No single mutant reintroduces the bug, so no bundle can name one that reproduces it. A 300-seed search under `M67` found nothing, and `M67`'s covering test is a **unit test in `./hlc/`** rather than a sweep — which said the same thing earlier, in a form nobody read as this |
+| **Reproduce (plan)** | `patch -p1 < sim/mutants/M67-minting-drops-the-node-tag.patch && patch -p1 < sim/mutants/M68-restart-timestamp-derived-not-minted.patch && go run ./cmd/simctl replay --bundle seeds/BUG-021` |
+| **Reproduce (seed)** | `seeds/BUG-021` carries seed **69**, found by a sharded search over `[0,3200)` with both halves of the fix removed: **49 detections in 3,200 seeds, first at 69** |
+| **Correction, recorded because it was my claim and it was wrong** | This entry said no single mutant reintroduces the bug, so no bundle could name one. **Measured: `M68` alone reproduces it, on every one of the eight first-detecting seeds the search found, and `M67` alone reproduces it on none of them.** The asymmetry has a reason — `M68` makes a restarting transaction adopt a timestamp carrying another node's tag, and restarts are common, while `M67` needs two nodes to mint the identical `(wall, logical)` independently, which the pre-fix exit run saw 38 times in 25,000 seeds. The bundle names the **pair** because the pair is the defect's shape and the corpus lane's set support is then exercised by a real entry, and this line records that the pair is not a reproduction *necessity* |
 
 **Symptom.** *"transaction 29 (start …840000000.26) is ROLLED BACK on its primary `a07`, and key
 `a05` is committed at …840000000.59. Half of an aborted transaction is visible."*
