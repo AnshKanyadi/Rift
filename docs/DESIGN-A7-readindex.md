@@ -188,10 +188,54 @@ which of those is D-A7-4's real question.
 
 ---
 
-### D-A7-5: the read mark, which A6's last fix put directly in this phase's path **[open]**
+### D-A7-5: the read mark — **A7's governing constraint** **[open]**
 
-**This is the decision A7 exists to make and did not know it had.** It is not a refinement of the
-others; it bounds what read index is allowed to serve.
+Ansh, on the A6 sign-off: *"BUG-022's fix rests on the read mark being a function of the log because
+every read is a log entry, and read index exists to stop reads being log entries. So A7 cannot be
+designed as if the fix is inherited. State it as the phase's governing constraint."*
+
+**So it is not a decision among the others; it bounds what read index is allowed to serve, and every
+other decision here is taken inside it.**
+
+### D-A7-5a: the narrow reading does not work, and the reason is BUG-022's own timeline
+
+The ruling offers *"read index is scoped to exclude keys under transactional locks"* as one of the two
+branches. Taken literally — exclude a key that **currently holds a lock** — it is not sufficient, and
+BUG-022's five log entries are the counterexample:
+
+```
+idx=107  txn-get   a00  at 7750000000.514   -> answered      <- no lock exists yet
+idx=109  prewrite  a00  start 7480000000.1792              <- the lock arrives AFTER
+idx=111  commit    a00  -> commit 7630000000.3072          <- below the answered read
+```
+
+**The read that must leave a mark is answered before any lock exists.** A rule keyed on the key being
+locked at read time would have let that read through, left no mark, and BUG-022 would be back with the
+guard still in place and still passing.
+
+What the branch means once repaired is **the transactional keyspace**, not the locked subset: a key
+that *can* be prewritten, whether or not it currently is. That is recommendation **A** below, and the
+repair is worth stating because the narrow reading is the one a reader reaches for first and it fails
+silently.
+
+### D-A7-5b: and the totality argument expires with its premises
+
+Also ruled: *"whichever way it goes, the guard's totality argument gets restated under A7's conditions
+and re-induced, because a guard proven total under one set of premises is a guard whose proof expired
+when the premises did."*
+
+A6 §28.3's argument is: after the guard `readMark(key) <= startTS < commitTS`, so no read *before* the
+prewrite was answered at or above the commit timestamp; and a read *after* the prewrite either sits at
+or above `startTS` and blocks on the lock, or sits below `startTS` and so below `commitTS`.
+
+**Every clause of that names the log.** *Before the prewrite* and *after the prewrite* are positions in
+one log; *blocks on the lock* is a property of applying a read entry against applied state. Read index
+answers reads that occupy no position. So the argument does not carry over — it has to be rewritten
+against A7's premises, and the rewrite is an exit criterion rather than a paragraph:
+
+> **A7 does not close until the three-guard totality argument is restated under read index and
+> `M71`/`M72` are re-induced against the restated form.** A mutant that passes because the property it
+> attacks moved is a mutant that has stopped meaning anything.
 
 **The dependency.** BUG-022's fix — the third first-committer-wins guard — rests on a **read mark**: a
 record holding the highest timestamp at which a range has been asked for a key. `PrewriteInto` refuses
@@ -443,5 +487,15 @@ Every one of these is a decision I am not making.
     mutant is the design decision itself planted as a defect — a snapshot read served by read index.
     That makes the boundary between the two read paths something the suite kills rather than something
     the code remembers.*
+12. **D-A7-5a — is the branch "exclude keys under transactional locks" repaired to "exclude the
+    transactional keyspace"?** *Recommendation: yes, and it is not a wording change. BUG-022's read was
+    answered before any lock existed, so a rule keyed on the key being locked at read time would have
+    let it through and left no mark. The property that matters is whether the key CAN be prewritten,
+    not whether it is prewritten now.*
+13. **D-A7-5b — does A7's exit require the three-guard totality argument restated under read index and
+    `M71`/`M72` re-induced against the restated form?** *Recommendation: yes, as an exit criterion
+    rather than a paragraph. Every clause of A6's argument names a log position, and read index answers
+    reads that occupy none, so the proof expired with its premises. A mutant that passes because the
+    property it attacks moved has stopped meaning anything.*
 
 **Stopping here for rulings, as the protocol requires.** No A7 code is written.
