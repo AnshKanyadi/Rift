@@ -81,41 +81,61 @@ test: ## Go unit tests, -short: every path runs, no path is swept (see the tiers
 covering: ## sim/hunt at FULL seed ranges: the covering tests' silence claims (nightly)
 	$(GO) test -count=1 -timeout $(COVER_TIMEOUT) ./sim/hunt/
 
-# RACE_SEEDS bounds the A1 exit run inside the race lane, and the number is
-# stated here rather than hidden in a skip.
+# The race lane, SPLIT, with budgets taken from a measurement rather than
+# inherited.
 #
-# The race lane asks one question: does any cross-goroutine interaction reach
-# node state off the mailbox? That is answered by the real-mode driver's tests
-# and by a few hundred simulated seeds; it is not answered any better by ten
-# thousand. The instrumentation costs about 20x, so the default exit run takes
-# roughly ten hours under -race and about three minutes without it. Seed
-# coverage is `make test` and `make soak`, which run the full 10k uninstrumented.
+# # What the measurement said
 #
-# A4 widened what RACE_SEEDS bounds. It capped only the exit run; every covering
-# test ran its full seed search under -race, and the package crossed Go's
-# ten-minute default with no data race in it at all -- a timeout reported as a
-# failure. It now caps every seed search in sim/hunt (see boundSeeds), and what
-# that costs is written down where it happens: a capped search proves nothing
-# about DETECTION, only that no cross-goroutine interaction reaches core state
-# while that code runs. Detection is claimed by the unraced lanes and the mutant
-# lane, which run the full ranges.
+# At A5's 0.36 s/seed the whole repository under `-race` was 90 minutes. At A6's
+# measured 8.4 s/seed it does not finish: `sim/hunt` at RAFT_SEEDS=50 blew the
+# 5400s budget, with one test at 36m20s -- about **43 s/seed instrumented**. So
+# the package at 50 seeds is on the order of nine hours and 200 seeds is four
+# times that.
 #
-# The explicit timeout is here so the next time this budget is exceeded the lane
-# says so instead of panicking at a default nobody chose.
-RACE_SEEDS ?= 200
-# 90 minutes. A4 roughly doubled the per-seed cost -- more ranges, more
-# messages, and 1.85 million routing refusals across the exit sweep -- and
-# sim/hunt crossed 30 minutes under instrumentation with zero data races in it.
+# "Does the seed count move or does the budget move" therefore has a third
+# answer: neither alone. The lane is split by what it is for.
 #
-# The budget is what moves, not the seed bound. RACE_SEEDS is 200 because A1
-# ruled that a few hundred simulated seeds answer this lane's question, and
-# lowering it to buy wall clock would be trading a recorded scope for a number
-# nobody ruled on.
-RACE_TIMEOUT ?= 5400s
+# # `race`: the structural claim, per push
+#
+# The question this lane asks is *does any cross-goroutine interaction reach node
+# state off the mailbox* (Amendment A1). That question lives in `raft/`, `store/`,
+# `node/`, `kv/` and `sim/` -- the system and its real-mode driver -- and it is
+# answered by their tests rather than by a seed search. **Measured: 191 seconds
+# for every package except `sim/hunt`.** The budget is 900s, about five times the
+# measurement: ordinary drift does not fail the lane and a doubling does.
+#
+# # `race-soak`: the seed search, nightly and sharded
+#
+# `sim/hunt` is where the driver, mailbox and simulator meet, so it is the half
+# with the most to say and the half nothing can afford per push. It moves to the
+# nightly tier beside `covering` and `soak`, and it shards the way the exit run
+# does, on the same argument: a seed's verdict does not depend on which
+# invocation ran it.
+#
+# # What the split gives up, stated rather than absorbed
+#
+# The per-push lane no longer instruments the simulator driver. A race introduced
+# there is caught nightly instead of on push. That is a real reduction and it is
+# the honest one available: the alternative was a seed count in single digits,
+# which A1's ruling -- *a few hundred simulated seeds answer this lane's
+# question* -- does not authorise. Shrinking a recorded scope to fit a budget
+# without saying so is the move this file exists to prevent.
+RACE_SEEDS   ?= 8
+RACE_TIMEOUT ?= 900s
+
+# The nightly half. 200 seeds is A1's ruling and it is what the shards cover
+# between them; the shard count is a scheduling choice and may move.
+RACE_SOAK_SEEDS   ?= 200
+RACE_SOAK_SHARDS  ?= 8
 
 .PHONY: race
-race: ## Go unit tests under -race (seed searches bounded to $(RACE_SEEDS) seeds; see the note above)
-	RAFT_SEEDS=$(RACE_SEEDS) $(GO) test -race -timeout $(RACE_TIMEOUT) ./...
+race: ## -race over every package but sim/hunt: the mailbox claim, per push (measured 191s)
+	RAFT_SEEDS=$(RACE_SEEDS) LANE_SEEDS=4 $(GO) test -race -count=1 -timeout $(RACE_TIMEOUT) \
+		$$($(GO) list ./... | grep -v 'sim/hunt')
+
+.PHONY: race-soak
+race-soak: ## [nightly] sim/hunt under -race, sharded: the seed search half
+	sh scripts/race-soak.sh $(RACE_SOAK_SEEDS) $(RACE_SOAK_SHARDS)
 
 .PHONY: vet
 vet: ## Standard go vet
@@ -176,7 +196,7 @@ assertions: ## Every declared every-run assertion mechanism must actually be inv
 	$(GO) test -count=1 -run 'TestEveryAssertionMechanismIsInvoked|TestAssertionRegistryIsWellFormed' ./sim/hunt/
 
 .PHONY: power
-power: power-toy power-mutants ## Harness-power floors: every planted flaw class must still be detected at its floor
+power: power-toy power-decl power-mutants ## Harness-power floors: every planted flaw class must still be detected at its floor
 
 .PHONY: power-toy
 power-toy: ## The toy's four flaw classes, floored since A0
@@ -185,6 +205,10 @@ power-toy: ## The toy's four flaw classes, floored since A0
 .PHONY: mutant-covered
 mutant-covered: ## Every covering test EXECUTES the line its mutant changes (not around it)
 	sh scripts/mutant-covered.sh
+
+.PHONY: power-decl
+power-decl: ## Every mutant's power DECLARATION is consistent -- milliseconds, no sweep
+	sh scripts/power-decl.sh
 
 .PHONY: power-mutants
 power-mutants: ## Every MUTANT class: detection rate against a standing floor, or an explicit opt-out
@@ -233,7 +257,7 @@ hooks: ## Install the pre-push hook that runs the every-change lanes
 	@printf '  It is not a remote. It is the half of a remote that can be had without one.\n'
 
 .PHONY: nightly
-nightly: covering soak ## The nightly tier: full seed ranges, then the 10k soak
+nightly: covering race-soak soak ## The nightly tier: full seed ranges, then the 10k soak
 	@printf '\n  nightly complete. The three solo measurements are `make solo`.\n\n'
 
 .PHONY: solo

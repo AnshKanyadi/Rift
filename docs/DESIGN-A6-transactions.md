@@ -2650,3 +2650,109 @@ canary, which is aimed at a test that covers none of it.
 **What I have not done:** changed the script, changed any of the four covering tests, or marked the
 lane green. Tuning four tests to satisfy a rule that asks an assertion body to execute on a passing
 tree would be the exact move this project forbids, one level up from the tests.
+
+---
+
+## 37. Which lanes actually run, and the cheap half of the one that did not
+
+§31 recorded that `power-mutants` had been red since `M67` and `M70` landed. The ruling asked for the
+fix **and** for the list: which lanes run automatically, and which run when somebody remembers.
+
+### 37.1 The list
+
+| | lanes |
+|---|---|
+| **Run automatically** — the pre-push hook, the only executor on this machine | `build` `lint` `lane-coverage` `bundle-seeds` `assertions` `provenance` `test` `corpus` — **8** |
+| **Configured to run on push** — `make ci` and `.github/workflows/ci.yml`, which **has never executed** | those 8 plus `race` `blind` `power` `smoke` `mutants` `mutant-covered` `corpus-reproduces` — **15** |
+| **Run when somebody remembers** | the 7 in `ci` that the hook does not run, plus `covering` `exit-run` `soak` `nightly` `solo` `race-soak` |
+
+> **Zero lanes run automatically in the sense the workflow means. Eight run because a hook exists.**
+
+**And every mutation-testing lane is in the remembered column.** `power` — which is `power-toy` plus
+`power-mutants` — `mutants`, and `mutant-covered` are all outside the hook, because between them they
+cost roughly twenty CPU-hours. `power-mutants` went red the day two mutants landed and stayed red for
+the back half of a phase, and the reason is not carelessness: **the only thing that executes here does
+not run it, and the thing that would costs fifteen hours.**
+
+That is the **third cost of having no remote**, in those words. The first was that every lane runs on
+memory. The second (§20.2) was that the lanes and the thing that runs them drift apart invisibly. The
+third is that **a lane too expensive for the hook has no executor at all**, so its tier is a label
+rather than a schedule.
+
+### 37.2 The fix that fits in the hook: check the declaration, not the measurement
+
+The failure that actually happened was not a detection regression. It was a **declaration nobody could
+satisfy**: `power-seeds: 1 / floor: 1 / ceiling: 1` on a class whose covering test is a unit test,
+against a probe that measures sweeps.
+
+**The measurement costs fifteen CPU-hours. The declaration costs milliseconds.** So `make power-decl`
+checks every patch's declaration for internal consistency without running anything, and it is in the
+pre-push hook:
+
+- an opt-out must carry a reason of real length — *"n/a"* alone is not one;
+- a class declares an opt-out, or seeds with a floor and a ceiling, or seeds with `power-detector:
+  sweep`;
+- **`power-seeds` under 30 is not a sweep**, which is the rule that would have caught `M67`, `M68` and
+  `M70` on the day they landed;
+- `power-measured` must exist and must not say `PENDING`;
+- a floor or ceiling above its own sweep length is unsatisfiable or unbreachable.
+
+On its first run it found **six** inconsistent declarations: the three from §31 plus `M60`, `M61` and
+`M64` still carrying `PENDING` — floors asserted against measurements nobody had taken.
+
+**This is the twenty-first vacuous-green entry** and the shape is worth naming: *a lane too expensive
+to run is a lane whose claims are unchecked, and the cheap invariant over its inputs is worth more
+than the expensive measurement nobody schedules.*
+
+### 37.3 What the classes measured, now that the probe can see them
+
+| class | before | after |
+|---|---|---|
+| `M67-minting-drops-the-node-tag` | `1 of 1` declared, `0 of 1` measured | **opt-out with the number**: 0 of 60 as a rate, and its sweep detector `IdentityCollisions` fired 38 times in 25,000 pre-fix — 1 in 660 — so an honest floor needs thousands of seeds. A unit test in `./hlc/` is the right instrument |
+| `M68-restart-timestamp-derived-not-minted` | `1 of 1` declared, `0 of 60` measured | **`power-detector: sweep`, detected**: 52 foreign-tag starts and 65 stale restarts at 60 seeds |
+| `M70-ingest-does-not-seed-the-clock` | `1 of 1` declared, `0 of 1` measured | **a real floor**: 1 of 200, first at seed 55, floored at detected-at-all with a ceiling of 150 |
+| `M61`, `M64` | `PENDING` | 232 of 300 and 300 of 300, both first at seed 0 |
+
+**`M68` is the one that pays for the probe fix.** It could not be measured at all until three counters
+the exit run had been collecting — `ForeignTagStarts`, `StaleRestarts`, `StaleIncarnation` — were
+asserted rather than merely carried. `ForeignTagStarts` is **BUG-021's second half**: `IdentityCollisions`
+watches that two nodes do not mint one timestamp, and nothing watched that a restart mints its own
+rather than adopting `RestartAt`. That is §22.6b's two-halves rule in the assertion dimension — the
+decision had two halves and the exit run watched one — and all three were safe to add against the
+signed run rather than by argument, because its own shard censuses carry `ForeignTagStarts=0`,
+`StaleRestarts=0` and `StaleIncarnation=5195` across 25,000 seeds.
+
+---
+
+## 38. A bundle may name a mutant SET
+
+The corpus's arrangement is *the bundle carries the schedule, the mutant carries the defect*, and
+nothing in it requires the defect to be atomic. `Meta.Mutant` being a single string was an assumption
+that had never been tested, and BUG-021 is the case that tests it: its defect is a **pair**, and a tree
+with either half of the fix still refuses the collision the other allows, so no single patch
+reintroduces it.
+
+With a single-patch field the options were a bundle that cannot reproduce or no bundle at all, and
+BUGS.md rule 2 asks every entry for one. So `--mutant` repeats, `Meta.Mutants` carries the set,
+`MutantSet()` reads either shape, and `corpus-reproduces.sh` applies all of them and labels the
+verdict `M67+M68`. Every existing bundle's `meta.json` is unchanged, because one patch still writes the
+single field.
+
+---
+
+## 39. The race lane, split, with the budgets it was measured at
+
+§33's recommendation, landed.
+
+| lane | what it asks | measured | budget |
+|---|---|---|---|
+| **`race`** (per push) | *does any cross-goroutine interaction reach node state off the mailbox* (Amendment A1) — every package **except `sim/hunt`**, which is `raft/`, `store/`, `node/`, `kv/`, `sim/` and the real-mode driver | **191 s** | **900 s**, about five times the measurement |
+| **`race-soak`** (nightly, sharded) | the seed search: `sim/hunt` under `-race`, 200 seeds across 8 shards | ~43 s/seed instrumented, so ~9 h in one process | the nightly tier, beside `covering` and `soak` |
+
+**What the split gives up, stated rather than absorbed.** The per-push lane no longer instruments the
+simulator driver, which is where CARRY-FORWARD says the lane's value is concentrated. A race
+introduced there is caught nightly instead of on push. That is a real reduction, and it is the honest
+one available: the alternative was a seed count in single digits, which A1's ruling — *a few hundred
+simulated seeds answer this lane's question* — does not authorise. **Shrinking a recorded scope to fit
+a budget without saying so is the move this file exists to prevent**, so the scope is kept and moved to
+a tier that can hold it.

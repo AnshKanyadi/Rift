@@ -2,10 +2,9 @@
 # covering-test: TestRestartsMintTheirOwnStartTimestamp
 # package: ./sim/hunt/
 # expect: killed
-# power-seeds: 1
-# power-floor: 1
-# power-ceiling: 1
-# power-measured: 7 foreign tags across 10 uncertainty restarts over 12 seeds, against 0 of 10 on the clean tree. It SURVIVED twice before this: pinned first to seed 90004, which is the schedule that found BUG-021 and does not restart; then to a counter living inside nowAbove, which this patch deletes the call to -- so the mutation removed the guard along with the behaviour. DESIGN-A6 sections 22.6 and 22.7
+# power-seeds: 60
+# power-detector: sweep
+# power-measured: sweep-detected at 60 seeds, two criteria: 52 start timestamps carrying another node's tag and 65 restarts that did not clear the commit they restarted on. It measured 0 of 1 and then 0 of 60 as a RATE, and both zeros were the instrument: this class's detector is an aggregate assertion and the probe consulted none of them until A6's close. ForeignTagStarts and StaleRestarts were also collected by every shard of the exit run and asserted nowhere, which is why the criteria had to be added before this could be measured at all (DESIGN-A6 sections 31, 35.1)
 # mutates: BUG-021's SECOND half, and the reason the fix is one decision rather than two. A restarting transaction adopts RestartAt directly instead of minting above it. RestartAt is the observed commit's successor -- Logical plus one -- and Logical's low bits are the node tag, so the restarted transaction is identified by a number from another node's sequence. A tree carrying only the first half of the fix looks complete until a restart lands on a foreign tag
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go

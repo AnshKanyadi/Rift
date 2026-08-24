@@ -2,10 +2,10 @@
 # covering-test: TestARangeIngestingRecordsRaisesItsClock
 # package: ./store/
 # expect: killed
-# power-seeds: 1
+# power-seeds: 200
 # power-floor: 1
-# power-ceiling: 1
-# power-measured: killed deterministically by its covering test. Two corrections were needed first, both mine: the test's timestamps were below the simulated clock so the floor never bound, and then five seconds ahead so Update refused them as beyond maxOffset. A hundred milliseconds is the realistic gap and the one that must work
+# power-ceiling: 150
+# power-measured: 1 of 200, first at seed 55, under current at A6's close, and 1 of 60 first at 55 -- the same seed from both, which is what a deterministic sweep should give. It declared 1 of 1 before that, which was a sweep expectation its covering test could never satisfy: the test is a unit test in ./store/ and the probe measures sweeps, so the lane was RED on this class from the day it landed (DESIGN-A6 section 31). FRAGILE at 1 in 200 -- BUG-023 is roughly 1 seed in 90 under holds and this is the same order -- so it is floored at detected-at-all with the ceiling at 150, under three times the measured first detection
 # mutates: BUG-023's second half. Records arriving by any path -- a split's birth state, an installed snapshot, a restart's recovery -- no longer raise the range's clock to the maximum timestamp among them. A range built from a SNAPSHOT rather than by applying the split entry gets no floor at all, which is the half a fix that only touched the split path would miss
 --- a/store/node.go
 +++ b/store/node.go

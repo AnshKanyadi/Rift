@@ -29,7 +29,11 @@ if [ "${RIFT_SKIP_HOOK:-}" = "1" ]; then
 fi
 
 printf '\n  pre-push: the every-change lanes\n'
-for lane in build lint lane-coverage bundle-seeds assertions provenance test corpus; do
+# power-decl joins the list because it is the cheap half of a lane that has been
+# RED since M67 and M70 landed and that nothing on this machine runs: the
+# measurement costs fifteen CPU-hours, the DECLARATION costs milliseconds, and
+# the failure that actually happened was a declaration nobody could satisfy.
+for lane in build lint lane-coverage bundle-seeds assertions provenance power-decl test corpus; do
   printf '  ---- make %s\n' "$lane"
   if ! make "$lane" >/tmp/rift-hook.log 2>&1; then
     printf '\n  FAILED: make %s\n\n' "$lane"

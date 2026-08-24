@@ -47,16 +47,28 @@ type bundleDir struct {
 	name string
 	path string
 	meta struct {
-		Seed      uint64 `json:"seed"`
-		Commit    string `json:"commit"`
-		Workload  string `json:"workload"`
-		TraceHash string `json:"trace_hash"`
-		Mutant    string `json:"mutant"`
+		Seed      uint64   `json:"seed"`
+		Commit    string   `json:"commit"`
+		Workload  string   `json:"workload"`
+		TraceHash string   `json:"trace_hash"`
+		Mutant    string   `json:"mutant"`
+		Mutants   []string `json:"mutants"`
 		Violation *struct {
 			Checker string `json:"checker"`
 			Detail  string `json:"detail"`
 		} `json:"violation"`
 	}
+}
+
+// mutantSet is every patch this bundle needs, from either field. A defect that
+// no single patch reintroduces names a set (see Meta.Mutants); everything else
+// names one, and both read the same here.
+func (b bundleDir) mutantSet() []string {
+	var out []string
+	if b.meta.Mutant != "" {
+		out = append(out, b.meta.Mutant)
+	}
+	return append(out, b.meta.Mutants...)
 }
 
 func corpus(t *testing.T) []bundleDir {
@@ -218,10 +230,10 @@ func verdictOf(b bundleDir) string {
 	if b.meta.Violation != nil {
 		return b.meta.Violation.Checker + " -- " + b.meta.Violation.Detail
 	}
-	if b.meta.Mutant != "" {
+	if set := b.mutantSet(); len(set) > 0 {
 		// The schedule is preserved here and the defect is preserved in the
 		// mutant; neither half reproduces the bug alone.
-		return "schedule only; the defect it exposed is fixed and preserved as " + b.meta.Mutant
+		return "schedule only; the defect it exposed is fixed and preserved as " + strings.Join(set, " + ")
 	}
 	return "no violation recorded; a determinism artifact rather than a finding"
 }

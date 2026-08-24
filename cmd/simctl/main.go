@@ -150,7 +150,43 @@ type Meta struct {
 	// against the fixed tree, which is the wrong way round -- the lane exists to
 	// notice rot, not to demand the bug back.
 	Mutant string `json:"mutant,omitempty"`
+
+	// Mutants is the patch SET, for a defect no single patch reintroduces.
+	//
+	// # Why a set, and why it was a string first
+	//
+	// The arrangement is *the bundle carries the schedule, the mutant carries
+	// the defect*, and nothing in that requires the defect to be atomic.
+	// BUG-021 is the case that made it explicit: two nodes minting one start
+	// timestamp needs BOTH halves of the fix removed -- the node tag (`M67`) and
+	// the minted restart timestamp (`M68`) -- because a tree with either half
+	// still refuses the collision the other allows. With only a single-patch
+	// field, the honest options were a bundle that could not reproduce or no
+	// bundle at all, and BUGS.md rule 2 asks every entry for one.
+	//
+	// `Mutant` stays for the single-patch case, which is every other bundle, and
+	// the two are read together: the set is `Mutant` if it is set, plus
+	// `Mutants`. A reader gets one list either way.
+	Mutants []string `json:"mutants,omitempty"`
 }
+
+// MutantSet is every patch this bundle needs, from either field.
+func (m Meta) MutantSet() []string {
+	var out []string
+	if m.Mutant != "" {
+		out = append(out, m.Mutant)
+	}
+	return append(out, m.Mutants...)
+}
+
+// stringList is a repeatable string flag.
+//
+// It exists so `--mutant` can be given more than once, which is what a defect
+// that no single patch reintroduces needs (see Meta.Mutants).
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 
 // RaftMeta is the raft workload's build parameters.
 type RaftMeta struct {
@@ -261,7 +297,8 @@ func cmdRun(args []string) int {
 	flawName := fs.String("flaw", "none", "toy flaw to plant: none | ack-before-sync | ack-before-replicate | dup-apply")
 	placeName := fs.String("placement", "reactive", "toy crash targeting: reactive | uniform")
 	failover := fs.Bool("failover", false, "crash the primary and promote a backup")
-	mutant := fs.String("mutant", "", "the sim/mutants patch that reintroduces the defect this schedule exposed")
+	var mutants stringList
+	fs.Var(&mutants, "mutant", "the sim/mutants patch that reintroduces the defect this schedule exposed; repeat it for a defect no single patch reintroduces")
 	preVote := fs.Bool("pre-vote", true, "raft workload: run the pre-vote round")
 	snapEvery := fs.Uint64("snapshot-threshold", 6, "raft workload: applied entries between snapshots; 0 disables")
 	transfers := fs.Int("transfers", 2, "raft workload: leadership transfers the plan schedules")
@@ -276,7 +313,16 @@ func cmdRun(args []string) int {
 	transfers2pc := fs.Int("transfers-2pc", 40, "raft workload: transactions the bank runs; 0 disables the bank")
 	_ = fs.Parse(args)
 
-	meta := Meta{Seed: *seed, Workload: *wl, Mutant: *mutant}
+	meta := Meta{Seed: *seed, Workload: *wl}
+	// One patch keeps the single-string field every existing bundle uses; more
+	// than one goes in the set. A reader takes MutantSet either way.
+	switch len(mutants) {
+	case 0:
+	case 1:
+		meta.Mutant = mutants[0]
+	default:
+		meta.Mutants = mutants
+	}
 	var p *plan.Plan
 	var hist *sim.History
 
@@ -437,7 +483,7 @@ func cmdReplay(args []string) int {
 	// produces for the one that found something.
 	if *rerecord {
 		got.Seed = recorded.Seed
-		got.Mutant = recorded.Mutant
+		got.Mutant, got.Mutants = recorded.Mutant, recorded.Mutants
 		got.Commit = headCommit()
 		if err := writeBundle(*dir, p, got, hist); err != nil {
 			return fail("re-recording bundle: %v", err)
@@ -516,9 +562,12 @@ func cmdReplay(args []string) int {
 	// A bundle whose defect is already fixed replays clean by design, and the
 	// half of the reproduction that is missing is named rather than left for a
 	// reader to go looking for.
-	if recorded.Violation == nil && recorded.Mutant != "" {
+	if recorded.Violation == nil && len(recorded.MutantSet()) > 0 {
 		fmt.Printf("this schedule's defect is fixed; to see the finding, reintroduce it:\n")
-		fmt.Printf("  patch -p1 < %s && simctl replay --bundle %s\n", recorded.Mutant, *dir)
+		for _, m := range recorded.MutantSet() {
+			fmt.Printf("  patch -p1 < %s\n", m)
+		}
+		fmt.Printf("  simctl replay --bundle %s\n", *dir)
 	}
 	return rc
 }

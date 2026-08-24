@@ -94,9 +94,26 @@ func TestPowerProbe(t *testing.T) {
 		opt.GCUnthrottled = true
 	}
 
+	// # POWER_FROM makes the probe shardable, on the exit run's argument
+	//
+	// `MaterializeRaftWith(seed, opt)` derives a whole plan from the seed alone,
+	// so a seed's verdict does not depend on which invocation ran it. A rare
+	// class needs thousands of seeds and one process is hours; contiguous
+	// non-overlapping ranges in separate processes are the same seeds in a
+	// fraction of the wall clock, which is exactly why `scripts/exit-run.sh`
+	// exists. `first` stays an ABSOLUTE seed so shards can be compared.
+	var from uint64
+	if v := os.Getenv("POWER_FROM"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			t.Fatalf("POWER_FROM: %v", err)
+		}
+		from = n
+	}
+
 	detected, first := 0, int64(-1)
 	var agg hunt.RaftCensus
-	for seed := uint64(0); seed < seeds; seed++ {
+	for seed := from; seed < seeds; seed++ {
 		bad, c := noticed(seed, opt)
 		agg = hunt.AddCensus(agg, c)
 		if bad {
@@ -126,7 +143,8 @@ func TestPowerProbe(t *testing.T) {
 	// tree at the same seed count -- a difference, not a presence, for the reason
 	// DESIGN-A6 §16.4 records about the corpus matcher.
 	fails := exitCriteriaFailures(agg)
-	fmt.Printf("POWER detected=%d of=%d first=%d sweepfail=%d\n", detected, seeds, first, len(fails))
+	fmt.Printf("POWER detected=%d of=%d from=%d first=%d sweepfail=%d\n",
+		detected, seeds-from, from, first, len(fails))
 	// # The census itself, so "reachable" stops being an argument
 	//
 	// A class that measures zero has two very different explanations and the

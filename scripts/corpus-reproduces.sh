@@ -76,7 +76,19 @@ skipped=0
 for d in "$SEEDS"/*/; do
   [ -f "$d/meta.json" ] || continue
   name=$(basename "$d")
-  mutant=$(python3 -c "import json,sys;print(json.load(open('$d/meta.json')).get('mutant',''))")
+  # # A bundle may name a SET, because a defect need not be atomic
+  #
+  # The arrangement is *the bundle carries the schedule, the mutant carries the
+  # defect*, and nothing in it requires one patch. BUG-021 needs both halves of
+  # its fix removed -- the node tag and the minted restart timestamp -- because a
+  # tree with either half still refuses the collision the other allows. Applying
+  # one and calling the bundle stale would be blaming the schedule for the
+  # arrangement.
+  mutant=$(python3 -c "
+import json
+m=json.load(open('$d/meta.json'))
+s=([m['mutant']] if m.get('mutant') else []) + list(m.get('mutants') or [])
+print(' '.join(s))")
   if [ -z "$mutant" ]; then
     skipped=$((skipped + 1))
     printf '   skip     %-12s carries no mutant: its flaw is in the plan or it is a harness defect\n' "$name"
@@ -87,8 +99,12 @@ for d in "$SEEDS"/*/; do
   mkdir -p "$work"
   (cd "$ROOT" && tar cf - --exclude=./.git --exclude=./.github .) | (cd "$work" && tar xf -)
 
-  if ! (cd "$work" && patch -p1 --silent --forward < "$mutant" 2>/dev/null); then
-    printf '   ROT      %-12s %s no longer applies\n' "$name" "$mutant"
+  rot=""
+  for one in $mutant; do
+    (cd "$work" && patch -p1 --silent --forward < "$ROOT/$one" 2>/dev/null) || rot=$one
+  done
+  if [ -n "$rot" ]; then
+    printf '   ROT      %-12s %s no longer applies\n' "$name" "$rot"
     failed=$((failed + 1))
     continue
   fi
@@ -97,6 +113,7 @@ for d in "$SEEDS"/*/; do
     failed=$((failed + 1))
     continue
   fi
+  label=$(for one in $mutant; do basename "$one"; done | paste -sd+ -)
 
   checked=$((checked + 1))
   out=$(cd "$work" && $GO run ./cmd/simctl replay --bundle "$d" 2>&1 || true)
@@ -117,15 +134,15 @@ for d in "$SEEDS"/*/; do
   # reproducing its finding. For a bundle recorded on fixed code the recording is
   # clean, so the only honest pass is a finding appearing where there was none.
   if printf '%s' "$out" | grep -qE 'THE RECORDING DID NOT|WHERE THE RECORDING WAS NOT|panic|simctl:'; then
-    printf '   ok       %-12s reproduces its FINDING under %s\n' "$name" "$(basename "$mutant")"
+    printf '   ok       %-12s reproduces its FINDING under %s\n' "$name" "$label"
   elif printf '%s' "$out" | grep -qE 'DIVERGED'; then
-    printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$(basename "$mutant")"
+    printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$label"
     printf '            The bundle is sensitive to SOMETHING; only the finding returning proves\n'
     printf '            it is sensitive to the thing it was recorded for. Re-record it at a seed\n'
     printf '            where the finding returns, or retire it with the reason written down.\n'
     failed=$((failed + 1))
   else
-    printf '   STALE    %-12s replays IDENTICALLY with %s applied.\n' "$name" "$(basename "$mutant")"
+    printf '   STALE    %-12s replays IDENTICALLY with %s applied.\n' "$name" "$label"
     printf '            The mutation changed nothing on this schedule, so the bundle no longer\n'
     printf '            carries its finding. Re-record it at a seed that does reproduce -- the\n'
     printf '            power lane will name one -- in the same commit that noticed.\n'

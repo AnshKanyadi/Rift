@@ -429,6 +429,39 @@ func exitCriteriaFailures(c hunt.RaftCensus) []string {
 			"The fix is the IDENTITY -- a transaction id in the record key, or the TSO fallback "+
 			"Amendment A6 pre-authorises -- and never this assertion", c.IdentityCollisions))
 	}
+	// # BUG-021's SECOND half, and BUG-024's, which the exit run collected and
+	// # never consulted
+	//
+	// `IdentityCollisions` above is one half of D-A6-12: two nodes must not mint
+	// the same start timestamp. The other half is that a RESTART mints its own
+	// rather than adopting `RestartAt`, which carries the tag of whoever minted
+	// the commit it restarted on -- and `ForeignTagStarts` is the counter for it.
+	// It was plumbed through the census and through every shard and asserted
+	// nowhere, which is §22.6b's two-halves rule in the assertion dimension: the
+	// decision had two halves and the exit run watched one.
+	//
+	// All three are safe to add against the signed run rather than by argument:
+	// its recorded shard censuses carry ForeignTagStarts=0, StaleRestarts=0 and
+	// StaleIncarnation=5195 across 25,000 seeds.
+	if c.ForeignTagStarts != 0 {
+		add(fmt.Sprintf("%d start timestamps carried the tag of a node other than the one asked "+
+			"for them. A restart that adopts RestartAt instead of minting above it hands the "+
+			"transaction another node's identity, which is BUG-021 one level out", c.ForeignTagStarts))
+	}
+	if c.StaleRestarts != 0 {
+		add(fmt.Sprintf("%d restarts did not clear the commit they restarted on, so the next read "+
+			"meets the same uncertainty and the transaction makes no progress by restarting",
+			c.StaleRestarts))
+	}
+	// Non-vacuity, not a zero-assertion: BUG-024's guard rejects a read answer
+	// from a dead incarnation, and a sweep in which it never fired never reached
+	// the schedule the guard exists for.
+	if c.StaleIncarnation == 0 {
+		add("no read answer from a pre-restart incarnation was ever rejected across the whole " +
+			"sweep. That guard is BUG-024's fix and a sweep that never reaches it says nothing " +
+			"about it")
+	}
+
 	// A read this workload cannot parse is a read answered with another key's
 	// value. Asserted at zero, and it has never been nonzero.
 	if c.UnparseableReads != 0 {

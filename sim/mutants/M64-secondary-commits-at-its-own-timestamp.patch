@@ -3,9 +3,9 @@
 # package: ./sim/hunt/
 # expect: killed
 # power-seeds: 300
-# power-floor: 1
-# power-ceiling: 30
-# power-measured: PENDING
+# power-floor: 150
+# power-ceiling: 10
+# power-measured: 300 of 300, first at seed 0, under current at A6's close. Every seed notices, which is what a transaction whose keys land at different commit timestamps should look like to an atomicity oracle
 # mutates: a transaction's secondaries commit one logical tick after its primary. Each key's own history is perfectly ordinary -- one prewrite, one commit, ascending timestamps -- so nothing that looks at a single key can see it, and every replica agrees. A reader between the two timestamps sees half the transaction, which is the definition of atomicity broken
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go
