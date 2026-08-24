@@ -491,6 +491,20 @@ assertion rather than a tuned test.
 > run — the list produced a survivor rather than a green tick — and the survivor was answered with a
 > new invariant (§14.5). A list that has caught nothing and a list that has surfaced a hole are
 > different kinds of claim, and this one is the second.
+>
+> **And the second time, the hole was closed with a DETECTOR rather than with a longer list (§40).**
+> `M62` was the sharper case: not a survivor an invariant over the final state could answer, but a
+> class measured to be reachable *and* invisible to every client-facing oracle by construction. The
+> answer is `resolution-only-breaks-expired-locks`, which reads the permission a resolver claimed out
+> of the committed log and checks it against the decision in the recovered state. **For this class the
+> list is no longer the only instrument**, which is the narrower and harder form of the gap being
+> repaid rather than restated.
+>
+> That is what the burden the list inherited looks like when it is discharged: the list surfaces the
+> hole, the hole gets a mechanism, and the record says which classes still have nothing but the list.
+> Of the symmetric-apply classes, `M61` has invariant 5, `M60` has invariant 1, `M62` now has this
+> oracle, `M63` was never a class and `M66` is unreached — which leaves **`M64` as the one covered by
+> a mutant alone**, and that is a shorter and more useful sentence than the original claim was.
 
 ---
 
@@ -1714,8 +1728,13 @@ claimed.
 
 `56 checked, 2 skipped, 8 failures`, and the eight are two different things.
 
-**Four genuinely mispointed covering tests** — the defect this lane was built for, found four times on
-its first complete run:
+**Four verdicts that this section called genuinely mispointed covering tests, and they were not.**
+**Corrected at §36**, which is the written case that all four are FALSE POSITIVES of the lane's own
+rule, and at §36.4, which is the re-run under the repaired rule. Left standing here rather than
+rewritten, because what this section got wrong is the more useful half: the lane produced four
+confident findings on its first complete run and the confident part was the defect.
+
+The four, as reported:
 
 | mutant | covering test | line it never executes |
 |---|---|---|
@@ -1734,6 +1753,12 @@ dead covering tests violated: **part of what the mutant changes is never execute
 against it.** A patch with several hunks can still be killed through the hunks that are covered, and
 the class is then covered for a reason nobody wrote down. Each of the four needs its test routed
 through the real call site, and each is a small investigation of its own.
+
+> **And the small investigation is what overturned it.** Doing it for all four found the same shape
+> four times — a closing brace, an assertion body, an error branch — none of which any test can
+> execute on a tree where the assertion holds and the engine works. The paragraph above is right about
+> what the lane *should* claim and wrong about what it *did* claim, and the gap between the two was
+> the rule. §36.
 
 **Four ERRORs, which are a budget failure rather than a coverage verdict:**
 
@@ -2502,7 +2527,8 @@ different things, and the instrument that produced the number was itself part of
 
 `TestPowerProbe`'s `noticed()` counted a seed as detected on: a materialise error, a run error, an
 end-of-run violation, a report verdict, a panic, or no leader. That is **a hand-listed subset of the
-harness's detectors.** The exit run asserts forty-six criteria over the census — *no snapshot was
+harness's detectors.** The exit run asserts a whole list of criteria over the census — forty-six
+when this was written, and the number moving is the point rather than a detail — *no snapshot was
 ever taken*, *no resolver ever left a live owner alone*, *the inconclusive rate is under thirty per
 mille* — and the probe consulted none of them.
 
@@ -2580,13 +2606,27 @@ the same two numbers (D-A6-10) — so the oracle reads two recorded fields and n
 is not built here for the reason invariant 7 was not built as `M66`'s remedy: it lands as its own
 decision, with its own induction, and A6 is signed on the checkers it was signed with.
 
+> **BUILT. Ansh's ruling: now, not deferred — "unlike invariant 7 this one is not a remedy in search
+> of a class, the class is established and measured."** §40 is the section, and the disposition above
+> is what changes: `M62` stops being *reachable and undetected* and becomes *reachable and detected*,
+> by an oracle rather than by a unit test in `kv/`.
+
 ---
 
 ## 36. The written case that `make mutant-covered` is itself wrong
 
-**Reported, not acted on.** CLAUDE.md: *a failing checker means the code is wrong until proven
-otherwise; if you believe a checker is itself buggy, stop and make the written case first.* This is
-that case, and it contradicts the premise of a ruling, so it is Ansh's to re-take.
+**Reported, not acted on — and then ACCEPTED, and then landed.** CLAUDE.md: *a failing checker means
+the code is wrong until proven otherwise; if you believe a checker is itself buggy, stop and make the
+written case first.* This is that case, and it contradicted the premise of a ruling, so it was Ansh's
+to re-take.
+
+> **Ansh, re-taking it:** *"your case is accepted and my premise is struck. Closing braces attributed
+> to no span, a panic message reachable only when safety breaks, and an error return no unit test can
+> force are not covering-test defects, and a rule that asks `M29` for a test violating state machine
+> safety is a rule that cannot be satisfied on that shape."*
+
+The rule below is landed, with both checks run and reported (§36.4). The rest of this section is left
+as it was written, because the argument is the record.
 
 The ruling was: *"M15, M29, M55 and M60 are the defect the lane exists for and get fixed, with the
 lane green afterward."* On inspection **none of the four is that defect.** All four are the lane
@@ -2627,6 +2667,18 @@ Three patches were narrowed by hand this cycle to get past exactly this: `M72` (
 Each narrowing was a workaround for the same defect, applied before it was understood. That the same
 shape came up four more times unprompted is what makes it a rule rather than four coincidences.
 
+**Ansh, ratifying: the three hand-narrowings are the evidence that the shape is real rather than a
+rationalisation of four inconvenient cases**, and they belong in the record for that reason. The point
+is the ORDER. The narrowings came *first*, before anyone had named the shape — three separate times
+somebody looked at a `DEAD` verdict on a `return err` or a closing brace, decided the verdict was
+wrong, and edited the patch to make it go away. A rule inferred from four cases that arrived after the
+hypothesis is a rule fitted to its evidence. **Three cases that arrived before it, and were each
+worked around rather than argued with, are not.**
+
+Seven instances in one day, of two kinds and in two directions — three worked around by hand, four
+reported by the lane — is the whole basis for changing the rule, and it is a stronger basis than the
+lane's original sentence ever had.
+
 ### 36.3 The proposed rule, and why it is not a weakening
 
 > **Require the FIRST line of each contiguous deleted-or-replaced run to be covered**, rather than
@@ -2650,6 +2702,149 @@ canary, which is aimed at a test that covers none of it.
 **What I have not done:** changed the script, changed any of the four covering tests, or marked the
 lane green. Tuning four tests to satisfy a rule that asks an assertion body to execute on a passing
 tree would be the exact move this project forbids, one level up from the tests.
+
+### 36.4 The two checks, run
+
+**Check 1 — the original induction, re-run.** `store/clockinherit_test.go` was reverted to the
+mistake it records in its own comment: `r.seedClockAtLeast(maxVersionTimestamp(...))` inline instead
+of `r.ingest(recs, ...)`. The reconstructed test **passes** — it is a covering test that cannot fail
+under its mutant — and the lane says so under the new rule:
+
+```
+DEAD  M70-ingest-does-not-seed-the-clock  TestARangeIngestingRecordsRaisesItsClock
+                                          never executes store/node.go:1328
+```
+
+Restored, it reports `ok`. The canary reports `canary — correctly uncovered by
+TestLinearizableHistoryPasses`. **The induction the lane's header records survives the rule change.**
+
+**And the four original failures still fail, by proof rather than by re-running them.** All four were
+the same mistake on two mutants — `M68` twice and `M70` once, §25.2 — and both patches are
+**single-line replacements**: `M68` is `sim/hunt/bank.go:443`, `M70` is `store/node.go:1328`. A
+one-line run has one line, so its first line *is* its whole set. **Old required set = new required
+set = `{443}` and `{1328}`.** The rule change cannot alter those verdicts in either direction. The
+canary is the same shape: `sim/checker/porcupine.go:145`, old = new = `{145}`.
+
+**Check 2 — the full lane under both rules.** Done in two halves, and the first half turned out to
+answer most of it.
+
+**(a) The static half, which is a proof and not a sample.** The new required set is *by construction*
+a subset of the old, so **no verdict can move from `ok` to `DEAD`** — the rule can only demand less.
+And where the two sets are **equal**, no verdict can move at all, whatever the coverage says. Computed
+over all 61 patches by applying each one and diffing:
+
+> **48 of 61 patches have identical old and new required sets. Their verdicts are provably unchanged
+> and no coverage run can alter that.** Thirteen differ, and those thirteen are the entire space in
+> which a verdict can move.
+
+That includes both of the lane's known budget failures: **`M19` and `M46` are IDENTICAL**
+(`raft/raft.go:1683`, `store/machine.go:852`), so the two covering tests that cannot finish inside
+`TEST_TIMEOUT` contribute nothing to this question — worth stating, because it would otherwise look
+like two hours of unexamined lane.
+
+**(b) The measured half: the thirteen that can move.** Run with the covering tests bounded to 25
+seeds, which is sound in one direction and that is the direction needed: **coverage is monotone in
+seeds** — running more seeds executes a superset of lines — so a line covered at 25 is covered at
+500, and `miss` measured here is a **superset** of `miss` at full range. An empty `miss` here is
+therefore an empty `miss` there.
+
+| mutant | `miss` under the OLD rule | `miss` under the NEW rule | verdict |
+|---|---|---|---|
+| `M15-vacuity-rule-removed` | `279` | — | **DEAD → ok** |
+| `M55-collection-takes-the-version-a-read-still-needs` | `217` | — | **DEAD → ok** |
+| `M60-commit-does-not-clear-its-lock` | `204,205` | — | **DEAD → ok** |
+| `M29-truncation-refused-below-the-durable-watermark` | `2543,2544,2545` | **`2543`** | **DEAD → DEAD** |
+| `M24`, `M25`, `M30`, `M31`, `M38`, `M44`, `M47`, `M72`, `M73` | — | — | ok → ok, nine of them |
+
+**Three of the four move. `M29` does not, and that is the finding.**
+
+### 36.5 `M29` stays DEAD, and the rule is not what is wrong
+
+The proposed rule was argued from §36.1's table, which lists `M29`'s uncovered lines as
+*"the panic's message, inside an assertion body"* and therefore predicted it would clear. It does not,
+and the reason is mechanical and was invisible from the table:
+
+```
+2541  if r.commitIndex >= i {                                          <- REPLACED, and covered
+2542      panic(fmt.Sprintf(                                           <- unchanged
+2543          "raft: node %d truncated to %d with commit index %d; ..  <- REPLACED, not covered
+2544              "was committed is being overwritten, ...",           <- REPLACED
+2545          r.id, i, r.commitIndex))                                 <- REPLACED
+```
+
+Line 2542 is **unchanged between the two edits**, so the hunk is **two** contiguous replaced runs, not
+one — `{2541}` and `{2543,2544,2545}` — and the new rule asks for the first line of *each*. 2543 is
+the first line of the second run and it sits inside the panic's argument list, which only evaluates
+when state machine safety has already failed. **So the lane is still asking for a covering test that
+breaks the invariant**, which is precisely the thing Ansh's ruling struck.
+
+**The rule is not what is wrong here. The patch is.** `M29`'s class is *truncation refuses below the
+DURABLE watermark instead of below the COMMIT index* — the class is the **condition**. Rewriting the
+panic's message alongside it is cosmetic, and it is the sole reason the hunk has two runs. So the
+patch is narrowed to the condition line and the message is left alone:
+
+```diff
+-	if r.commitIndex >= i {
++	if r.tail.persisted >= i {
+ 		panic(fmt.Sprintf(
+ 			"raft: node %d truncated to %d with commit index %d; ...
+```
+
+One run, first line `2541`, **covered**. The mutation's behaviour is unchanged — the guard still tests
+the wrong watermark and still panics on legitimate truncations — and the message it would print is now
+stale when it fires, which costs nothing because a mutant that fires is a mutant being killed.
+
+**This is re-pointing, not tuning** (§22.6's distinction): the defect the patch represents is
+identical, and what changed is that the patch now describes it without the incidental edit. It landed
+with its own verification rather than in a batch, as §25.3c requires, and both halves were run:
+
+```
+killed   M29-truncation-refused-below-the-durable-watermark
+         by TestStateMachineSafetyOracleReportsNothing   6s
+
+ok       M29-truncation-refused-below-the-durable-watermark
+         TestStateMachineSafetyOracleReportsNothing runs it
+1 checked, 0 skipped, 0 unchecked, 0 dead, 474s of 9000s budget
+```
+
+**So all four of the lane's original DEAD verdicts are resolved — three by the rule and one by the
+patch — and none of the four was resolved by touching a covering test**, which was the outcome the
+written case argued for and the outcome the ruling struck the old premise to allow.
+
+> **And the general lesson is about mutant patches rather than about the lane: an incidental edit
+> inside a hunk splits it into runs, and a run that begins inside an expression begins somewhere no
+> test can reach. Keep a mutant's diff to the thing it is a mutant OF.**
+
+### 36.6 The whole lane under the new rule, and the budget it cost to find out
+
+The lane was re-run over **all 61 patches** with the covering tests bounded to 25 seeds — sound in the
+direction that matters, because coverage is monotone in seeds and an `ok` at 25 is an `ok` at 500:
+
+```
+57 reported ok
+canary-mispointed   correctly uncovered (expect: alive), first_miss=145
+M23, M48            addition-only: no original line to cover
+M14                 ERROR -- see below
+```
+
+**Nothing is DEAD.** The lane went from `56 checked, 2 skipped, 8 failures` to no coverage failures
+at all, and it got there by fixing the rule and one patch rather than by touching a covering test.
+
+`M14`'s `ERROR` is an artefact of this pass and not a verdict: `TestStaleDurabilityCompletionIsRefused`
+carries a **hardcoded `const seeds = 200`** and does not go through `boundSeeds`, so `RAFT_SEEDS` does
+not reach it and it blew the 900s cap this pass ran under. Its required set is IDENTICAL under both
+rules (`store/node.go:277`), so its verdict is unchanged by construction, and it was not among the
+four.
+
+**And the cost, measured rather than assumed.** At `COVER_JOBS=6` and the lane's real per-test
+timeout, the unbounded run spent **89 minutes reaching 3 of its 11 batches**, with two of those three
+holding a covering test that ran out the entire 3600s. That is the number `COVER_BUDGET` exists to
+put a bound on, and the bound is **21,600s** — six hours, against a pathological worst case of eleven.
+
+> **The lane's cost is not the number of mutants. It is that a handful of covering tests sweep 500 or
+> 1,500 seeds, at ~5s a seed and twice that under coverage instrumentation. If the budget ever fires,
+> the fix is those tests — the same fix `M65` and `M66` got when their covering test turned out to be
+> the exit run — and not a larger number.**
 
 ---
 
@@ -2785,6 +2980,32 @@ third meaning is a question about the mechanism rather than about the entry — 
 that way rather than quietly kept, because the alternative is a capability whose justification nobody
 can find later.
 
+### 38.2 And the lane's behaviour on HALF a set is induced, not assumed
+
+*No gate counts until its failure has been induced.* The set support's failure mode is *a bundle that
+names one of the pair*, so that is what was built: two copies of `BUG-021`'s bundle, identical in
+every byte except `meta.mutants`, one naming `M67` and one naming `M68`, run through
+`scripts/corpus-reproduces.sh`:
+
+```
+STALE    BUG-021-M67only replays IDENTICALLY with M67-minting-drops-the-node-tag.patch applied.
+         The mutation changed nothing on this schedule, so the bundle no longer
+         carries its finding.
+ok       BUG-021-M68only reproduces its FINDING under M68-restart-timestamp-derived-not-minted.patch
+ 2 bundles checked, 0 skipped, 1 failures
+```
+
+**The lane gives a verdict on half a set, and it is the correct verdict in both directions.** Red for
+the half that does not reproduce, green for the half that does — which is §38.1's asymmetry
+independently reproduced by a different instrument, and it is the induction that makes "the bundle
+names a set" a checked property rather than a described one.
+
+Two things this settles that the prose could not. The set is applied as a **conjunction** — every
+patch in it, and a patch that fails to apply is `ROT` and fails the bundle — so a set cannot silently
+degrade to a subset. And a bundle naming *only* the necessary half would still be green, which is why
+the entry names the pair on the grounds of the defect's SHAPE rather than on the grounds of
+necessity, and says so.
+
 ---
 
 ## 39. The race lane, split, with the budgets it was measured at
@@ -2803,3 +3024,333 @@ one available: the alternative was a seed count in single digits, which A1's rul
 simulated seeds answer this lane's question* — does not authorise. **Shrinking a recorded scope to fit
 a budget without saying so is the move this file exists to prevent**, so the scope is kept and moved to
 a tier that can hold it.
+
+---
+
+## 40. `M62`'s detector, built: `resolution-only-breaks-expired-locks`
+
+§35.4 stated a detector and did not build it, on the reasoning that it should land as its own
+decision with its own induction. Ansh's ruling: **build it now** — unlike invariant 7 it is not a
+remedy in search of a class, because the class is established and measured.
+
+### 40.1 What it asserts
+
+> **A rolled-back transaction record that nobody proposed must have a resolve behind it carrying
+> `Deadline < ExpireAt`.**
+
+A rolled-back record exists for exactly two reasons. Somebody proposed it -- `OpPutTxnRecord`, a
+coordinator abandoning its own transaction -- which needs no permission at all. Or a resolver declared
+the owner dead, which does: D-A6-5's rule is that **the TTL is expiry, not opinion**, so a resolver
+may only make an owner dead once the deadline the owner published has passed the timestamp the
+resolver judged it against.
+
+Both numbers are already in the command. They ride there for D-A6-10's reason -- every replica must
+compare the same two values rather than each consulting its own clock -- and that is what makes the
+oracle possible at all: **the permission a resolver claimed is written down in the log, so it can be
+read back and checked against what the resolve did.**
+
+### 40.2 Why it is not the production predicate restated
+
+Production uses the two numbers to **decide**. The oracle reads the **decision** out of the recovered
+final state and the **two numbers** out of the committed log, and asks whether anything in the log
+authorised what the state shows. No code is shared with `kv.ResolveLock` for a verdict to cancel out
+against, and the harness supplier it takes -- `resolutions` -- **decodes and stops**. Deciding in the
+supplier which resolve had declared an owner dead would have re-run the rule under test, which is
+precisely how the removed model failed (§13.1).
+
+It is also cluster-wide on the log side and per-range on the state side, for a reason A6 has paid for
+before: a transaction's primary can be on any range and **a split moves it**, so the command that
+authorised a rollback may sit in the parent's log while the record it produced is in the child's
+inherited state.
+
+**And the second arm — *"no committed command anywhere accounts for this record"* — is sound only
+because the two halves come from one list**, which is worth writing down because the obvious reading
+of it is unsound. The ledger does **not** promise a complete committed prefix in general;
+`committedPrefix` exists precisely to report when it has not witnessed one, and an oracle asking *"is
+this command anywhere"* against a partial log would accuse a correct run, which is BUG-016's lesson.
+Here the question is closed: the recovered state is `store.ReplayMachine` over `rl.Base()` and
+`rl.Committed()`, and this walk reads `rl.Committed()` for every range, so **the state cannot contain
+what the log this walk reads did not produce** — with ancestors covered because ranges are born by
+splitting inside the run and the ledger records each one's base.
+
+**What it does not say, and the one place it can be masked.** It does not say a resolve was needed,
+or that waiting would have been better, or that the owner was in fact alive. A coordinator that died
+the instant before its deadline is legitimately killed and this is silent about it. The only thing
+refused is a killing nothing in the log gave permission for.
+
+And it takes **any** authorising resolve as sufficient, not the earliest one. That is not laziness —
+it is the only sound reading available without an ordering the log does not give: a correct run may
+contain several resolves for one transaction, early ones that waited and a later one that expired it,
+and demanding that the *first* be authorised would fire on every ordinary resolution. The cost is a
+masking case: a transaction killed unlawfully at `t1` whose log also contains a lawful resolve at
+`t2 > deadline` reads as authorised. **It is stated rather than measured** — closing it needs the
+creation event, and the record's creation is not observable in the log at all, only its inputs and its
+result. The measured rate below is a lower bound for that reason.
+
+### 40.3 Induced first, in milliseconds, because the sweep is the thing under suspicion
+
+`M62`'s whole finding is that no sweep detects it. So establishing that the oracle **speaks** could
+not wait on a seed search: `raftcheck/resolveauthority_test.go` builds the log and the final state
+directly and asserts seven cases, including the two that decide whether the oracle is worth having:
+
+| case | required |
+|---|---|
+| deadline 300, resolver judged at 200, record rolled back, nobody proposed | **violation** |
+| deadline 300, resolver judged at **exactly** 300 | **violation** -- `ExpireAt <= Deadline` means WAIT, and the boundary has to agree with production or the two differ by one tick in the direction that kills live transactions |
+| deadline 300, resolver judged at 301 | silent, and the declaration **counted** |
+| three resolves, only the last past the deadline | silent -- one authorised resolve is enough |
+| the coordinator proposed its own rollback | silent, and **not** counted as a declaration |
+| the transaction COMMITTED | silent -- no permission is needed to commit |
+| rolled back with neither a proposal nor any resolve | violation, reported **differently**: a record no command produced is a different defect |
+
+### 40.4 The measurement, old against new
+
+Induced against `M62`, 200 seeds, `current` shape, sharded four ways, with the unmutated tree measured
+at the same 200 seeds as the baseline the difference is taken against (§35.1's rule: **a sweep failure
+counts only if the unmutated tree at the same seed count does not have it**).
+
+| | before the detector | after |
+|---|---|---|
+| `M62`, per-seed | **0 of 300**, then **0 of 100** with the sweep detector on | **18 of 200, first at seed 20** |
+| `M62`, sweep verdict | `sweepfail=0` | **`SAFETY VIOLATION` in all four shards** — 2, 3, 6 and 7 |
+| the clean tree, same 200 seeds | — | **0 of 200, `sweepfail=0`** in all four shards |
+| what named it | nothing. `TxnLostToResolver` went 0 → 2 and no checker spoke | `resolution-only-breaks-expired-locks`, naming the transaction, the deadline and the timestamp the resolver judged it at |
+
+The verdict text on the first detecting seed, which is the thing worth reading rather than the count:
+
+```
+seed 20  VIOLATION resolution-only-breaks-expired-locks: range 1: the transaction that
+started at 1600000007678719459.0 on primary "a01" is ROLLED BACK by a RESOLVER -- nobody
+proposed that record -- and every one of the 1 resolves that named it judged an unexpired
+lock. The nearest carried expire-at 1600000007744393667.3 against a deadline of
+1600000008178719459.0, which is not above it.
+```
+
+**434 milliseconds of lock still to run**, and the owner was killed. That is the defect stated in the
+units the design doc argues in.
+
+**The declaration.** `power-seeds: 200`, `power-floor: 9`, `power-ceiling: 80` — half the measured
+rate and four times the first detecting seed, the same margin `M14` and `M45` carry. `M62` stops
+being an opt-out with a finding in it and becomes a floored class.
+
+**And the covering test does not move.** `TestTheDeadlineIsComparedAgainstTheReadTimestamp` in `kv/`
+still kills it in one second, which is the right instrument for a class detected at 9 per hundred
+seeds; the oracle is what makes the class *visible to a sweep*, which is a different job. Re-verified:
+`1 killed, 0 canary alive, 0 mismatched, 0 rotted`.
+
+**Non-vacuity is now an exit criterion, and it was added against a measurement.** `ResolverDeclarations`
+reads **64, 67, 67 and 72** across the four clean shards — robustly non-zero — so
+`exitCriteriaFailures` refuses a sweep in which the oracle judged nothing. The probe therefore covers
+it by construction, which is §35.1's structural fix doing the thing it was built for on the first new
+criterion added after it.
+
+### 40.4b And it is a function of the log, which is a debt A7 should be told about
+
+The oracle reads the permission out of the committed log. That is only possible because **a resolve
+is a log entry**, and every resolve is a log entry today for the same reason every read was until A7:
+because nothing has taken the work off the log yet.
+
+This is D-A7-5's general form in a new place, and it is worth writing down before it costs anything:
+
+> **A fact maintained by the apply path is a function of the log. The moment an operation is answered
+> off the log, every fact that operation used to maintain becomes a fact somebody has to maintain
+> somewhere else — and the place it used to live will still compile.**
+
+An optimisation that resolved a lock without proposing a command — a leaseholder deciding locally,
+say — would leave this oracle reading an empty permission set and reporting silence. **It would not
+break; it would stop looking**, and `ResolverDeclarations` going to zero is the only thing that would
+say so, which is why that count is an exit criterion rather than a log line. A7 does not do this;
+STRETCH's leases are where the shape lives.
+
+### 40.5 Non-vacuity, because a green over nothing is this register's commonest entry
+
+`Declarations()` counts the rolled-back records the oracle attributed to a resolver. A run in which
+every rollback was self-proposed exercises none of this, and a sweep of such runs would report a
+silence that means only that resolution never fired. It is carried in the census as
+`ResolverDeclarations` so the number is visible rather than assumed.
+
+**And the opportunity is rarer than `ResolveWaits` suggests, which is worth stating because it is
+what sets the detection rate.** At seed 0 the whole run produces **six** rolled-back decisions and
+**five of them are self-proposed** -- coordinators abandoning transactions the cluster refused. Only
+one was a resolver's declaration, and it was authorised. An unauthorised kill needs a resolver to
+reach a primary while the transaction is genuinely live and genuinely undecided, and that window is
+narrow. The rate below is the rate of that window, not a weakness of the oracle.
+
+---
+
+## 41. The retired model's leftovers, swept for rather than noticed
+
+`modelRecords` was found while adding a record kind, reported rather than deleted, and then deleted
+on the ruling (§30.3). That is one leftover found by accident, which says nothing about how many
+there are. So the question was asked mechanically instead: **for every exported and unexported
+identifier in the system packages, is there a caller anywhere in the tree including tests?**
+
+### 41.1 What the sweep found
+
+| identifier | what it was | disposition |
+|---|---|---|
+| `kv.EncodeLockValue`, `kv.EncodeWriteValue`, `kv.EncodeTxnValue` | **the retired model's own leftovers.** Their doc comment says so in as many words: *"The value codecs, exported for the harness's model."* They existed so `modelRecords` could render the model's logical state into engine records; the model was retired at §13 and `modelRecords` was deleted after it, and these outlived both | **deleted.** The unexported `encodeLock`/`encodeWrite`/`encodeTxn` are the production path and are untouched. The **decoders** stay and are not symmetry: a split-born range inherits records, so `recoveredStates` has to read what the harness did not write |
+| `coordinator.resolves` / `Resolves()` | a **duplicate counter**: `c.resolves++` and `c.readerResolves++` are incremented at the same two lines, and only `ReaderResolves()` is ever read | **deleted**, field and accessor |
+| `raftcheck.Ledger.Rev()` | an exported accessor for `l.rev`. Every reader of `rev` is `base.stale()`, inside the package. It has had no caller in any commit | **deleted** |
+| `store.codec.encodeKV` / `decodeKV` | the serialiser for the state machine **when the state machine was a Go map**. Both halves lost their callers at `e8b258c`, *"A5: MVCC is the replicated state machine"*, and neither has been called by anything since, tests included | **deleted.** It was `store/`'s only use of `internal/sorted`, and that import went with it |
+| `raftcheck.rangeLedger.holds` | a durable-coverage helper written at A2. `git log -G` finds the commit that wrote it and the commit that moved it from `Ledger` to `rangeLedger` at A4, and **no commit that ever added or removed a call to it** | **deleted**, with its reasoning kept in prose where it was |
+| `store.Replica.TxnRefused()` | a live counter — `txnRefused` increments at four sites — whose accessor nobody reads | **reported, not deleted** — see below |
+
+### 41.2 Five deleted, one reported, and the difference is not caution
+
+The five are the same case in five costumes: **code whose stated purpose no longer exists.** The
+encoders say *"for the harness's model"* and the model is retired; `encodeKV` serialises a map state
+machine that became MVCC at A5; `coordinator.resolves` duplicates a counter that is read; `Rev()` and
+`holds` were never called at all. §25.1's third meaning says the response to code that cannot be
+reached is to delete the code, and applying it to four of the five and not the fifth would be applying
+a rule where it is comfortable.
+
+**Two things were kept out of the deletions on purpose**, because they are the part worth having:
+`encodeKV`'s note on why its key ordering was load-bearing (a snapshot's bytes are compared against an
+independent expectation, so a map range would make one state produce different bytes on different
+runs), and `holds`'s note on what its snapshot arm assumes (*a snapshot is taken from an applied
+prefix, so an index it covers is one this node applied* — sound exactly as far as state machine safety
+holds, which is another oracle's verdict). Both survive as comments where the code was. **A deletion
+that takes the reasoning with it is how the same thing gets rediscovered.**
+
+**`TxnRefused()` is the one that is reported, and it is the sharp one.** It contradicts a comment
+three lines above it: *"The transaction counters. Every one is asserted somewhere in the exit run: a
+count nobody asserts on is decoration that looks like evidence."* `TxnRefused` is not asserted
+anywhere and is not even carried in the census. Deletion is the **wrong** response — a refusal count
+in the apply path is evidence worth having, and the counter is live — so the right one is to carry it
+and assert it, which is what §37.3 did for `ForeignTagStarts`, `StaleRestarts` and `StaleIncarnation`.
+**An exit criterion is added against a measurement and not by argument** (§21.1b), and no measurement
+of `TxnRefused` exists, so it is on the list rather than in the exit run.
+
+### 41.3 The general form
+
+> **A leftover is found by a sweep or it is found by accident, and this project has now done both on
+> the same class of thing. The accident found one. The sweep found six more: two whose stated purpose
+> was retired at a phase boundary and which outlived it, one duplicate counter, two that no commit has
+> ever called, and one live counter with no reader.**
+
+The sweep is four lines of shell and it is not a lane, because a lane that fails on an unused
+identifier fails on the day somebody writes the producer before the consumer. It belongs at a phase
+boundary, where "what did this phase leave behind" is a question somebody is already asking.
+
+---
+
+## 42. Every class that read zero under the broken probe, re-measured
+
+Ansh, on the post-A6 list: *"Re-measure every class that was reading zero under the old probe and
+report old against new, since `M62` was found this way and it will not be the only one."*
+
+It was not the only one.
+
+### 42.1 Which classes qualify, and which were already answered by a stronger instrument
+
+The probe's blindness was specific: `noticed()` consulted a hand-listed subset of the harness's
+detectors and could not see any class whose detector is an **aggregate assertion over a sweep** rather
+than a per-seed verdict (§35.1). So the classes to re-measure are the ones whose zero came from
+**that instrument**.
+
+Two classes had already been settled by something stronger and are not re-measured:
+
+- **`M30`** — *"measured trace-identical over 10k seeds"*. A trace-identity claim is stronger than
+  anything the probe reports; a mutation that changes no trace changes no census.
+- **`M66`** — settled at A6's close by a **byte-identical census** across 40 seeds with
+  `ForeignLocksKept` included (§35.3). Same instrument, same strength.
+
+`M67` and `M68` were re-measured when the probe was fixed (§37.3) and `M70` and `M60` with them. That
+leaves four: **`M73`, `M53`, `M56` and `M47`** — plus `M62`, which the ruling had already turned into
+a detector (§40).
+
+**`M56` is in that list for a reason worth separating from the others.** It was not *reading* zero. It
+had **never been measured at all**: its declaration is an opt-out, and `power-mutants.sh` does not run
+the probe for an opt-out. It is included because the question *"which classes have a zero nobody has
+re-taken"* has a wider answer than *"which classes measured zero"*, and §42.3 is what that widening
+found.
+
+Every measurement below is against **the unmutated tree at the same seed count and the same shard
+shape**, because a sweep failure is a difference and not a presence (§16.4).
+
+### 42.2 The results
+
+| class | old | new | disposition |
+|---|---|---|---|
+| **`M62`** lock expiry off by one | 0 of 300, then 0 of 100 with the sweep detector, `sweepfail=0` | **18 of 200, first at seed 20**; clean 0 of 200 | **detector built** (§40); opt-out → floored class, `power-floor: 9`, `power-ceiling: 80` |
+| **`M73`** a read answer lands in any incarnation | 0 of 200, `sweepfail=0`; opt-out saying *"a floor honest enough would need a 24-hour sweep"* | per-seed still 0 of 200 — and **`sweepfail=1` in all four shards**, on one criterion: *no read answer from a pre-restart incarnation was ever rejected*. `StaleIncarnation` 9–15 per fifty seeds → **flat zero** | **opt-out → `power-detector: sweep`, 60 seeds.** Found by the probe fix |
+| **`M53`** empty mark releases through | 0 in 300, 0 in 3,000 at A5; 0 of 200 throttled *and* unthrottled at A6 | **0 of 300, `sweepfail=0`**, against a clean baseline of 0 and `sweepfail=0` at the same 300 | **unchanged, and now confirmed by the repaired instrument.** 34 census fields drift, so the mutated code RUNS — this is not `M66`'s byte-identical unreached — but the condition the defect needs does not arise. Opt-out stands |
+| **`M56`** term gated only on what is dirty now | **never measured at all** — an opt-out reasoned by analogy with `M53` | **280 of 300, first at seed 0 in every shard**; **59 of 60** on a second run; **28 of 30 under A5's own shape**, the shape the opt-out was written against. `persist-before-reply` fires on seed 0 | **the opt-out was false on the day it was written.** → a floored class, `power-floor: 30`, `power-ceiling: 5` |
+| **`M47`** superseded split applied anyway | *"zero firings in 300 A4 seeds"*, recorded as an unexercised path | **0 of 300, `sweepfail=0`, and the census is BYTE-IDENTICAL to the clean tree in all four shards — 0 of 76 fields move** | **upgraded, not merely confirmed.** It joins `M66` and `M30`: UNREACHED and proved, rather than undetected |
+
+**Two of the five moved, one was upgraded, one was confirmed, and one was found to be false.** That is
+the whole point of re-measuring a set of zeros: they were five different things wearing one number.
+
+### 42.2b What `M47`'s upgrade is worth, since "still zero" sounds like nothing happened
+
+`M47`'s old declaration said *zero firings in 300 seeds*, which is a **detection** claim and therefore
+compatible with the defect happening and nothing noticing — which is exactly what `M62` turned out to
+be. The new measurement is a **census-identity** claim: across 300 seeds, all 76 fields of the
+accumulated census are byte-identical to the unmutated tree's. **The mutation changes nothing the
+harness counts.** That is the difference between *no oracle spoke* and *there was nothing to speak
+about*, and it is the same instrument that settled `M66` (§35.3) and `M30`.
+
+Its argued reason survives contact with the number, which is worth saying because arguments usually
+do not: Raft's figure-8 rule serialises the schedule `M47` needs, because a new leader must commit an
+entry of its own before it can commit the previous term's split, and committing it means applying it,
+which moves the extent before a second split can be proposed from it. **The argument predicted
+byte-identity and byte-identity is what the census shows.**
+
+### 42.3 `M56`: an opt-out is a claim, and the instrument that could refute it is switched off BY the opt-out
+
+This one is not a probe-blindness finding, and that is what makes it the more useful of the two.
+
+`M56`'s declaration read: *"n/a — the same schedule `M53` needs, and unreachable for the same measured
+reason: the throttled collector does not produce a mark that opens and closes empty while an earlier
+handed mark is outstanding."* It is **reasoned by analogy**. It cites `M53`'s measurement, not its own.
+
+And `M56` is not `M53`. Both are in `raft/raft.go` and that is where the resemblance ends. `M53`
+swaps `closeEmptyMark` for `releaseThrough` on an empty mark, so it needs **that mark to exist** —
+an empty mark opening and closing while an earlier one is outstanding, which the throttled collector
+does not produce. `M56` replaces `m := r.hsMark` with `m := PersistMark(0)`, which ungates the term
+**whenever `hardStateDirty` is false** — which is most of the time. It needs no interleaving at all.
+The analogy was drawn from BUG-017 naming both halves, not from what either mutation does.
+
+Measured: **280 of 300, first at seed 0 of every shard** — and **59 of 60** in a separate two-shard
+run, against a clean tree at **0 of 60** and **0 of 300**. It is caught by `persist-before-reply` with
+the plainest verdict in the repository:
+
+```
+seed 0  VIOLATION persist-before-reply: range 1: node 2 sent a vote-resp advertising
+term 1 at instant 114891944 while only term 0 was durable
+```
+
+**The mechanism that let it stand is structural and worth naming.** `scripts/power-mutants.sh` skips
+any patch carrying a `# power:` line — it does not measure it, by design, because an opt-out is
+supposed to mean *there is nothing to measure*. So:
+
+> **An opt-out is a claim about reachability, and it exempts itself from the only instrument that
+> could refute it. A floored class is re-measured every time the lane runs; an opted-out class is
+> re-measured never.**
+
+That is §37's shape one level in — *a lane too expensive to run is a lane whose claims are unchecked*
+— except here it is not cost that switches the instrument off, it is the claim itself.
+
+**And it is worse than a claim that went stale, which is what I expected to find.** The obvious story
+is that the schedule mix moved under a reachability claim written for an earlier mix — A2's kill-time
+amendment exists for exactly that. So the claim was re-measured under **A5's own shape**, the shape it
+was written against, at commit `7a809a4`:
+
+| | detections |
+|---|---|
+| `M56` under `POWER_CONFIG=a5`, 30 seeds | **28 of 30, first at seed 0** |
+| the clean tree, same shape, same seeds | **0 of 30** |
+
+> **The opt-out was false on the day it was written.** Nothing drifted. A claim that the sweep could
+> not reach this class was made about a sweep that reaches it on nine seeds in ten, and it stood for
+> a phase and a half because writing `power: n/a` is what turns the measurement off.
+
+**The remedy, proposed and NOT built, with the reason.** A periodic **refutation pass**: measure every
+opted-out class at a small seed count and fail if any of them detects. It is cheap — seventeen classes
+at thirty seeds is under an hour of CPU — and it would have caught this the day the shape moved. What
+stops it being a five-minute change is **scope**: several opt-outs patch the oracle framework itself
+(`M8`–`M13`, `M15`, `M16`), and running the raft probe against a mutated *checker* will report
+differences for reasons that are not refutations. A pass that reports false refutations is worse than
+no pass (BUG-016's standard), so the scope rule is a decision rather than an implementation detail,
+and it is on the record as a proposal rather than landed on my own judgement.

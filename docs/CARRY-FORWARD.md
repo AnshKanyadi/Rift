@@ -37,21 +37,39 @@ ratification**, and it is not worth opening that interface for on its own.
 
 ## Owed by A6
 
-**One reduced-seed unthrottled garbage-collection run.** DESIGN-A0 §7 item 9 records what the A5
-collection throttle costs: M53's class goes from 1 detection in 60 seeds to 0 in 3,000. The figure
-must be re-measured under A6's shape rather than inherited from A5's, at a reduced seed count so the
-run is affordable.
+**~~One reduced-seed unthrottled garbage-collection run.~~ DISCHARGED — and A5's figure does not
+reproduce.** 40 seeds solo, 49m32s: 48.8× as many collections unthrottled, zero violations. And the
+figure the obligation was actually about — *detection* — measured under A6's shape at 200 seeds:
+**M53 is 0 of 200 throttled and 0 of 200 unthrottled.** If the class were still 1-in-60 unthrottled,
+200 seeds would have found about three. **The throttle is not what puts M53 out of reach at A6 — the
+schedule mix is**, which is A2's M34 lesson again. What the pair does *not* establish is that the
+throttle costs nothing; it establishes that 200 seeds cannot tell. A6-HANDOFF §4.
 
 *Ansh, on the A5 sign-off: "put one unthrottled run on the A6 checklist at a reduced seed count, so
 the number gets re-measured under A6's shape rather than inherited from A5's."*
 
-**Bound the race lane, with a measurement.** It is 90 minutes at A5 and will be four hours by A7. Its
-value is concentrated in `sim/hunt`, where the driver, mailbox and simulator meet, and it has found
-real races twice, so it stays — but the seed count has never been measured, only inherited. Run
-`sim/hunt` under `-race` at 50, 100 and 200 seeds and report whether the two races it caught
-historically are still caught at the lower counts. Bound it at the smallest count that catches
-everything 200 catches, with the measurement recorded. **Do not guess the number** — same discipline
-as the window curve.
+**~~Bound the race lane, with a measurement.~~ DISCHARGED, and the answer was a third one.**
+DESIGN-A6 §33, §39. The measurement said neither the seed count nor the budget moves alone: at
+`RAFT_SEEDS=50` the lane did not finish inside its own 5400s budget, timing out at 90 minutes with
+one test at 36m20s — about **43 s/seed instrumented** against 8.4 uninstrumented — and reported zero
+data races. So the lane is **split by what it is for**, with a budget per half taken from a
+measurement:
+
+| lane | question | measured | budget |
+|---|---|---|---|
+| `race` (per push) | does any cross-goroutine interaction reach node state off the mailbox (Amendment A1) — every package **except** `sim/hunt` | **191 s** | **900 s**, about five times the measurement |
+| `race-soak` (nightly, sharded) | the seed search: `sim/hunt` under `-race`, 200 seeds across 8 shards | ~43 s/seed instrumented, ~9 h in one process | the nightly tier |
+
+**What is given up is recorded rather than absorbed**: the per-push lane no longer instruments the
+simulator driver, so a race introduced there is caught nightly instead of on push. The alternative was
+a seed count in single digits, which A1's ruling — *a few hundred simulated seeds answer this lane's
+question* — does not authorise, so the scope was kept and moved to a tier that can hold it.
+
+**And the question Ansh actually asked could not be answered, which is on the record as its own
+finding** (§21.4): *"are the two races it caught historically still caught at the lower counts"*
+presupposes a record of those two findings, and there is none — no BUGS.md entry, no seed, no commit.
+With zero races found at 50 seeds, the lane now rests on its **structural** argument alone, and the
+"has found real races twice" claim is unsupported by anything in the repository.
 
 *Ansh, on the A5 sign-off: "Before A6 closes, report what race seed count is actually needed... If
 100 catches everything 200 catches, bound it there with the measurement recorded, which is the same
@@ -161,33 +179,86 @@ at zero in the exit run as `IdentityCollisions`; the day it fires the fix is the
 transaction id in the record key, or the TSO fallback Amendment A6 pre-authorises — and never the
 assertion.
 
-**The race lane no longer fits its own budget.** `RACE_SEEDS` is 200 and `RACE_TIMEOUT` is 5400s. At
-A5's 0.36 s/seed that was comfortable; A6's shape costs ~3.75 s/seed uninstrumented and the lane runs
-at roughly 20×, so 200 seeds is several hours. The seed count was ruled on at A1 ("a few hundred
-simulated seeds answer this lane's question") and the budget is what has always moved — but the
-budget cannot absorb this one. The measurement Ansh asked for at A5 is still owed and is now the thing
-that decides which of the two moves.
+**~~The race lane no longer fits its own budget.~~ DISCHARGED by the split** — see the entry under
+*Owed by A6* above for the two lanes and the two budgets.
 
-**There is still no remote, and that is now a three-finding cost.** DESIGN-A6 §20. `provcheck` red
-across a commit, `make test` unrunnable since A1, and two lanes in `make ci` absent from the
-workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
-*run*. Every phase that ships without a remote should expect to find another lane that stopped.
+### RISK-1: **there is no executor.** *Named project risk, standing until a remote exists.*
 
-**`M62` is reachable and undetected, and it is the only one of the three that is.** DESIGN-A6 §35.4.
-Applied to the tree it moves **33 census fields** and `TxnLostToResolver` goes 0 → 2 — live
-coordinators losing transactions to a resolver with no right to kill them — and no oracle and no exit
-criterion says anything, because aborting a transaction is a legal outcome. §13.4's ledger entry is
-corrected to rest on this rather than on the original three-way zero. **The detector it needs is
-stated and not built**: *for every resolve that declared an owner dead, the resolver's `ExpireAt` must
-be strictly above the lock's `Deadline`* — both values are already carried in the command, so the
-oracle reads two recorded fields and needs no state.
+Not a passing note and not a lane's problem. It is the largest standing threat to every verification
+claim this repository makes, and it is recorded here in the form the A6 audit produced (DESIGN-A6
+§20, §37):
 
-**`make mutant-covered` is believed to be wrong, and the case is written.** DESIGN-A6 §36. All four of
-its DEAD verdicts are false positives of two kinds — a closing brace, which Go's coverage attributes
-to no span, and an assertion or error body, which only executes when the thing being asserted fails.
-The proposed rule is *the FIRST line of each contiguous deleted run must be covered*, and it is **not
-landed**: it needs the original induction re-run under it and a full-lane diff of every verdict that
-moves.
+> **Zero lanes run automatically in the sense the workflow means. Eight run because a hook exists.
+> Fifteen are configured for a workflow that has never executed. And every mutation lane sits in the
+> remembered column, because between them they cost roughly twenty CPU-hours — so a lane too
+> expensive for the hook has no executor at all, and its tier is a label rather than a schedule.**
+
+**What it has already cost, in findings rather than in worry.** Three lanes have now been found red
+after running unattended — `provcheck` red across a commit, `make test` unrunnable since A1, and
+`power-mutants` red from the day `M67` and `M70` landed and through the back half of a phase — and
+**the mechanism that would have caught all three has never run once.** That is the risk stated as a
+measurement: the detector for "a lane stopped" is itself a lane in the column that does not run.
+
+**And it has a sibling that costs nothing to run and is switched off anyway.** `M56` carried an
+opt-out claiming its class was unreachable, reasoned by analogy with another mutant and never
+measured; it measures **280 of 300, first at seed 0**, and **28 of 30 under A5's own shape** — so the
+claim was **false on the day it was written**, not gone stale. It stood because `power-mutants.sh`
+**skips** any patch with a `power:` line — *an opt-out exempts itself from the only instrument that
+could refute it.* Different mechanism, same shape: **a claim nothing re-tests.** DESIGN-A6 §42.3,
+where the refutation pass and its scope problem are written down.
+
+**Why the usual answers do not close it.** `make lane-coverage` keeps the *list* honest and cannot
+make the list *run*. A pre-push hook can hold eight lanes and cannot hold fifteen CPU-hours. Moving a
+lane to the nightly tier renames the problem unless something executes the nightly tier. **Nothing
+inside the repository can fix this**, which is what makes it a project risk rather than an item of
+work.
+
+**The mitigations actually available, and the one that has been taken.** A lane too expensive to run
+is a lane whose claims are unchecked, and the *cheap invariant over its inputs* is worth more than
+the expensive measurement nobody schedules: `make power-decl` checks every mutant's power
+DECLARATION for internal consistency in milliseconds and is in the hook, and on its first run it
+found six inconsistent declarations including the three that had been red for half a phase (§37.2).
+That pattern — **a millisecond check on the inputs of an hours-long lane** — is the only mitigation
+this repository can apply to itself, and it should be applied to every remembered lane, not just this
+one.
+
+**What discharges it.** A remote, or any executor that runs the nightly and remembered tiers on a
+schedule nobody has to remember. Until then: every phase that ships without one should expect to find
+another lane that stopped, and the phase report should say which ones were actually run.
+
+
+**~~`M62` is reachable and undetected.~~ DISCHARGED — the detector is built.** DESIGN-A6 §35.4, §40.
+`resolution-only-breaks-expired-locks`: a rolled-back transaction record that nobody proposed must
+have a resolve behind it carrying `Deadline < ExpireAt`. Both values already ride in the command for
+D-A6-10's reason, so the oracle reads the permission out of the committed log and the decision out of
+the recovered state, and shares no code with `kv.ResolveLock`. Induced directly in `raftcheck/` on
+seven built cases including the exact-boundary one, then measured against `M62`.
+
+*Ansh, on the post-A6 list: "unlike invariant 7 this one is not a remedy in search of a class, the
+class is established and measured."*
+
+**What it leaves standing.** The symmetric-apply gap itself is not closed — it is one class smaller.
+`M64` (a secondary committing at its own timestamp) is now the symmetric-apply class covered by a
+mutant and nothing else.
+
+**~~`make mutant-covered` is believed to be wrong.~~ ACCEPTED and LANDED.** DESIGN-A6 §36, §36.4. The
+rule is now *the FIRST line of each contiguous deleted-or-replaced run must be covered*, and both
+checks were run before it landed: the original `seedClockAtLeast`-inline induction still reports
+`DEAD`, and the diff of every verdict that can move was taken. The static half of that diff is a
+proof rather than a sample — **48 of 61 patches have identical old and new required sets**, and the
+new set is by construction a subset of the old, so nothing can move from `ok` to `DEAD`. The four
+original failures the lane exists for are on two single-line patches whose sets are unchanged, so
+their verdicts are unchanged by construction.
+
+*Ansh, re-taking the ruling: "Closing braces attributed to no span, a panic message reachable only
+when safety breaks, and an error return no unit test can force are not covering-test defects, and a
+rule that asks M29 for a test violating state machine safety is a rule that cannot be satisfied on
+that shape."*
+
+**The lane also has a wall-clock budget now** (`COVER_BUDGET`): sixty mutants each entitled to a
+`TEST_TIMEOUT` is a lane whose worst case is sixty hours. It stops between batches, names every patch
+it did not reach as `UNCHECK`, and **fails** — a budget that truncated quietly would report a subset
+nobody named as though it were the list.
 
 **`read-answers-match-the-history` is designed and not built.** DESIGN-A6 §28.5b.
 
@@ -205,13 +276,35 @@ takes work off the log:
 *Ansh has not ruled on D-A7-5. The recommendation on the table is that read index serves the
 linearizable read path and A6's snapshot reads keep their log entry.*
 
-**`sim/hunt`'s `modelRecords` has no caller.** DESIGN-A6 §30.3. It renders the harness model's logical
-state into engine records so a digest over one is a digest over the other — and nothing calls it, so
-that comparison does not happen. Found while adding the fifth record kind to the model. By §25.1's
-third meaning this is code that cannot be reached and the response is deletion; it is reported rather
-than deleted because removing it is a decision about what the harness *could* check, and the other
-reading — that the comparison was meant to exist and got disconnected — is the more expensive one to
-be wrong about.
+**~~`sim/hunt`'s `modelRecords` has no caller.~~ DISCHARGED — deleted, and then swept for.**
+DESIGN-A6 §30.3, §41. `modelRecords` was found **by accident**, while adding a record kind, which
+says nothing about how many more there are. So the question was asked mechanically: for every
+identifier in the system packages, is there a caller anywhere in the tree including tests?
+
+**The sweep found six more.** Three deleted:
+
+- `kv.EncodeLockValue`, `kv.EncodeWriteValue`, `kv.EncodeTxnValue` — **the same leftover**, and their
+  own doc comment said so: *"exported for the harness's model"*. They existed so `modelRecords` could
+  render the model's state into engine records, and they outlived both the model and `modelRecords`.
+  The **decoders** stay, and not for symmetry: a split-born range inherits records, so `recoveredStates`
+  has to read what the harness did not write.
+- `coordinator.resolves`/`Resolves()` — a duplicate counter incremented on the same two lines as
+  `readerResolves`, and only `ReaderResolves()` is ever read.
+- `raftcheck.Ledger.Rev()` — an exported accessor with no caller in any commit.
+
+Two more deleted, on the same rule applied where it is less comfortable: `store/codec.go`'s
+`encodeKV`/`decodeKV`, the serialiser from when the state machine was a Go map, whose callers went at
+A5's `e8b258c` (it was `store/`'s only use of `internal/sorted`, and that import went too); and
+`raftcheck.rangeLedger.holds`, **written at A2 and never called by any commit** — `git log -G` finds
+no commit that added or removed a call. **Both kept their reasoning as comments where the code was**,
+because a deletion that takes the reasoning with it is how the same thing gets rediscovered.
+
+**One reported, not deleted, and it is the sharp one.** `store.Replica.TxnRefused()` is a **live**
+counter with no reader, three lines below a comment that says *"Every one is asserted somewhere in the
+exit run: a count nobody asserts on is decoration that looks like evidence."* Deletion is the wrong
+response — a refusal count in the apply path is evidence worth having. The right one is to carry it
+and assert it, as §37.3 did for `ForeignTagStarts`, and **an exit criterion is added against a
+measurement, not by argument**, so it is on this list rather than in the exit run.
 
 **A surviving mutant has three meanings.** DESIGN-A6 §25.1: no checker can see it (add the
 assertion), the test goes around the path (route it through), or **the code cannot be reached**

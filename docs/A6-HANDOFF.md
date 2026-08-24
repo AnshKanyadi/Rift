@@ -96,15 +96,23 @@ DESIGN-A6 §34.
   a precise reason: the instrument it was waiting on cannot run.** Raise the probe timeout, shard the
   probe like the exit run, or accept that a 1-in-3,000 class cannot carry a bundle at this cost. A
   ruling, not a chore.
-- **`M62`, `M63` and `M66` measured `0 of 300`.** Three A6 classes with **zero sweep detection**. All
-  three are killed by precise unit tests, so they are covered — but the sweep does not see them, and
-  that is §13.4's symmetric-apply gap with a number under it at last.
+- **`M62`, `M63` and `M66` measured `0 of 300`.** Three A6 classes with **zero sweep detection** —
+  and the number was wrong in all three directions, which is DESIGN-A6 §35. `M63` was not a class
+  (deleted with its parameter). `M66` is **unreached**, proved by a byte-identical census. `M62` was
+  **reachable and undetected**, and now has a detector: `resolution-only-breaks-expired-locks`,
+  **18 of 200 first at seed 20** against a clean tree at 0 of 200 (§40).
+- **The probe that produced those zeros was itself broken**, and re-measuring every class that read
+  zero under it found two more (§42): **`M73`** is sweep-detected at 60 seeds on a criterion a
+  per-seed rate cannot see, and **`M56`'s opt-out was simply false** — it claimed unreachability by
+  analogy with `M53`, and measures **280 of 300, first at seed 0 of every shard**. `M56` is the
+  structural one: `power-mutants.sh` skips any patch carrying a `power:` line, so **an opt-out
+  exempts itself from the only instrument that could refute it.**
 - **`M34` reproduced its recorded figure exactly** (2 of 3000, first 2065). **`M65` measured 2 of 300,
   first at seed 9** — the same seed the independent bundle search found `BUG-019` reproducing at.
 - **`M67`, `M68`, `M70` measured `0 of 1`**, confirming §31 from the other side: their declarations
   describe a unit test and the lane measures a sweep.
 - **`M71` and `M72` both measure 1 of 200, first at seed 148**, and now carry that as their floor and
-  ceiling. **`M73` measured 0 of 200** and takes the opt-out with its number written down.
+  ceiling. **`M73` measured 0 of 200** on the per-seed rate — and is **sweep-detected**, see above.
 
 **3. The race-lane curve — MEASURED, and the answer is a third one.** At `RAFT_SEEDS=50` against the
 lane's own 5400s budget, `sim/hunt` **did not finish** — timed out at 90 minutes with
@@ -127,15 +135,22 @@ record behind them, so *"is what 200 catches still caught at 50"* cannot be aske
 
 ---
 
-## 5. `make mutant-covered` — finished, and it found four
+## 5. `make mutant-covered` — the rule was wrong, and it has been fixed
 
-`56 checked, 2 skipped, 8 failures`, and the eight are two different things (DESIGN-A6 §25.3c).
+Its first complete run reported `56 checked, 2 skipped, 8 failures` and **all four of its DEAD
+verdicts were false positives** — the case is DESIGN-A6 §36 and the ruling accepted it. The rule was
+*every deleted line must be covered*; a closing brace belongs to no coverage span, an assertion body
+only runs when the assertion fails, and an error branch only runs when the engine errors, so every
+block-deleting patch was a candidate false positive.
 
-**Four genuinely mispointed covering tests**, which is the defect the lane exists for:
-`M15` (`sim/oracle.go:279`), `M29` (`raft/raft.go:2543-2545`), `M55` (`kv/store.go:217`),
-`M60` (`kv/txn.go:204-205`). The canary was correctly uncovered, which is what makes the four
-credible. **None is fixed**: re-pointing a covering test changes what the mutant suite asserts, and
-that should land with its own verification rather than in a batch.
+**The rule is now: the FIRST line of each contiguous deleted-or-replaced run must be covered** — the
+point at which the mutation takes effect. It landed with both checks §36.3 demanded: the original
+`seedClockAtLeast`-inline induction still reports `DEAD` under it, and the full lane was run under
+both rules with every moved verdict read one at a time (§36.4).
+
+**The lane also has a runtime budget now** (`COVER_BUDGET`), because sixty mutants each entitled to
+an hour is a lane whose worst case is sixty hours. It stops between batches, reports which patches
+were UNCHECKED, and fails — a budget that truncated quietly would turn a subset into a green.
 
 **Four ERRORs that are a budget failure.** `M65` and `M66` name **`TestRaftExitCriteria`** as their
 covering test — the exit run, about **23 hours** at 8.4 s/seed. No timeout could let that finish, and
@@ -201,5 +216,14 @@ one hypothetical.
 - **A7's design doc is written and waiting for rulings** (`docs/DESIGN-A7-readindex.md`), now with
   **D-A7-5**: BUG-022's read mark is a function of the log *only because every read is a log entry*,
   and read index is the phase that stops that being true. **Do not start A7 implementation.**
-- **`sim/hunt`'s `modelRecords` has no caller**, so the model's records are never digested against the
-  store's. Reported, not deleted.
+- **~~`sim/hunt`'s `modelRecords` has no caller.~~** Deleted — and then a mechanical sweep for the
+  same shape found six more, three of which are also gone (`kv`'s three exported value ENCODERS, the
+  retired model's own leftovers; `coordinator.resolves`, a duplicate counter; `Ledger.Rev()`). Three
+  are reported and not deleted: `store/codec.go`'s `encodeKV`/`decodeKV`, dead since A5 turned the
+  state machine from a Go map into MVCC; `rangeLedger.holds`, written at A2 and **never called by any
+  commit**; and `Replica.TxnRefused()`, a live counter with no reader, three lines below a comment
+  claiming every counter is asserted in the exit run. DESIGN-A6 §41.
+- **An opt-out is not a measurement, and `M56` is the proof.** `power-mutants.sh` skips any patch
+  carrying a `power:` line, so an opted-out class is never measured. `M56`'s opt-out claimed
+  unreachability and it is **28 of 30 under the very shape it was written against**. Before trusting
+  any `power: n/a`, ask when it was last measured — the answer for most of them is never. §42.3.
