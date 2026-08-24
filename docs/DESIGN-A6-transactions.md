@@ -2368,3 +2368,87 @@ That keeps the structural claim on every push and puts the expensive half where 
 lane is now going (§25.3b, §31). **What it must not do is quietly become a smaller number**, because
 the recorded scope — *"a few hundred simulated seeds answer this lane's question"* — was a ruling, and
 replacing it with "eight" because eight fits is trading a scope for a budget without saying so.
+
+---
+
+## 34. The power measurement under A6's shape
+
+`POWER_JOBS=3 sh scripts/power-mutants.sh --measure`, about **6h40m** wall. **42 classes measured, 17
+opted out with a reason, 3 that could not be measured at all.** Every floor in the tree before this was
+A5's.
+
+### 34.1 The three that could not be measured, and why it is the same cause as everything else
+
+| class | seeds it declares | what happened |
+|---|---|---|
+| `M46-split-inherits-the-appended-configuration` | 3,000 under `current` | **no measurement** |
+| `M19-vote-for-a-shorter-log` | 1,500 under `current` | **no measurement** |
+| `M60-commit-does-not-clear-its-lock` | 300 under `current` | **no measurement** |
+
+The probe runs under a **3600s** timeout. At A6's measured 8.4 s/seed, 3,000 seeds is **seven hours**
+and 1,500 is three and a half. The declarations were written when a seed cost 0.36 s, where 3,000
+seeds was eighteen minutes.
+
+> **The timeout is now the binding constraint on how rare a class this lane is able to floor**, and no
+> class that needs a 3,000-seed sweep can be floored at A6's cost inside it.
+
+**`BUG-015` therefore stays blocked, for a new and more precise reason.** It was blocked on *"the power
+measurement will name a seed"*; the power measurement ran and **could not measure `M46` at all**. The
+options are a raised probe timeout (7+ hours for one class), a sharded probe on the exit run's model,
+or accepting that a 1-in-3,000 class cannot carry a bundle at this cost. That is a ruling, and it is
+the third time this phase that A6's per-seed cost has turned a lane parameter into a design question.
+
+### 34.2 What held, and the one that matters
+
+**`M34` reproduced its recorded figure exactly**: `2 of 3000 (a2), first=2065`, against a header
+reading *"2 of 3000, first at seed 2065, under a2 at commit A5-close"*. A class measured under a named
+historical shape gives the same number a phase later, which is what naming the shape was for.
+
+**`M65` measured `2 of 300, first=9`** — and seed 9 is exactly where the independent bundle search
+found `BUG-019` reproducing. Two instruments, one seed, neither told about the other.
+
+### 34.3 Three A6 classes have zero sweep detection, and that is the symmetric-apply gap with a number
+
+| class | measured |
+|---|---|
+| `M62-lock-expiry-off-by-one` | **0 of 300** |
+| `M63-resolution-reads-the-wrong-primary` | **0 of 300** |
+| `M66-commit-takes-any-lock` | **0 of 300** |
+
+All three are killed by their covering tests — precise unit tests in `kv/` — so the classes are
+covered. What is now measured is that **the sweep does not notice them at all**: 900 seeds of the full
+A6 workload, with the bank and every oracle running, and not one of the three produced a finding.
+
+That is §13.4's surrendered property with an actual number under it. The replay-equivalence trade gave
+up *an apply path wrong identically on every replica*, and these three are exactly that shape: a lock
+expiring one tick early, a resolver reading the wrong primary, a commit taking somebody else's lock —
+each symmetric, each leaving a self-consistent database. §13.4 says the list of mutant classes is *"a
+claim, not a proof"*. **The claim is now measured, and the measurement is that for these three the
+list is the only thing standing between the repository and the defect.** A unit test that pins the
+mechanism is a real instrument; it is not the sweep, and the record should not read as though it were.
+
+### 34.4 BUG-022's own two classes
+
+| class | measured |
+|---|---|
+| `M71-a-read-leaves-no-mark` | **1 of 200, first at seed 148** |
+| `M72-prewrite-ignores-the-read-mark` | **1 of 200, first at seed 148** |
+| `M73-a-read-answer-lands-in-any-incarnation` | **0 of 200** → explicit opt-out with the reason |
+
+**The same seed and the same rate for both halves**, which is what two halves of one guard should look
+like: neither half alone changes what the sweep can see, so the sweep sees the same schedule fail
+either way. Floored at detected-at-all with the ceiling set to the sweep's own end rather than a
+widened number, because widening past the range that was measured would be declaring a value nobody
+measured.
+
+`M73` is reachable — seed 10303 is the seed that found it — and its rate is below what 200 seeds can
+measure, with the first known detecting seed at 10303. A floor honest enough to assert would need a
+24-hour sweep, so it takes the opt-out the lane provides, with the number that justifies it written
+down.
+
+### 34.5 And `M67`, `M68` and `M70` measured `0 of 1`, which is §31 confirmed
+
+All three declare a one-seed sweep floor and all three are covered by tests that are not sweeps. The
+measurement says what §31 said from the declaration: the header and the lane are describing two
+different measurements with one vocabulary. `M67` and `M70`'s resolution is now backed by a number
+rather than by an argument — and `M68` joins them, which §31 did not know.
