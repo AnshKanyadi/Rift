@@ -2579,3 +2579,74 @@ Both values are already carried in the command — they are carried precisely so
 the same two numbers (D-A6-10) — so the oracle reads two recorded fields and needs no state at all. It
 is not built here for the reason invariant 7 was not built as `M66`'s remedy: it lands as its own
 decision, with its own induction, and A6 is signed on the checkers it was signed with.
+
+---
+
+## 36. The written case that `make mutant-covered` is itself wrong
+
+**Reported, not acted on.** CLAUDE.md: *a failing checker means the code is wrong until proven
+otherwise; if you believe a checker is itself buggy, stop and make the written case first.* This is
+that case, and it contradicts the premise of a ruling, so it is Ansh's to re-take.
+
+The ruling was: *"M15, M29, M55 and M60 are the defect the lane exists for and get fixed, with the
+lane green afterward."* On inspection **none of the four is that defect.** All four are the lane
+reporting a false positive, and they are two kinds of it.
+
+### 36.1 The evidence, line by line
+
+Every deleted line of each patch, with whether the covering test executed it:
+
+| mutant | hunk's first line | uncovered | what the uncovered lines are |
+|---|---|---|---|
+| `M15-vacuity-rule-removed` | `sim/oracle.go:267` **covered** | `279` | `}` — the block's closing brace |
+| `M29-truncation-refused-below-the-durable-watermark` | `raft/raft.go:2541` **covered** | `2543-2545` | the panic's message, inside an assertion body |
+| `M55-collection-takes-the-version-a-read-still-needs` | `kv/store.go:214` **covered** | `217` | `}` — the block's closing brace |
+| `M60-commit-does-not-clear-its-lock` | `kv/txn.go:203` **covered** | `204-205` | `return err` and its `}` — an error branch |
+
+In every case the **mutation's entry point is covered**, every executable line of the mutated region
+is covered, and the only uncovered lines are ones that cannot be covered:
+
+- **A closing brace is not a statement.** Go's coverage profile records blocks as
+  `file:startLine.col,endLine.col count`, and the block ends at the last statement — so the `}` that
+  closes it belongs to no span and reads as uncovered forever. **Every patch that deletes a block
+  deletes a closing brace**, so every such patch is a candidate false positive.
+- **An assertion body only runs when the assertion fails.** `M29` removes a `panic` that fires when
+  state machine safety breaks. On a tree where safety holds, those lines cannot execute, and the
+  advice the lane prints — *"route the test through the real call site"* — asks for a covering test
+  that breaks the invariant.
+- **An error branch only runs when the engine errors.** `M60`'s `return err` comes from an engine read
+  that no unit test makes fail.
+
+**Zero of the four is a test going around the path.** The lane's first complete run has, on this
+evidence, no true findings.
+
+### 36.2 Independent corroboration, from earlier the same day
+
+Three patches were narrowed by hand this cycle to get past exactly this: `M72` (the uncovered line was
+`return err`), and `M65` and `M66` after re-pointing (uncovered lines `return err` and its brace).
+Each narrowing was a workaround for the same defect, applied before it was understood. That the same
+shape came up four more times unprompted is what makes it a rule rather than four coincidences.
+
+### 36.3 The proposed rule, and why it is not a weakening
+
+> **Require the FIRST line of each contiguous deleted-or-replaced run to be covered**, rather than
+> every line of it.
+
+That is the faithful mechanisation of the lane's own sentence — *"the line has to run at all"* — where
+"the line" is the point at which the mutation takes effect. A hunk whose first line never runs is a
+hunk the mutation cannot reach, which is precisely the failure the lane was built for: **a test that
+calls the guarded function inline never executes the call site, so the hunk's first line is
+uncovered.** All four original failures the lane exists for still fail under it, and so does the
+canary, which is aimed at a test that covers none of it.
+
+**Two checks before it is believed, neither of them run here:**
+
+1. **Re-induce it.** Reconstruct the original mistake — a test calling `seedClockAtLeast` inline — and
+   require the proposed rule to report `DEAD`. The lane's header records that induction; it has to
+   survive the rule change or the rule is wrong.
+2. **Re-run the full lane under both rules and report every verdict that moves.** Anything that goes
+   from DEAD to ok is a claim that needs reading one at a time, not a number.
+
+**What I have not done:** changed the script, changed any of the four covering tests, or marked the
+lane green. Tuning four tests to satisfy a rule that asks an assertion body to execute on a passing
+tree would be the exact move this project forbids, one level up from the tests.
