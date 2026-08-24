@@ -2004,3 +2004,215 @@ func (o *UncertaintyEnvelope) Check() *sim.Violation {
 	}
 	return nil
 }
+
+// --- resolution authority -------------------------------------------------------
+
+// ResolveFact is one resolve command as it stands in a committed log: the
+// transaction it names, the deadline the lock carried, and the timestamp the
+// resolver chose to judge that deadline against.
+//
+// Both values ride in the command (store.TxnCommand.ExpireAt, .Deadline) and
+// they ride there for D-A6-10's reason: every replica must compare the same two
+// numbers rather than each consulting its own clock. That is what makes this
+// oracle possible at all -- the permission a resolver claimed is written down in
+// the log, so it can be read back and checked against what the resolve did.
+type ResolveFact struct {
+	Primary  string
+	StartTS  hlc.Timestamp
+	Deadline hlc.Timestamp
+	ExpireAt hlc.Timestamp
+}
+
+// ProposedRollback is one EXPLICITLY proposed rolled-back transaction record --
+// a coordinator abandoning its own transaction, or anybody else writing the
+// record directly rather than through a resolve.
+//
+// It is recorded because it is the other way a rolled-back record can come to
+// exist, and an oracle that did not know about it would accuse a coordinator of
+// aborting itself.
+type ProposedRollback struct {
+	Primary string
+	StartTS hlc.Timestamp
+}
+
+// ResolutionsAt is supplied by the harness: the two command shapes above, as
+// they appear in one range's committed log.
+//
+// It DECODES; it does not model. It reports what the log says and takes no view
+// on what any of it did -- which is the distinction that keeps this oracle out
+// of the trap the removed model fell into. A supplier that decided which
+// resolves declared an owner dead would be re-running the rule this oracle
+// exists to check, and would cancel out against a defect in it.
+type ResolutionsAt func(entries []raft.Entry) ([]ResolveFact, []ProposedRollback)
+
+// ResolutionAuthority: a resolve that declares an owner dead had the right to.
+//
+// # The class this exists for, and the measurement that made it a decision
+//
+// DESIGN-A6 §13.4 surrendered one property when the independent model was
+// retired: an apply path wrong the SAME way on every replica. `M62` is that
+// property realised and measured. It makes lock expiry always fall through, so
+// every resolver rolls back every lock it meets, live or not. Applied to the
+// tree it moves 33 census fields and `TxnLostToResolver` goes 0 -> 2 -- live
+// coordinators losing their transactions to a resolver with no right to kill
+// them -- and nothing said anything: 0 of 300, 0 of 100, sweepfail 0.
+//
+// The reason nothing said anything is not omission. **Aborting a transaction is
+// a legal outcome.** Atomicity holds, snapshot isolation holds, the bank
+// conserves, every replica agrees, and the replay agrees with all of them. Every
+// client-facing oracle is blind by construction.
+//
+// # What it asserts, and why it is not the production rule restated
+//
+// A rolled-back transaction record exists in the final state for exactly two
+// reasons: somebody proposed it (`OpPutTxnRecord`), or a resolver declared the
+// owner dead (`OpResolveStatus`). The first needs no permission -- a coordinator
+// may abandon its own transaction. The second does, and the permission is
+// D-A6-5's: **the TTL is expiry, not opinion**, so a resolver may only make an
+// owner dead once the deadline the owner published has passed the timestamp the
+// resolver judged it at.
+//
+// So: for every rolled-back record with no explicit proposal behind it, some
+// resolve naming that transaction must carry `Deadline < ExpireAt`.
+//
+// This is not the production predicate re-run. Production uses the two numbers
+// to DECIDE; this reads the decision out of the recovered state and the two
+// numbers out of the log, and asks whether anything in the log authorised what
+// the state shows. Under `M62` the decision happens and no command authorised
+// it, which is the violation -- and no code is shared with `kv.ResolveLock` for
+// the verdict to cancel out against.
+//
+// # What it does not say
+//
+// It does not say a resolve was NEEDED, or that waiting would have been better,
+// or that the owner was in fact alive. A transaction whose coordinator died the
+// instant before its deadline is legitimately killed and this is silent about
+// it. The only thing refused is a killing nothing in the log gave permission for.
+type ResolutionAuthority struct {
+	base
+	cmds      ResolutionsAt
+	recovered RecoveredAt
+
+	// declarations is how many rolled-back records this oracle attributed to a
+	// resolver's declaration rather than to an explicit proposal.
+	//
+	// Recorded because a green verdict over nothing is the register's most
+	// common entry: a run in which every rollback was self-proposed exercises
+	// none of this, and a sweep of such runs would report silence that means
+	// only that resolution never fired.
+	declarations int
+}
+
+// NewResolutionAuthority builds the oracle.
+func NewResolutionAuthority(l *Ledger, cmds ResolutionsAt, recovered RecoveredAt) *ResolutionAuthority {
+	return &ResolutionAuthority{
+		base: base{l: l, name: "resolution-only-breaks-expired-locks"},
+		cmds: cmds, recovered: recovered,
+	}
+}
+
+// Declarations is how many rolled-back records were attributed to a resolver.
+// It is the oracle's non-vacuity witness: zero means the run never resolved
+// anything and the silence says nothing.
+func (o *ResolutionAuthority) Declarations() int { return o.declarations }
+
+// Interested returns false: this is a property of the final state read against
+// the whole committed log, and it is evaluated once, like the other A6 oracles.
+func (o *ResolutionAuthority) Interested(sim.Kind) bool { return false }
+
+// OnStep is never called: see Interested.
+func (o *ResolutionAuthority) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+// Check evaluates the invariant once, over the final recovered state and every
+// range's committed log.
+func (o *ResolutionAuthority) Check() *sim.Violation {
+	// Every resolve and every explicit proposal, cluster-wide. Cluster-wide
+	// because a transaction's primary can be on any range and a split moves it:
+	// the command that authorised a rollback may sit in the PARENT's log while
+	// the record it produced is in the child's inherited state.
+	//
+	// # Why "no command accounts for this record" is a sound thing to say
+	//
+	// It rests on the two halves coming from ONE list. The recovered state is
+	// store.ReplayMachine over rl.Base() and rl.Committed(); this walk is over
+	// rl.Committed() for every range. So a record in the final state was
+	// produced either by a command in the very entries read here, or by one in
+	// an ancestor's -- and every ancestor is in the ledger, because ranges are
+	// born by splitting inside the run and the ledger records each one's base.
+	//
+	// That matters because the ledger does NOT promise a complete committed
+	// prefix in general -- committedPrefix exists precisely to report when it
+	// has not witnessed one -- and an oracle that asked "is this command
+	// anywhere" against a partial log would accuse a correct run. Here the
+	// question is closed: the state cannot contain what the log this walk reads
+	// did not produce.
+	authorised := map[string]ResolveFact{}
+	attempted := map[string][]ResolveFact{}
+	proposed := map[string]bool{}
+	for _, rl := range o.l.Ranges() {
+		rs, ps := o.cmds(rl.Committed())
+		for _, r := range rs {
+			k := txnDecisionKey(r.Primary, r.StartTS)
+			attempted[k] = append(attempted[k], r)
+			if r.Deadline.Less(r.ExpireAt) {
+				authorised[k] = r
+			}
+		}
+		for _, p := range ps {
+			proposed[txnDecisionKey(p.Primary, p.StartTS)] = true
+		}
+	}
+
+	// The states are walked in the harness's order and each range's records in
+	// the order the replay produced them, so the first violation reported is a
+	// function of the run and not of a map walk.
+	for _, st := range o.recovered() {
+		for _, d := range st.Decided {
+			if !d.Rollback {
+				continue
+			}
+			k := txnDecisionKey(d.Key, d.StartTS)
+			if proposed[k] {
+				continue // somebody wrote the record on purpose; no permission needed
+			}
+			if _, ok := authorised[k]; ok {
+				o.declarations++
+				continue
+			}
+			tries := attempted[k]
+			if len(tries) == 0 {
+				// A rolled-back record with neither a proposal nor a resolve
+				// behind it. That is a record no command in the log produced,
+				// which is a different defect from the one this oracle is for --
+				// and it is still not a state any correct run can reach.
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d: the transaction that started at %s on primary %q is ROLLED BACK, "+
+						"and no committed command anywhere proposed that record or resolved that "+
+						"transaction. The record exists and nothing in the log accounts for it",
+					st.Range, d.StartTS, d.Key)}
+			}
+			// Every resolve that named this transaction judged it against a
+			// timestamp at or below its own deadline, so every one of them was
+			// looking at a lock that had not expired -- and the owner is dead
+			// anyway.
+			worst := tries[0]
+			for _, r := range tries[1:] {
+				if worst.ExpireAt.Less(r.ExpireAt) {
+					worst = r
+				}
+			}
+			o.declarations++
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d: the transaction that started at %s on primary %q is ROLLED BACK by a "+
+					"RESOLVER -- nobody proposed that record -- and every one of the %d resolves "+
+					"that named it judged an unexpired lock. The nearest carried expire-at %s "+
+					"against a deadline of %s, which is not above it. A resolver may only make an "+
+					"owner dead once the deadline the owner published has passed: the TTL is "+
+					"expiry, not opinion (D-A6-5, D-A6-10). This kills live coordinators, and it "+
+					"is invisible to every other checker because aborting a transaction is a legal "+
+					"outcome (M62, DESIGN-A6 §13.4)",
+				st.Range, d.StartTS, d.Key, len(tries), worst.ExpireAt, worst.Deadline)}
+		}
+	}
+	return nil
+}

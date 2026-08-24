@@ -587,3 +587,26 @@ func TestPercolatorInvariantsReportNothing(t *testing.T) {
 func TestTransactionAtomicityOracleReportsNothing(t *testing.T) {
 	assertOracleSilent(t, "transaction-atomicity", 60)
 }
+
+// TestResolutionAuthorityReportsNothing is the covering test for
+// M62-lock-expiry-off-by-one, and it is the first DETECTOR built for the
+// symmetric-apply gap rather than another mutant class on the list.
+//
+// # What M62 is, and why nothing else sees it
+//
+// It makes the expiry test always fall through, so every resolver rolls back
+// every lock it meets whether or not the owner is alive. It is SYMMETRIC:
+// every replica does it, the replay does it, and the cluster agrees with
+// itself. And its outcome is LEGAL — a transaction that gets aborted is an
+// ordinary thing — so atomicity, snapshot isolation, bank conservation and
+// per-key linearizability are all satisfied by a run in which live coordinators
+// are being killed. Measured before this oracle existed: 33 census fields move
+// and TxnLostToResolver goes 0 -> 2, against detected=0 of 300, 0 of 100 and
+// sweepfail=0 (DESIGN-A6 §35.4).
+//
+// The oracle reads the permission out of the log instead of the outcome out of
+// the state: a rolled-back record nobody proposed needs a resolve that carried
+// Deadline < ExpireAt behind it.
+func TestResolutionAuthorityReportsNothing(t *testing.T) {
+	assertOracleSilent(t, "resolution-only-breaks-expired-locks", 60)
+}

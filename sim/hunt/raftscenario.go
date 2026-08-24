@@ -828,6 +828,37 @@ func txnFacts(base []byte, entries []raft.Entry) ([]raftcheck.CommitFact, map[st
 	return flat, decided
 }
 
+// resolutions is raftcheck.ResolutionsAt: the two command shapes the resolution
+// oracle reads, decoded out of one range's committed log.
+//
+// It DECODES and stops. It does not say which resolve declared an owner dead --
+// deciding that here would re-run the rule the oracle exists to check, and the
+// verdict would cancel out against a defect in it, which is exactly how the
+// removed model failed.
+func resolutions(entries []raft.Entry) ([]raftcheck.ResolveFact, []raftcheck.ProposedRollback) {
+	var rs []raftcheck.ResolveFact
+	var ps []raftcheck.ProposedRollback
+	for _, e := range entries {
+		if len(e.Data) == 0 {
+			continue
+		}
+		c, ok := store.DecodeTxnCommand(e.Data)
+		if !ok {
+			continue
+		}
+		switch {
+		case c.Op == store.OpResolveStatus:
+			rs = append(rs, raftcheck.ResolveFact{
+				Primary: c.Key, StartTS: c.StartTS,
+				Deadline: c.Deadline, ExpireAt: c.ExpireAt,
+			})
+		case c.Op == store.OpPutTxnRecord && c.Status != kv.TxnCommitted:
+			ps = append(ps, raftcheck.ProposedRollback{Primary: c.Key, StartTS: c.StartTS})
+		}
+	}
+	return rs, ps
+}
+
 // recoveredStates is raftcheck.RecoveredAt: every range's final state machine,
 // decoded into the four record kinds.
 //
@@ -1033,6 +1064,7 @@ type RaftResult struct {
 	RollForwards          int
 	RollBacks             int
 	ReadsBlocked          int
+	ResolverDeclarations  int
 
 	Seed     uint64
 	Outcome  sim.Outcome
@@ -1413,10 +1445,37 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 				}
 			}
 		}
-		inv := raftcheck.NewPercolatorInvariants(ledger, func() []raftcheck.RecoveredState {
-			return recoveredStates(ledger, clocks)
-		})
+		// Recovered ONCE and shared. Each call replays every range's whole
+		// committed log through the real apply path, which is the cost that
+		// kept these oracles out of OnStep in the first place; two oracles
+		// wanting the same state is not a reason to pay it twice.
+		var states []raftcheck.RecoveredState
+		var recoveredOnce bool
+		recovered := func() []raftcheck.RecoveredState {
+			if !recoveredOnce {
+				states, recoveredOnce = recoveredStates(ledger, clocks), true
+			}
+			return states
+		}
+		inv := raftcheck.NewPercolatorInvariants(ledger, recovered)
 		res.Violated = inv.Check()
+
+		// # Why this one is here and not beside the invariants
+		//
+		// It needs BOTH halves: the rolled-back records out of the recovered
+		// state, and the permission out of the committed log. The invariants
+		// oracle takes only the first and is documented as taking only the
+		// first -- a property of the final state, checkable by inspection -- so
+		// handing it a log would make it a different kind of check under the
+		// same name.
+		//
+		// It is the first built answer to the symmetric-apply gap that is a
+		// DETECTOR rather than a mutant class (DESIGN-A6 sections 13.4, 35.4).
+		ra := raftcheck.NewResolutionAuthority(ledger, resolutions, recovered)
+		if v := ra.Check(); v != nil && res.Violated == nil {
+			res.Violated = v
+		}
+		res.ResolverDeclarations = ra.Declarations()
 	}
 	if coord != nil {
 		res.TxnStarted = coord.Started()
@@ -1652,6 +1711,7 @@ type RaftCensus struct {
 	RollForwards          int
 	RollBacks             int
 	ReadsBlocked          int
+	ResolverDeclarations  int
 
 	FirstViolation     uint64
 	FoundAViolation    bool
@@ -1760,6 +1820,7 @@ func CensusOf(seed uint64, r RaftResult) RaftCensus {
 	c.RollForwards += r.RollForwards
 	c.RollBacks += r.RollBacks
 	c.ReadsBlocked += r.ReadsBlocked
+	c.ResolverDeclarations += r.ResolverDeclarations
 	c.SnapshotReads += r.SnapshotReads
 	if r.Ranges > c.Ranges {
 		c.Ranges = r.Ranges
@@ -1887,6 +1948,7 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.ResolveNoLock, b.ResolveNoLock},
 		{&out.RollForwards, b.RollForwards}, {&out.RollBacks, b.RollBacks},
 		{&out.ReadsBlocked, b.ReadsBlocked},
+		{&out.ResolverDeclarations, b.ResolverDeclarations},
 	} {
 		*p.dst += p.src
 	}

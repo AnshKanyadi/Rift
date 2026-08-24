@@ -89,6 +89,10 @@ func reportExitCensus(t *testing.T, c hunt.RaftCensus) {
 	t.Logf("a6 recovery:  %d resolutions issued by a READER that ran into a lock; the primary's "+
 		"range answered %d already-decided, DECLARED %d owners dead, and left %d alone as alive",
 		c.ReaderResolves, c.ResolveAlreadyDecided, c.ResolveDeclaredDead, c.ResolveWaits)
+	t.Logf("a6 authority: %d rolled-back records in the final states were attributed to a "+
+		"RESOLVER rather than to a coordinator's own abort, and every one of them had a resolve "+
+		"behind it carrying Deadline < ExpireAt (M62's detector, DESIGN-A6 section 40)",
+		c.ResolverDeclarations)
 	t.Logf("a6 verdicts:  readers carried %d verdicts back to a locked key (%d forward, %d back); "+
 		"%d rolled forward and %d rolled back at the key, %d found the lock already gone",
 		c.ResolvedForward+c.ResolvedBack, c.ResolvedForward, c.ResolvedBack,
@@ -328,6 +332,23 @@ func exitCriteriaFailures(c hunt.RaftCensus) []string {
 	if c.ResolveWaits == 0 {
 		add("no resolver ever left a live owner alone. A sweep that expired everything it " +
 			"met has never exercised the verdict that keeps cleanup from breaking atomicity")
+	}
+	// The resolution-authority oracle's own non-vacuity, and it is a different
+	// question from ResolveDeclaredDead.
+	//
+	// That counter is the NODE's: how often the apply path took the
+	// declare-dead branch. This one is the ORACLE's: how many rolled-back
+	// records in the final state it attributed to a resolver rather than to a
+	// coordinator's own abort. An oracle that judged nothing reports a silence
+	// that means only that resolution never fired, and the whole reason this
+	// oracle exists is that M62's class is invisible to everything else -- so a
+	// vacuous green here is a vacuous green about a class that had no sweep
+	// instrument at all until this one. Measured 64 to 72 per 50 seeds across
+	// 200 seeds of the clean tree (DESIGN-A6 section 40).
+	if c.ResolverDeclarations == 0 {
+		add("resolution-only-breaks-expired-locks judged NOTHING: not one rolled-back record " +
+			"in the whole sweep was attributed to a resolver's declaration, so its silence is " +
+			"about an empty set and the symmetric-apply class it covers is unwatched")
 	}
 	if c.ResolveAlreadyDecided == 0 {
 		add("no resolver ever found a decision already made, so the make-it-exist rule -- " +

@@ -132,10 +132,21 @@ func TestPowerProbe(t *testing.T) {
 	// mutant that makes one of them true is caught by the exit run and invisible
 	// to a rate.
 	//
-	// `M62` is exactly that: it makes every lock look expired, so `ResolveWaits`
-	// goes to zero. The class is reachable -- 50,396 waits across the exit run --
-	// and it measured `0 of 300` here, because `noticed` asked a hand-listed
-	// subset of the criteria rather than the criteria.
+	// `M73` is exactly that, and it is the class this fix FOUND. It removes
+	// BUG-024's incarnation guard, so `StaleIncarnation` goes 10-15 per fifty
+	// seeds to a flat zero and the criterion *no read answer from a pre-restart
+	// incarnation was ever rejected* fires in every shard -- against `0 of 200`
+	// on the per-seed rate, before and after. It had been carrying an opt-out
+	// that said a floor would need a 24-hour sweep; the sweep verdict costs 200
+	// seeds (DESIGN-A6 §42).
+	//
+	// `M62` was the case this fix was WRITTEN for, and the guess about it was
+	// half wrong, which is worth leaving in. The guess was that it drives
+	// `ResolveWaits` to zero. It does not: the node's apply path keeps its own
+	// copy of the expiry comparison and `M62` mutates only `kv.ResolveLock`, so
+	// waits fall (83 -> 60 in one shard of fifty) without vanishing, and no
+	// criterion fired. What `M62` needed was not a better probe but an oracle
+	// nobody had written, and it has one now (§40): 18 of 200, first at seed 20.
 	//
 	// So the probe consults `exitCriteriaFailures` over the accumulated census,
 	// which is the same list the exit run asserts, and reports what failed. The
