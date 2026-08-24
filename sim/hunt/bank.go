@@ -270,7 +270,6 @@ type coordinator struct {
 	started   int
 	committed int
 	abandoned int
-	resolves  int
 
 	// The A6 evidence counters. Every one is asserted or deleted in the exit
 	// run (DESIGN-A4 section 9.4b), and each names a path that is worthless if
@@ -552,7 +551,6 @@ func (c *coordinator) applied(cmd store.TxnCommand, r store.TxnResult, at clock.
 				return
 			}
 			t.resolves[cmd.Key]++
-			c.resolves++
 			c.readerResolves++
 			// # The expiry timestamp is FRESH, and is not the read's snapshot
 			//
@@ -981,7 +979,6 @@ func (c *coordinator) auditApplied(cmd store.TxnCommand, r store.TxnResult, at c
 			return
 		}
 		a.resolves[cmd.Key]++
-		c.resolves++
 		c.readerResolves++
 		ts, ok := c.now(a.id)
 		if !ok {
@@ -1273,7 +1270,6 @@ func (c *coordinator) beginTransfer(id, from, to, amount int, run *plan.Run) {
 func (c *coordinator) Started() int            { return c.started }
 func (c *coordinator) Committed() int          { return c.committed }
 func (c *coordinator) Abandoned() int          { return c.abandoned }
-func (c *coordinator) Resolves() int           { return c.resolves }
 func (c *coordinator) Reads() int              { return c.reads }
 func (c *coordinator) ReaderResolves() int     { return c.readerResolves }
 func (c *coordinator) Restarts() int           { return c.restarts }

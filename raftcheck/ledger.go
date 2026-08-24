@@ -326,7 +326,10 @@ type rangeLedger struct {
 //
 // One counter for the whole ledger rather than one per range: an oracle that
 // walks every range has to re-walk when any of them changes.
-func (l *Ledger) Rev() uint64 { return l.rev }
+//
+// It had an exported accessor, `Rev()`, which nothing has ever called: every
+// reader of `rev` is `base.stale()`, inside this package. Deleted rather than
+// kept for symmetry, on DESIGN-A6 §25.1's third meaning.
 
 // forRange returns the sub-ledger for id, creating it in sorted position.
 //
@@ -745,26 +748,19 @@ type DurableState struct {
 	Log       []raft.Entry
 }
 
-// holds reports whether a node's durable state covers index i: either the entry
-// is in the log suffix, or the snapshot is at or past it.
+// `holds` -- *does this node's durable state cover index i* -- WAS here, and it
+// was never called by anything, in any commit. `git log -G` finds the commit
+// that wrote it (A2) and the commit that moved it from `Ledger` to
+// `rangeLedger` (A4), and no commit that added or removed a call.
 //
-// The snapshot arm rests on a stated assumption rather than on an observation,
-// and it is worth naming: a snapshot is taken from an APPLIED prefix, so an
-// index the snapshot covers is one this node applied. That is sound exactly as
-// far as state machine safety holds, and state machine safety is checked
-// independently -- so if it ever fails, this arm is unreliable and the run has
-// already reported the reason.
-func (l *rangeLedger) holds(node int, e raft.Entry) bool {
-	if l.durableSnap[node].Index >= e.Index {
-		return true
-	}
-	for _, x := range l.durableLog[node] {
-		if x.Index == e.Index && x.Term == e.Term && string(x.Data) == string(e.Data) {
-			return true
-		}
-	}
-	return false
-}
+// It is deleted on DESIGN-A6 §25.1's third meaning, and the reasoning inside it
+// is kept here because it is the interesting part and it will be wanted again if
+// anybody re-derives durable coverage: **a snapshot is taken from an APPLIED
+// prefix, so an index the snapshot covers is one this node applied.** That is
+// sound exactly as far as state machine safety holds -- which is checked
+// independently, so if it ever fails, the run has already reported the reason.
+// An oracle resting on it is resting on another oracle's verdict, and saying so
+// out loud is the price of using it.
 
 // RecordSent records a released message alongside the sender's durable state.
 //

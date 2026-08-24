@@ -492,23 +492,24 @@ func takeTS(b []byte) (hlc.Timestamp, []byte, bool) {
 // replicas must reach the same verdict from the same log position.
 const DefaultTTL = 500 * time.Millisecond
 
-// The value codecs, exported for the harness's model.
+// The value ENCODERS are gone, and the reason is worth keeping.
 //
-// It restates what a prewrite and a commit DO and shares only the SERIALISATION,
-// which is the same split every other model function in this project makes: a
-// defect in applying a step cannot cancel out on both sides of the comparison,
-// and a model that produced different bytes for the same logical state would
-// report a divergence on every seed.
-func EncodeLockValue(l Lock) []byte { return encodeLock(l) }
-func EncodeWriteValue(startTS hlc.Timestamp, rollback bool) []byte {
-	return encodeWrite(startTS, rollback)
-}
-func EncodeTxnValue(r TxnRecord) []byte { return encodeTxn(r) }
+// There were three -- EncodeLockValue, EncodeWriteValue, EncodeTxnValue --
+// exported, in their own words, "for the harness's model": they let
+// sim/hunt.modelRecords render the model's logical state into engine records so
+// that a digest over one was a digest over the other. That model was retired at
+// A6 (DESIGN-A6 §13) and modelRecords was deleted with it, and these outlived
+// both. Nothing called them. §25.1's third meaning: the response to code that
+// cannot be reached is to delete the code, not to write a test for it.
+//
+// The production path uses the unexported encodeLock, encodeWrite and encodeTxn
+// and is untouched.
 
-// The value decoders, exported for the harness's model for the same reason the
-// encoders are: a split-born range INHERITS records, and a model that could not
-// read them would start every child range with an incomplete state and report a
-// divergence on every seed that split mid-transaction.
+// The value decoders survive, and NOT for symmetry: a split-born range INHERITS
+// records, so the harness has to read what it did not write. recoveredStates
+// decodes every one of the record kinds below out of a replayed state machine,
+// which is what percolator-invariants and resolution-only-breaks-expired-locks
+// are evaluated over.
 func DecodeLockValue(b []byte) (Lock, bool) { return decodeLock(b) }
 func DecodeWriteValue(b []byte) (startTS hlc.Timestamp, rollback bool, ok bool) {
 	return decodeWrite(b)

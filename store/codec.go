@@ -5,7 +5,6 @@ import (
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/hlc"
-	"github.com/anshkanyadi/rift/internal/sorted"
 	"github.com/anshkanyadi/rift/kv"
 	"github.com/anshkanyadi/rift/raft"
 )
@@ -224,43 +223,23 @@ func decodeMachine(b []byte) (RangeDescriptor, hlc.Timestamp, []kv.Record, bool)
 	return desc, mark, rs, true
 }
 
-// encodeKV serialises the state machine.
+// The map state machine's codec is GONE, and the note is worth keeping.
 //
-// Keys are sorted, and that is load-bearing rather than tidy: a snapshot's bytes
-// are compared against an independently computed expectation, and a map range
-// here would make the same state produce different bytes on different runs. It
-// is also the classic Go determinism leak, which is why this package is in core
-// scope and cannot range a map at all.
-func encodeKV(kv map[string]string) []byte {
-	var b []byte
-	b = putU64(b, uint64(len(kv)))
-	for _, k := range sorted.Keys(kv) {
-		b = putBytes(b, []byte(k))
-		b = putBytes(b, []byte(kv[k]))
-	}
-	return b
-}
-
-func decodeKV(b []byte) (map[string]string, bool) {
-	n, b, ok := takeU64(b)
-	if !ok {
-		return nil, false
-	}
-	kv := make(map[string]string, n)
-	for range n {
-		var kb, vb []byte
-		kb, b, ok = takeBytes(b)
-		if !ok {
-			return nil, false
-		}
-		vb, b, ok = takeBytes(b)
-		if !ok {
-			return nil, false
-		}
-		kv[string(kb)] = string(vb)
-	}
-	return kv, true
-}
+// `encodeKV`/`decodeKV` serialised the state machine when the state machine was
+// a Go map. Both halves lost their callers at `e8b258c` -- *"A5: MVCC is the
+// replicated state machine"* -- and neither has been called since, by anything,
+// including tests. DESIGN-A6 §25.1's third meaning: the response to code that
+// cannot be reached is to delete it.
+//
+// Its key ordering was load-bearing rather than tidy -- a snapshot's bytes are
+// compared against an independently computed expectation, so ranging a map here
+// would make one state produce different bytes on different runs -- and the
+// requirement survives it without needing the code: this package is in core
+// determinism scope and the vet pass forbids ranging a map anywhere in it, and
+// `encodeMachine` above walks an ordered SLICE of records, which is the same
+// property obtained by not having a map in the first place.
+//
+// It was `store/`'s only use of `internal/sorted`, and that import goes with it.
 
 // DecodeMachine decodes a state machine for the harness's model: the extent, the
 // garbage-collection mark, and every version.
