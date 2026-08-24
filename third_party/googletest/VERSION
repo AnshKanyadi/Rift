@@ -1,0 +1,50 @@
+# Vendored dependency provenance -- GoogleTest.
+#
+# DESIGN-B1 section 9.2. FetchContent was declined: a build step that reaches
+# the network fails in exactly the situation where "every number reproduces
+# from a clean clone by one script" matters most, which is a stranger checking
+# our work. So the tree is vendored, whole and unmodified.
+#
+# WHOLE AND UNMODIFIED IS THE POINT. Pruning the tree would turn the check
+# below from an equality into a diff against a subset, and a verification that
+# requires judgement is one people skip.
+
+upstream:   https://github.com/google/googletest
+tag:        v1.17.0
+commit:     52eb8108c5bdec04579160ae17225d66034bd723
+tree:       ad23b2ceac4a6eef2278c48545b62ffc1f0c134a
+authored:   2025-04-30 (upstream commit date; "Prepare for v1.17.0 (#4757)")
+vendored:   2026-08-24
+vendored-by: Session B (Track B), landing B1.0
+path:       third_party/googletest/
+
+# THE ONE FILE THAT IS NOT UPSTREAM'S
+#
+# This file. It is the only addition to the vendored directory, and both checks
+# below exclude exactly it, by name, at the directory root. Any OTHER added,
+# removed or edited file changes the tree hash and reddens the offline lane --
+# which is why excluding one hard-coded name costs nothing: the equality itself
+# guards the exclusion.
+
+exclude-from-hash: VERSION
+
+# HOW THIS IS CHECKED, AND THE DELIBERATE SPLIT BETWEEN THE TWO CHECKS
+#
+#   scripts/cpp-vendor-check.sh   OFFLINE. A lane (`make cpp-vendor-check`).
+#                                 Recomputes the git tree hash of this
+#                                 directory and requires it to equal `tree:`
+#                                 above. Catches a local edit to a vendored
+#                                 dependency, which is otherwise a mystery.
+#
+#   scripts/verify-vendored-gtest.sh   NETWORK. Deliberately NOT a lane.
+#                                 Fetches the pinned commit from upstream and
+#                                 requires ITS tree hash to equal `tree:` too.
+#                                 This is what a stranger runs to confirm the
+#                                 bytes here are the bytes upstream published.
+#
+# The split is the whole design. Putting the network check in a lane would
+# reintroduce the dependency vendoring exists to remove; leaving the offline
+# check out would mean a one-byte local edit produces a mysterious build
+# failure instead of a named one. Together: the lane proves the tree has not
+# drifted since vendoring, and the one-time check proves what it had not
+# drifted FROM.

@@ -8,6 +8,19 @@ GO           ?= go
 STUB         := ./scripts/lane-stub.sh
 TOOLING_ONLY := ./scripts/tooling-only.sh
 BLIND        := ./scripts/blind-analyzer.sh
+
+# ---- Track B (C++ engine). DESIGN-B1 section 9.3.
+CMAKE        ?= cmake
+CPP_SRC      := engine-cpp
+CPP_BUILD    ?= engine-cpp/build
+CPP_BUILD_CI := engine-cpp/build-ci
+VENDOR_CHECK := ./scripts/cpp-vendor-check.sh
+NO_NETWORK   := ./scripts/cpp-no-network.sh
+CPP_MUTANTS  := ./scripts/cpp-mutants.sh
+# The lane set `make cpp-ci` runs under network isolation. It grows as
+# lanes un-stub; every member must be runnable by hand, because nothing
+# runs it for us.
+CPP_LANES    := cpp-vendor-check cpp-vendor-build cpp-test cpp-asan cpp-ubsan
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -73,6 +86,41 @@ lint: vet fmt-check determinism tooling-only hatches ## vet + formatting + the d
 .PHONY: ci
 ci: build lint test race blind smoke mutants ## Everything the push lane runs
 
+# ------------------------------------------------------------- Track B lanes
+#
+# GoogleTest is vendored whole at a pinned commit, not fetched. A build step
+# that reaches the network fails in exactly the situation where "reproduces
+# from a clean clone" matters most, which is a stranger checking our work.
+# DESIGN-B1 section 9.2.
+
+.PHONY: cpp-vendor-check
+cpp-vendor-check: ## Vendored GoogleTest matches its recorded tree hash (offline)
+	@$(VENDOR_CHECK)
+
+.PHONY: cpp-vendor-build
+cpp-vendor-build: ## Vendored GoogleTest configures and builds, with no network
+	@printf '\n  vendored framework build\n'
+	@printf '  ----------------------------------------------------------\n'
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD) -DCMAKE_BUILD_TYPE=Debug
+	$(CMAKE) --build $(CPP_BUILD) --target gtest_main -j $(WORKERS)
+
+.PHONY: cpp-lane-set
+cpp-lane-set: $(CPP_LANES) ## Every Track B lane, in order, without isolation
+
+.PHONY: cpp-ci
+cpp-ci: ## The whole Track B lane set with networking disabled, and proof it was
+	@# COLD BUILD DIR, DELIBERATELY. A warm one carries whatever a previous
+	@# networked run downloaded -- a populated FetchContent cache above all --
+	@# and the lane then passes under isolation for the one reason that has
+	@# nothing to do with the claim. BM21 survived this lane until the build
+	@# directory was made cold; the mutant was right and the lane was wrong.
+	@rm -rf $(CPP_BUILD_CI)
+	@$(NO_NETWORK) $(MAKE) cpp-lane-set CPP_BUILD=$(CPP_BUILD_CI)
+
+.PHONY: cpp-mutants
+cpp-mutants: ## Track B mutant catalogue: each patch must redden the lane it names
+	@$(CPP_MUTANTS)
+
 # ---------------------------------------------------------------- stub lanes
 
 .PHONY: smoke
@@ -117,6 +165,7 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
 	@echo "       hatches blind"
+	@echo "       cpp-vendor-check cpp-vendor-build cpp-ci cpp-mutants"
 	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12)"
 	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
 	@echo "       killpoints(B4) differential(B4)"
