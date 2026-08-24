@@ -2315,3 +2315,56 @@ seed.
 **And the identity assertions still read zero:** 0 transactions shared a `(primary, start)` identity,
 0 foreign-tag starts, 0 peer timestamps refused for exceeding maxOffset. BUG-021's fix holds across
 25,000 seeds, which matters here because BUG-022's safety argument rests on it (§28.3).
+
+---
+
+## 33. The race-lane measurement, and the answer it gives
+
+CARRY-FORWARD asks: *run `sim/hunt` under `-race` at 50, 100 and 200 seeds, report whether what 200
+catches is still caught at the lower counts, and bound it at the smallest count that catches
+everything 200 catches.* §21.4 already recorded that the first half of that question is unanswerable —
+the lane's claimed two historical race findings have no record behind them, and both recorded
+race-lane failures were clocks (DESIGN-A4 §9.5).
+
+**The second half now has an answer, and it is neither of the two the question offered.**
+
+| point | budget | result |
+|---|---|---|
+| `RAFT_SEEDS=50`, `RACE_TIMEOUT=5400s` | the lane's current budget | **did not finish** — `panic: test timed out after 1h30m0s`, with `TestRestartsMintTheirOwnStartTimestamp` alone at **36m20s** |
+| data races reported | — | **0** |
+
+> **The lane does not fit its own budget at its smallest point.** So the question "does `RACE_SEEDS`
+> move or does `RACE_TIMEOUT` move" has a third answer: **neither is enough on its own.**
+
+**Why, in the one number that explains it.** `TestRestartsMintTheirOwnStartTimestamp` swept 50 seeds
+in 36m20s — about **43 s/seed instrumented**, against **8.4 s/seed** uninstrumented on the same
+workload. `sim/hunt` holds roughly fifteen tests that each sweep a seed range, so the package at
+`RAFT_SEEDS=50` is on the order of **nine hours**, and 200 seeds is four times that. A 90-minute
+budget and a 50-seed floor cannot both survive A6's per-seed cost; lowering the seed count to fit
+would mean single digits, which is not a seed search.
+
+**What this measurement is not.** It ran while the power measurement had three cores, so the wall
+times are **upper bounds**. That direction matters and it is the honest one: a run that had *fitted*
+under contention would have proved the budget sufficient, and a run that did not fit proves only that
+it did not fit *here*. The per-seed figure is the durable part, and it is a ratio against a
+same-machine baseline rather than an absolute.
+
+**And zero data races at 50 seeds.** With the premise problem in §21.4, that leaves the lane resting
+on its **structural** argument — that a cross-goroutine reach into node state would be caught — and
+not on a detection history. A lane whose value is structural should be sized by what makes the
+structure exercised, which is the real-mode driver's tests plus a handful of simulated seeds, and not
+by a seed count inherited from when a seed cost 0.36 s.
+
+**The recommendation, which is Ansh's to take or refuse.** Split the lane in two rather than tune one
+number:
+
+- **`race` (per push)**: the real-mode driver's tests and the unit tests under `-race`, plus a
+  single-digit seed search — minutes, and it exercises every cross-goroutine path the mailbox rule is
+  about.
+- **`race-soak` (nightly, sharded like the exit run)**: the seed search at whatever count the nightly
+  tier can afford.
+
+That keeps the structural claim on every push and puts the expensive half where every other expensive
+lane is now going (§25.3b, §31). **What it must not do is quietly become a smaller number**, because
+the recorded scope — *"a few hundred simulated seeds answer this lane's question"* — was a ruling, and
+replacing it with "eight" because eight fits is trading a scope for a budget without saying so.
