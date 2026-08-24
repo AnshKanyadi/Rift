@@ -184,7 +184,7 @@ func TestResolutionRollsForwardAndBack(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("lock: %v %v", ok, err)
 		}
-		r, c, err := s.ResolveLock([]byte("sec"), l, ts(200, 0), true)
+		r, c, err := s.ResolveLock(l, ts(200, 0), true)
 		if err != nil || r != kv.ResolveForward || c != commit {
 			t.Fatalf("resolve = (%s,%s,%v), want roll-forward at %s", r, c, err, commit)
 		}
@@ -213,11 +213,11 @@ func TestResolutionRollsForwardAndBack(t *testing.T) {
 		l, _, _ := s.Lock([]byte("sec"))
 
 		// Before the deadline the only safe answer is to wait.
-		if r, _, err := s.ResolveLock([]byte("sec"), l, ts(120, 0), true); err != nil || r != kv.ResolveWait {
+		if r, _, err := s.ResolveLock(l, ts(120, 0), true); err != nil || r != kv.ResolveWait {
 			t.Fatalf("resolve before the deadline = %s (%v), want wait", r, err)
 		}
 		// After it, roll back.
-		r, _, err := s.ResolveLock([]byte("sec"), l, ts(200, 0), true)
+		r, _, err := s.ResolveLock(l, ts(200, 0), true)
 		if err != nil || r != kv.ResolveBack {
 			t.Fatalf("resolve after the deadline = %s (%v), want roll-back", r, err)
 		}
@@ -258,10 +258,10 @@ func TestTheDeadlineIsComparedAgainstTheReadTimestamp(t *testing.T) {
 	// The same lock, two read timestamps either side of the deadline, resolved
 	// in the "wrong" order in wall-clock terms. Each answer depends only on its
 	// own timestamp.
-	if r, _, _ := s.ResolveLock([]byte("sec"), l, ts(200, 0), true); r != kv.ResolveBack {
+	if r, _, _ := s.ResolveLock(l, ts(200, 0), true); r != kv.ResolveBack {
 		t.Errorf("at 200 (past the 150 deadline) = %s, want roll-back", r)
 	}
-	if r, _, _ := s.ResolveLock([]byte("sec"), l, ts(120, 0), true); r != kv.ResolveWait {
+	if r, _, _ := s.ResolveLock(l, ts(120, 0), true); r != kv.ResolveWait {
 		t.Errorf("at 120 (before the deadline) = %s, want wait. The verdict moved with something "+
 			"other than the timestamp it was asked about", r)
 	}
@@ -649,5 +649,117 @@ func TestTheReadMarkIsInsideTheClockInvariant(t *testing.T) {
 	if !ok || got != ts(700, 3) {
 		t.Fatalf("TimestampOf on a read mark gave (%s, %v), want (700.3, true). A range seeded "+
 			"from everything else would still sit below a read it had already answered", got, ok)
+	}
+}
+
+// TestALateCommitDoesNotOrphanTheNextTransactionsVersion is M66's targeted lane.
+//
+// # Why a targeted lane and not a seed
+//
+// M66 measured `0 of 300` in the power sweep, and the census says why: applied
+// to the tree, it changes **nothing the harness counts** — 40 seeds, every one
+// of ~60 census fields byte-identical to the unmutated run, `ForeignLocksKept`
+// included. Since `ForeignLocksKept` is incremented exactly when a commit or a
+// rollback finds somebody else's lock, and M66 removes that check from the
+// COMMIT path only, an identical count is direct evidence: **across 40 seeds,
+// `CommitInto` never once met a foreign lock.** The class is not undetected in
+// that sweep; it is unreached.
+//
+// That is the same disposition M47 and the envelope refusal got — prove the
+// mix cannot produce the condition, then build the lane that produces it — and
+// it is the honest alternative to raising a seed count until something happens.
+//
+// # The interleaving, which needs no fault beyond a duplicate delivery
+//
+// T1 prewrites k and commits it. T2 then prewrites k, legitimately: the lock is
+// gone and T2 started after T1's commit. Now a DUPLICATE of T1's commit arrives
+// — the simulator delivers duplicates, and a resolver rolling a transaction
+// forward issues the same commit a coordinator may already have issued.
+//
+// A commit that deletes the lock SLOT rather than ITS OWN lock takes T2's. T2's
+// version is then an orphan: no lock, so no resolver will finish it; no commit
+// record, so no reader will see it. Invariant 7 is the property that names it,
+// and this is the state it exists for.
+func TestALateCommitDoesNotOrphanTheNextTransactionsVersion(t *testing.T) {
+	s, db := newStore(t)
+	t1, t1commit, t2 := ts(100, 0), ts(200, 0), ts(300, 0)
+
+	if err := prewrite(t, s, db, "k", "k", t1, ts(1000, 0), "a"); err != nil {
+		t.Fatalf("T1 prewrite: %v", err)
+	}
+	b := engine.NewBatch()
+	if err := s.PutTxnInto(b, []byte("k"), kv.TxnRecord{
+		Status: kv.TxnCommitted, StartTS: t1, CommitTS: t1commit,
+	}); err != nil {
+		t.Fatalf("T1 record: %v", err)
+	}
+	if err := s.CommitInto(b, []byte("k"), t1, t1commit); err != nil {
+		t.Fatalf("T1 commit: %v", err)
+	}
+	apply(t, db, b)
+
+	if err := prewrite(t, s, db, "k", "k", t2, ts(1000, 0), "b"); err != nil {
+		t.Fatalf("T2 prewrite: %v", err)
+	}
+
+	// The duplicate. Idempotent by design: the write record it stages is the one
+	// already there, and the lock it must NOT touch belongs to T2.
+	b = engine.NewBatch()
+	if err := s.CommitInto(b, []byte("k"), t1, t1commit); err != nil {
+		t.Fatalf("the duplicate commit errored: %v", err)
+	}
+	apply(t, db, b)
+
+	l, ok, err := s.Lock([]byte("k"))
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if !ok || l.StartTS != t2 {
+		t.Fatalf("T2's lock is gone after a duplicate of T1's commit (ok=%v, holder=%s). T2's "+
+			"version at %s is now an orphan: no lock, so nobody will resolve it; no commit "+
+			"record, so nobody will read it (BUG-019 on the roll-forward path, M66)", ok, l.StartTS, t2)
+	}
+	if s.ForeignLocksKept() == 0 {
+		t.Error("the duplicate commit did not report finding a foreign lock, so this lane did not " +
+			"reach the condition it exists for and its green says nothing")
+	}
+
+	// # Invariant 7's predicate, over the state this produced
+	//
+	// Stated here rather than assumed from the lock check, because the lock is
+	// the mechanism and the orphan is the fact. Every version must be named by a
+	// lock or by a write record.
+	recs, err := s.Records()
+	if err != nil {
+		t.Fatalf("records: %v", err)
+	}
+	ns := s.Namespace()
+	named := map[string]bool{}
+	var versions []hlc.Timestamp
+	for _, r := range recs {
+		kind, ok := kv.KindOf(ns, r.Key)
+		if !ok {
+			continue
+		}
+		switch kind {
+		case kv.KindData:
+			if _, at, ok := kv.DecodeKey(ns, r.Key); ok {
+				versions = append(versions, at)
+			}
+		case kv.KindLock:
+			if lk, ok := kv.DecodeLockValue(r.Value); ok {
+				named[lk.StartTS.String()] = true
+			}
+		case kv.KindWrite:
+			if st, _, ok := kv.DecodeWriteValue(r.Value); ok {
+				named[st.String()] = true
+			}
+		}
+	}
+	for _, v := range versions {
+		if !named[v.String()] {
+			t.Errorf("the version at %s is named by no lock and no write record: it is storage no "+
+				"operation can reach, and every replica would hold the same dead byte", v)
+		}
 	}
 }

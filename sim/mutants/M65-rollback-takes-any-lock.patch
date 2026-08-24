@@ -1,22 +1,33 @@
 # id: M65-rollback-takes-any-lock
-# covering-test: TestRaftExitCriteria
-# package: ./sim/hunt/
+# covering-test: TestARollbackDoesNotStealSomebodyElsesLock
+# package: ./kv/
 # expect: killed
 # power-seeds: 300
 # power-floor: 1
 # power-ceiling: 60
-# power-measured: PENDING
+# power-measured: 2 of 300, first at seed 9, under current at BUG-022's fix -- and seed 9 is where an independent bundle search found BUG-019 reproducing, neither instrument told about the other. Re-pointed off TestRaftExitCriteria at A6's close: that test is the exit run, about 23 hours at 8.4 s/seed, so a kill nobody can afford to run is a kill nobody has
 # mutates: BUG-019 exactly. A rollback deletes the key's lock without checking whose it is, so a transaction that was refused and is cleaning up after itself takes a live transaction's lock. The victim becomes a committed transaction with an orphaned version: no lock, so no reader ever discovers it and no resolver ever finishes it, and the value it committed is invisible forever. Caught by bank-conservation and by nothing else -- the state it produces is internally consistent, it just has the wrong amount of money in it
 --- a/kv/txn.go
 +++ b/kv/txn.go
-@@ -152,9 +152,7 @@
+@@ -219,7 +219,7 @@
  		return ErrUnsetTimestamp
  	}
  	b.Set(WriteKey(s.ns, key, startTS), encodeWrite(startTS, true))
 -	if err := s.releaseLockOf(b, key, startTS); err != nil {
--		return err
--	}
-+	b.Delete(LockKey(s.ns, key))
++	if err := s.releaseAnyLock(b, key); err != nil {
+ 		return err
+ 	}
  	// The VERSION delete is already keyed by the start timestamp, so it can
- 	// never touch another transaction's write. Only the lock was ambiguous.
- 	b.Delete(EncodeKey(s.ns, key, startTS))
+@@ -540,4 +540,12 @@
+ 	}
+ 	key, _, ok := takeMetaKey(ns, kind, engineKey)
+ 	return key, ok
++}
++
++// releaseAnyLock is the pre-BUG-019 reading of "delete the lock": it deletes the
++// SLOT, whoever owns it. It exists only so a mutant can put one path back to it
++// without touching the other, which is what keeps M65 and M66 two classes.
++func (s *Store) releaseAnyLock(b *engine.Batch, key []byte) error {
++	b.Delete(LockKey(s.ns, key))
++	return nil
+ }

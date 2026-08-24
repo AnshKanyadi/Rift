@@ -1,6 +1,7 @@
 package hunt_test
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -114,19 +115,42 @@ func reportExitCensus(t *testing.T, c hunt.RaftCensus) {
 }
 
 // assertExitCriteria is every exit assertion, over a census.
-func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
-	t.Helper()
+// exitCriteriaFailures is every exit assertion, as a list of failures over a
+// census.
+//
+// # Why it is a list and not a set of t.Error calls
+//
+// Because two callers need the same answer and only one of them is a test.
+// `TestPowerProbe` measures whether the harness NOTICES a planted defect, and
+// its notion of noticing was a hand-listed subset -- a violation, a report
+// verdict, an election census -- which is blind to every class whose detector is
+// one of the assertions below. `M62` drives `ResolveWaits` to zero and this list
+// says so; the probe measured `0 of 300` and called the class undetectable.
+//
+// So the criteria live in one place and both callers consult all of them. A new
+// criterion is covered by construction rather than by somebody remembering to
+// add it to a second list, which is the same rule AddCensus is written out for.
+//
+// A `t.Fatal` in the original becomes an entry like any other: stopping early
+// was a convenience for a test and would silently shorten the probe's answer.
+func exitCriteriaFailures(c hunt.RaftCensus) []string {
+	var out []string
+	add := func(s string) { out = append(out, s) }
+	if c.Seeds == 0 {
+		return []string{"the census covers zero seeds, so every criterion below is a division by " +
+			"nothing and none of them is evidence"}
+	}
 	// 1. Zero safety violations.
 	if c.Violations != 0 {
-		t.Errorf("SAFETY VIOLATION: %d across %d seeds; first at seed %d", c.Violations, c.Seeds, c.FirstViolation)
+		add(fmt.Sprintf("SAFETY VIOLATION: %d across %d seeds; first at seed %d", c.Violations, c.Seeds, c.FirstViolation))
 	}
 
 	// 2. Inconclusive is tracked separately and never counted as a pass. A
 	//    rising rate means shrink the window or partition harder per key, never
 	//    loosen the checker.
 	if perMille := c.Inconclusive * 1000 / c.Seeds; perMille > 30 {
-		t.Errorf("inconclusive rate %d per mille is above the 30 threshold; the remedy is a smaller "+
-			"problem -- shorter histories, harder per-key partitioning -- never a looser checker", perMille)
+		add(fmt.Sprintf("inconclusive rate %d per mille is above the 30 threshold; the remedy is a smaller "+
+			"problem -- shorter histories, harder per-key partitioning -- never a looser checker", perMille))
 	}
 
 	// 2b. A2's features must have RUN. A green sweep in which no snapshot was
@@ -134,24 +158,24 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	//     vacuous-green rule the census enforces for elections: the system has to
 	//     do the thing whose safety is being asserted.
 	if c.SnapshotsTaken == 0 {
-		t.Error("no snapshot was taken across the whole sweep; every snapshot oracle in this run " +
+		add("no snapshot was taken across the whole sweep; every snapshot oracle in this run " +
 			"checked nothing, and the compaction path was never executed")
 	}
 	if c.SnapshotsApplied == 0 {
-		t.Error("no snapshot was ever INSTALLED across the whole sweep. Taking one exercises " +
+		add("no snapshot was ever INSTALLED across the whole sweep. Taking one exercises " +
 			"compaction; installing one is what exercises InstallSnapshot racing appends and " +
 			"restarts, which CLAUDE.md names as A2's danger zone")
 	}
 	if c.ConfProposed == 0 {
-		t.Error("no membership change was ever proposed across the whole sweep; every configuration " +
+		add("no membership change was ever proposed across the whole sweep; every configuration " +
 			"oracle in this run checked nothing, and the change path was never executed")
 	}
 	if c.SplitsApplied == 0 {
-		t.Error("no split was applied across the whole sweep; every per-range oracle judged a " +
+		add("no split was applied across the whole sweep; every per-range oracle judged a " +
 			"single range, which is what they already did before A4")
 	}
 	if c.Ranges < 2 {
-		t.Error("no machine ever hosted more than one range, so multi-raft was never exercised")
+		add("no machine ever hosted more than one range, so multi-raft was never exercised")
 	}
 	// A4's three mechanisms must have RUN, on the same rule as A2's and A3's.
 	//
@@ -161,20 +185,20 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// ever made. That is the eleventh instance of the vacuous-green class, and
 	// it was guarding an invariant CLAUDE.md names by name.
 	if c.StaleEpochRefusals == 0 {
-		t.Error("no request was ever refused for a stale descriptor epoch across the whole sweep; " +
+		add("no request was ever refused for a stale descriptor epoch across the whole sweep; " +
 			"the epoch check is the mechanism behind \"no request served under a stale descriptor " +
 			"epoch\", and a sweep that never reaches it says nothing about that invariant")
 	}
 	if c.OutOfExtentRefusals == 0 {
-		t.Error("no committed command was ever refused for naming a key outside its range's extent; " +
+		add("no committed command was ever refused for naming a key outside its range's extent; " +
 			"that check is BUG-014's fix and this sweep never executed it")
 	}
 	// Ordered is not enough. A move that stalls is SAFE -- it leaves an extra
 	// replica and removes nothing -- so the rebalance oracle passes over a sweep
 	// in which every single move stalled, and would be saying nothing.
 	if c.MovesCompleted == 0 {
-		t.Errorf("%d replica moves were ordered and NONE completed; a stalled move is safe, so the "+
-			"rebalance oracle is green over a mechanism that never finished once", c.MovesOrdered)
+		add(fmt.Sprintf("%d replica moves were ordered and NONE completed; a stalled move is safe, so the "+
+			"rebalance oracle is green over a mechanism that never finished once", c.MovesOrdered))
 	}
 	// # The bidirectional half of a RECORDED GAP
 	//
@@ -190,29 +214,29 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// attribution needs revisiting before it can judge those seeds, and the
 	// design doc is stale. It is on A6's checklist for exactly that reason.
 	if c.MovesRacingChurn != 0 {
-		t.Errorf("%d move windows contained a membership change the move did not make. "+
+		add(fmt.Sprintf("%d move windows contained a membership change the move did not make. "+
 			"DESIGN-A4 section 10 records this interleaving as UNEXERCISED and the record is now "+
 			"wrong. Before deleting this assertion, revisit rebalance-safety's attribution: it "+
 			"cannot tell whose removal it is looking at when both drivers are live, which is what "+
-			"produced 252 false violations in 300 seeds (BUG-016)", c.MovesRacingChurn)
+			"produced 252 false violations in 300 seeds (BUG-016)", c.MovesRacingChurn))
 	}
 	// A5's mechanisms, on the same rule: every count printed above is asserted
 	// on or deleted (DESIGN-A4 section 9.4b).
 	if c.GCApplied == 0 {
-		t.Error("no collection was ever applied across the whole sweep; the garbage-collection " +
+		add("no collection was ever applied across the whole sweep; the garbage-collection " +
 			"mark never moved, so every claim about what is answerable below it is a claim about " +
 			"a mechanism that did not run")
 	}
 	if c.VersionsCollected == 0 {
-		t.Error("collections applied and collected NOTHING: the mark moved over a history with no " +
+		add("collections applied and collected NOTHING: the mark moved over a history with no " +
 			"versions under it, so the collector was never asked to remove anything")
 	}
 	if c.SnapshotReads == 0 {
-		t.Error("no read named a remembered timestamp; every read was at now, which is the one " +
+		add("no read named a remembered timestamp; every read was at now, which is the one " +
 			"shape that cannot tell an MVCC store from a single-version one")
 	}
 	if c.MVCCReadsRefused == 0 {
-		t.Error("no read was ever refused below the collection mark. That refusal is the whole " +
+		add("no read was ever refused below the collection mark. That refusal is the whole " +
 			"reason the mark is a mark and not a cleanup: without it a read below the mark is " +
 			"answered from a history that is no longer there")
 	}
@@ -230,9 +254,9 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// wrong: the day a workload can reach it, the lane says so instead of
 	// quietly proving something new. DESIGN-A5 section 11 carries the entry.
 	if c.MVCCWritesRefused != 0 {
-		t.Errorf("%d writes were refused below the collection mark. DESIGN-A5 section 11 records "+
+		add(fmt.Sprintf("%d writes were refused below the collection mark. DESIGN-A5 section 11 records "+
 			"this as unreachable in A5's workload -- every write is stamped at propose, above the "+
-			"mark by construction -- and the record is now wrong", c.MVCCWritesRefused)
+			"mark by construction -- and the record is now wrong", c.MVCCWritesRefused))
 	}
 
 	// # The envelope refusal is asserted at ZERO, and that is a bidirectional gap
@@ -244,21 +268,21 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// it. Both are worth stopping for, and the envelope EXPERIMENT that
 	// deliberately exceeds maxOffset is STRETCH (Amendment A6), not this lane.
 	if c.EnvelopeRefusals != 0 {
-		t.Errorf("%d peer timestamps were refused for exceeding maxOffset in a bounded-skew sweep. "+
+		add(fmt.Sprintf("%d peer timestamps were refused for exceeding maxOffset in a bounded-skew sweep. "+
 			"Either the schedule mix now leaves the envelope, or the check is refusing nodes "+
 			"inside it; hlc.TestCausalityUnderSkew is the model of what bounded means",
-			c.EnvelopeRefusals)
+			c.EnvelopeRefusals))
 	}
 	if c.ConfRecoveries == 0 {
-		t.Error("no restart ever recovered a log carrying a configuration change, so nothing in " +
+		add("no restart ever recovered a log carrying a configuration change, so nothing in " +
 			"this sweep exercised a configuration surviving a crash")
 	}
 	if c.ConfCrossChecks == 0 {
-		t.Error("no recovery was ever checked against a snapshot's configuration, so the one " +
+		add("no recovery was ever checked against a snapshot's configuration, so the one " +
 			"place recomputeConf can be compared against an independent derivation never ran")
 	}
 	if c.TransfersAsked == 0 {
-		t.Error("no leadership transfer was requested across the whole sweep, so the transfer path " +
+		add("no leadership transfer was requested across the whole sweep, so the transfer path " +
 			"is unexercised and its exit criterion unevidenced")
 	}
 
@@ -268,53 +292,53 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// no read ever met a lock has exercised the happy path of a protocol whose
 	// entire difficulty is in the unhappy one.
 	if c.TxnCommitted == 0 {
-		t.Error("no transaction ever reached its commit point across the whole sweep; every " +
+		add("no transaction ever reached its commit point across the whole sweep; every " +
 			"transaction oracle in this run judged a workload that never committed")
 	}
 	if c.TxnAbandoned == 0 {
-		t.Error("no coordinator was ever abandoned mid-transaction. Every lock this sweep " +
+		add("no coordinator was ever abandoned mid-transaction. Every lock this sweep " +
 			"resolved belonged to a transaction that finished, so the recovery path -- the " +
 			"reason resolution exists -- ran against nothing it was built for")
 	}
 	if c.ReadsBlocked == 0 {
-		t.Error("no read ever found a lock across the whole sweep, so reader-side lock discovery " +
+		add("no read ever found a lock across the whole sweep, so reader-side lock discovery " +
 			"never happened and every resolution path below it is unreachable")
 	}
 	if c.ReaderResolves == 0 {
-		t.Error("no reader ever issued a resolution. Locks were discovered and nothing was done " +
+		add("no reader ever issued a resolution. Locks were discovered and nothing was done " +
 			"about them, which is the half of Percolator that is not bookkeeping")
 	}
 	// Both directions of the verdict, separately. A sweep that only ever rolled
 	// forward has never executed rollback and vice versa, and A6's exit criteria
 	// name both by name.
 	if c.RollForwards == 0 {
-		t.Error("no lock was ever ROLLED FORWARD: no resolver ever found a committed primary " +
+		add("no lock was ever ROLLED FORWARD: no resolver ever found a committed primary " +
 			"whose secondary was unwritten, which is the case that makes a commit point mean " +
 			"anything")
 	}
 	if c.RollBacks == 0 {
-		t.Error("no lock was ever ROLLED BACK: no transaction was ever cleaned up after its " +
+		add("no lock was ever ROLLED BACK: no transaction was ever cleaned up after its " +
 			"coordinator stopped, so the other half of resolution is unevidenced")
 	}
 	if c.ResolveDeclaredDead == 0 {
-		t.Error("no resolver ever DECLARED an owner dead. The TTL is expiry rather than " +
+		add("no resolver ever DECLARED an owner dead. The TTL is expiry rather than " +
 			"permission precisely because somebody has to write the rollback record, and nobody " +
 			"in this sweep ever did")
 	}
 	if c.ResolveWaits == 0 {
-		t.Error("no resolver ever left a live owner alone. A sweep that expired everything it " +
+		add("no resolver ever left a live owner alone. A sweep that expired everything it " +
 			"met has never exercised the verdict that keeps cleanup from breaking atomicity")
 	}
 	if c.ResolveAlreadyDecided == 0 {
-		t.Error("no resolver ever found a decision already made, so the make-it-exist rule -- " +
+		add("no resolver ever found a decision already made, so the make-it-exist rule -- " +
 			"the whole safety argument for concurrent resolvers -- was never exercised")
 	}
 	if c.WriteConflicts == 0 {
-		t.Error("no prewrite was ever refused for a commit newer than its snapshot. " +
+		add("no prewrite was ever refused for a commit newer than its snapshot. " +
 			"First-committer-wins never fired, so snapshot isolation's write rule is unevidenced")
 	}
 	if c.PrewriteBlocked == 0 {
-		t.Error("no prewrite ever met a live lock, so two transactions never contended for one " +
+		add("no prewrite ever met a live lock, so two transactions never contended for one " +
 			"key -- which is the only condition under which any of this machinery matters")
 	}
 	// # BUG-022's evidence, both halves, because they fail independently
@@ -324,16 +348,16 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// reads marks nobody stages. Neither shows up in a violation count, and one
 	// number cannot tell them apart -- so there are two.
 	if c.ReadMarks == 0 {
-		t.Error("no read mark was staged across the whole sweep, so BUG-022's guard had nothing " +
+		add("no read mark was staged across the whole sweep, so BUG-022's guard had nothing " +
 			"to consult and every prewrite in this run passed a check that was never true")
 	}
 	if c.ReadConflicts == 0 {
-		t.Error("no prewrite was ever refused because somebody had already been answered a read " +
+		add("no prewrite was ever refused because somebody had already been answered a read " +
 			"of the key above its snapshot. That is the interleaving BUG-022 lives in, and a " +
 			"sweep that never reaches it says nothing about the fix")
 	}
 	if c.TxnAborted == 0 {
-		t.Error("no transaction ever aborted after losing a race; the explicit-abort path is " +
+		add("no transaction ever aborted after losing a race; the explicit-abort path is " +
 			"unexercised and every rollback in this sweep came from a dead coordinator")
 	}
 	// # BUG-019's evidence
@@ -343,7 +367,7 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// a committed version nobody could ever see. Zero means the schedule never
 	// reached the bug, and the fix is unevidenced.
 	if c.ForeignLocksKept == 0 {
-		t.Error("no commit or rollback ever found a lock belonging to another transaction. " +
+		add("no commit or rollback ever found a lock belonging to another transaction. " +
 			"BUG-019 is the defect where it took that lock anyway, and a sweep that never " +
 			"reaches the condition says nothing about the fix")
 	}
@@ -360,13 +384,13 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// lost-update finding got written down. The two counts are kept apart so the
 	// day the recording path stops being called, this says so.
 	if c.LedgerRestarts != c.UncertaintyRestarts {
-		t.Errorf("the coordinator restarted %d transactions and the ledger was told about %d. "+
+		add(fmt.Sprintf("the coordinator restarted %d transactions and the ledger was told about %d. "+
 			"Every transaction the ledger did not hear about is one whose recorded start "+
 			"timestamp is a value the system abandoned, and reasoning from it places the "+
-			"transaction somewhere it never was", c.UncertaintyRestarts, c.LedgerRestarts)
+			"transaction somewhere it never was", c.UncertaintyRestarts, c.LedgerRestarts))
 	}
 	if c.UncertaintyRestarts == 0 {
-		t.Error("no read ever restarted above an uncertain commit across the whole sweep. The " +
+		add("no read ever restarted above an uncertain commit across the whole sweep. The " +
 			"uncertainty interval is A6's answer to bounded clock skew and this sweep never " +
 			"executed it, which is the vacuous-green class with a headline claim attached")
 	}
@@ -377,18 +401,18 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// and reports green. That is the vacuous-green class, and this is the
 	// assertion that keeps it from recurring here.
 	if c.SnapshotsCompared == 0 {
-		t.Error("snapshot-isolation compared no answer against an earlier answer to the same " +
+		add("snapshot-isolation compared no answer against an earlier answer to the same " +
 			"question, so its stability property -- the one that catches a transaction committing " +
 			"into the past -- asserted nothing at all across the whole sweep")
 	}
 
 	// # The conservation evidence itself
 	if c.AuditsComplete == 0 {
-		t.Error("no audit ever read every account at one timestamp, so bank-conservation " +
+		add("no audit ever read every account at one timestamp, so bank-conservation " +
 			"checked nothing at all: the oracle iterates a list that is empty")
 	}
 	if c.AuditsLocked == 0 {
-		t.Error("no audit ever met a lock, so every conservation check in this sweep was taken " +
+		add("no audit ever met a lock, so every conservation check in this sweep was taken " +
 			"over a quiet instant -- which is not the instant the property is interesting at")
 	}
 	// # Bidirectional: the identity Percolator assumes
@@ -399,37 +423,46 @@ func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
 	// start timestamps; a per-node HLC does not guarantee it, so the assumption
 	// is asserted rather than assumed. DESIGN-A6 section 15 carries the entry.
 	if c.IdentityCollisions != 0 {
-		t.Errorf("%d transactions shared a (primary, start timestamp) with an earlier one. "+
+		add(fmt.Sprintf("%d transactions shared a (primary, start timestamp) with an earlier one. "+
 			"That pair is the transaction record's address, so the second transaction's "+
 			"decision would be refused as already made and it would adopt the first's fate. "+
 			"The fix is the IDENTITY -- a transaction id in the record key, or the TSO fallback "+
-			"Amendment A6 pre-authorises -- and never this assertion", c.IdentityCollisions)
+			"Amendment A6 pre-authorises -- and never this assertion", c.IdentityCollisions))
 	}
 	// A read this workload cannot parse is a read answered with another key's
 	// value. Asserted at zero, and it has never been nonzero.
 	if c.UnparseableReads != 0 {
-		t.Errorf("%d reads returned a value this workload never wrote, which means a read was "+
-			"answered from a key it did not name", c.UnparseableReads)
+		add(fmt.Sprintf("%d reads returned a value this workload never wrote, which means a read was "+
+			"answered from a key it did not name", c.UnparseableReads))
 	}
 
 	// 3. Elections must be observed CONTENDING, not merely completing. A run
 	//    where the leader is never challenged proves nothing, and a mix that
 	//    produces one is a mix that needs fixing.
 	if c.ElectionsWon == 0 {
-		t.Fatal("no election was won across the whole sweep; every client operation went unanswered " +
+		add("no election was won across the whole sweep; every client operation went unanswered " +
 			"and the linearizability checker reported green over a history of unknowns")
 	}
 	if c.SplitVotes == 0 {
-		t.Error("no split vote across the whole sweep: the schedule mix never made two nodes " +
+		add("no split vote across the whole sweep: the schedule mix never made two nodes " +
 			"campaign in the same term, so the contended path is untested")
 	}
 	if got := c.SeedsWithContention * 100 / c.Seeds; got < 10 {
-		t.Errorf("only %d%% of seeds saw contention (more than one election won, or a split vote); "+
-			"the mix is too quiet to be evidence about a consensus protocol", got)
+		add(fmt.Sprintf("only %d%% of seeds saw contention (more than one election won, or a split vote); "+
+			"the mix is too quiet to be evidence about a consensus protocol", got))
 	}
 	// A cluster that never elects anybody on a large fraction of seeds is a
 	// liveness smell that would hide safety coverage behind unanswered clients.
 	if got := c.SeedsWithNoLeader * 100 / c.Seeds; got > 20 {
-		t.Errorf("%d%% of seeds never elected a leader; those seeds check nothing", got)
+		add(fmt.Sprintf("%d%% of seeds never elected a leader; those seeds check nothing", got))
+	}
+	return out
+}
+
+// assertExitCriteria reports every failure in exitCriteriaFailures.
+func assertExitCriteria(t *testing.T, c hunt.RaftCensus) {
+	t.Helper()
+	for _, f := range exitCriteriaFailures(c) {
+		t.Error(f)
 	}
 }

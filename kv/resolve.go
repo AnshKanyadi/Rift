@@ -70,7 +70,23 @@ func (r Resolution) String() string {
 // does not, the caller routes the primary half elsewhere and comes back; the
 // decision itself is unchanged, which is what keeps a cross-range resolution from
 // being a different protocol.
-func (s *Store) ResolveLock(key []byte, l Lock, readTS hlc.Timestamp, primaryOnThisRange bool) (Resolution, hlc.Timestamp, error) {
+//
+// # It takes no key, and M63 is why that is now written down
+//
+// It used to take the locked key alongside the lock, and never read it. `M63`
+// existed to break the distinction — read the record of the KEY rather than of
+// the PRIMARY the lock names — and the distinction does not exist here: the only
+// production caller is the `OpResolveStatus` apply path, which is **addressed to
+// the primary key by construction** (D-A6-9 splits resolution into two commands
+// precisely so the deciding half lands on the primary's range), so it passes the
+// same value for both.
+//
+// So the property M63 guarded is enforced one level up, by where the command is
+// routed, which is a stronger guarantee than a runtime check inside this
+// function. The parameter and the mutant are gone together — the **second** time
+// DESIGN-A6 §25.1's third meaning has been the answer, after `M69`, which is
+// what makes it a recurring outcome rather than a curiosity.
+func (s *Store) ResolveLock(l Lock, readTS hlc.Timestamp, primaryOnThisRange bool) (Resolution, hlc.Timestamp, error) {
 	if !primaryOnThisRange {
 		// The caller must fetch the record from wherever the primary lives now.
 		// Re-routing by KEY is what makes a split harmless here: the lock names

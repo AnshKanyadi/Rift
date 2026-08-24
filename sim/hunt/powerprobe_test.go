@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/anshkanyadi/rift/sim"
@@ -94,19 +95,75 @@ func TestPowerProbe(t *testing.T) {
 	}
 
 	detected, first := 0, int64(-1)
+	var agg hunt.RaftCensus
 	for seed := uint64(0); seed < seeds; seed++ {
-		if noticed(seed, opt) {
+		bad, c := noticed(seed, opt)
+		agg = hunt.AddCensus(agg, c)
+		if bad {
 			detected++
 			if first < 0 {
 				first = int64(seed)
 			}
 		}
 	}
-	fmt.Printf("POWER detected=%d of=%d first=%d\n", detected, seeds, first)
+
+	// # The SWEEP verdict, and the class of detector the per-seed rate cannot see
+	//
+	// A per-seed rate can only measure a detector that fires on a seed. Several
+	// of the exit criteria are aggregate NON-VACUITY assertions -- *no resolver
+	// ever left a live owner alone*, *no snapshot was ever taken* -- and a
+	// mutant that makes one of them true is caught by the exit run and invisible
+	// to a rate.
+	//
+	// `M62` is exactly that: it makes every lock look expired, so `ResolveWaits`
+	// goes to zero. The class is reachable -- 50,396 waits across the exit run --
+	// and it measured `0 of 300` here, because `noticed` asked a hand-listed
+	// subset of the criteria rather than the criteria.
+	//
+	// So the probe consults `exitCriteriaFailures` over the accumulated census,
+	// which is the same list the exit run asserts, and reports what failed. The
+	// lane decides whether a failure is NEW by running this on the unmutated
+	// tree at the same seed count -- a difference, not a presence, for the reason
+	// DESIGN-A6 §16.4 records about the corpus matcher.
+	fails := exitCriteriaFailures(agg)
+	fmt.Printf("POWER detected=%d of=%d first=%d sweepfail=%d\n", detected, seeds, first, len(fails))
+	// # The census itself, so "reachable" stops being an argument
+	//
+	// A class that measures zero has two very different explanations and the
+	// numbers above cannot tell them apart: the defect happened and nothing
+	// noticed, or the defect never happened at all. `M63` was the second --
+	// it mutated a distinction the code does not make -- and the only way that
+	// was established was by reading the call sites.
+	//
+	// A census that is byte-identical to the unmutated tree's says the mutation
+	// changed nothing the harness counts, which is evidence for the second. A
+	// census that differs says the behaviour moved and no oracle spoke, which is
+	// the first and is a finding about the oracles.
+	fmt.Printf("POWER-CENSUS %+v\n", agg)
+	for _, f := range fails {
+		one := strings.Join(strings.Fields(f), " ")
+		if len(one) > 110 {
+			one = one[:110]
+		}
+		fmt.Printf("POWER-SWEEP %s\n", one)
+	}
 }
 
 // noticed reports whether the harness objected to this seed in any way.
-func noticed(seed uint64, opt hunt.RaftOptions) (bad bool) {
+// noticed reports whether the harness objected to this seed in any way, and
+// returns the seed's census so the caller can ask the exit criteria about the
+// sweep as a whole.
+//
+// # Detection here is deliberately broad
+//
+// Any oracle violation, any end-of-run violation, any harness error, any panic,
+// or a run that elected nobody. Not "the oracle I expected fired": power is
+// about whether the machinery notices, and attribution belongs to the mutant
+// lane, which already checks it per class.
+//
+// What it is NOT is the whole story, and that is what the census is for. A
+// detector that only speaks about a whole sweep cannot speak here.
+func noticed(seed uint64, opt hunt.RaftOptions) (bad bool, c hunt.RaftCensus) {
 	defer func() {
 		if recover() != nil {
 			bad = true
@@ -114,21 +171,22 @@ func noticed(seed uint64, opt hunt.RaftOptions) (bad bool) {
 	}()
 	p, err := hunt.MaterializeRaftWith(seed, opt)
 	if err != nil {
-		return true
+		return true, c
 	}
 	r, err := hunt.RunRaftWith(p, opt, nil)
 	if err != nil {
-		return true
+		return true, c
 	}
+	c = hunt.CensusOf(seed, r)
 	if r.Violated != nil || r.Census.ElectionsWon == 0 {
-		return true
+		return true, c
 	}
 	for _, rep := range r.Reports {
 		if rep.Verdict == sim.VerdictViolation {
-			return true
+			return true, c
 		}
 	}
-	return false
+	return false, c
 }
 
 var _ = plan.Plan{}

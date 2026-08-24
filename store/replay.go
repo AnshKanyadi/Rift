@@ -229,8 +229,12 @@ func applyTxnTo(s *kv.Store, b *engine.Batch, c TxnCommand, desc RangeDescriptor
 		// which is what "the TTL is expiry, not permission" means: nobody
 		// concludes the owner is dead, somebody makes it dead, through the log
 		// (DESIGN-A6 section 5).
+		// The command is addressed to the PRIMARY key, so the lock this builds
+		// names itself as its own primary. That is not a coincidence to be
+		// preserved by care -- D-A6-9 splits resolution into two commands so the
+		// deciding half lands on the primary's range, and this is that half.
 		l := kv.Lock{Primary: []byte(c.Key), StartTS: c.StartTS, Deadline: c.Deadline}
-		r, _, err := s.ResolveLock([]byte(c.Key), l, c.ExpireAt, true)
+		r, _, err := s.ResolveLock(l, c.ExpireAt, true)
 		if err != nil || r != kv.ResolveBack {
 			return
 		}

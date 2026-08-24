@@ -470,6 +470,18 @@ assertion rather than a tuned test.
 
 > **UNCAUGHT BY REPLAY EQUIVALENCE: an apply path wrong identically on every replica.**
 >
+> **Corrected at A6's close, and the correction is the entry now.** §34.3 first put a number on this
+> — `M62`, `M63` and `M66` at 0 of 300 — and the number was wrong in all three directions. `M63` was
+> not a class at all (§35.2). `M66` is unreached rather than undetected, proved by a byte-identical
+> census (§35.3). And `M62` is **reachable and undetected**: 33 census fields move, `TxnLostToResolver`
+> goes 0 → 2, and no oracle and no exit criterion speaks (§35.4). The measurement that produced the
+> original zeros was itself blind to every aggregate detector, which is the register's twenty-second
+> entry (§35.1).
+>
+> So the honest form of the gap is narrower and harder than the first statement: **for at least one
+> class the list is not merely the primary instrument, it is the only one**, and the sweep has been
+> measured not to see it.
+>
 > It is caught by the symmetric-apply mutant classes above, to the extent those classes are complete —
 > which is a claim about a list, not a proof. **The day a defect of this shape reaches BUGS.md without
 > a mutant having caught it, this record is wrong and says so**, and the response is a new class here
@@ -1603,6 +1615,32 @@ floor from those versions. In every case where the invariant can be violated, th
 record floor already binds. `spec.ClockAt` was a mechanism whose absence nothing
 could notice.
 
+### 25.1b The third meaning has now happened twice, which changes what it is
+
+`M69` was the first: the split path's own clock floor was unreachable, so the mutant that removed it
+could not be killed, and the code went with the mutant.
+
+**`M63` is the second, and it is better established.** It mutated
+`s.Txn(l.Primary, …)` into `s.Txn(key, …)` inside `ResolveLock` — read the record of the *locked key*
+rather than of the *primary the lock names*. Three facts settle it:
+
+1. `ResolveLock`'s `key` parameter was **never read** anywhere in the function.
+2. Its only production call site is the `OpResolveStatus` apply path, which passes **the same value**
+   for `key` and `l.Primary`.
+3. It does so **by construction**, not by luck: D-A6-9 splits resolution into two commands precisely
+   so the deciding half is addressed to the primary's range. The property `M63` guarded is enforced by
+   where the command is routed, one level up, which is stronger than a runtime check inside the
+   function.
+
+So the parameter and the mutant went together, and the power measurement's `0 of 300` for `M63` was
+never a statement about reachability of a defect — it was a statement about a distinction the code
+does not make.
+
+> **Twice is a pattern.** The third meaning is not a curiosity that happened once to a clock floor: a
+> mutant that cannot be killed is, often enough to expect it, a mutant aimed at a distinction the code
+> has already made structurally. The check is cheap and it is the one this project keeps skipping —
+> **before asking why a mutant survives, ask whether its two branches are ever different.**
+
 ### 25.1 A surviving mutant has three meanings, not two
 
 Amendment A2's standing rule treats a survivor as a gap in the machinery. This
@@ -2452,3 +2490,92 @@ All three declare a one-seed sweep floor and all three are covered by tests that
 measurement says what §31 said from the declaration: the header and the lane are describing two
 different measurements with one vocabulary. `M67` and `M70`'s resolution is now backed by a number
 rather than by an argument — and `M68` joins them, which §31 did not know.
+
+---
+
+## 35. The three classes that measured zero, resolved one at a time
+
+§34.3 reported `M62`, `M63` and `M66` at **0 of 300** and read it as one thing. It was three
+different things, and the instrument that produced the number was itself part of the answer.
+
+### 35.1 The instrument was broken, and that is the twenty-second vacuous-green entry
+
+`TestPowerProbe`'s `noticed()` counted a seed as detected on: a materialise error, a run error, an
+end-of-run violation, a report verdict, a panic, or no leader. That is **a hand-listed subset of the
+harness's detectors.** The exit run asserts forty-six criteria over the census — *no snapshot was
+ever taken*, *no resolver ever left a live owner alone*, *the inconclusive rate is under thirty per
+mille* — and the probe consulted none of them.
+
+> **The power lane could not measure any class whose detector is an aggregate assertion rather than a
+> per-seed verdict, and it reported zero for those classes as though zero meant unreachable.**
+
+That is the register's **twenty-second** entry and the first one *inside the power lane* — the
+instrument whose whole job is noticing when detection drops was itself not looking everywhere.
+
+**The fix is structural, not a longer list.** `exitCriteriaFailures(census)` is now the single
+statement of the criteria; `assertExitCriteria` reports them to a test and the probe evaluates them
+over the accumulated sweep. A new criterion is covered by construction. The census the probe
+accumulates comes from `CensusOf`, extracted from `SweepRaftWith` for the same reason `AddCensus` was
+written out: two places summing one thing is a number that reads low.
+
+The probe now prints `sweepfail=N` and the failing criteria, and a patch may declare
+`power-detector: sweep`. **A sweep failure counts only if the unmutated tree at the same seed count
+does not have it** — a difference, not a presence, which is §16.4's lesson applied before it could
+cost anything.
+
+### 35.2 `M63` was never a class: the distinction does not exist
+
+Settled by reading, not by sweeping. `ResolveLock`'s `key` parameter was **never read**; its only
+production caller passes the same value for `key` and `l.Primary`; and it does so **by construction**,
+because D-A6-9 splits resolution into two commands so the deciding half is addressed to the primary's
+range. §25.1's third meaning, for the second time. Parameter and mutant deleted together.
+
+### 35.3 `M66` is UNREACHED, and the census proves it rather than arguing it
+
+Applied to the tree, `M66` changes **nothing the harness counts**: 40 seeds, and every field of the
+census byte-identical to the unmutated run.
+
+The decisive field is `ForeignLocksKept`. It increments exactly when a commit or a rollback finds
+somebody else's lock and leaves it alone, `M66` removes that check **from the commit path only**, and
+the count is unchanged — so across 40 seeds **`CommitInto` never once met a foreign lock**. The
+condition the defect needs is not rare in that sweep; it does not occur.
+
+That is `M47`'s disposition and the envelope refusal's: prove the mix cannot produce the condition,
+then build the lane that does. `TestALateCommitDoesNotOrphanTheNextTransactionsVersion` is that lane,
+and the interleaving it forces needs no fault beyond a **duplicate delivery**, which the simulator
+already models and which a resolver rolling a transaction forward produces on its own: T1 commits, T2
+prewrites the key legitimately, and a duplicate of T1's commit takes T2's lock. The lane asserts
+invariant 7's predicate over the resulting state and dies under the mutant in **one second**, against
+the twenty-three hours its old covering test would have cost.
+
+### 35.4 `M62` is REACHABLE AND UNDETECTED, and that is the finding
+
+The census is the evidence in the other direction: **33 of the census's fields move**, and the one
+that names the defect is `TxnLostToResolver` going **0 → 2** — live coordinators losing their
+transactions to a resolver that had no right to kill them. The schedule diverges downstream:
+snapshots, splits, collections, uncertainty restarts all shift.
+
+And **nothing says anything**. `detected=0 of 300`, `0 of 100`, `sweepfail=0` at 100 seeds. (At 30
+seeds the inconclusive-rate criterion did cross its threshold — one inconclusive in thirty is 33 per
+mille — which was small-sample noise and not a detection; the 100-seed run is what settles it. A
+threshold that fires on sample size is a threshold that will fire on nothing, and it is worth knowing
+that this one does that at thirty seeds.)
+
+> **This is §13.4's surrendered property, realised.** A resolver that kills live transactions produces
+> only states the correct code can also produce, because aborting a transaction is a legal outcome. So
+> every client-facing oracle is blind by construction — not by omission — and the only thing standing
+> between the repository and this defect is a unit test in `kv/`.
+
+**The list is therefore not sufficient in the sense §13.4 hoped.** The claim was that the
+symmetric-apply classes are covered by a list of mutants *and* that the sweep would eventually see
+them; the second half is now measured false for this class.
+
+**The detector it needs, stated so that building it is a decision.**
+
+> **`resolution-only-breaks-expired-locks`** — for every resolve the ledger recorded, if the verdict
+> declared the owner dead, the resolver's `ExpireAt` must be strictly above the lock's `Deadline`.
+
+Both values are already carried in the command — they are carried precisely so every replica compares
+the same two numbers (D-A6-10) — so the oracle reads two recorded fields and needs no state at all. It
+is not built here for the reason invariant 7 was not built as `M66`'s remedy: it lands as its own
+decision, with its own induction, and A6 is signed on the checkers it was signed with.

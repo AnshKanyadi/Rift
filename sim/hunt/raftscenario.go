@@ -1752,109 +1752,126 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 			return c, fmt.Errorf("seed %d: %w", seed, err)
 		}
 
-		if uint64(r.Census.Terms) > c.Terms {
-			c.Terms = uint64(r.Census.Terms)
-		}
-		c.SnapshotsTaken += r.SnapshotsTaken
-		c.SnapshotsApplied += r.SnapshotsApplied
-		c.TransfersAsked += r.TransfersAsked
-		c.ConfProposed += r.ConfProposed
-		c.ConfRefused += r.ConfRefused
-		c.LagRefused += r.LagRefused
-		c.ConfRecoveries += r.ConfRecoveries
-		c.ConfCrossChecks += r.ConfCrossChecks
-		c.SplitsProposed += r.SplitsProposed
-		c.SplitsApplied += r.SplitsApplied
-		c.StaleEpochRefusals += r.StaleEpochRefusals
-		c.OutOfExtentRefusals += r.OutOfExtentRefusals
-		c.MovesOrdered += r.MovesOrdered
-		c.MovesCompleted += r.MovesCompleted
-		c.MovesRacingChurn += r.MovesRacingChurn
-		c.MovesUnattributable += r.MovesUnattributable
-		c.GCProposed += r.GCProposed
-		c.GCApplied += r.GCApplied
-		c.VersionsCollected += r.VersionsCollected
-		c.MVCCReadsRefused += r.MVCCReadsRefused
-		c.MVCCWritesRefused += r.MVCCWritesRefused
-		c.EnvelopeRefusals += r.EnvelopeRefusals
-		c.TxnStarted += r.TxnStarted
-		c.TxnCommitted += r.TxnCommitted
-		c.TxnAbandoned += r.TxnAbandoned
-		c.TxnAborted += r.TxnAborted
-		c.TxnLostToResolver += r.TxnLostToResolver
-		c.TxnReads += r.TxnReads
-		c.ReaderResolves += r.ReaderResolves
-		c.UncertaintyRestarts += r.UncertaintyRestarts
-		c.LedgerRestarts += r.LedgerRestarts
-		c.TxnReadsRefused += r.TxnReadsRefused
-		c.AuditsStarted += r.AuditsStarted
-		c.AuditsComplete += r.AuditsComplete
-		c.AuditsLocked += r.AuditsLocked
-		c.AuditsUncertain += r.AuditsUncertain
-		c.UnparseableReads += r.UnparseableReads
-		c.WriteConflicts += r.WriteConflicts
-		c.PrewriteBlocked += r.PrewriteBlocked
-		c.ReadMarks += r.ReadMarks
-		c.ReadConflicts += r.ReadConflicts
-		c.TxnRaceLost += r.TxnRaceLost
-		c.ResolveWaits += r.ResolveWaits
-		c.ResolveAlreadyDecided += r.ResolveAlreadyDecided
-		c.ResolveDeclaredDead += r.ResolveDeclaredDead
-		c.ResolveNoLock += r.ResolveNoLock
-		c.AuditsRetried += r.AuditsRetried
-		c.IdentityCollisions += r.IdentityCollisions
-		c.ForeignLocksKept += r.ForeignLocksKept
-		c.SnapshotsCompared += r.SnapshotsCompared
-		c.SecondPassReads += r.SecondPassReads
-		c.ForeignTagStarts += r.ForeignTagStarts
-		c.StaleRestarts += r.StaleRestarts
-		c.StaleIncarnation += r.StaleIncarnation
-		c.ResolveWaited += r.ResolveWaited
-		c.ResolvedForward += r.ResolvedForward
-		c.ResolvedBack += r.ResolvedBack
-		c.RollForwards += r.RollForwards
-		c.RollBacks += r.RollBacks
-		c.ReadsBlocked += r.ReadsBlocked
-		c.SnapshotReads += r.SnapshotReads
-		if r.Ranges > c.Ranges {
-			c.Ranges = r.Ranges
-		}
-		c.ElectionsStart += r.Census.ElectionsStart
-		c.ElectionsWon += r.Census.ElectionsWon
-		c.SplitVotes += r.Census.SplitVotes
-		if r.Census.ElectionsWon == 0 {
-			c.SeedsWithNoLeader++
-		}
-		if r.Census.ElectionsWon > 1 || r.Census.SplitVotes > 0 {
-			c.SeedsWithContention++
-		}
+		c = AddCensus(c, CensusOf(seed, r))
+	}
+	return c, nil
+}
 
-		if r.Violated != nil {
+// CensusOf is one seed's contribution to a census.
+//
+// # Why it is a function and not a block inside the sweep
+//
+// Because two things need it and one of them was silently making do without.
+// `SweepRaftWith` folds a seed into a running total; `TestPowerProbe` needs the
+// same total so it can ask the exit criteria whether the SWEEP was noticed, and
+// the version that did not have this asked a hand-listed subset of the criteria
+// instead. A counter added to one place and not the other is a number that reads
+// low, which is the shape this file already refuses to trust (see AddCensus).
+func CensusOf(seed uint64, r RaftResult) RaftCensus {
+	var c RaftCensus
+	c.Seeds = 1
+	if uint64(r.Census.Terms) > c.Terms {
+		c.Terms = uint64(r.Census.Terms)
+	}
+	c.SnapshotsTaken += r.SnapshotsTaken
+	c.SnapshotsApplied += r.SnapshotsApplied
+	c.TransfersAsked += r.TransfersAsked
+	c.ConfProposed += r.ConfProposed
+	c.ConfRefused += r.ConfRefused
+	c.LagRefused += r.LagRefused
+	c.ConfRecoveries += r.ConfRecoveries
+	c.ConfCrossChecks += r.ConfCrossChecks
+	c.SplitsProposed += r.SplitsProposed
+	c.SplitsApplied += r.SplitsApplied
+	c.StaleEpochRefusals += r.StaleEpochRefusals
+	c.OutOfExtentRefusals += r.OutOfExtentRefusals
+	c.MovesOrdered += r.MovesOrdered
+	c.MovesCompleted += r.MovesCompleted
+	c.MovesRacingChurn += r.MovesRacingChurn
+	c.MovesUnattributable += r.MovesUnattributable
+	c.GCProposed += r.GCProposed
+	c.GCApplied += r.GCApplied
+	c.VersionsCollected += r.VersionsCollected
+	c.MVCCReadsRefused += r.MVCCReadsRefused
+	c.MVCCWritesRefused += r.MVCCWritesRefused
+	c.EnvelopeRefusals += r.EnvelopeRefusals
+	c.TxnStarted += r.TxnStarted
+	c.TxnCommitted += r.TxnCommitted
+	c.TxnAbandoned += r.TxnAbandoned
+	c.TxnAborted += r.TxnAborted
+	c.TxnLostToResolver += r.TxnLostToResolver
+	c.TxnReads += r.TxnReads
+	c.ReaderResolves += r.ReaderResolves
+	c.UncertaintyRestarts += r.UncertaintyRestarts
+	c.LedgerRestarts += r.LedgerRestarts
+	c.TxnReadsRefused += r.TxnReadsRefused
+	c.AuditsStarted += r.AuditsStarted
+	c.AuditsComplete += r.AuditsComplete
+	c.AuditsLocked += r.AuditsLocked
+	c.AuditsUncertain += r.AuditsUncertain
+	c.UnparseableReads += r.UnparseableReads
+	c.WriteConflicts += r.WriteConflicts
+	c.PrewriteBlocked += r.PrewriteBlocked
+	c.ReadMarks += r.ReadMarks
+	c.ReadConflicts += r.ReadConflicts
+	c.TxnRaceLost += r.TxnRaceLost
+	c.ResolveWaits += r.ResolveWaits
+	c.ResolveAlreadyDecided += r.ResolveAlreadyDecided
+	c.ResolveDeclaredDead += r.ResolveDeclaredDead
+	c.ResolveNoLock += r.ResolveNoLock
+	c.AuditsRetried += r.AuditsRetried
+	c.IdentityCollisions += r.IdentityCollisions
+	c.ForeignLocksKept += r.ForeignLocksKept
+	c.SnapshotsCompared += r.SnapshotsCompared
+	c.SecondPassReads += r.SecondPassReads
+	c.ForeignTagStarts += r.ForeignTagStarts
+	c.StaleRestarts += r.StaleRestarts
+	c.StaleIncarnation += r.StaleIncarnation
+	c.ResolveWaited += r.ResolveWaited
+	c.ResolvedForward += r.ResolvedForward
+	c.ResolvedBack += r.ResolvedBack
+	c.RollForwards += r.RollForwards
+	c.RollBacks += r.RollBacks
+	c.ReadsBlocked += r.ReadsBlocked
+	c.SnapshotReads += r.SnapshotReads
+	if r.Ranges > c.Ranges {
+		c.Ranges = r.Ranges
+	}
+	c.ElectionsStart += r.Census.ElectionsStart
+	c.ElectionsWon += r.Census.ElectionsWon
+	c.SplitVotes += r.Census.SplitVotes
+	if r.Census.ElectionsWon == 0 {
+		c.SeedsWithNoLeader++
+	}
+	if r.Census.ElectionsWon > 1 || r.Census.SplitVotes > 0 {
+		c.SeedsWithContention++
+	}
+
+	if r.Violated != nil {
+		c.Violations++
+		if !c.FoundAViolation {
+			c.FoundAViolation, c.FirstViolation = true, seed
+		}
+	}
+	for _, rep := range r.Reports {
+		switch rep.Verdict {
+		case sim.VerdictPass:
+			c.Pass++
+		case sim.VerdictViolation:
 			c.Violations++
 			if !c.FoundAViolation {
 				c.FoundAViolation, c.FirstViolation = true, seed
 			}
-		}
-		for _, rep := range r.Reports {
-			switch rep.Verdict {
-			case sim.VerdictPass:
-				c.Pass++
-			case sim.VerdictViolation:
-				c.Violations++
-				if !c.FoundAViolation {
-					c.FoundAViolation, c.FirstViolation = true, seed
-				}
-			case sim.VerdictInconclusive:
-				c.Inconclusive++
-				if len(c.InconclusiveCauses) < 10 {
-					c.InconclusiveCauses = append(c.InconclusiveCauses,
-						fmt.Sprintf("seed %d: %s", seed, rep.Detail))
-				}
-			case sim.VerdictUnset:
+		case sim.VerdictInconclusive:
+			c.Inconclusive++
+			if len(c.InconclusiveCauses) < 10 {
+				c.InconclusiveCauses = append(c.InconclusiveCauses,
+					fmt.Sprintf("seed %d: %s", seed, rep.Detail))
 			}
+		case sim.VerdictUnset:
 		}
 	}
-	return c, nil
+	return c
 }
 
 // AddCensus folds one census into another, for the sharded exit run.

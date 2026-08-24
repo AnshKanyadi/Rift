@@ -117,10 +117,31 @@ measure_one() {
     printf 'ROT\t\n' > "$out"; rm -rf "$work"; return 0
   fi
   probe=$(cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
-    $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER ' || true)
+    $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER' || true)
   rm -rf "$work"
-  if [ -z "$probe" ]; then printf 'ERROR\t\n' > "$out"; return 0; fi
-  printf 'OK\t%s\n' "$probe" > "$out"
+  rate=$(printf '%s\n' "$probe" | grep '^POWER ' || true)
+  if [ -z "$rate" ]; then printf 'ERROR\t\n' > "$out"; return 0; fi
+  printf 'OK\t%s\n' "$rate" > "$out"
+  # The sweep failures, one per line, so the report can diff them against the
+  # unmutated tree's. A PRESENCE is not a detection -- DESIGN-A6 §16.4 is the
+  # record of what believing one costs -- so only a failure the baseline does not
+  # have counts.
+  printf '%s\n' "$probe" | grep '^POWER-SWEEP ' | sed 's/^POWER-SWEEP //' >> "$out" || true
+}
+
+# baseline_sweep prints the unmutated tree's sweep failures for one (seeds, cfg),
+# computed once and cached. Most classes share a shape, so this is a handful of
+# runs rather than one per class.
+baseline_sweep() {
+  bseeds=$1; bcfg=$2
+  cache="$scratch/baseline-$bseeds-$bcfg.sweep"
+  if [ ! -f "$cache" ]; then
+    POWER_SEEDS="$bseeds" POWER_CONFIG="$bcfg" \
+      $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 \
+      | grep '^POWER-SWEEP ' | sed 's/^POWER-SWEEP //' > "$cache" || true
+    [ -f "$cache" ] || : > "$cache"
+  fi
+  cat "$cache"
 }
 
 # Phase one, when POWER_JOBS > 1: every measurable patch runs concurrently,
@@ -154,6 +175,8 @@ for patch in "$PATCHDIR"/*.patch; do
   ceiling=$(sed -n 's/^# power-ceiling: *//p' "$patch")
   cfg=$(sed -n 's/^# power-config: *//p' "$patch")
   [ -n "$cfg" ] || cfg=current
+  detector=$(sed -n 's/^# power-detector: *//p' "$patch")
+  [ -n "$detector" ] || detector=rate
 
   if [ -n "$na" ]; then
     optout=$((optout + 1))
@@ -165,7 +188,11 @@ for patch in "$PATCHDIR"/*.patch; do
   # unmeasurable until somebody guessed its numbers.
   if [ "$MEASURE" = yes ]; then
     [ -n "$seeds" ] || { printf '   UNCOVERED %s declares no power-seeds.\n' "$id"; failed=$((failed + 1)); continue; }
-  elif [ -z "$seeds" ] || [ -z "$floor" ] || [ -z "$ceiling" ]; then
+  elif [ "$detector" = sweep ] && [ -z "$seeds" ]; then
+    printf '   UNCOVERED %s declares a sweep detector and no power-seeds.\n' "$id"
+    failed=$((failed + 1))
+    continue
+  elif [ "$detector" != sweep ] && { [ -z "$seeds" ] || [ -z "$floor" ] || [ -z "$ceiling" ]; }; then
     printf '   UNCOVERED %s declares no power expectation.\n' "$id"
     printf '             Every mutant class carries a rate floor AND a seeds-to-detection ceiling,\n'
     printf '             or an explicit opt-out with a reason. Saying nothing is how thirty-one\n'
@@ -210,9 +237,42 @@ for patch in "$PATCHDIR"/*.patch; do
   covered=$((covered + 1))
 
   if [ "$MEASURE" = yes ]; then
-    printf '   measure  %-44s %s of %s (%s) first=%s\n' "$id" "$got" "$seeds" "$cfg" "$first"
+    sweepn=$(echo "$out" | sed -n 's/.*sweepfail=\([0-9]*\).*/\1/p')
+    printf '   measure  %-44s %s of %s (%s) first=%s sweepfail=%s\n' \
+      "$id" "$got" "$seeds" "$cfg" "$first" "${sweepn:-0}"
+    if [ "${sweepn:-0}" != 0 ]; then
+      tail -n +2 "$scratch/$id.result" 2>/dev/null | sed 's/^/              sweep: /'
+    fi
     continue
   fi
+  # # A class whose detector is an AGGREGATE assertion has no per-seed rate
+  #
+  # `M62` makes every lock look expired. Nothing about that is visible on a
+  # single seed -- a transaction aborted by a competitor is a legal outcome --
+  # and it is caught by the exit criteria over the whole sweep. A rate floor
+  # cannot express that, and the version of this lane that only had rates
+  # reported `0 of 300` and read it as "undetectable".
+  #
+  # So a patch may declare `power-detector: sweep`, and what is required is a
+  # sweep failure the UNMUTATED tree does not have at the same seed count and
+  # config. A difference, not a presence.
+  if [ "$detector" = sweep ]; then
+    baseline_sweep "$seeds" "$cfg" | sort > "$scratch/$id.base"
+    tail -n +2 "$scratch/$id.result" 2>/dev/null | sort > "$scratch/$id.swept"
+    newfail=$(comm -13 "$scratch/$id.base" "$scratch/$id.swept" | head -1)
+    if [ -z "$newfail" ]; then
+      printf '   BLIND    %-44s no exit criterion failed that the unmutated tree does not also fail\n' "$id"
+      printf '            (%s seeds, %s). The class declares a SWEEP detector and the sweep did not\n' "$seeds" "$cfg"
+      printf '            notice, so either the detector is not the one named or the class is out of\n'
+      printf '            reach of this seed count.\n'
+      failed=$((failed + 1))
+    else
+      printf '   sweep    %-44s noticed by an exit criterion the baseline passes (%s, %s):\n' "$id" "$seeds" "$cfg"
+      printf '              %s\n' "$newfail"
+    fi
+    continue
+  fi
+
   bad=no
   if [ "$got" -lt "$floor" ]; then
     printf '   DROPPED  %-44s rate %s of %s, floor %s (%s)\n' "$id" "$got" "$seeds" "$floor" "$cfg"
