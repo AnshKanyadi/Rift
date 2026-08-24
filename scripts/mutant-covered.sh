@@ -16,12 +16,55 @@
 # # The check
 #
 # Go's own coverage answers it directly and without annotation: run the covering
-# test on the UNMUTATED tree with coverage on, and require the lines the patch
-# touches to be covered. A test that goes around the path leaves them at zero.
+# test on the UNMUTATED tree with coverage on, and require the FIRST LINE OF EACH
+# CONTIGUOUS DELETED-OR-REPLACED RUN to be covered. A test that goes around the
+# path leaves it at zero.
 #
 # It cannot be satisfied by claiming an entry point, because coverage is produced
 # by execution rather than by assertion. That is what makes it mechanical rather
 # than remembered.
+#
+# # Why the FIRST line and not every line, which is what it used to be
+#
+# The first version required every deleted line to be covered, and its first
+# complete run produced four DEAD verdicts of which zero were true findings
+# (DESIGN-A6 §36). In all four the mutation's entry point was covered, every
+# executable line of the mutated region was covered, and the only uncovered lines
+# were ones no test can cover:
+#
+#   M15  sim/oracle.go:279     `}`  -- the block's closing brace
+#   M55  kv/store.go:217       `}`  -- the block's closing brace
+#   M29  raft/raft.go:2543-45  a panic's message, inside an assertion body
+#   M60  kv/txn.go:204-205     `return err` from an engine read, and its brace
+#
+# A closing brace is not a statement: Go's profile records blocks as
+# `file:startLine.col,endLine.col count` and the block ends at its last
+# STATEMENT, so the `}` belongs to no span and reads uncovered forever. Every
+# patch that deletes a block deletes one, so under the old rule every such patch
+# was a candidate false positive. An assertion body only runs when the assertion
+# FAILS -- M29 removes a panic that fires when state machine safety breaks, so
+# the lane's own printed advice was asking for a covering test that violates
+# state machine safety. An error branch only runs when the engine errors.
+#
+# Three more patches had already been narrowed BY HAND the same day to get past
+# exactly this shape -- M72, and M65 and M66 after re-pointing, uncovered lines
+# `return err` and its brace -- each narrowing a workaround for a defect nobody
+# had named yet. Seven instances of one shape is a rule, not seven coincidences.
+#
+# So the rule is the faithful mechanisation of this lane's own sentence, *the
+# line has to run at all*, where "the line" is the point at which the mutation
+# takes effect. **A hunk whose first line never runs is a hunk the mutation
+# cannot reach**, and that is precisely the failure this lane was built for: a
+# test that calls the guarded function inline never executes the call site, so
+# the hunk's first line is uncovered.
+#
+# This is a narrowing of what is DEMANDED and not of what is DETECTED, and the
+# two checks that establish that were run before it landed:
+#
+#   1. The original induction -- a reconstruction of the seedClockAtLeast-inline
+#      mistake against M70 -- still reports DEAD under it.
+#   2. The full lane was run under both rules and every verdict that moved was
+#      read one at a time. DESIGN-A6 §36 carries the table.
 #
 # # The lines come from APPLYING the patch, not from reading its header
 #
@@ -54,6 +97,38 @@
 # Coverage instrumentation costs roughly 2x on top, which the budget absorbs. If
 # one day it does not, the lane says which test ran out at a number somebody
 # chose, instead of dying at a default nobody did.
+#
+# # And the LANE has a budget too, not just each test in it
+#
+# `TEST_TIMEOUT` bounds one covering test. Nothing bounded the lane: sixty
+# mutants each entitled to an hour is a lane whose worst case is sixty hours, and
+# a lane with no stated cost is a lane that quietly stops being run -- which is
+# §37's third cost of having no remote, arriving from the inside.
+#
+# So `COVER_BUDGET` is the whole lane's wall clock, in seconds, taken from a
+# measurement rather than guessed, on the same discipline as `race`'s 900s
+# against a measured 191s. The lane checks it between batches, so an overrun is
+# bounded by one batch rather than by one test.
+#
+# **It fails and says what it did not check.** A budget that silently truncated
+# would turn "56 checked, 0 dead" into a sentence about a subset nobody named,
+# which is the vacuous-green shape this whole lane exists to refuse.
+#
+# # And what the measurement actually said, which is worse than expected
+#
+# At `COVER_JOBS=6` under A6's shape the lane spent **89 minutes reaching 3 of
+# its 11 batches**, and two of those three contained a covering test that ran out
+# the whole 3600s per-test timeout. The cost driver is not the number of mutants:
+# it is that several covering tests sweep **500 seeds** (`persist-before-reply`)
+# or 1,500 (`leader-completeness`), and a seed costs ~5s at A6's shape and twice
+# that under coverage instrumentation.
+#
+# So the budget below is not a target the lane comfortably meets. It bounds the
+# pathological case -- every batch running out its per-test timeout is 11 hours --
+# and it makes the cost a number somebody chose. **If the lane hits it, the fix is
+# the per-test cost and not the budget**: re-point the 500-seed covering tests at
+# cheap ones, which is exactly what was done for `M65` and `M66` when their
+# covering test turned out to be the exit run (DESIGN-A6 section 25.3c).
 set -eu
 
 GO=${GO:-go}
@@ -61,10 +136,22 @@ ONLY=${1:-}
 ROOT=$(pwd)
 TEST_TIMEOUT=${TEST_TIMEOUT:-3600s}
 
+# The lane's own budget, in seconds. Six hours: the worst case at COVER_JOBS=6 is
+# 11 batches x 3600s = 11 hours, and the measured lower bound is 89 minutes for
+# the first three batches. See the header for why this is a bound rather than a
+# target.
+COVER_BUDGET=${COVER_BUDGET:-21600}
+started=$(date +%s)
+
+# overbudget reports whether the lane has spent its wall clock.
+overbudget() {
+  [ $(( $(date +%s) - started )) -gt "$COVER_BUDGET" ]
+}
+
 printf '\n  mutant coverage: every covering test executes the line its mutant changes\n'
 printf '  ----------------------------------------------------------------\n'
 
-fail=0; checked=0; skipped=0
+fail=0; checked=0; skipped=0; unchecked=0; budgetblown=
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
@@ -106,10 +193,13 @@ cover_one() {
   lines=$(python3 -c '
 import sys, difflib
 a=open(sys.argv[1]).readlines(); b=open(sys.argv[2]).readlines()
-out=[]
+gone=set()
 for tag,i1,i2,_,_ in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes():
-    if tag in ("delete","replace"): out.extend(range(i1+1,i2+1))
-print(" ".join(map(str,out)))' "$work/orig" "$work/$target")
+    if tag in ("delete","replace"): gone.update(range(i1+1,i2+1))
+# The FIRST line of each contiguous deleted-or-replaced run: the point at which
+# the mutation takes effect. See the header for why the interior lines are not
+# askable.
+print(" ".join(str(n) for n in sorted(gone) if n-1 not in gone))' "$work/orig" "$work/$target")
   if [ -z "$lines" ]; then printf 'SKIP\n' > "$out"; return 0; fi
   prof="$tmp/$name.cov"
   if ! $GO test -count=1 -timeout "$TEST_TIMEOUT" -run "^${test_name}\$" \
@@ -137,9 +227,21 @@ if [ "$JOBS" -gt 1 ]; then
   for patch in sim/mutants/*.patch; do
     name=$(basename "$patch" .patch)
     [ -z "$ONLY" ] || [ "$ONLY" = "$name" ] || continue
+    : > "$tmp/$name.launched"
     cover_one "$patch" "$name" "$tmp/$name.result" &
     running=$((running + 1))
-    if [ "$running" -ge "$JOBS" ]; then wait; running=0; fi
+    if [ "$running" -ge "$JOBS" ]; then
+      wait; running=0
+      if overbudget; then
+        printf '   BUDGET   the lane has spent %ss of its %ss and stopped.\n' \
+          "$(( $(date +%s) - started ))" "$COVER_BUDGET"
+        printf '            Everything after %s is UNCHECKED. This is a failure, not a\n' "$name"
+        printf '            partial pass: a lane that truncates quietly reports a subset\n'
+        printf '            nobody named as though it were the whole list.\n'
+        budgetblown=$name
+        break
+      fi
+    fi
   done
   wait
 fi
@@ -183,6 +285,13 @@ report_one() {
 for patch in sim/mutants/*.patch; do
   name=$(basename "$patch" .patch)
   [ -z "$ONLY" ] || [ "$ONLY" = "$name" ] || continue
+  if [ "$JOBS" -le 1 ] && overbudget; then
+    printf '   BUDGET   the lane has spent %ss of its %ss and stopped at %s.\n' \
+      "$(( $(date +%s) - started ))" "$COVER_BUDGET" "$name"
+    printf '            Everything from here on is UNCHECKED, which is a failure.\n'
+    budgetblown=$name
+    break
+  fi
 
   test_name=$(sed -n 's/^# covering-test:[[:space:]]*//p' "$patch" | head -1)
   pkg=$(sed -n 's/^# package:[[:space:]]*//p' "$patch" | head -1)
@@ -192,6 +301,13 @@ for patch in sim/mutants/*.patch; do
     skipped=$((skipped + 1)); continue
   fi
   if [ "$JOBS" -gt 1 ]; then
+    # A patch the budget stopped us reaching is UNCHECKED, and saying so is the
+    # whole point: reporting it as an ERROR would blame the patch for a decision
+    # the budget made.
+    if [ ! -f "$tmp/$name.launched" ]; then
+      printf '   UNCHECK  %-44s not reached: the lane ran out of budget\n' "$name"
+      unchecked=$((unchecked + 1)); continue
+    fi
     # The work was done above; this loop only reports it, in patch order.
     status=$(cut -f1 "$tmp/$name.result" 2>/dev/null || echo ERROR)
     case "$status" in
@@ -225,10 +341,13 @@ for patch in sim/mutants/*.patch; do
   lines=$(python3 -c '
 import sys, difflib
 a=open(sys.argv[1]).readlines(); b=open(sys.argv[2]).readlines()
-out=[]
+gone=set()
 for tag,i1,i2,_,_ in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes():
-    if tag in ("delete","replace"): out.extend(range(i1+1,i2+1))
-print(" ".join(map(str,out)))' "$work/orig" "$work/$target")
+    if tag in ("delete","replace"): gone.update(range(i1+1,i2+1))
+# The FIRST line of each contiguous deleted-or-replaced run: the point at which
+# the mutation takes effect. See the header for why the interior lines are not
+# askable.
+print(" ".join(str(n) for n in sorted(gone) if n-1 not in gone))' "$work/orig" "$work/$target")
 
   if [ -z "$lines" ]; then
     skipped=$((skipped + 1)); continue   # addition-only: no original line to cover
@@ -261,5 +380,11 @@ print(",".join(map(str,sorted(want-cov))))' "$prof" "$target" $lines)
 done
 
 printf '  ----------------------------------------------------------------\n'
-printf '   %d checked, %d skipped, %d dead\n\n' "$checked" "$skipped" "$fail"
+printf '   %d checked, %d skipped, %d unchecked, %d dead, %ss of %ss budget\n' \
+  "$checked" "$skipped" "$unchecked" "$fail" "$(( $(date +%s) - started ))" "$COVER_BUDGET"
+if [ -n "$budgetblown" ]; then
+  printf '   OVER BUDGET: stopped at %s. The verdicts above are a SUBSET.\n\n' "$budgetblown"
+  exit 1
+fi
+printf '\n'
 [ "$fail" -eq 0 ] || exit 1

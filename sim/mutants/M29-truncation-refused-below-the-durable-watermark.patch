@@ -4,23 +4,23 @@
 # expect: killed
 # power-seeds: 300
 # power-floor: 8
-# power-ceiling: 10
-# power-measured: 21 of 300, first at seed 1, under current at commit A5-close; was 23 of 300, first at seed 1, at commit 6e716d5+A5-open
-# mutates: the in-raft state machine safety assertion is weakened back to the false invariant it once held -- that no truncation may reach at or below the DURABLE watermark. Raft guarantees no such thing: a follower deletes a conflicting entry and everything after it, routinely from disk. The node kills itself on a correct protocol step
+# power-ceiling: 24
+# power-measured: 21 of 300, first at seed 1, under current at commit A5-close; was 23 of 300 first at seed 1 under the same shape at A4-close
+# mutates: truncation refuses to discard entries below the DURABLE watermark instead of below the COMMIT index. Raft section 5.3 has a follower delete a conflicting entry and everything after it, and those entries are routinely already on disk -- so a persisted suffix being overwritten is the protocol working, and only a COMMITTED entry may never be overwritten. The mutant asserts the stronger, false thing, and panics on legitimate truncations
+# note: the patch replaces ONE LINE -- the condition -- and deliberately leaves the panic's message alone.
+# It used to rewrite the message too, and that was a mistake with a mechanical cost: the message rewrite
+# made the hunk TWO contiguous runs rather than one, and the second run's first line is inside the panic's
+# argument list, which only evaluates when state machine safety has already failed. `make mutant-covered`
+# therefore reported this class DEAD forever, asking for a covering test that breaks the invariant
+# (DESIGN-A6 sections 36, 36.4). The message is cosmetic to the class; the condition IS the class.
 --- a/raft/raft.go
 +++ b/raft/raft.go
-@@ -1142,11 +1142,10 @@
+@@ -1142,7 +1142,7 @@
  	// The false assertion sat here unreachable for as long as tail.persisted
  	// never moved -- which is the same defect twice: a claim nothing exercised,
  	// guarding a watermark nothing advanced.
 -	if r.commitIndex >= i {
 +	if r.tail.persisted >= i {
  		panic(fmt.Sprintf(
--			"raft: node %d truncated to %d with commit index %d; an entry this node was told "+
--				"was committed is being overwritten, which is state machine safety failing",
--			r.id, i, r.commitIndex))
-+			"raft: node %d truncated to %d with %d already acknowledged durable; the driver "+
-+				"acknowledged an entry that later vanished", r.id, i, r.tail.persisted))
- 	}
- 
- 	r.log = r.log[:i-1]
+ 			"raft: node %d truncated to %d with commit index %d; an entry this node was told "+
+ 				"was committed is being overwritten, which is state machine safety failing",
