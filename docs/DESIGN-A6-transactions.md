@@ -2704,6 +2704,25 @@ On its first run it found **six** inconsistent declarations: the three from §31
 to run is a lane whose claims are unchecked, and the cheap invariant over its inputs is worth more
 than the expensive measurement nobody schedules.*
 
+### 37.2b A mutant changes the cost of the sweep, so the probe's timeout is sized for the wrong tree
+
+`M60` reported `ERROR -- the probe produced no measurement` twice, at its declared 300 seeds. It is
+not a rare class: measured at 60 seeds it is **60 of 60, first at seed 0.** Every seed notices.
+
+What it is, is **expensive**. `M60` leaves every commit's lock standing, so locks pile up, readers
+block on them, resolvers churn, and a seed costs about **2.5× the clean tree's**. Three hundred seeds
+ran for two hours without finishing, against a probe timeout of 3600s chosen from the clean tree's
+per-seed cost.
+
+> **A probe timeout sized on the unmutated tree is not sized for the mutated one, and the classes it
+> will time out on are the ones whose defect makes the system do more work — which is a large share of
+> what a mutant is.**
+
+The declaration now says 60 seeds, and the reason is in it: a class detected on every seed does not
+need three hundred of them. That is the second time this phase that A6's cost has turned a lane
+parameter into a design question, and it is a different mechanism from §34.1's — there the seeds were
+too many for the budget, here the *seconds per seed* were.
+
 ### 37.3 What the classes measured, now that the probe can see them
 
 | class | before | after |
@@ -2712,6 +2731,7 @@ than the expensive measurement nobody schedules.*
 | `M68-restart-timestamp-derived-not-minted` | `1 of 1` declared, `0 of 60` measured | **`power-detector: sweep`, detected**: 52 foreign-tag starts and 65 stale restarts at 60 seeds |
 | `M70-ingest-does-not-seed-the-clock` | `1 of 1` declared, `0 of 1` measured | **a real floor**: 1 of 200, first at seed 55, floored at detected-at-all with a ceiling of 150 |
 | `M61`, `M64` | `PENDING` | 232 of 300 and 300 of 300, both first at seed 0 |
+| `M60-commit-does-not-clear-its-lock` | `PENDING`, and `ERROR` twice | **60 of 60, first at seed 0** — measured once the seed count came down to one the probe can reach (§37.2b) |
 
 **`M68` is the one that pays for the probe fix.** It could not be measured at all until three counters
 the exit run had been collecting — `ForeignTagStarts`, `StaleRestarts`, `StaleIncarnation` — were

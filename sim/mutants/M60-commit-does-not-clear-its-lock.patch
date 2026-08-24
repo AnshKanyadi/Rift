@@ -2,10 +2,11 @@
 # covering-test: TestPercolatorInvariantsReportNothing
 # package: ./sim/hunt/
 # expect: killed
-# power-seeds: 300
-# power-floor: 1
-# power-ceiling: 30
-# power-measured: PENDING
+# power-seeds: 60
+# power-floor: 30
+# power-ceiling: 10
+# power-measured: 60 of 60, first at seed 0, under current at A6's close -- every seed notices, which is what a commit that leaves its lock standing should look like to an invariant that says a key is never both committed and locked.
+#   The seed count came DOWN from 300, and the reason is a finding rather than a convenience: this mutant makes seeds about 2.5x more expensive (locks pile up, readers block, resolvers churn), so 300 seeds ran for two hours without finishing and the probe's 3600s timeout reported ERROR twice. A probe timeout sized on the CLEAN tree's per-seed cost is not sized for a mutated one, and a class detected on every seed does not need three hundred of them.
 # mutates: a commit writes its write record and leaves the lock standing. SYMMETRIC: every replica does it, so the cluster agrees with itself, replays consistently, and satisfies snapshot isolation and bank conservation -- and every reader of that key blocks forever on a lock whose transaction is already decided. This is the class the removed model used to cover and the reason the invariants oracle exists
 --- a/kv/txn.go
 +++ b/kv/txn.go

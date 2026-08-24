@@ -106,7 +106,13 @@ Two bundles (`BUG-003`, `BUG-008`) satisfied the first and not the second, and w
 anyway. The criterion is one line in that script and it was ruled on at A5, so it is Ansh's to
 change, not something to tighten quietly.
 
-**BUG-015's bundle is red and blocked, not retired.** DESIGN-A6 §16.2. `M46` detects at 1 in 3,000
+**BUG-015's bundle is blocked on a RULING now, not on a run.** The power measurement ran and **could
+not measure `M46` at all**: the probe's timeout is 3600s and `M46` declares 3,000 seeds, which at A6's
+8.4 s/seed is seven hours. So the instrument the entry was waiting on cannot execute. The options are
+a raised probe timeout for one class, a sharded probe (the mechanism now exists — `POWER_FROM`), or
+accepting that a 1-in-3,000 class cannot carry a bundle at this cost. DESIGN-A6 §34.1.
+
+*(The original entry, for the reasoning:)* **BUG-015's bundle is red and blocked, not retired.** DESIGN-A6 §16.2. `M46` detects at 1 in 3,000
 and its finding is a refusal rather than an oracle verdict; a 300-seed search is a quarter of one
 expected detection and proves nothing. The seed comes from the mutant power measurement under A6's
 shape. Until then `make corpus-reproduces` is red on exactly this entry, and that is the correct
@@ -127,11 +133,14 @@ than a mutant class (which muddies Amendment A2's per-class count); a bundle car
 this reason recorded. **What is not on the list is loosening the corpus matcher** — §16.4 is the record
 of what that costs.
 
-**Three entries have no bundle at all, which BUGS.md rule 2 requires.** `BUG-017` (A5), `BUG-020` (the
-harness defect) and `BUG-021` (above). The first two were noticed while creating bundles for BUG-022
-through BUG-024 and are not fixed in the same pass, because a bundle is only worth having if it
-reproduces and finding a seed that does is the expensive half. The rule says every entry, and three
-entries do not have one.
+**~~BUG-021 has no bundle.~~ DISCHARGED** — recorded at seed 69 against the `M67`+`M68` pair, found by
+a sharded search over `[0,3200)`. And the premise it was blocked on was wrong: `M68` alone reproduces
+it on all eight first-detecting seeds and `M67` alone on none, so the mutant-set mechanism landed for
+this entry is not required by it. DESIGN-A6 §38.1.
+
+**Two entries still have no bundle, which BUGS.md rule 2 requires.** `BUG-017` (A5) and `BUG-020` (the
+harness defect). A bundle is only worth having if it reproduces, and finding a seed that does is the
+expensive half.
 
 **Corpus regeneration is a search, not a re-record.** DESIGN-A6 §16.3. Whenever the workload moves
 traces, `TestEveryStoredBundleReplays` fails and the fix is to regenerate — but a schedule that no
@@ -164,14 +173,23 @@ across a commit, `make test` unrunnable since A1, and two lanes in `make ci` abs
 workflow. `make lane-coverage` keeps the list honest; nothing inside the repository can make the list
 *run*. Every phase that ships without a remote should expect to find another lane that stopped.
 
-**`read-answers-match-the-history` is designed and not built.** DESIGN-A6 §28.5b. BUG-022 was found
-by a conservation law, which reports one integer and cannot attribute; the oracle that would have
-named it in one sentence is *the value a read was given equals the value the final recovered state
-says was visible at its timestamp*. It needs `RecoveredVersion` to carry its value and three stated
-exclusions. **It was not added in BUG-022's commit because the exit run was in flight at that commit**,
-and an oracle the exit run did not run with makes "25,000 seeds clean" a claim about a different set
-of checkers than the repository has. Building it means re-running the exit run; that is a ruling, not
-a chore.
+**`M62` is reachable and undetected, and it is the only one of the three that is.** DESIGN-A6 §35.4.
+Applied to the tree it moves **33 census fields** and `TxnLostToResolver` goes 0 → 2 — live
+coordinators losing transactions to a resolver with no right to kill them — and no oracle and no exit
+criterion says anything, because aborting a transaction is a legal outcome. §13.4's ledger entry is
+corrected to rest on this rather than on the original three-way zero. **The detector it needs is
+stated and not built**: *for every resolve that declared an owner dead, the resolver's `ExpireAt` must
+be strictly above the lock's `Deadline`* — both values are already carried in the command, so the
+oracle reads two recorded fields and needs no state.
+
+**`make mutant-covered` is believed to be wrong, and the case is written.** DESIGN-A6 §36. All four of
+its DEAD verdicts are false positives of two kinds — a closing brace, which Go's coverage attributes
+to no span, and an assertion or error body, which only executes when the thing being asserted fails.
+The proposed rule is *the FIRST line of each contiguous deleted run must be covered*, and it is **not
+landed**: it needs the original induction re-run under it and a full-lane diff of every verdict that
+moves.
+
+**`read-answers-match-the-history` is designed and not built.** DESIGN-A6 §28.5b.
 
 **The read mark is a function of the log only until A7.** DESIGN-A6 §28.6, DESIGN-A7 D-A7-5.
 BUG-022's guard consults a record staged by the apply path for every `OpTxnGet`, and that is a
