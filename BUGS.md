@@ -1577,7 +1577,7 @@ under the widened definition, and fails there anyway. BUG-021 contributed nothin
 | **Reproduce (seed)** | seed **10303**: the audit at `1600000005203989560.0` sums to **+10** |
 | **First violating step** | the read answer that arrived after the restart, carrying the abandoned snapshot's timestamp; the guard now counts it as `StaleIncarnation`, and seed 10303 produces exactly **one** |
 | **Invariant that caught it** | bank conservation over client-observed history |
-| **Mutant class** | none existed — added `M73-a-read-answer-lands-in-any-incarnation`, in the same commit as this entry |
+| **Mutant class** | none existed — added `M73-a-read-answer-lands-in-any-incarnation`, in the same commit as this entry. **It measured `0 of 200` and took an opt-out saying an honest floor would need a 24-hour sweep. That was the broken probe**: the class's detector is an aggregate assertion, not a per-seed verdict, and the fixed probe finds it at 60 seeds — `StaleIncarnation` goes 9–15 per fifty seeds to a flat zero, on the criterion *no read answer from a pre-restart incarnation was ever rejected* (DESIGN-A6 §42) |
 | **Fix commit** | a read answer is rejected unless `cmd.ReadTS == t.startTS` |
 
 **Symptom.** *"the audit at 1600000005203989560.0 read all 8 accounts and they sum to +10, not 0."*

@@ -2,7 +2,9 @@
 # covering-test: TestBUG024
 # package: ./sim/hunt/
 # expect: killed
-# power: n/a -- 0 of 200 measured under current at BUG-022's fix. The class IS reachable: seed 10303 is the seed that found it, and TestBUG024 pins it. But its rate is below what a 200-seed sweep can measure and the first detecting seed known is 10303, so a floor honest enough to assert would need a 24-hour sweep. Killed by TestBUG024, which names the seed directly rather than searching for it
+# power-seeds: 60
+# power-detector: sweep
+# power-measured: sweep-detected at 60 seeds, on one criterion: no read answer from a pre-restart incarnation was ever rejected across the whole sweep. StaleIncarnation goes 9 to 15 per fifty seeds on the clean tree to a FLAT ZERO under the mutant, in every shard measured. Confirmed at 200 seeds in four shards of fifty -- the criterion fires in all four and the clean tree has sweepfail=0 in all four -- and at 60 in two shards of thirty, where the only other failure is the inconclusive-rate threshold that BOTH trees cross at that sample size and which therefore is not a difference. The PER-SEED rate is 0 of 200 before and after, which is why it carried an opt-out saying a floor would need a 24-hour sweep: its detector is an aggregate non-vacuity assertion and a rate cannot see one. This class was FOUND by the power probe's structural fix (DESIGN-A6 sections 35.1, 42) -- the second class the fix found after M68, and the first that had already been written off. TestBUG024 still names seed 10303 directly and is still the covering test
 # mutates: BUG-024. A transaction that restarts above an uncertain commit takes a new start timestamp and re-reads; the reads it issued BEFORE the restart are still in flight and their answers arrive afterwards carrying the old snapshot. Without this check they land in the new snapshot's read set and the transfer computes its writes from two different instants, which conserves nothing -- in whichever direction the two snapshots happen to differ
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go
