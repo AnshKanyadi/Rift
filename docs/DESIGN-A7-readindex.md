@@ -357,6 +357,47 @@ defect was in the column the table has no room for.
 
 ---
 
+## 4.2 The measurement D-A7-5 turns on, taken before the ruling
+
+Open question 9 asked for the share of read volume that is transactional, *"measurable now from A6's
+own census without writing any A7 code"*. It is, and here it is — from the signed 25,000-seed exit run
+at `611d0b9`:
+
+| | reads | how it is obtained |
+|---|---|---|
+| transactional (`TxnReads`) | **7,489,025** | counted |
+| second-pass stability probes | 2,517,352 | counted |
+| audit reads | ~3.2 M started plus 1,910,147 re-asked | derived from 399,951 audits × 8 accounts |
+| **plain (`k*`) reads** | **≈ 875,490** | **derived**: `SnapshotReads` is 350,196 and the workload takes a remembered timestamp on 400 per mille of plain reads, so the total is `350196 / 0.4` |
+
+> **Plain reads are about one in ten.** Scoping read index to the plain path addresses roughly 10% of
+> the read volume this sweep produces.
+
+**Two honest qualifications, because the number is load-bearing.** The plain figure is *derived* from
+a configured ratio rather than counted — a counted figure needs one census field and should be added
+before the number is quoted in BENCHMARKS.md. And the mix is **this workload's**: the bank's audits
+read every account on every pass and the second-pass probe reads them again, which is harness traffic
+answering a checker rather than a client. A production mix is not this mix, and the 10% bounds the
+sweep rather than the design.
+
+### What it does to recommendation 8
+
+It does not overturn it, and it changes what the recommendation is *for*.
+
+**A stays the recommendation for what A7 can ship**, because B's price is unchanged: a leaseholder-local
+timestamp cache needs a leadership-handover argument, and the two known ways to make one are a lease's
+clock bound — struck, and the whole reason read index is A7's mechanism — or a new replicated
+low-water-mark protocol, which is a phase.
+
+**But A7's value proposition moves**, and it should move in the doc rather than in the benchmark.
+Under A, read index is **the correctness mechanism CLAUDE.md's fourth headline claim names**
+("linearizable reads via read index"), delivered on the path where linearizable reads live — and its
+*throughput* win is on one read in ten. BENCHMARKS.md must say that in those terms. A phase sold as a
+latency win that removes 10% of the read traffic would be the kind of claim this project takes apart
+in other people's work.
+
+---
+
 ## 5. The oracle **[open]**
 
 CLAUDE.md's exit criterion: *"staleness checker green under partitions and leader churn."*
@@ -475,10 +516,12 @@ Every one of these is a decision I am not making.
    either a lease's clock bound or a new replicated low-water-mark protocol — a phase, not a
    decision.*
 9. **D-A7-5 — is the share of read volume that is transactional measured before this is ruled on?**
-   *Recommendation: yes, and it is measurable now from A6's own census without writing any A7 code. If
-   the plain path is a small fraction of reads, recommendation 8 buys little and the case for the
-   timestamp cache becomes a real one rather than a deferral. A recommendation that a measurement
-   could overturn should say so before the measurement, not after.*
+   *Taken, §4.2: plain reads are about **one in ten** of this sweep's read volume. It does not
+   overturn recommendation 8 — B's handover argument is still a phase and not a decision — and it does
+   change what A7 is FOR: read index becomes the correctness mechanism CLAUDE.md's fourth headline
+   claim names, with a throughput win on 10% of reads, and BENCHMARKS.md has to say so in those terms.
+   Two qualifications: the plain figure is derived from a configured ratio rather than counted, and
+   the mix is this workload's, whose audits are a checker reading rather than a client.*
 10. **§4.1 — does the assumption audit become standing practice, alongside the fact table?**
     *Recommendation: yes. The fact table came out clean at A6 and the phase's most expensive defect
     was an assumption in the protocol's own correctness argument that the table has no column for.
