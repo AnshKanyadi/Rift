@@ -36,8 +36,8 @@ weakened to pass; sessions never mark a phase complete; a fact is recorded, neve
 | 1 | **BUG-022 root-caused and fixed** | **done** — the read mark, `M71`/`M72`, BUGS.md, bundle |
 | 2 | BUG-024 mutant-classed and in BUGS.md | **done** — `M73`, entry, bundle |
 | 3 | The exit run re-run clean, 25,000 seeds | **done** — 0 violations, 97 inconclusive, at `611d0b9` |
-| 4 | The three solo measurements | **two done, one owed** — see §4 |
-| 5 | `BUG-015`'s bundle | **still red and still blocked** on the power measurement |
+| 4 | The three solo measurements | **all three done** — see §4 |
+| 5 | `BUG-015`'s bundle | **still red**, and now blocked on a ruling rather than on a run — §4 |
 | 6 | `make mutant-covered` finished at full scale | **done** — 56 checked, 8 failures, §5 |
 
 ---
@@ -87,26 +87,43 @@ found about three. The throttle is not what puts M53 out of reach at A6 — the 
 that is A2's M34 lesson again. What the two numbers do *not* establish is that the throttle costs
 nothing; they establish that 200 seeds cannot tell.
 
-**2. Mutant power floors and ceilings — RUNNING.** `POWER_JOBS=3 sh scripts/power-mutants.sh
---measure`. The critical path is `M46` at 3,000 seeds under `current`: about **7 hours**, which no
-amount of parallelism shortens because one class is one sequential sweep. `POWER_JOBS` was added for
-this and is verified to produce byte-identical output to a sequential run.
+**2. Mutant power floors and ceilings — DONE.** `POWER_JOBS=3 sh scripts/power-mutants.sh --measure`,
+about 6h40m. **42 classes measured, 17 opted out with a reason, 3 that could not be measured at all.**
+DESIGN-A6 §34.
 
-**Its result names three things**: `BUG-015`'s replacement bundle seed, whether `M67` becomes an
-explicit opt-out and `M70` gets a real floor (§31 — the lane has been RED on both since they landed),
-and every floor in the tree, which is still A5's.
+- **`M46`, `M19` and `M60` produced no measurement.** The probe runs under a **3600s** timeout and
+  `M46` declares 3,000 seeds — **seven hours** at 8.4 s/seed. **`BUG-015` is still blocked, and now for
+  a precise reason: the instrument it was waiting on cannot run.** Raise the probe timeout, shard the
+  probe like the exit run, or accept that a 1-in-3,000 class cannot carry a bundle at this cost. A
+  ruling, not a chore.
+- **`M62`, `M63` and `M66` measured `0 of 300`.** Three A6 classes with **zero sweep detection**. All
+  three are killed by precise unit tests, so they are covered — but the sweep does not see them, and
+  that is §13.4's symmetric-apply gap with a number under it at last.
+- **`M34` reproduced its recorded figure exactly** (2 of 3000, first 2065). **`M65` measured 2 of 300,
+  first at seed 9** — the same seed the independent bundle search found `BUG-019` reproducing at.
+- **`M67`, `M68`, `M70` measured `0 of 1`**, confirming §31 from the other side: their declarations
+  describe a unit test and the lane measures a sweep.
+- **`M71` and `M72` both measure 1 of 200, first at seed 148**, and now carry that as their floor and
+  ceiling. **`M73` measured 0 of 200** and takes the opt-out with its number written down.
 
-**3. The race-lane curve at 50/100/200 — OWED, and the arithmetic says it cannot run as written.**
-`race-curve.sh` runs the whole `sim/hunt` package under `-race` at each count. At A5's 0.36 s/seed the
-lane was 90 minutes; at A6's measured **8.4 s/seed** the same shape is roughly **35 hours at the
-*smallest* point**. That is a prediction from the per-seed cost, **not a measurement**, and it must be
-run before it is believed — but if it holds, the question CARRY-FORWARD asked ("which of `RACE_SEEDS`
-or `RACE_TIMEOUT` moves") has a third answer: **neither; the lane has to be restructured**, because a
-90-minute budget and a 50-seed floor cannot both survive a 23× per-seed cost increase.
+**3. The race-lane curve — MEASURED, and the answer is a third one.** At `RAFT_SEEDS=50` against the
+lane's own 5400s budget, `sim/hunt` **did not finish** — timed out at 90 minutes with
+`TestRestartsMintTheirOwnStartTimestamp` alone at 36m20s — and reported **zero data races**. That is
+about **43 s/seed instrumented** against 8.4 uninstrumented, so the package at 50 seeds is on the
+order of nine hours and 200 is four times that.
 
-**And its premise is still broken**, which §21.4 records: CARRY-FORWARD says the lane "has found real
-races twice" and there is no record behind it. The measurement cannot be *"is what 200 catches still
-caught at 50"* because the two catches cannot be identified.
+So *"does `RACE_SEEDS` move or does `RACE_TIMEOUT` move"* has a third answer: **neither is enough
+alone.** DESIGN-A6 §33 recommends splitting the lane — the structural half per push, the seed search
+nightly and sharded — rather than shrinking the seed count until it fits, because the recorded scope
+(*"a few hundred simulated seeds answer this lane's question"*) was a ruling.
+
+Measured while the power sweep had three cores, so the wall times are **upper bounds**. That is the
+honest direction: a run that had fitted under contention would have been conclusive; one that did not
+is not. The 43 s/seed ratio is the durable part.
+
+**And its premise is still broken** (§21.4): the lane's claimed two historical race findings have no
+record behind them, so *"is what 200 catches still caught at 50"* cannot be asked. With zero races at
+50, the lane now rests on its **structural** argument alone.
 
 ---
 
