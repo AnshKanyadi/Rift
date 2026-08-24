@@ -1436,7 +1436,7 @@ type RecoveredVersion struct {
 // RecoveredAt is supplied by the harness: every range's final state.
 type RecoveredAt func() []RecoveredState
 
-// PercolatorInvariants: four properties of the FINAL state, each checkable by
+// PercolatorInvariants: seven properties of the FINAL state, each checkable by
 // inspection.
 //
 // # Why this exists, and why it is not the model that was removed
@@ -1645,6 +1645,72 @@ func (o *PercolatorInvariants) Check() *sim.Violation {
 						"hold the same dead byte",
 					st.Range, v.Key, v.At)}
 			}
+		}
+
+		// 7. Over the TRANSACTIONAL keyspace, every data version is accounted
+		//    for: a lock names it, or a write record does.
+		//
+		// # The domain is the invariant, not a filter on it
+		//
+		// The premise is *a version exists because a prewrite wrote it, and a
+		// prewrite writes the version and the lock in one batch*. That premise
+		// is what the invariant is derived from, and it is true of exactly the
+		// keys the transaction protocol touches. The plain workload writes
+		// versions through `PutInto` with no lock and no write record — A5's
+		// non-transactional MVCC, correct, and a different thing — so those keys
+		// are **outside the domain rather than exceptions inside it**.
+		//
+		// The domain is stated the only way the recovered state can state it: a
+		// key carrying at least one write record or lock has been through the
+		// protocol; a key with neither has never been prewritten.
+		//
+		// The unscoped form was written first and fired on seed 0, on `k06` —
+		// the invariant finding its own domain before anybody believed it.
+		//
+		// # What it says, and why nothing else can say it
+		//
+		// So at every instant a version has a lock naming its start timestamp,
+		// or the transaction was decided and a write record names it — a commit
+		// record or a rollback tombstone. **A version with neither is an
+		// orphan**: nobody will resolve it, because there is no lock; nobody
+		// will read it, because there is no commit record.
+		//
+		// Every replica holds the same orphan, so replay equivalence agrees with
+		// itself. No client observed the write, so porcupine has nothing to
+		// compare. The bank notices only if the missing money lands inside an
+		// audit's window. That is the shape §13.4 surrendered when the
+		// independent model was retired, and it is the second time a structural
+		// property has been the answer to it rather than a tuned test —
+		// invariant 5 was the first.
+		//
+		// # What the domain costs
+		//
+		// An orphan on a key that has never carried a write record or a lock is
+		// outside it. That is a real limit and it is stated rather than argued
+		// away: the invariant covers versions the protocol produced, and a key
+		// the protocol never touched has no version it produced.
+		accounted := map[string]bool{}
+		transactional := map[string]bool{}
+		for _, w := range st.Writes {
+			accounted[w.Key+"@"+w.StartTS.String()] = true
+			transactional[w.Key] = true
+		}
+		for _, lk := range st.Locks {
+			accounted[lk.Key+"@"+lk.StartTS.String()] = true
+			transactional[lk.Key] = true
+		}
+		for _, v := range st.Versions {
+			if !transactional[v.Key] || accounted[v.Key+"@"+v.At.String()] {
+				continue
+			}
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d: %q has a version at %s with NO lock naming it and NO write record "+
+					"naming it. A prewrite writes the version and the lock in one batch, so a "+
+					"version with neither is an orphan: nobody will resolve it because there is "+
+					"no lock, and nobody will read it because there is no commit record. Every "+
+					"replica holds the same orphan, so nothing that compares replicas can see it "+
+					"(BUG-019's class)",
+				st.Range, v.Key, v.At)}
 		}
 
 		// 3. At most one version at or below the collection mark, per key.
