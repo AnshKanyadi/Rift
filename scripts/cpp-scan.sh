@@ -1,214 +1,279 @@
 #!/usr/bin/env sh
-# The Env surface scan: the 1:1:1 correspondence, asserted rather than reviewed.
+# The scope scan: the half of Amendment A5 the Env seam cannot see.
 #
-# DESIGN-B1 section 3.2. The NVI shape makes it impossible for an IMPLEMENTATION
-# to expose an entry point that skips fault interception. It does not make it
-# impossible for an edit to env.h itself -- adding a public virtual to a base
-# class there would bypass, and that is exactly what mutant BM17 does. This is
-# the check that catches it.
+# B1-D11, ruled. Env catches syscalls by construction. It is structurally blind
+# to a `double`, a `rand()`, a `steady_clock::now()`, a pointer-keyed container,
+# or a raw ::open that never went through it -- and the answer to "how do you
+# know a steady_clock::now() didn't sneak in?" must be a BUILD FAILURE, not a
+# promise.
 #
-# THE CORRESPONDENCE: one public non-virtual wrapper, one private Do* pure
-# virtual, one CallSite enumerator, one entry in AllCallSites(). Four artifacts,
-# not three: the census iterates AllCallSites(), so a list that had drifted from
-# the enum would make the census report on a different set than exists -- which
-# is the failure the census is FOR, arriving inside the census itself. Not "the
-# same number of each" -- the same NAMES. A count equality can be satisfied by two unrelated drifts cancelling;
-# set equality cannot, and it costs nothing more to check.
+# FOUR PARTS, each able to fail on its own:
 #
-# THE GRAMMAR IS STRICT AND THAT IS THE POINT. Every line inside the marked
-# region must be classifiable. A line this scanner does not understand is a LANE
-# FAILURE, never a line it skips. A parser that silently ignores what it cannot
-# classify reports the health of its own grammar and calls it coverage -- which
-# is the failure Track A spent five checklist steps inside this month.
+#   1. the Env surface correspondence            scripts/cpp-scan-surface.sh
+#   2. the A5 rules and the PosixEnv thinness rules
+#   3. CPP-HATCHES.txt reconciled against what part 2 actually found
+#   4. CLAIMS.txt -- the sentences this lane is what makes true
 #
-# SCOPE, AND WHAT IS NOT HERE YET. At B1.2a this scan carries only the Env
-# surface rules. B1.4 extends this same script with the rest of DESIGN-B1
-# section 9.4: the A5 bans (<random>, <chrono>, float/double, getenv, raw
-# open/write/fsync/rename outside env/posix/, `default:` over a closed enum),
-# CPP-HATCHES.txt as the checked-in registry with the unused-entry rule, and the
-# blind-patch set that makes this lane fail its own mutation test. Until then,
-# this lane's green means the Env surface is intact and nothing more.
+# EVERY OPT-OUT CARRIES A SPLIT LABEL, FROM THE START. An entry in
+# CPP-HATCHES.txt is either
 #
-# usage: cpp-scan.sh [engine-cpp-dir]
+#     covered-by: <instrument>     the class this rule catches is caught there
+#                                  instead, by something that actually exists
+#
+#     unreachable: <detector> | <argument>
+#                                  the thing cannot occur here, <detector> would
+#                                  have seen it, and no other detector sees the
+#                                  class more often
+#
+# and never a free-text reason. Track A spent a full cycle refuting seventeen
+# single-labelled opt-outs and found three of them wrong, one a first-tier
+# safety defect. A single label lets "this is fine" and "nothing checks this"
+# wear the same clothes; the split makes the second one say so.
+#
+# usage: cpp-scan.sh [--fixtures] [engine-cpp-dir]
 set -eu
 
+FIXTURES=no
+ONE_FIXTURE=""
+if [ "${1:-}" = "--fixtures" ]; then
+  FIXTURES=yes; shift
+  # A single fixture may be named, which is what lets the blind lane declare a
+  # patch against a fixture that does NOT cover it and require it to survive.
+  # Without per-fixture granularity every blinding kills every canary.
+  case "${1:-}" in
+    *.fixture) ONE_FIXTURE=$1; shift ;;
+  esac
+fi
 dir=${1:-engine-cpp}
-env_h=$dir/src/env/env.h
-call_site_h=$dir/src/env/call_site.h
-call_site_cc=$dir/src/env/call_site.cc
+here=$(dirname "$0")
+SCAN_RULES_AWK=$here/cpp-scan-rules.awk
+HATCHES=$dir/CPP-HATCHES.txt
+CLAIMS=$dir/CLAIMS.txt
 
-for f in "$env_h" "$call_site_h" "$call_site_cc"; do
-  if [ ! -f "$f" ]; then
-    printf '\n  FAIL  missing %s\n\n' "$f"; exit 1
+errs=0
+note() { printf '   BAD   %s\n' "$1"; errs=$((errs + 1)); }
+
+RULE_IDS=""
+
+# rule <id> <scope: any|nonposix> <regex> <why>
+rule() {
+  RULE_IDS="$RULE_IDS $1"
+  k=$(echo "$1" | tr - _)
+  eval "RULE_SCOPE_$k=\$2"
+  eval "RULE_PAT_$k=\$3"
+  eval "RULE_WHY_$k=\$4"
+}
+
+# THE RULE TABLE IS THE POINT OF THIS SHAPE. One rule per line between the
+# markers, so a blind patch that deletes one line blinds exactly one rule and
+# nothing else -- which is what lets this lane fail its own mutation test
+# (scripts/cpp-scan-blind.sh, DR-27). A lane that has quietly stopped checking
+# something looks exactly like a lane with nothing to report.
+#
+# RIFT-SCAN-RULES-BEGIN
+rule A5-RANDOM  any      '<random>|[^A-Za-z_](rand|srand|random|arc4random|mt19937)[[:space:]]*\(' 'randomness in engine scope; the simulator owns the only stream'
+rule A5-CLOCK   any      '<chrono>|[^A-Za-z_](time|clock|gettimeofday|clock_gettime)[[:space:]]*\(|steady_clock|system_clock' 'a wall-clock read; the C++ analogue of clock/real.go has ZERO hatched calls'
+rule A5-FLOAT   any      '(^|[^A-Za-z_0-9])(float|double)([^A-Za-z_0-9]|$)' 'a float on a path that can reach on-disk bytes'
+rule A5-GETENV  any      '[^A-Za-z_]getenv[[:space:]]*\(' 'ambient environment; a run must be a function of its inputs'
+rule A5-STREAM  any      '<fstream>|<iostream>|[^A-Za-z_]fopen[[:space:]]*\(' 'the engine does not open files to talk about itself'
+rule A5-DEFAULT any      '(^|[[:space:]])default[[:space:]]*:' 'a default: arm buys back the exhaustiveness -Werror=switch gives for free'
+rule A5-ADDRESS any      '(map|set|unordered_map|unordered_set)[[:space:]]*<[[:space:]]*[A-Za-z_][A-Za-z0-9_:[:space:]]*\*' 'a pointer-keyed container; nothing may depend on an address (section 6.1)'
+rule A5-SYSCALL nonposix '::[[:space:]]*(open|write|read|pread|pwrite|fsync|fdatasync|rename|unlink|mkdir|rmdir|stat|lstat|fcntl|close|_exit|opendir|readdir|closedir|ftruncate|lseek)[[:space:]]*\(' 'a syscall outside env/posix/; every syscall goes through Env for the reason every clock read goes through Clock'
+# RIFT-SCAN-RULES-END
+
+# The statement cap for engine-cpp/src/env/posix, chosen against the code rather
+# than guessed. With the readdir loop moved to the seam, every function in
+# posix_env.cc is at or under 15 lines. Exactly one function in the tree exceeds
+# it -- WriteFully, at 19 -- and it is the single place in PosixEnv with real
+# logic and the single place with dedicated tests. That is the registry entry
+# earning its place rather than an accident.
+POSIX_LINE_CAP=16
+
+scan_file() {  # scan_file <file> <posix: yes|no>
+  f=$1
+  posix=$2
+  # Comments are stripped before matching. A rule that fired on the prose
+  # explaining why the rule exists is a rule nobody can document.
+  stripped=$(sed 's://.*::' "$f")
+  for id in $RULE_IDS; do
+    k=$(echo "$id" | tr - _)
+    eval "sc=\$RULE_SCOPE_$k"
+    eval "pat=\$RULE_PAT_$k"
+    if [ "$sc" = nonposix ] && [ "$posix" = yes ]; then continue; fi
+    printf '%s\n' "$stripped" | grep -E "$pat" | sed 's/^[ \t]*//; s/[ \t]*$//' |
+      while IFS= read -r text; do
+        [ -z "$text" ] || printf '%s|%s|%s\n' "$id" "$f" "$text"
+      done
+  done
+  if [ "$posix" = yes ]; then
+    awk -v CAP="$POSIX_LINE_CAP" -f "$SCAN_RULES_AWK" "$f"
   fi
-done
+}
 
-printf '\n  Env surface scan (1:1:1)\n'
+# ---------------------------------------------------------------- fixtures
+#
+# Each fixture contains exactly ONE violation and declares which rule must fire
+# on it. This is what makes a blinded rule detectable: blind the rule, the
+# fixture stops being rejected, the lane says so.
+if [ "$FIXTURES" = yes ]; then
+  fixdir=$dir/scan-fixtures
+  printf '\n  scope scan -- fixture check (each rule must still fire)\n'
+  printf '  ----------------------------------------------------------\n'
+  n=0
+  set -- "$fixdir"/*
+  [ -n "$ONE_FIXTURE" ] && set -- "$ONE_FIXTURE"
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    want=$(sed -n 's|^// RIFT_SCAN_FIXTURE  *||p' "$f" | head -1)
+    scope=$(sed -n 's|^// RIFT_SCAN_SCOPE  *||p' "$f" | head -1)
+    [ -n "$scope" ] || scope=no
+    if [ -z "$want" ]; then
+      note "$f declares no // RIFT_SCAN_FIXTURE rule"
+      continue
+    fi
+    n=$((n + 1))
+    got=$(scan_file "$f" "$scope" | cut -d'|' -f1 | sort -u | tr '\n' ' ')
+    case " $got " in
+      *" $want "*) printf '   fires   %-16s %s\n' "$want" "$(basename "$f")" ;;
+      *) note "fixture $(basename "$f") should trip $want; rules that fired: [$got]" ;;
+    esac
+  done
+  printf '  ----------------------------------------------------------\n'
+  if [ "$n" -eq 0 ]; then
+    printf '   FAIL  no fixtures found. An empty fixture check proves nothing.\n\n'
+    exit 2
+  fi
+  if [ "$errs" -ne 0 ]; then
+    printf '   FAIL  %d rule(s) no longer fire on their own fixture.\n\n' "$errs"
+    exit 1
+  fi
+  printf '   ok  %d rules still fire on their fixtures\n\n' "$n"
+  exit 0
+fi
+
+# ------------------------------------------------------------------ part 1
+"$here/cpp-scan-surface.sh" "$dir" || errs=$((errs + 1))
+
+# ------------------------------------------------------------------ part 2
+printf '  [2/4] A5 scope rules and PosixEnv thinness\n'
 printf '  ----------------------------------------------------------\n'
 
-awk '
-function bad(msg) { printf("   BAD   %s:%d  %s\n", FILENAME, FNR, msg); errs++ }
+found=$(mktemp)
+trap 'rm -f "$found" "$found.hatched" "$found.used"' EXIT INT TERM
 
-BEGIN { region = 0; access = ""; cls = ""; nbegin = 0; nend = 0; errs = 0
-        ncall = 0; nimpl = 0; nenum = 0; inenum = 0
-        nlist = 0; inlist = 0; nlbegin = 0; nlend = 0 }
+files=$(find "$dir/src" -type f \( -name '*.h' -o -name '*.cc' \) | sort)
+nfiles=$(printf '%s\n' "$files" | grep -c . || true)
+if [ "$nfiles" -eq 0 ]; then
+  note "no sources found under $dir/src -- a scan over nothing is not a scan"
+fi
+for f in $files; do
+  posix=no
+  case $f in */src/env/posix/*) posix=yes ;; esac
+  scan_file "$f" "$posix" >> "$found"
+done
 
-# ------------------------------------------------------------ call_site.h
-FILENAME ~ /call_site\.h$/ {
-  if ($0 ~ /^enum class CallSite/) { inenum = 1; next }
-  if (inenum && $0 ~ /^};/)        { inenum = 0; next }
-  if (!inenum) next
-  t = $0
-  sub(/\/\/.*/, "", t)
-  gsub(/[ \t]/, "", t)
-  if (t == "") next
-  if (t ~ /^k[A-Za-z0-9_]+,$/) {
-    name = substr(t, 1, length(t) - 1)
-    if (name in enums) bad("duplicate CallSite enumerator " name)
-    enums[name] = 1; nenum++
-    next
-  }
-  bad("unparsed line inside the CallSite enum: " $0)
-  next
-}
+nviol=$(grep -c . "$found" || true)
+printf '   files scanned  : %s\n' "$nfiles"
+printf '   rules applied  : %s\n' "$(printf '%s' "$RULE_IDS" | wc -w | tr -d ' ')"
+printf '   violations     : %s (each must be in the registry below)\n' "$nviol"
 
-# ------------------------------------------------------------ call_site.cc
-FILENAME ~ /call_site\.cc$/ {
-  if ($0 ~ /RIFT-CALL-SITE-LIST-BEGIN/) { inlist = 1; nlbegin++; next }
-  if ($0 ~ /RIFT-CALL-SITE-LIST-END/)   { inlist = 0; nlend++;   next }
-  if (!inlist) next
-  t = $0
-  sub(/\/\/.*/, "", t)
-  gsub(/[ \t]/, "", t)
-  if (t == "") next
-  if (t ~ /^CallSite::k[A-Za-z0-9_]+,$/) {
-    name = t; sub(/^CallSite::/, "", name); sub(/,$/, "", name)
-    if (name in listed) bad("duplicate entry in AllCallSites(): " name)
-    listed[name] = 1; nlist++
-    next
-  }
-  bad("unparsed line inside the AllCallSites() list: " $0)
-  next
-}
+# ------------------------------------------------------------------ part 3
+printf '  [3/4] CPP-HATCHES.txt, reconciled against what actually fired\n'
+printf '  ----------------------------------------------------------\n'
 
-# ----------------------------------------------------------------- env.h
-FILENAME ~ /env\.h$/ {
-  if ($0 ~ /RIFT-ENV-SURFACE-BEGIN/) { region = 1; nbegin++; next }
-  if ($0 ~ /RIFT-ENV-SURFACE-END/)   { region = 0; nend++;   next }
+if [ ! -f "$HATCHES" ]; then
+  note "missing $HATCHES"
+else
+  : > "$found.used"
+  nreg=0
+  while IFS= read -r line; do
+    case $line in ''|\#*) continue ;; esac
+    nreg=$((nreg + 1))
+    rid=$(printf '%s' "$line" | awk -F'|' '{print $1}' | sed 's/^ *//; s/ *$//')
+    rfile=$(printf '%s' "$line" | awk -F'|' '{print $2}' | sed 's/^ *//; s/ *$//')
+    ranchor=$(printf '%s' "$line" | awk -F'|' '{print $3}' | sed 's/^ *//; s/ *$//')
+    rlabel=$(printf '%s' "$line" | awk -F'|' '{print $4}' | sed 's/^ *//; s/ *$//')
 
-  if (!region) {
-    if ($0 ~ /^class (Env|WritableFile|SequentialFile|RandomAccessFile|Directory)[ \t]*\{/)
-      bad("surface class declared OUTSIDE the scanned region; moving a class out of the region moves it out of this check")
-    next
-  }
+    # The split label, enforced. Exactly one of two forms, both with their
+    # fields filled in.
+    case $rlabel in
+      covered-by:*)
+        inst=$(printf '%s' "$rlabel" | sed 's/^covered-by: *//')
+        if [ -z "$inst" ]; then
+          note "$rid $rfile: covered-by names no instrument"
+        else
+          instpath=$(printf '%s' "$inst" | awk '{print $1}')
+          [ -e "$instpath" ] || note "$rid $rfile: covered-by names '$instpath', which does not exist"
+        fi
+        ;;
+      unreachable:*)
+        rest=$(printf '%s' "$rlabel" | sed 's/^unreachable: *//')
+        det=$(printf '%s' "$rest" | awk -F'~' '{print $1}' | sed 's/ *$//')
+        arg=$(printf '%s' "$rest" | awk -F'~' '{print $2}' | sed 's/^ *//')
+        [ -n "$det" ] || note "$rid $rfile: unreachable names no detector"
+        [ -n "$arg" ] || note "$rid $rfile: unreachable gives no argument that no other detector sees the class more often"
+        ;;
+      *)
+        note "$rid $rfile: label must be 'covered-by: <instrument>' or 'unreachable: <detector> ~ <argument>', got '$rlabel'"
+        ;;
+    esac
 
-  t = $0
-  sub(/[ \t]+$/, "", t)
-  sub(/^[ \t]+/, "", t)
-  if (t == "") next
-  if (t ~ /^\/\//) next
+    if grep -Fq "$rid|$rfile|$ranchor" "$found"; then
+      printf '%s|%s|%s\n' "$rid" "$rfile" "$ranchor" >> "$found.used"
+    else
+      # AN UNUSED ENTRY FAILS. A drifted hatch means something is unguarded
+      # while its author believes otherwise, which is worse than no hatch at
+      # all -- the registry is read as a list of known gaps, so a stale line
+      # makes a real gap look accounted for.
+      note "$rid $rfile: registry entry matches nothing the scan found -- either the code changed and the exemption is stale, or the rule stopped firing"
+    fi
+  done < "$HATCHES"
+  printf '   registry lines : %s\n' "$nreg"
 
-  if (t ~ /^class [A-Za-z_][A-Za-z0-9_]*[ ]*\{$/) {
-    cls = t; sub(/^class /, "", cls); sub(/[ ]*\{$/, "", cls)
-    seen_class[cls] = 1
-    access = "private"          # a class defaults to private, as C++ does
-    next
-  }
-  if (t == "};") { cls = ""; access = ""; next }
-  if (t == "public:")    { access = "public";    next }
-  if (t == "protected:") { access = "protected"; next }
-  if (t == "private:")   { access = "private";   next }
+  # Every violation must be registered.
+  while IFS= read -r v; do
+    [ -z "$v" ] && continue
+    if ! grep -Fqx "$v" "$found.used"; then
+      vid=$(printf '%s' "$v" | awk -F'|' '{print $1}')
+      vf=$(printf '%s' "$v" | awk -F'|' '{print $2}')
+      vt=$(printf '%s' "$v" | awk -F'|' '{print $3}')
+      k=$(echo "$vid" | tr - _)
+      eval "why=\${RULE_WHY_$k:-}"
+      note "$vid  $vf"
+      printf '           %s\n' "$vt"
+      [ -n "$why" ] && printf '           why the rule exists: %s\n' "$why"
+      printf '           To exempt it, add a line to %s with a SPLIT LABEL.\n' "$HATCHES"
+    fi
+  done < "$found"
+fi
 
-  if (cls == "") { bad("declaration outside any class: " t); next }
+# ------------------------------------------------------------------ part 4
+printf '  [4/4] CLAIMS.txt -- the sentences this lane is what makes true\n'
+printf '  ----------------------------------------------------------\n'
+if [ ! -f "$CLAIMS" ]; then
+  note "missing $CLAIMS"
+else
+  nclaim=0
+  while IFS= read -r line; do
+    case $line in ''|\#*) continue ;; esac
+    nclaim=$((nclaim + 1))
+    cfile=$(printf '%s' "$line" | awk -F'|' '{print $1}' | sed 's/^ *//; s/ *$//')
+    ctext=$(printf '%s' "$line" | awk -F'|' '{print $2}' | sed 's/^ *//; s/ *$//')
+    if [ ! -f "$cfile" ]; then
+      note "claim names $cfile, which does not exist"
+    elif ! grep -Fq "$ctext" "$cfile"; then
+      note "claim not found verbatim in $cfile: \"$ctext\""
+    fi
+  done < "$CLAIMS"
+  printf '   claims checked : %s\n' "$nclaim"
+  if [ "$nclaim" -eq 0 ]; then
+    note "CLAIMS.txt lists nothing; a step in the epistemic-chokepoint class must name what it carries"
+  fi
+fi
 
-  # The bypass rule, checked before anything else so its message is the one
-  # that prints. This is the mutant BM17 exists to plant.
-  if (access == "public" && t ~ /virtual/ && t !~ /^virtual ~[A-Za-z_][A-Za-z0-9_]*\(\);$/) {
-    bad("PUBLIC VIRTUAL in the Env surface -- an implementation could override it and bypass fault interception entirely: " t)
-    next
-  }
-
-  if (t ~ /^virtual ~[A-Za-z_][A-Za-z0-9_]*\(\);$/) {
-    if (access != "public") bad("the destructor must be public: " t)
-    next
-  }
-
-  if (t ~ /\/\/ RIFT_ENV_CALL /) {
-    name = t; sub(/^.*\/\/ RIFT_ENV_CALL /, "", name); sub(/[ \t]*$/, "", name)
-    if (access != "public") bad("RIFT_ENV_CALL wrapper is not public: " t)
-    if (name in calls) bad("two wrappers claim CallSite " name)
-    calls[name] = 1; call_class[name] = cls; ncall++
-    next
-  }
-  if (t ~ /\/\/ RIFT_ENV_IMPL /) {
-    name = t; sub(/^.*\/\/ RIFT_ENV_IMPL /, "", name); sub(/[ \t]*$/, "", name)
-    if (access != "private") bad("RIFT_ENV_IMPL virtual is not private -- private is what stops an implementation from being called directly: " t)
-    if (t !~ /virtual /)     bad("RIFT_ENV_IMPL is not virtual: " t)
-    if (t !~ /= 0;/)         bad("RIFT_ENV_IMPL is not pure -- a default implementation is an implementation that skipped review: " t)
-    if (name in impls) bad("two implementations claim CallSite " name)
-    impls[name] = 1; impl_class[name] = cls; nimpl++
-    next
-  }
-  if (t ~ /\/\/ RIFT_ENV_CTOR/)  { if (access == "public") bad("constructor must not be public: " t); next }
-  if (t ~ /\/\/ RIFT_ENV_STATE/) { if (access != "private") bad("state must be private: " t); next }
-  if (t ~ /= delete;$/) next
-
-  bad("unparsed line -- this scanner refuses to skip what it cannot classify: " t)
-  next
-}
-
-END {
-  if (nbegin != 1 || nend != 1) {
-    printf("   BAD   env.h must contain exactly one RIFT-ENV-SURFACE-BEGIN and one -END (found %d and %d)\n", nbegin, nend)
-    errs++
-  }
-
-  split("Env WritableFile SequentialFile RandomAccessFile Directory", req, " ")
-  for (i in req) if (!(req[i] in seen_class)) {
-    printf("   BAD   surface class %s was not found inside the region\n", req[i]); errs++
-  }
-
-  for (n in calls) {
-    if (!(n in impls)) { printf("   BAD   %s has a public wrapper but no private Do* implementation\n", n); errs++ }
-    if (!(n in enums)) { printf("   BAD   %s has a public wrapper but no CallSite enumerator -- an entry point nobody can inject at or kill at\n", n); errs++ }
-    if ((n in impls) && call_class[n] != impl_class[n]) {
-      printf("   BAD   %s: wrapper is in %s but implementation is in %s\n", n, call_class[n], impl_class[n]); errs++
-    }
-  }
-  for (n in impls) {
-    if (!(n in calls)) { printf("   BAD   %s has a private Do* but no public wrapper -- unreachable through the choke point\n", n); errs++ }
-    if (!(n in enums)) { printf("   BAD   %s has a private Do* but no CallSite enumerator\n", n); errs++ }
-  }
-  for (n in enums) {
-    if (!(n in calls)) { printf("   BAD   CallSite %s has no public wrapper\n", n); errs++ }
-    if (!(n in impls)) { printf("   BAD   CallSite %s has no private Do* implementation\n", n); errs++ }
-    if (!(n in listed)) { printf("   BAD   CallSite %s is missing from AllCallSites(), so the census would never look for it\n", n); errs++ }
-  }
-  for (n in listed) {
-    if (!(n in enums)) { printf("   BAD   AllCallSites() lists %s, which is not a CallSite enumerator\n", n); errs++ }
-  }
-  if (nlbegin != 1 || nlend != 1) {
-    printf("   BAD   call_site.cc must contain exactly one RIFT-CALL-SITE-LIST-BEGIN and one -END (found %d and %d)\n", nlbegin, nlend)
-    errs++
-  }
-
-  printf("   public non-virtual wrappers : %d\n", ncall)
-  printf("   private Do* pure virtuals   : %d\n", nimpl)
-  printf("   CallSite enumerators        : %d\n", nenum)
-  printf("   AllCallSites() entries      : %d\n", nlist)
-  if (ncall != nimpl || ncall != nenum || ncall != nlist) {
-    printf("   BAD   the four counts must be equal\n"); errs++
-  }
-
-  printf("  ----------------------------------------------------------\n")
-  if (errs > 0) {
-    printf("   FAIL  %d problem(s) in the Env surface.\n\n", errs)
-    printf("  The fault surface and the kill-point set are defined by this\n")
-    printf("  correspondence. A drift in it is not a style problem: it is an Env\n")
-    printf("  call that no injector can reach, or an injector that fires at\n")
-    printf("  nothing, and neither reports itself anywhere else.\n\n")
-    exit 1
-  }
-  printf("   ok  one wrapper, one Do*, one CallSite, one list entry -- names, not counts\n\n")
-}
-' "$env_h" "$call_site_h" "$call_site_cc"
+printf '  ----------------------------------------------------------\n'
+if [ "$errs" -ne 0 ]; then
+  printf '   FAIL  %d problem(s).\n\n' "$errs"
+  exit 1
+fi
+printf '   ok  scope clean, registry exact, claims present\n\n'

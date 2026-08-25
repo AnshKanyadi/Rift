@@ -77,7 +77,32 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 3 entries.
+Counts: 4 entries.
+
+### The two general forms these entries taught
+
+Recorded here rather than only inside the entries, because the instances are
+cheap and the forms are not.
+
+**GF-1 — a lane that verifies an ABSENCE must run in a state where the thing
+could actually be present.** From HARNESS-002 and HARNESS-004. An absence
+verified in a state that could not have contained the thing is not a
+verification, it is a tautology wearing a lane's clothes. `cpp-ci` claims no
+lane touches the network; it was resting on a warm FetchContent cache rather
+than on the absence of a fetch, and the isolation it did have worked perfectly
+and had nothing to block. Track A has hit the cousin of this twice. The cold
+cache is now part of what `cpp-ci` MEANS and is asserted at both ends —
+`scripts/cpp-cold-cache.sh`, induced by `COLD-fetch-despite-isolation`.
+
+**GF-2 — a two-field assertion where both fields read the same value under the
+defect is not an assertion.** From HARNESS-003. Track A has recorded this shape
+twenty-four times; it appeared in Track B's first cycle of real code, in a
+different language and a different subsystem, written by someone who had read
+all twenty-four. That is not a coincidence and it is not about C++ or about
+ledgers: **the class is about how verification code gets written.** The reflex
+it demands is to ask, of every assertion, "what value would this read if the
+thing I am checking were broken?" — and if the answer is "the same one", the
+assertion is decoration no matter how specific it looks.
 
 ### HARNESS-001 — a mutation lane's scratch copy silently lost three files of the tree under test
 
@@ -177,3 +202,38 @@ discovered, at best, as an unexplained pass at B1.9b.
 **Fix.** The test now asserts on `promoted` directly, in both directions: a lying Sync's entry must
 read `promoted == false` with `injection == kSyncLoss`, and a clean Sync's must read `promoted == true`
 with the right byte count. A flag asserted in only one direction degenerates into a constant.
+
+**The class, not the instance.** See GF-2 above. Both fields reading zero under the defect is the same
+shape Track A has recorded twenty-four times, and it arrived in Track B's first cycle of code that does
+anything. The lesson is not about ledgers, or about C++: it is about how verification code gets
+written, and it will arrive again in B1.6's byte digest and B1.9a's oracle unless the question "what
+would this read if the subject were broken?" is asked of every assertion.
+
+### HARNESS-004 — the cold-cache check asserted the absence of something it had just deleted
+
+| field | value |
+|---|---|
+| **Found by** | inducing the gate, by hand, in the same cycle that wrote it |
+| **Phase** | B1.4 |
+| **Reproduce** | at the first draft of `scripts/cpp-cold-cache.sh`: `mkdir -p engine-cpp/build-ci && make cpp-ci` — green |
+| **Invariant that caught it** | none. The induced-failure rule caught it: the gate was written, run, and did not fire |
+| **Mutant class** | `COLD-fetch-despite-isolation` covers the *after* half; the *before* half is induced by hand, `mkdir engine-cpp/build-ci && make cpp-ci` |
+| **Fix commit** | this one |
+
+**Symptom.** The gate written to prevent HARNESS-002 recurring was created, wired, and induced — and
+the induction printed `*** GATE DID NOT FIRE ***`.
+
+**Root cause.** `cpp-ci`'s recipe ran `rm -rf $(CPP_BUILD_CI)` and *then* called the check. The check
+asserted that the build root did not exist, immediately after the lane had deleted it. It was green
+unconditionally, including in the exact state HARNESS-002 occurred in.
+
+**Why this one is worth an entry despite never being committed.** It is GF-1 recurring inside the fix
+for GF-1, written by someone who had the general form in front of them at the time. A rule you can
+state and still violate one line later is a rule that needs a mechanism, and the mechanism is the
+induced-failure discipline: the draft was indistinguishable from the fix by reading, and distinguished
+in four seconds by running.
+
+**Fix.** The check no longer removes what it checks for — *a check that removes the thing it is
+checking for is a check that cannot fail*. `cpp-ci` refuses when the build root exists and says how to
+clear it; a successful run removes its own tree at the end, so the next run is cold; a failed run
+leaves its tree for whoever has to debug it.
