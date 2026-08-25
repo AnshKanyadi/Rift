@@ -1,0 +1,19 @@
+# id: M76-read-answered-on-the-quorum-alone
+# covering-test: TestRaftExitCriteria
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 30
+# power-detector: sweep
+# power-measured: PENDING -- measured against A7's shape once read index is in the exit run
+# mutates: a read is answered as soon as its leadership quorum confirms, WITHOUT waiting for this replica's own applied index to reach the confirmed read index. That is section 1.1's SECOND condition dropped, and it is the half that gets forgotten because the hard-looking half -- talking to a quorum -- is already done. The quorum establishes a POSITION: that this leader was still leader at or after the read arrived, so nothing a newer leader committed can be missed below that index. It says nothing whatever about whether THIS node's state machine has got there yet, and answering before it has is reading your own past. Ansh, ruling on the differential oracle: 'plant it -- a mutant that answers on the quorum alone, killed by the differential oracle, since a client-visible stale read is precisely what ruling 5's fixture exists to catch'. read-index-answers-match-the-log is that fixture: it replays the range's committed prefix to the confirmed index and compares, so it sees a stale answer whether or not any client observed the write that was missed -- which per-key linearizability cannot
+--- a/store/node.go
++++ b/store/node.go
+@@ -906,7 +906,7 @@
+ func (n *Replica) serveReadyReads(at clock.Instant) {
+ 	kept := n.pendingReads[:0]
+ 	for _, q := range n.pendingReads {
+-		if q.index == 0 || n.applied < q.index {
++		if q.index == 0 {
+ 			kept = append(kept, q)
+ 			continue
+ 		}

@@ -113,7 +113,37 @@ type ReadRecord struct {
 	Value   string
 	Found   bool
 	Refused bool
-	When    clock.Instant
+
+	// AppliedAt is the index this replica's state machine had reached when it
+	// answered. Only meaningful with OffLog.
+	//
+	// It exists because the property splits in two and only one half is about
+	// agreement:
+	//
+	//	1. AppliedAt >= Index. The read WAITED. A quorum establishes a position;
+	//	   it says nothing about whether this node reached it.
+	//	2. the answer matches the log at AppliedAt. The node's state is the log's
+	//	   state, at the position the node was actually at.
+	//
+	// Comparing the answer against the log at INDEX instead is wrong in a way
+	// that took a mutant to notice: a node that has applied PAST the confirmed
+	// index may legitimately answer with a newer version, and demanding equality
+	// at Index reports that as a violation. Too-fresh is not stale, and a later
+	// state is never a linearizability failure.
+	AppliedAt raft.Index
+
+	// OffLog marks an answer served by READ INDEX rather than by a log entry
+	// (A7). For those, Index is the CONFIRMED read index rather than the
+	// position of an entry -- there is no entry -- and it is the index the
+	// answer is required to reflect.
+	//
+	// The distinction is load-bearing rather than descriptive:
+	// `mvcc-read-correctness` replays the log and answers the READ ENTRIES it
+	// finds there, so it cannot see one of these at all. A read answered off
+	// the log is invisible to every oracle that walks the log looking for it,
+	// which is precisely why A7 owes a new one.
+	OffLog bool
+	When   clock.Instant
 }
 
 // TxnRecord is one transaction the harness's coordinator issued, and what it

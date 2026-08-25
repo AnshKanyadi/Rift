@@ -515,7 +515,10 @@ func (o *PersistBeforeReply) check(rangeID uint64, l *rangeLedger) *sim.Violatio
 // step would assert an eventual property against a run caught mid-cleanup and
 // would replay every range's whole log to do it.
 func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt, facts TxnFactsAt) []sim.Oracle {
-	os, _ := AllWithRebalance(l, state, splits, extent, reads, facts)
+	// A nil ValueAtIndex leaves read-index agreement with no model, and the
+	// oracle then compares nothing rather than asserting over an expectation it
+	// does not have -- the same rule the paragraph above states for StateAt.
+	os, _, _ := AllWithRebalance(l, state, splits, extent, reads, facts, nil)
 	return os
 }
 
@@ -524,8 +527,9 @@ func All(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads Reads
 // the slice, because finding an oracle by type-asserting over a []sim.Oracle is
 // how a checker's internals become everybody's business.
 func AllWithRebalance(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf, reads ReadsAt,
-	facts TxnFactsAt) ([]sim.Oracle, *RebalanceSafety) {
+	facts TxnFactsAt, valueAt ValueAtIndex) ([]sim.Oracle, *RebalanceSafety, *ReadIndexAgreement) {
 	reb := NewRebalanceSafety(l)
+	agree := NewReadIndexAgreement(l, valueAt)
 	return []sim.Oracle{
 		NewElectionSafety(l),
 		NewLogMatching(l),
@@ -539,7 +543,12 @@ func AllWithRebalance(l *Ledger, state StateAt, splits SplitsAt, extent ExtentOf
 		NewSplitPartition(l, splits, extent),
 		NewMVCCReadCorrectness(l, reads),
 		NewTransactionAtomicity(l, facts),
-	}, reb
+		// A7's differential. A FIXTURE rather than a lane (ruling 5): it is the
+		// only instrument here that can catch a stale read no client observed,
+		// and an instrument of that description is worth nothing if it runs when
+		// somebody remembers.
+		agree,
+	}, reb, agree
 }
 
 // --- apply continuity across snapshots ---------------------------------------
@@ -1228,6 +1237,22 @@ func (o *MVCCReadCorrectness) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 	}
 
 	for _, got := range o.l.reads {
+		// # An OFF-LOG answer is not this oracle's business, and comparing one
+		// # here would manufacture violations
+		//
+		// This table is keyed by the LOG INDEX OF A READ ENTRY. A read served by
+		// read index (A7) has no entry: its Index is the CONFIRMED read index,
+		// which is an unrelated position that may well hold some other read's
+		// entry. Comparing an off-log answer for one key against the expectation
+		// recorded for a different read at that index is a false violation
+		// waiting for a coincidence, which is BUG-016's standard.
+		//
+		// They are checked by `read-index-answers-match-the-log`, which replays
+		// the committed prefix TO that index rather than looking up an entry at
+		// it.
+		if got.OffLog {
+			continue
+		}
 		exp, ok := want[got.Range][got.Index]
 		if !ok {
 			// The harness has no expectation for this position, which means the
@@ -2212,6 +2237,122 @@ func (o *ResolutionAuthority) Check() *sim.Violation {
 					"is invisible to every other checker because aborting a transaction is a legal "+
 					"outcome (M62, DESIGN-A6 §13.4)",
 				st.Range, d.StartTS, d.Key, len(tries), worst.ExpireAt, worst.Deadline)}
+		}
+	}
+	return nil
+}
+
+// ValueAtIndex is supplied by the harness: replay a range's committed log up to
+// and including `upto`, and report what `key` held at timestamp `at`.
+//
+// It is injected for `ReadsAt`'s reason and the reason is sharper again here.
+// A7's whole claim is that a read answered OFF the log still reflects everything
+// committed as of its confirmed index. If the oracle asked the node what it
+// held, it would be checking that the node agrees with itself -- and the node's
+// local state is exactly the thing under suspicion, because a deposed leader's
+// local state is where a stale read comes from.
+//
+// So the expectation comes from replaying the committed log, which is the same
+// independent execution snapshot equivalence uses, and the two answers are
+// compared.
+type ValueAtIndex func(rangeID uint64, upto raft.Index, key string, at hlc.Timestamp) (value string, found, ok bool)
+
+// ReadIndexAgreement: every read answered off the log matches what that range's
+// committed log produces at the index the read was confirmed at.
+//
+// # Why this oracle exists, and what nothing else can see
+//
+// DESIGN-A7 §5 names three properties for the read path and this is the third.
+// The first is per-key linearizability, which porcupine already checks -- and it
+// is the WEAKEST of the three, because **a stale read is only caught if some
+// client observed the write it missed.** In a quiet history nobody observed it
+// and porcupine is green over a lie.
+//
+// The second is a ledger-side bound on the index itself. This is the third: the
+// same question answered two ways, one of them not involving the node that
+// answered it.
+//
+// > **It is the only instrument in this phase that can catch a stale read no
+// > client observed**, which is why ruling 5 made it a FIXTURE rather than a
+// > lane: it runs in the sweep, not when somebody remembers.
+//
+// # What a violation means, concretely
+//
+// The node answered `v` for a key, having confirmed it could serve at index i,
+// and the committed log at index i says the key held something else. Either the
+// answer came from state that is not the log's state at i -- a deposed leader
+// reading its own past -- or the confirmed index was too low for the answer
+// given. Both are stale reads; the oracle does not need to tell them apart to
+// refuse them.
+type ReadIndexAgreement struct {
+	base
+	valueAt  ValueAtIndex
+	compared int
+}
+
+// NewReadIndexAgreement builds the oracle.
+func NewReadIndexAgreement(l *Ledger, valueAt ValueAtIndex) *ReadIndexAgreement {
+	return &ReadIndexAgreement{base: base{l: l, name: "read-index-answers-match-the-log"}, valueAt: valueAt}
+}
+
+// Compared is how many off-log answers this oracle actually checked. It is the
+// non-vacuity witness: a sweep that served no reads off the log exercises none
+// of this, and a green over zero comparisons is this register's commonest entry.
+func (o *ReadIndexAgreement) Compared() int { return o.compared }
+
+// Interested returns false: this is a property of recorded answers against the
+// committed log, evaluated once.
+func (o *ReadIndexAgreement) Interested(sim.Kind) bool { return false }
+
+// OnStep is never called: see Interested.
+func (o *ReadIndexAgreement) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+// Check compares every off-log answer against the log it claimed to reflect.
+func (o *ReadIndexAgreement) Check() *sim.Violation {
+	for _, r := range o.l.Reads() {
+		if !r.OffLog || r.Refused {
+			continue
+		}
+		if o.valueAt == nil {
+			return nil
+		}
+		// # HALF ONE: the read waited.
+		//
+		// The quorum established a POSITION. This is the only thing that says
+		// the node reached it, and it is the half `M76` removes.
+		if r.AppliedAt < r.Index {
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d: node %d answered a read of %q OFF THE LOG having confirmed it could "+
+					"serve at index %d, while its own state machine had only applied to %d. The "+
+					"confirming quorum establishes a POSITION -- that this leader was still leader "+
+					"at or after the read arrived -- and says nothing whatever about whether THIS "+
+					"node has got there. Answering before it has is reading your own past",
+				r.Range, r.Node, r.Key, r.Index, r.AppliedAt)}
+		}
+		// # HALF TWO: the node's state is the log's state, AT THE POSITION THE
+		// # NODE WAS ACTUALLY AT.
+		//
+		// Not at Index. A node that has applied past the confirmed index may
+		// legitimately return a newer version, and demanding equality at Index
+		// would report that as a violation -- a false accusation of correct
+		// behaviour, which is BUG-016's standard.
+		want, found, ok := o.valueAt(r.Range, r.AppliedAt, r.Key, r.At)
+		if !ok {
+			// The ledger did not witness a committed prefix for this range, so
+			// there is nothing to compare against. Reporting a violation here
+			// would accuse a correct run of the harness's own gap, which is
+			// BUG-016's lesson.
+			continue
+		}
+		o.compared++
+		if found != r.Found || (found && want != r.Value) {
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d: node %d answered a read of %q at %s OFF THE LOG with %q (found=%v), "+
+					"having applied to index %d -- but that range's committed log at index %d holds "+
+					"%q (found=%v). The node's state machine is not the log's state at the position "+
+					"the node itself says it reached, and no client had to observe anything for "+
+					"this to be a wrong answer",
+				r.Range, r.Node, r.Key, r.At, r.Value, r.Found, r.AppliedAt, r.AppliedAt, want, found)}
 		}
 	}
 	return nil

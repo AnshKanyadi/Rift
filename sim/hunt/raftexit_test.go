@@ -480,6 +480,16 @@ func exitCriteriaFailures(c hunt.RaftCensus) []string {
 	// path: under D-A7-4 both paths exist for the phase, so a sweep on the
 	// replicated path legitimately serves none, and demanding otherwise would
 	// fail a run for being the other half of the comparison.
+	// Ruling 2: followers serve reads, and the exercise must be NON-VACUOUS.
+	// The absence of exactly this count is why D-A7-2 was implemented and
+	// exercised by nothing for the length of the phase.
+	if c.ReadIndexRuns > 0 && c.FollowerReads == 0 {
+		add("read index ran and not one read was answered by a NON-LEADER. D-A7-2 is in " +
+			"CLAUDE.md's scope for this phase and ruling 2 required the exercise to be " +
+			"non-vacuous: a sweep in which every read was served by a leader has not tested " +
+			"follower reads at all, and the absence of this assertion is why that went " +
+			"unnoticed once already")
+	}
 	if c.ReadIndexRuns > 0 && c.ReadsServed == 0 {
 		add("the sweep ran with read index ON and not one read was served off the log. " +
 			"Every staleness assertion about the read-index path is then green over a path " +

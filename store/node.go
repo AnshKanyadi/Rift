@@ -305,6 +305,10 @@ type Replica struct {
 	// a sweep reading zero has not exercised A7 at all.
 	readsServed int
 
+	// followerReads counts those answered by a node that was not the leader.
+	// Ruling 2's obligation, as a number.
+	followerReads int
+
 	// readSeq numbers this replica's read-index requests, and pendingReads holds
 	// the ones whose confirming quorum has not come back yet. A7.
 	readSeq      uint64
@@ -390,6 +394,12 @@ type pendingRead struct {
 	// index is the confirmed read index, set when the ReadState arrives. Zero
 	// means the confirming quorum has not answered yet.
 	index raft.Index
+
+	// viaFollower records that this node was NOT the leader when it took the
+	// read. It is ruling 2's non-vacuity witness: a sweep in which every read
+	// was served by a leader has not tested follower reads, and the ABSENCE of
+	// this count is why that went unnoticed.
+	viaFollower bool
 }
 
 type clientOp struct {
@@ -443,7 +453,19 @@ func (n *Replica) jitter() {
 // answer, which the checker treats as "may or may not have happened" -- correct,
 // since an unavailable replica is behaving properly.
 func (n *Replica) onClient(req Request) {
-	if n.raft.Role() != raft.RoleLeader {
+	// # A follower may serve a plain read, and ONLY a plain read (D-A7-2)
+	//
+	// It confirms nothing itself: `raft.ReadIndex` forwards to the leader, the
+	// leader answers with an index, and this node waits for its OWN apply to
+	// reach it. The answer's freshness is pinned by the index rather than by
+	// this node's connectivity -- a read index is a fact about a position, not
+	// about a node.
+	//
+	// Everything else still requires leadership, because everything else either
+	// proposes an entry or makes a promise a later commit can break.
+	followerRead := req.AnyReplica && n.cfg.ReadIndex && req.Op == "get" &&
+		!req.ReadTS.IsSet() && req.Txn == nil
+	if n.raft.Role() != raft.RoleLeader && !followerRead {
 		return
 	}
 	// Reads go through the log, exactly like writes.
@@ -516,6 +538,7 @@ func (n *Replica) onClient(req Request) {
 		}
 		n.pendingReads = append(n.pendingReads, pendingRead{
 			ctx: ctx, histIdx: req.HistIdx, key: req.Key, at: at,
+			viaFollower: n.raft.Role() != raft.RoleLeader,
 		})
 		return
 	}
@@ -911,8 +934,22 @@ func (n *Replica) serveReadyReads(at clock.Instant) {
 			continue
 		}
 		n.readsServed++
+		if q.viaFollower {
+			n.followerReads++
+		}
 		val := ""
 		v, ok, err := n.mvcc.ReadAt([]byte(q.key), q.at)
+		// Recorded for `read-index-answers-match-the-log`, with OffLog set and
+		// Index the CONFIRMED read index rather than an entry's position --
+		// there is no entry. That oracle is the only instrument that can catch a
+		// stale read no client observed (DESIGN-A7 §5, ruling 5), and it can
+		// only see answers that were recorded, so this line is the whole of its
+		// input.
+		n.cfg.Ledger.RecordRead(provenance.Witness(raftcheck.ReadRecord{
+			Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: q.index, Key: q.key, At: q.at,
+			Value: string(v), Found: ok && err == nil, Refused: err != nil, When: at,
+			OffLog: true, AppliedAt: n.applied,
+		}))
 		switch {
 		case err != nil:
 			// Same rule as the replicated path: a refused read is an OUTCOME,
@@ -1145,6 +1182,11 @@ func (n *Replica) OutOfExtentRefusals() int { return n.outOfExtent }
 // ReadsServed is how many reads this replica answered from local state after a
 // confirmed read index, rather than by replicating a log entry.
 func (n *Replica) ReadsServed() int { return n.readsServed }
+
+// FollowerReads is how many of those were answered by a non-leader. Ruling 2:
+// the exercise must be NON-VACUOUS, and a sweep where every read was served by
+// a leader has not tested D-A7-2 at all.
+func (n *Replica) FollowerReads() int { return n.followerReads }
 
 // NoOpsApplied is how many term-start no-ops this replica has applied: entries
 // with no Data and no proposal identity. It is the NON-VACUITY half -- a sweep
@@ -2002,6 +2044,25 @@ type Request struct {
 	Key     string
 	Value   string
 	HistIdx int
+
+	// AnyReplica marks a read the client sent to ONE designated replica rather
+	// than to the cluster, and is willing to have answered by whichever node it
+	// reached -- leader or follower.
+	//
+	// # Why the harness needs this at all
+	//
+	// The sweep delivers every request to EVERY node and only the leader acts on
+	// it, which is a broadcast with a filter rather than a client talking to a
+	// replica. Under that dispatch a follower can never serve anything, so
+	// D-A7-2's follower reads were implemented in `raft/` and exercised by
+	// nothing -- exactly what ruling 2 forbade in advance, and invisible because
+	// no count said so.
+	//
+	// Simply letting followers answer the broadcast is not the fix: every
+	// follower would answer the same request and call History.End on one index
+	// repeatedly, which is a different bug rather than a repair. So a share of
+	// plain reads is addressed to one replica and delivered only there.
+	AnyReplica bool
 
 	// ReadTS, when set, is the timestamp this read names: a SNAPSHOT READ at a
 	// point the client remembers rather than at whatever "now" is.

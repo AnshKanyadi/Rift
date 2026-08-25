@@ -1630,3 +1630,64 @@ investigation went wrong first, and an entry that hid that would be teaching the
 late answers would corrupt a transaction's read set without any error anywhere, on a schedule with no
 faults in it. The corruption is proportional to how much the two snapshots differ, so it is largest
 exactly when the workload is busiest.
+
+---
+
+### BUG-025 — (harness) a follower forwarded every read and was answered by nobody
+
+| | |
+|---|---|
+| **Symptom** | Follower reads were implemented, dispatched and forwarded, and not one was ever answered. No error, no timeout, no dropped-message count: the request went out and nothing came back. |
+| **Found by** | ruling 2's census field reading **zero** — `follower=0` — after `served` proved reads were being taken. |
+| **Reproduce (seed)** | any A7 seed with `FollowerReadPerMille > 0`; the count is the reproduction. |
+| **Invariant that caught it** | none. **No invariant could.** A read nobody answers is indistinguishable from an unavailable replica, which this system treats as correct behaviour. |
+| **Mutant class** | `TestMessageCodecCarriesEveryField` and `TestEveryMessageFieldIsCarried`, both added with the fix. |
+
+**The defect.** `MsgReadIndex` and `MsgReadIndexResp` were added to `raft/` carrying `ReadCtx` and
+`ReadIndex`. `store/codec.go`'s `encodeMessage` serialises a **fixed field list**, and neither field
+was in it.
+
+> **A message type added to `raft/` and not to the transport's field list arrives with its type byte
+> intact and its payload ZEROED.** The message is delivered. The thing it exists to carry is gone. No
+> error is raised, because nothing in the codec knows a field was expected.
+
+So a follower forwarded a read whose context arrived empty — matchable to no request — and the
+answer's index arrived as zero, which no replica can ever have applied past. Both directions failed
+silently and the read simply never completed.
+
+**Why every test passed.** The raft-level tests call `Step` directly and never cross this boundary.
+`TestAFollowerAsksTheLeaderRatherThanConfirmingItself` verified the follower forwards and adopts the
+leader's index — correctly, and entirely in memory.
+
+> **The protocol was right and the wire was not, and nothing in the tree looked at the wire.**
+
+**This is the second codec defect in this project hidden by tests that bypass serialisation.** The
+first was A1's decode off-by-one (`M21`, BUG-001's bundle mutant), where the harness's own codec was
+wrong and porcupine returned green over forty operations no node had answered. Same shape, six phases
+apart, and the general rule is the one the second instance makes unavoidable:
+
+> **A unit test that exercises a mechanism without its serialisation will pass over a wire that does
+> not work.** The mechanism is not the protocol plus the encoding; it is the protocol *through* the
+> encoding, and a test that stops at the boundary has tested the half that was never in doubt.
+
+**The fix, and why it is two tests rather than two lines.** The two missing fields are two lines.
+What was missing was any reason to notice, so:
+
+- `TestMessageCodecCarriesEveryField` round-trips a message with **every** field populated and asserts
+  each survives — induced by dropping `ReadCtx` from the encoder;
+- `TestEveryMessageFieldIsCarried` reads `raft.Message` **by reflection** and requires every exported
+  field to appear in `encodeMessage`'s body. It is a source scan and deliberately crude, for
+  `TestOneApplyPath`'s reason: it fails the moment a field is added and the wire is forgotten.
+
+The second covers the types that existed **before it did**, which is what makes it an answer rather
+than a patch — verified by dropping `SnapConf`, an A2 field, and watching it fail naming `[SnapConf]`.
+Audited at the time of the fix: **20 fields on `raft.Message`, 20 carried.**
+
+**And it should have existed after A1.** The first codec defect produced the same class of silence and
+the response was to fix the off-by-one. Nothing was built that would have caught the second, and the
+second arrived in a different codec six phases later.
+
+**What it would have caused in production.** Every follower read would hang forever while the cluster
+reported perfect health: leader reads served normally, no error counters moving, no message losses
+recorded. A client library with a timeout would see follower reads as universally slow and route
+around them, and the feature would be quietly dead in a system whose own tests said it worked.

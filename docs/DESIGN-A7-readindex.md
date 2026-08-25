@@ -716,6 +716,141 @@ missed**, which is §5's stated weakness in property 1 and the whole reason prop
 
 ---
 
+## 5c. The chain: five mechanisms, none aimed at a codec bug, and none a code review
+
+This is the phase's clearest argument for the standards it runs on, and it is worth reading as a
+chain rather than as five findings.
+
+| # | step | the mechanism, and what it was added FOR |
+|---|---|---|
+| 1 | **ruling 2 demanded a non-vacuous census field** for follower reads | added because *a sweep in which every read was served by a leader has not tested them* — a coverage worry, nothing to do with wires |
+| 2 | **the field read `follower=0`** | the count itself, which existed only because ruling 2 refused to trust the implementation |
+| 3 | **the two-number standard said UNREACHED, not broken oracle** | added one turn earlier because `M76`'s differential had passed review while being wrong. `compared=657, served=657` **identical across both trees** is what pointed away from the oracle |
+| 4 | **chasing "unreached" found the DISPATCH** | requests were broadcast to every node and only leaders acted, so no read could reach a follower |
+| 5 | **fixing dispatch found the WIRE** | `encodeMessage` carries a fixed field list, and `ReadCtx`/`ReadIndex` were not in it: the message arrived with its type byte intact and its payload zeroed |
+
+> **Five steps, not one of them a code review, and each mechanism was added for a different reason —
+> none of them a codec bug.** A coverage rule, a count, a measurement discipline, a dispatch model and
+> a serialisation test are five unrelated instruments, and the defect at the end was invisible to every
+> test in the tree because every test stopped at the boundary the defect lived on.
+
+**The defect was not subtle and it was not findable by reading.** `raft/` was right, `store/` was right,
+and the two disagreed only about what survives a transport — which no test crossed. Careful reading of
+either side would have confirmed it correct, because each side WAS correct. BUG-025 carries the general
+rule: *a unit test that exercises a mechanism without its serialisation will pass over a wire that does
+not work.*
+
+**And it is the second time.** A1's decode off-by-one was the first codec defect hidden this way, six
+phases and a different codec earlier. After it, the off-by-one was fixed and nothing was built that
+would have caught the next one. The two tests added with BUG-025 are that thing, late.
+
+---
+
+## 5b. A mutant found a defect in the instrument aimed at it
+
+Every prior instance in this project is a planted defect revealing something about **coverage** or
+**reachability** — a class nothing detects, a schedule that cannot produce a condition, a test that
+goes around the path. `M76` is the first that revealed the **checker built to catch it was wrong**,
+and wrong in the direction that would have failed clean runs.
+
+### 5b.1 What happened, and what the signal was
+
+`M76` plants §1.1's second condition removed: a read answered as soon as its leadership quorum
+confirms, **without waiting for this replica's own applied index to reach the confirmed read index**.
+`read-index-answers-match-the-log` — the differential built for exactly this — reported a violation.
+Exit status said killed.
+
+The verdict text said something else:
+
+```
+range 3: node 2 answered a read of "k06" OFF THE LOG with "v78" (found=true),
+having confirmed it could serve at index 1 -- but the committed log at index 1
+holds "" (found=false)
+```
+
+**The node answered with MORE than its confirmed index holds.** That is not what `M76` plants. `M76`
+makes a node answer from state that is BEHIND; this verdict describes state that is AHEAD.
+
+> **The kill was real and the reason was wrong.** The oracle was comparing the answer against the log
+> at the CONFIRMED INDEX, so a node that had applied past that index and legitimately returned a newer
+> version was reported as a violation. It would have failed correct runs.
+
+### 5b.2 The general form
+
+> **A planted defect tests the CHECKER as much as the code.** A kill is evidence about both, and it is
+> only evidence about the code if the verdict describes the defect that was planted.
+>
+> **A kill whose verdict text does not describe the planted defect is a finding about the checker,
+> regardless of the exit status.**
+
+Nothing in the exit status carries that. `make mutants` reports `killed`, the lane goes green, and the
+discrepancy lives entirely in prose that no lane reads. It was noticed because the message did not
+match the format the oracle was written to print — which is a thin thread, and the reason this is
+written down rather than fixed quietly.
+
+### 5b.3 The property splits in two, and only one half is about agreement
+
+The conflation is the defect. Stated as two named halves, each with its own induction:
+
+| half | what it says | what breaks it |
+|---|---|---|
+| **`AppliedAt >= Index`** | **the read WAITED.** The confirming quorum establishes a POSITION — that this leader was still leader at or after the read arrived. It says nothing whatever about whether THIS node has got there | `M76` |
+| **the answer matches the log at `AppliedAt`** | **the node's state is the log's state**, at the position the node ACTUALLY REACHED | a replica whose state machine has diverged from its own log |
+
+**Why comparing against `Index` conflates them and makes the second half wrong.** `Index` is a
+*floor*, not a description of the answer: the read may be served from any state at or above it. A
+node that has applied past `Index` holds versions the log at `Index` does not, and returning one is
+correct. Demanding equality at `Index` turns that correctness into a violation, which is BUG-016's
+standard applied to the phase's own new oracle.
+
+> **Too fresh is not a violation.** A later state is never a linearizability failure — the read
+> reflects everything committed before it was issued, and more besides. **The next person to touch
+> this oracle will reach for `Index`, because it is the number the protocol is named after**, so the
+> case is kept as a permanent fixture rather than as a comment: *applied past the confirmed index,
+> answered with the newer version — NOT a violation.*
+
+### 5b.3b `M76`'s numbers, and the two readings that keep them from being misread
+
+| tree, 40 seeds | caught | compared | served | follower |
+|---|---|---|---|---|
+| clean | **0** | 598 | 599 | 101 |
+| `M76` | **1**, first at seed 27 | 588 | 599 | 101 |
+
+**`served` and `follower` are IDENTICAL across the two trees.** The mutation changed only whether an
+answer was *correct*, not how much work happened — so the difference between the runs is confined to
+the thing under test rather than to a workload that drifted. A mutant that moved the workload would
+make the comparison meaningless, and this one demonstrably did not.
+
+**`compared` differs by exactly ten, and that is the HALT rather than a coverage gap.** The run stops
+at the first violation, so the ten off-log answers after seed 27 were never reached. Read without that,
+`588 < 598` looks like the oracle checking less on the tree where it matters most; read with it, the
+shortfall is the oracle having already done its job.
+
+> **A number reported without its readings is a number somebody will misread later**, and these two are
+> exactly the kind that invite the wrong conclusion — one suggesting drift that did not happen, one
+> suggesting a gap that is a halt.
+
+### 5b.4 And the standard every A7 oracle is held to
+
+Ansh, on this: *every A7 oracle gets the same two-number treatment before it counts — fires on its
+planted defect, silent on the clean tree, both at a stated seed count.*
+
+Not because the others are doubted. Because **this one passed a design review, a ruling, and three
+separate assertions that it worked**, and the only thing that distinguished it from a working oracle
+was a number nobody had taken:
+
+| claim made | what was actually true |
+|---|---|
+| *"the oracle exists and speaks"* | it was in a list nothing invokes — `sim.Oracle` has no `Check()`, and `compared` read **0** on every seed |
+| *"`M76` is caught, 7 of 12"* | caught by `MVCCReadCorrectness`, which was consuming off-log records and comparing them against expectations keyed by unrelated read entries |
+| *"the oracle is sound"* | it compared against `Index` and would have failed clean runs |
+
+Three wrong claims, three mechanisms that caught them — the oracle's own non-vacuity counter, a
+verdict format that did not match, and a mutant. **None was caught by reading the code**, and the code
+was read carefully each time.
+
+---
+
 ## 6. What A7 does not do
 
 - **Leader leases** — STRETCH, Amendment A6, and §3's D-A7-1B says why reconsidering them here would
@@ -870,6 +1005,28 @@ is `M56`'s, `M30`'s and `M67`'s sentence. The three failure modes are all live h
 The third is the one to watch, because A7's own oracle design already says the per-key checker is the
 **weakest** of its three properties. A declaration citing it and stopping there would be `M67` written
 by somebody who had just read the argument against it.
+
+### 8.1b Every A7 oracle carries two numbers before it counts
+
+Ansh, after `M76` found a defect in the oracle aimed at it:
+
+> **Every A7 oracle gets the same two-number treatment before it counts: fires on its planted defect,
+> silent on the clean tree, both at a stated seed count.**
+
+Not a restatement of the induced-failure rule. That rule asks only the first number, and the
+differential oracle **passed it** — it fired, on a real mutant, with a real verdict — while being
+wrong in a way that would have failed clean runs. The second number is what separates *an oracle that
+fires* from *an oracle that is right*, and it is BUG-016's standard applied where it is hardest to
+apply: to one's own instrument.
+
+| oracle | fires on | silent on the clean tree |
+|---|---|---|
+| `read-index-answers-match-the-log` | `M76` | required at a stated seed count |
+| the ledger-side read-index bound (§5a) | a read stamped one index low | required |
+| `M71` re-pointed (ruling 11) | a snapshot read served by read index | required |
+
+**A green with no baseline is not a result** (§16.3b) is the same sentence one level in: an oracle that
+has never been shown silent has no baseline for its own firing.
 
 ### 8.2 The standing set
 

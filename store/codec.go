@@ -277,6 +277,20 @@ func encodeMessage(m raft.Message) []byte {
 	b = putU64(b, uint64(m.SnapTerm))
 	b = putBytes(b, m.SnapData)
 	b = putBytes(b, m.SnapConf)
+	// # A7's read-index fields, and why their absence was invisible
+	//
+	// A message type added to `raft/` and not to this codec crosses the
+	// transport with its payload ZEROED, and nothing says so: the type byte
+	// survives, the message arrives, and the fields it exists to carry are gone.
+	// MsgReadIndex lost its ReadCtx and MsgReadIndexResp lost its ReadIndex, so
+	// follower reads were forwarded and never answered.
+	//
+	// It was invisible to the raft unit tests because they call Step directly
+	// and never cross this boundary -- the protocol was correct and the wire was
+	// not. That gap between a unit test and a sweep is the finding, not the
+	// missing lines (DESIGN-A7 §5c).
+	b = putBytes(b, m.ReadCtx)
+	b = putU64(b, uint64(m.ReadIndex))
 	flags := byte(0)
 	if m.Granted {
 		flags |= 1
@@ -334,6 +348,21 @@ func decodeMessage(b []byte) (raft.Message, bool) {
 	if len(sc) > 0 {
 		m.SnapConf = sc
 	}
+	b = rest
+	// A7's read-index fields, in the same order the encoder wrote them.
+	rc, rest, ok := takeBytes(b)
+	if !ok {
+		return raft.Message{}, false
+	}
+	if len(rc) > 0 {
+		m.ReadCtx = rc
+	}
+	b = rest
+	ri, rest, ok := takeU64(b)
+	if !ok {
+		return raft.Message{}, false
+	}
+	m.ReadIndex = raft.Index(ri)
 	b = rest
 	if len(b) < 1 {
 		return raft.Message{}, false

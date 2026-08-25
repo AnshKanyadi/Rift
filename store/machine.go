@@ -445,6 +445,11 @@ func (m *Node) ReadsServed() int {
 	return m.sum(func(r *Replica) int { return r.ReadsServed() })
 }
 
+// FollowerReads is how many reads a non-leader answered on this node.
+func (m *Node) FollowerReads() int {
+	return m.sum(func(r *Replica) int { return r.FollowerReads() })
+}
+
 // NoOpsApplied, NoOpReachedArm and NoOpAnswered aggregate D-A7-6's two
 // propositions across this node's replicas. The first is the NON-VACUITY count
 // -- one term-start no-op per election, so a sweep reading zero has exercised

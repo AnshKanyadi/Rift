@@ -46,6 +46,11 @@ type RaftOptions struct {
 	PreVote           bool
 	SnapshotThreshold raft.Index
 
+	// FollowerReadPerMille is the share of plain reads addressed to ONE replica
+	// rather than broadcast, so a follower can actually serve one. Ruling 2's
+	// obligation: the exercise must be non-vacuous.
+	FollowerReadPerMille int
+
 	// ReadIndex serves PLAIN reads by read index instead of by a log entry (A7,
 	// D-A7-5 ruled A). Snapshot reads keep their entry regardless.
 	//
@@ -168,6 +173,12 @@ func A4Options() RaftOptions {
 func A7Options() RaftOptions {
 	o := A6Options()
 	o.ReadIndex = true
+	// A third of plain reads go to a designated replica. High enough that
+	// followers serve reads on every seed rather than occasionally -- for a
+	// mechanism whose measured exercise rate was ZERO, more is the right
+	// direction to be wrong in, which is the same argument the cold-cache
+	// routing makes one screen up.
+	o.FollowerReadPerMille = 333
 	return o
 }
 
@@ -1022,6 +1033,16 @@ type RaftResult struct {
 	// ReadsServed counts reads answered by read index rather than by the log.
 	ReadsServed int
 
+	// FollowerReads is how many reads a NON-LEADER answered. Ruling 2's
+	// non-vacuity witness.
+	FollowerReads int
+
+	// ReadAgreeCompared is how many off-log answers the differential oracle
+	// actually compared. Its NON-VACUITY witness: the oracle is silent when it
+	// has no model and when there are no off-log answers, and those silences
+	// look identical to a clean run from outside.
+	ReadAgreeCompared int
+
 	// ReadIndexRuns is 1 when this run had the read-index path ON. It exists
 	// so the non-vacuity assertion can tell "served none" from "never asked to",
 	// which under D-A7-4's two-paths decision are different runs rather than a
@@ -1149,8 +1170,8 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	oracles, reb := raftcheck.AllWithRebalance(
-		ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts)
+	oracles, reb, _ := raftcheck.AllWithRebalance(
+		ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts, valueAtIndex(ledger))
 	run.Loop.SetOracles(oracles)
 
 	peers := make([]raft.NodeID, n)
@@ -1434,6 +1455,26 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			}
 			req.ReadTS = hlc.Timestamp{Wall: run.Clocks[0].Timeline().Wall(when)}
 		}
+		// # A share of plain reads is addressed to ONE replica (D-A7-2)
+		//
+		// Everything else is delivered to every node and acted on only by the
+		// leader, which is a broadcast with a filter. Under that dispatch a
+		// follower can never serve anything, so follower reads were implemented
+		// and exercised by nothing.
+		//
+		// These are addressed to a single replica chosen from the seed, and that
+		// replica answers whether or not it is the leader -- forwarding to the
+		// leader for an index and waiting for its own apply. If it happens to
+		// BE the leader, the read takes the ordinary path, which is why the
+		// count that matters is FollowerReads rather than the number dispatched.
+		if opt.FollowerReadPerMille > 0 && op.Kind == "get" && !req.ReadTS.IsSet() &&
+			readKey.Uint64N(11, uint64(op.Seq), uint64(op.Client), 0, 1000) <
+				uint64(opt.FollowerReadPerMille) {
+			req.AnyReplica = true
+			target := int(readKey.Uint64N(12, uint64(op.Seq), uint64(op.Client), 0, uint64(len(nodes))))
+			run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, sim.NodeID(target), req)
+			continue
+		}
 		for i := range nodes {
 			run.Loop.At(clock.Instant(op.AtNS), sim.KindClient, sim.NodeID(i), req)
 		}
@@ -1517,6 +1558,24 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		}
 		res.ResolverDeclarations = ra.Declarations()
 	}
+
+	// # A7's differential, called HERE rather than left in the oracle list
+	//
+	// `sim.Oracle` is OnStep and Interested. It has no Check, so a final-state
+	// oracle put in the list built by AllWithRebalance is **never invoked** --
+	// SetOracles drives OnStep and nothing else. This one was in that list and
+	// compared ZERO answers across every seed, which is register entry 4 in a
+	// new place: a checker wired into something that does not call it.
+	//
+	// It was caught by the oracle's own non-vacuity counter rather than by
+	// reading the code, which is the argument for having built the counter.
+	if opt.ReadIndex {
+		agree := raftcheck.NewReadIndexAgreement(ledger, valueAtIndex(ledger))
+		if v := agree.Check(); v != nil && res.Violated == nil {
+			res.Violated = v
+		}
+		res.ReadAgreeCompared = agree.Compared()
+	}
 	if coord != nil {
 		res.TxnStarted = coord.Started()
 		res.TxnCommitted = coord.Committed()
@@ -1580,6 +1639,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.NoOpReachedArm += d.NoOpReachedArm()
 		res.NoOpAnswered += d.NoOpAnswered()
 		res.ReadsServed += d.ReadsServed()
+		res.FollowerReads += d.FollowerReads()
 		res.GCProposed += d.GCProposed()
 		res.GCApplied += d.GCApplied()
 		res.VersionsCollected += d.VersionsCollected()
@@ -1707,6 +1767,8 @@ type RaftCensus struct {
 	NoOpReachedArm      int
 	NoOpAnswered        int
 	ReadsServed         int
+	FollowerReads       int
+	ReadAgreeCompared   int
 	ReadIndexRuns       int
 	MovesOrdered        int
 	MovesCompleted      int
@@ -1825,6 +1887,8 @@ func CensusOf(seed uint64, r RaftResult) RaftCensus {
 	c.NoOpReachedArm += r.NoOpReachedArm
 	c.NoOpAnswered += r.NoOpAnswered
 	c.ReadsServed += r.ReadsServed
+	c.FollowerReads += r.FollowerReads
+	c.ReadAgreeCompared += r.ReadAgreeCompared
 	c.ReadIndexRuns += r.ReadIndexRuns
 	c.MovesOrdered += r.MovesOrdered
 	c.MovesCompleted += r.MovesCompleted
@@ -1970,6 +2034,8 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.NoOpReachedArm, b.NoOpReachedArm},
 		{&out.NoOpAnswered, b.NoOpAnswered},
 		{&out.ReadsServed, b.ReadsServed},
+		{&out.FollowerReads, b.FollowerReads},
+		{&out.ReadAgreeCompared, b.ReadAgreeCompared},
 		{&out.ReadIndexRuns, b.ReadIndexRuns},
 		{&out.MovesOrdered, b.MovesOrdered}, {&out.MovesCompleted, b.MovesCompleted},
 		{&out.MovesRacingChurn, b.MovesRacingChurn},
@@ -2012,4 +2078,58 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		*p.dst += p.src
 	}
 	return out
+}
+
+// valueAtIndex is raftcheck.ValueAtIndex: replay a range's committed prefix up
+// to `upto` and report what `key` held at `at`.
+//
+// The prefix is truncated at `upto` deliberately. A read confirmed at index i is
+// required to reflect the log AT i, not the log as it eventually ended up --
+// comparing against the final state would pass a read that missed a write and
+// fail one that correctly did not see a later one.
+func valueAtIndex(l *raftcheck.Ledger) raftcheck.ValueAtIndex {
+	return func(rangeID uint64, upto raft.Index, key string, at hlc.Timestamp) (string, bool, bool) {
+		for _, rl := range l.Ranges() {
+			if rl.ID() != rangeID || rl.Base() == nil {
+				continue
+			}
+			committed := rl.Committed()
+			prefix := make([]raft.Entry, 0, len(committed))
+			for _, e := range committed {
+				if e.Index > upto {
+					break
+				}
+				prefix = append(prefix, e)
+			}
+			desc, _, recs, ok := store.ReplayMachine(rl.Base(), prefix)
+			if !ok {
+				return "", false, false
+			}
+			// The visible version at `at`: the highest committed data version at
+			// or below it. Derived from the replayed records rather than asked
+			// of any store, which is the independence the oracle rests on.
+			ns := namespaceOf(desc.ID)
+			var bestAt hlc.Timestamp
+			var bestVal string
+			var found bool
+			for _, r := range recs {
+				kind, ok := kv.KindOf(ns, r.Key)
+				if !ok || kind != kv.KindData {
+					continue
+				}
+				k, vAt, ok := kv.DecodeKey(ns, r.Key)
+				if !ok || string(k) != key {
+					continue
+				}
+				if at.Less(vAt) {
+					continue
+				}
+				if !found || bestAt.Less(vAt) {
+					bestAt, bestVal, found = vAt, string(r.Value), true
+				}
+			}
+			return bestVal, found, true
+		}
+		return "", false, false
+	}
 }
