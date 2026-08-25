@@ -138,7 +138,16 @@ func A2Options() RaftOptions {
 // The sweep, the oracle inductions and the power probe now all read this, so
 // they cannot disagree. Advancing a phase is one edit here, and every instrument
 // moves with it.
-func CurrentOptions() RaftOptions { return A6Options() }
+// CurrentOptions is whatever shape the sweep runs TODAY, and at A7 that means
+// read index is on and a third of plain reads are addressed to one replica.
+//
+// Moving it is the phase boundary, and it moves every count underneath every
+// floor -- which is why A7's exit criterion 4 asks for the power numbers again
+// rather than citing A6's. DESIGN-A5 §11b is the standing warning about this
+// name: it once meant "what the sweep runs" while pinned to a shape the sweep
+// had left, and a label that stops describing its subject is the quiet drift
+// this lane exists to catch in the system under test.
+func CurrentOptions() RaftOptions { return A7Options() }
 
 // A3Options adds membership churn: a four-node cluster with one learner, and
 // enough scheduled changes that the cycle runs several times per seed.

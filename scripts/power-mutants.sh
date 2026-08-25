@@ -117,6 +117,30 @@ PATCHDIR=${1:-sim/mutants}
 ROOT=$(pwd)
 JOBS=${POWER_JOBS:-1}
 
+# # The lane copies a LIVE tree, and a tree edited mid-copy is not a tree
+#
+# copy_tree tars the working directory. If a file changes while that runs, the
+# copy is of a state that never existed: the patch may fail (ROT), or apply onto
+# a mismatched file and produce a tree that does not compile, which surfaces as
+# **ERROR -- the probe produced no measurement** with nothing in the log.
+#
+# That happened to `M76` and `M77` in A7's gating run: both were reported ERROR
+# with no output, and both apply and build cleanly on a stable tree. The verdict
+# was about the working directory, not about the class -- and an ERROR whose
+# provenance is unestablished is the same category as a number quoted from an
+# unchecked source, which this project has now been bitten by three times.
+#
+# A lane that takes minutes to hours cannot demand nobody touches the tree. It
+# CAN record what it measured, so a verdict is attributable afterwards.
+snapshot_id() {
+  git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown
+}
+dirty_note() {
+  if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    printf ' (tree DIRTY at start: verdicts are against uncommitted state)'
+  fi
+}
+
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT INT TERM
 
@@ -220,7 +244,7 @@ if [ "$JOBS" -gt 1 ]; then
   wait
 fi
 
-printf '\n  harness power, per mutant class\n'
+printf '\n  harness power, per mutant class -- measured against %s%s\n' "$(snapshot_id)" "$(dirty_note)"
 printf '  ----------------------------------------------------------------\n'
 
 failed=0

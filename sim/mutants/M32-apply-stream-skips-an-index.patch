@@ -9,12 +9,12 @@
 # mutates: the driver acknowledges one more applied index than it applied, so the state machine never sees that command and the next Ready starts past it -- a hole no cross-node comparison can see, because every node's stream is self-consistent
 --- a/store/node.go
 +++ b/store/node.go
-@@ -506,7 +506,7 @@
- 				}
- 			}
+@@ -886,7 +886,7 @@
+ 			n.maybeGC()
  			n.cfg.Ledger.RecordApplied(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
--			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
-+			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index + 1)
+ 			n.applied = rd.Committed[len(rd.Committed)-1].Index
+-			n.raft.AckApplied(n.applied)
++			n.raft.AckApplied(n.applied + 1)
  			n.maybeSnapshot(at, s)
  			n.maybeSplit(at)
  		}
