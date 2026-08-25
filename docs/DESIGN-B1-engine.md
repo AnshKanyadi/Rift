@@ -1,14 +1,16 @@
 # DESIGN-B1: Env, the WAL, the memtable, and the recovery contract
 
-**Status:** **REVISION 5 — revision 4 ratified 2026-08-17; B1.0 through B1.4 ratified 2026-08-24 and
-landed as code.** Nothing is self-ratified, so nothing is marked PROVISIONAL. **§13 is closed**:
+**Status:** **REVISION 6 — B1 IS SIGNED. All thirteen steps of §14 landed as code between 2026-08-24
+and 2026-08-25.** Nothing is self-ratified, so nothing is marked PROVISIONAL. **§13 is closed**:
 B1-Q12 was ruled as recommended, and this revision records the ruling that revision 4 predated.
-**Track B is out of design.** Five steps of §14's sequence exist as code on `rift-b`; §14.2 carries a
-**Landed** line for each, naming what it added beyond its written scope, because the sequence is now
-half history and a plan that does not admit what happened is a plan nobody checks against.
+**Every step of §14 exists as code on `rift-b`**, and §14.2 carries a **Landed** line for each naming
+what it added beyond its written scope — because a plan that does not admit what happened is a plan
+nobody checks against. The phase is signed; the *file* is now mostly a record.
 
-This revision is **the four owed items of §12.3 batched**, landed as B1.4 closed rather than as a
-cycle of its own. Track B does not need another doc revision as an event.
+Revision 6 carries §12.3's last two owed items, batched with DESIGN-B2 rather than run as their own
+cycle: §10.1.2's catalogue re-check at B1's close, and §10.2 pointing at §10.3 so a reader cannot take
+a table of green gates for a statement about harness power. **What B1 leaves behind for a later phase
+is in `CARRY-FORWARD.md`, dated**, not in this file.
 **Phase:** B1 (Track B). **Author:** Claude (Session B). **Decider:** Ansh.
 **Blocks:** all of Track B. **Depends on:** the `engine/` interface frozen at A0.5, which this must
 meet exactly — not approximately, because B4's differential rig defines "correct" as "byte-identical
@@ -1737,6 +1739,20 @@ written — and the distinction is worth keeping visible.
 | `SEAM-*` (3) | short-count ignored; `EINTR` fatal; the zero-return bound removed | B1.2b's three gates, made repeatable. §14.2 says "Mutants: none" for that step, which is a statement about the **BM catalogue** — `PosixEnv` is outside the fault matrix and gets no BM number — not a statement that its gates need no induction |
 | `MODEL-*` (3), `LEDGER-*`, `REGISTRY-*`, `CENSUS-*` (2) | the power-loss model, the ledger's promotion column, the registry, both censuses | B1.3's gates |
 | `SCAN-*` (5), `COLD-*` | the scope-scan rules, the registry, the claims, the cold cache | B1.4's gates |
+| `EXPAND-ignores-batch-history` | a `DeleteRange` that misses earlier writes in its own batch | §8.1's intra-batch rule had no mechanism behind it, and it is the half that **cannot be fixed at replay**: the WAL records the expansion, so one that missed a key is faithfully replayed into the wrong state forever |
+| `WATERMARK-inferred`, `GAPLESS-ignored`, `HEADER-conditional` | the watermark derived rather than read; the gapless check; the FILE_HEADER validated only when a group closed | B1.7b's gates. The last is a defect that cycle actually had |
+| `DECIDER-*` (2), `FLOOR-always-suspends`, `VERDICT-normal-is-void` | the evidentiary-decider category, and two members of it | GF-4's audit. Both `FLOOR-` and `VERDICT-` are reachable defects the audit found, not hypotheticals |
+| `ORACLE-includes-engine` | the oracle's inability to reach engine state | §7.4 condition 1 is a statement about includes, so it is checkable |
+| `FLOOR-continuation-removed` | the sweep's detection power, and no engine behaviour at all | §10.3's own induction: it is killed by `cpp-campaign` while `cpp-sweep` stays **green** |
+
+**Re-checked at B1's close, 2026-08-25 (revision 6, owed item (i)).** 57 patches:
+26 catalogue mutants and 31 that the catalogue did not name. Every catalogue
+mutant still has exactly one introducing step (§10.1.1) and none is orphaned;
+every non-catalogue mutant has a covering lane and a direction control, and the
+full set runs at 57 killed / 0 survived / 0 broken in 15m18s. **The
+non-catalogue set is now larger than the catalogue**, which is the honest
+measure of how much of this rig was specified by building it rather than in
+advance.
 
 **A standing consequence, and it is the reason this subsection exists rather than a note.** Two of
 these — `BM17c` and `BM17d` — were written because building the checker exposed something the checker
@@ -1787,6 +1803,14 @@ this applies to gates that exist because of a ruling exactly as it applies to th
 | vendored-tree integrity (§9.2) | edit one byte of the vendored GoogleTest; the offline hash lane must fail | — |
 | no lane touches the network (§9.2) | add `FetchContent_Declare`; `cpp-ci` under `unshare -rn` must fail | `BM21` |
 | kill-point census (§9.5) | add an Env call and do not update the census; the sweep must report the change | `BM17` |
+
+**Every gate above is a check that must be able to FAIL. §10.3 asks the other
+question — whether the machinery behind it still has the POWER it had — and the
+two are not substitutes.** A gate answers "did this run detect a defect that was
+present"; a floor answers "how often would it, and how early". HARNESS-010 is
+the case that separates them: every gate in this table was green and accurate
+while the sweep behind them could not see one class of defect at all. Read the
+floors table beside this one, not instead of it.
 
 **The byte-digest gate earns its own line.** Same workload, same WAL bytes, SHA-256 pinned. It is the C++
 analogue of the trace hash and catches three things for one test: ambient randomness, uninitialized
