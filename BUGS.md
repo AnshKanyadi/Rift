@@ -77,7 +77,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 7 entries.
+Counts: 9 entries.
 
 ### The two general forms these entries taught
 
@@ -389,6 +389,32 @@ the two members §7.5 names. The test asserts **both directions** — that the t
 that the prefix mode does not — because a classification asserted in one direction is the shape GF-2
 already names.
 
+### HARNESS-008 and HARNESS-009 — the other two evidentiary deciders, side by side
+
+Found by the audit HARNESS-006 forced. Recorded together because **the shape is identical and the
+consequences differ in a way worth seeing beside each other** — that pair is the argument for the
+both-directions rule in two lines.
+
+| | HARNESS-008 | HARNESS-009 |
+|---|---|---|
+| **where** | `rig::OutcomeFloor` | `rig::OutcomeForCapVerdict` |
+| **the untested direction** | `OutcomeFloor(false)` — it had only ever been called with `true` | `kNormal` — the two divergences and `kVoid` were asserted, a normal run never |
+| **the defect it admits** | suspend unconditionally | file a normal run as `kVoid` |
+| **what that costs** | **every run becomes unbankable** | **the evidence column empties permanently** |
+| **what turns red** | nothing | nothing |
+| **mutant** | `FLOOR-always-suspends` | `VERDICT-normal-is-void` |
+
+Both are GF-4. Both are conservative, which is why neither is visible: the engine is correct, the
+arithmetic is correct, every assertion holds, and the only symptom is a number that never appears.
+One kills the evidence at the source and one kills it at the sink, and **the pair is the reason the
+rule is "both directions" rather than "test the interesting case"** — there is no interesting case
+here, only two boring ones whose absence is invisible.
+
+Closed structurally: `engine-cpp/DECIDERS.txt` enumerates every function that decides evidentiary
+status, `scripts/cpp-scan.sh` requires each to name the tests asserting **both** of its directions, and
+a decider that lands without them fails the lane. Six is a small enough population to enumerate, and
+enumerating it is what stops the seventh arriving in B2 and the audit being re-run by hand.
+
 ### A shape three of this cycle's defects shared
 
 **HARNESS-006, `HEADER-conditional`, and the near half of BM2's survival are all the same thing: a
@@ -400,6 +426,21 @@ was decided elsewhere — so it passed, and reported on a situation that had not
 
 Worth one sentence rather than three entries, because the remedy is one habit: when writing a check,
 ask what has to be true for it to run at all, and assert that too.
+
+### The shape behind every mutant that has survived its first induction
+
+Three have: `LEDGER-always-promoted`, `BM2-accept-torn-tail`, `BM7-drop-close-error`. All three are
+meaning #1 — a checker that cannot see it — and all three have **one shape**:
+
+> **The test never created the situation it was checking.**
+
+`BM7` is the cleanest exemplar: a Close test that only ever ran a *successful* Close cannot distinguish
+a propagated error from a swallowed one, whatever it asserts about the return value.
+
+This is **§22.6c's discriminator rule arriving in C++ independently** — a check must be run in a state
+where the thing it discriminates could actually differ — and it is cited rather than restated. It is
+also the same family as GF-1, one level in: GF-1 is about a *lane* verifying an absence, this is about
+an *assertion* verifying a distinction. Filed once here; individual survivals are not entries.
 
 ### HARNESS-007 — `Slice` bound silently to temporary strings, and a test dangled
 

@@ -1100,6 +1100,20 @@ The `sync` flag's *policy* — how eagerly the poller wakes — is a B5 decision
 decision about the engine. B1 guarantees only that `Sync()` covers everything appended before it and
 returns the watermark it established.
 
+#### 7.1.1 Everything C++ cannot express literally, in one list
+
+Four, and they are kept together so the list of divergences from the frozen shape is one list rather
+than a note here and a comment there. The first two are ruled above; the last two were found by
+meeting the interface at B1.8 and are recorded rather than adapted quietly.
+
+| # | what the frozen shape says | what C++ does | why |
+|---|---|---|---|
+| 1 | `OnDurable(func(SeqNum))` | **absent** | No C-to-Go callbacks, ever (DR-11). The wrapper's poller owns the blocking `Sync()` and posts to the node mailbox. `Sync()` is strictly more primitive: a callback can be built from a poller and a poller cannot be built from a callback |
+| 2 | `Apply(b, sync bool)` | **no `sync` flag** | Its policy is a B5 decision about the pair. `Write()` never blocks on I/O whatever the caller asked for, so a flag promising otherwise is one the engine cannot honour |
+| 3 | a `nil` bound means unbounded | an explicit **`Bound`** | Go's nil and an empty key are different things and **an empty key is a valid key here**, so `Slice()` cannot mean both. Conflating them would make `DeleteRange(nil, nil)` — the clear half of clear-then-ingest, the case **Amendment A3 was ruled for** — indistinguishable from a range that deletes nothing. That is what makes this a divergence rather than a style choice |
+| 4 | "Approximate is in the name because the C++ engine answers from table metadata rather than by scanning" | **it scans**, exactly and in O(n) | B1 has no tables and therefore no metadata to answer from. **TEMPORARY, AND RETIRED BY B2**, which is where SSTable metadata first exists; recorded with its retiring phase so it does not become a permanent property by silence |
+
+
 **`Close` does not sync**, deliberately. The watermark is the engine's only durability promise; a
 `Close` that synced would make clean shutdown a hidden durability event that `engine/model`'s `Close`
 does not have, and the two engines would then disagree in precisely the differential rig. The

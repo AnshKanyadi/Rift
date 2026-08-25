@@ -13,6 +13,8 @@
 #   2. the A5 rules and the PosixEnv thinness rules
 #   3. CPP-HATCHES.txt reconciled against what part 2 actually found
 #   4. CLAIMS.txt -- the sentences this lane is what makes true
+#   5. DECIDERS.txt -- every function that decides evidentiary status, asserted
+#      in BOTH directions
 #
 # EVERY OPT-OUT CARRIES A SPLIT LABEL, FROM THE START. An entry in
 # CPP-HATCHES.txt is either
@@ -49,6 +51,7 @@ here=$(dirname "$0")
 SCAN_RULES_AWK=$here/cpp-scan-rules.awk
 HATCHES=$dir/CPP-HATCHES.txt
 CLAIMS=$dir/CLAIMS.txt
+DECIDERS=$dir/DECIDERS.txt
 
 errs=0
 note() { printf '   BAD   %s\n' "$1"; errs=$((errs + 1)); }
@@ -290,9 +293,75 @@ else
   fi
 fi
 
+# ------------------------------------------------------------------ part 5
+#
+# A DECIDER OF EVIDENTIARY STATUS IS A NAMED CATEGORY, and every member is
+# asserted in BOTH directions. HARNESS-006, -008 and -009 were all the same
+# defect in three different functions: a conservative misclassification, which
+# is the direction nothing notices, whose cost arrives downstream as a gate
+# nothing can satisfy. Six is a small enough population to enumerate, and
+# enumerating it is what stops the seventh arriving in B2.
+printf '  [5/5] DECIDERS.txt -- both directions, for every evidentiary decider\n'
+printf '  ----------------------------------------------------------\n'
+if [ ! -f "$DECIDERS" ]; then
+  note "missing $DECIDERS"
+else
+  ndec=0
+  registered=""
+  while IFS= read -r line; do
+    case $line in ''|\#*) continue ;; esac
+    ndec=$((ndec + 1))
+    fn=$(printf '%s' "$line" | awk -F'|' '{print $1}' | sed 's/^ *//; s/ *$//')
+    t1=$(printf '%s' "$line" | awk -F'|' '{print $2}' | sed 's/^ *//; s/ *$//')
+    t2=$(printf '%s' "$line" | awk -F'|' '{print $3}' | sed 's/^ *//; s/ *$//')
+    registered="$registered $fn"
+    if [ -z "$fn" ] || [ -z "$t1" ] || [ -z "$t2" ]; then
+      note "DECIDERS.txt line needs <function> | <true-direction test> | <false-direction test>: $line"
+      continue
+    fi
+    if ! grep -rq "RIFT_EVIDENCE_DECIDER" "$dir/src" "$dir/rig" --include='*.h' 2>/dev/null; then
+      note "no RIFT_EVIDENCE_DECIDER markers found at all"
+      break
+    fi
+    if ! grep -rq "^[^/]*[^A-Za-z_]$fn(.*RIFT_EVIDENCE_DECIDER" "$dir/src" "$dir/rig" --include='*.h'; then
+      note "$fn is registered but its declaration carries no RIFT_EVIDENCE_DECIDER marker"
+    fi
+    for t in "$t1" "$t2"; do
+      suite=$(printf '%s' "$t" | cut -d. -f1)
+      name=$(printf '%s' "$t" | cut -d. -f2)
+      if ! grep -rq "TEST(.*$suite, *$name)\|TEST_F(.*$suite, *$name)" "$dir/test"; then
+        note "$fn names test $t, which does not exist -- a direction asserted by a test that is not there is a direction not asserted"
+      fi
+    done
+  done < "$DECIDERS"
+  printf '   deciders       : %s\n' "$ndec"
+
+  # And the other way: every MARKED declaration must be registered. A decider
+  # that lands with a marker and no entry is the seventh arriving unasserted.
+  for f in $(find "$dir/src" "$dir/rig" -name '*.h'); do
+    grep -n 'RIFT_EVIDENCE_DECIDER' "$f" | while IFS= read -r hit; do
+      decl=$(printf '%s' "$hit" | sed 's/^[0-9]*://')
+      name=$(printf '%s' "$decl" | sed 's/(.*//' | awk '{print $NF}' | sed 's/^[*&]*//')
+      case " $registered " in
+        *" $name "*) ;;
+        *) printf '   BAD   %s is marked RIFT_EVIDENCE_DECIDER and is not in %s\n' "$name" "$DECIDERS" ;;
+      esac
+    done
+  done
+  # The subshell above cannot raise errs, so re-check in this shell.
+  for f in $(find "$dir/src" "$dir/rig" -name '*.h'); do
+    for name in $(grep 'RIFT_EVIDENCE_DECIDER' "$f" | sed 's/^[0-9]*://' | sed 's/(.*//' | awk '{print $NF}' | sed 's/^[*&]*//'); do
+      case " $registered " in
+        *" $name "*) ;;
+        *) errs=$((errs + 1)) ;;
+      esac
+    done
+  done
+fi
+
 printf '  ----------------------------------------------------------\n'
 if [ "$errs" -ne 0 ]; then
   printf '   FAIL  %d problem(s).\n\n' "$errs"
   exit 1
 fi
-printf '   ok  scope clean, registry exact, claims present\n\n'
+printf '   ok  scope clean, registry exact, claims present, deciders asserted both ways\n\n'
