@@ -322,6 +322,108 @@ the suite kills rather than a thing the code remembers.
 
 ---
 
+## 3a. D-A7-6: how the term-start no-op is REPRESENTED **[open]**
+
+§2 says *"the fix is one entry: on becoming leader, append an empty entry in the new term."* It does
+not say what that entry **is**, and the three ways to say it differ in one respect that matters:
+**one of them is a frozen-interface change and two are not.**
+
+This is written before the no-op's commit because ruling 6 puts that commit first, and a decision made
+inside a commit that is supposed to move every number for exactly one reason is a decision nobody
+sees.
+
+**A. `EntryNormal`, empty `Data`, and the ZERO `ProposalID`.**
+
+- *for*: no interface change at all. And the identity is not arbitrary — `Propose` **refuses** the zero
+  `ProposalID`, with a reason already in the code: *"a proposal needs an identifier; the zero value is
+  refused so a caller cannot fall back to matching on log index, which is not a proposal identity."*
+  So no client proposal can ever carry it, and **the no-op is identified by holding the one identity
+  the propose path is forbidden to issue.** That is a distinguishing mark nothing else can collide
+  with, rather than a convention.
+- *against*: every consumer of the apply path must handle an entry with no `Data` and no proposal
+  identity, and any of them keying a map on `ProposalID` now sees the same key once per election. That
+  is the hazard below and it is the whole of the work.
+
+**B. A new `EntryType`, `EntryNoOp`.**
+
+- *for*: the typed answer, and this project prefers typed answers — DESIGN-A5 §13's `At[Index, T]`
+  discussion is the standing argument for them.
+- *against*: **`Entry` and `EntryType` ride in `Ready`, so this is a change to the interface DESIGN-A0
+  D5 froze.** Per the standing rule that makes it *a report, never an assumed ratification* — and
+  CARRY-FORWARD already holds one such change (`raft.Configuration()` should take an index) that was
+  deliberately not made on its own. Opening the frozen interface for a no-op, while a better candidate
+  waits, is the wrong order.
+
+**C. `EntryNormal` with a marker prefix**, on the split's pattern (`store/range.go`: *"it reuses raft's
+`EntryNormal` envelope with a marker prefix, because raft has no business knowing what a range is"*).
+
+- *for*: an existing, working precedent in this tree.
+- *against*: **the precedent points the other way here.** The split's marker exists because the
+  *state machine* owns the concept and raft must not. The term-start no-op is the opposite: **raft
+  owns it**, appends it itself, and the state machine must not care. Borrowing the pattern would put a
+  raft-level fact into a state-machine-level encoding.
+
+**Recommendation: A**, and it is chosen partly to *avoid* B rather than because typing is unwelcome —
+the frozen interface should be opened once, for the change that has been waiting for it, not for this.
+
+### 3a.1 What A costs, surveyed rather than guessed
+
+An earlier draft of this section asserted that A carried a real hazard against the sacred list's
+*client request dedupe — retried requests apply at most once*: a zero `ProposalID` recurring once per
+election, polluting anything keyed on it. **The survey says the hazard is already answered, and it is
+answered by guards that are in the tree today with their reasons written beside them.**
+
+**Every consumer of `Entry.ID` in the system packages:**
+
+| site | what it does | already guarded? |
+|---|---|---|
+| `store/node.go:771` `answerAt` | matches a committed entry to the client waiting on it | **yes** — `if e.ID.Zero() { return }` on the first line |
+| `store/node.go:843` `answerTxn` | the same, for transaction steps | **yes** — same guard |
+| `store/node.go:924` | the same, for the third answer path | **yes** — same guard |
+| `store/codec.go:65` | encodes the ID into the log record | no guard needed; a zero ID round-trips as a zero ID |
+| `raftcheck/ledger.go:410,448` | keyed on **transaction** IDs, not proposal IDs | not a consumer |
+
+**And the apply path ignores a dataless entry by construction.** The committed-entry loop dispatches on
+the CONTENT of `e.Data`, and its arms are `isTxnCommand(e.Data)`, `isSplitCommand(e.Data)`, and
+`len(e.Data) > 0`. **There is no `default:`.** An entry with empty `Data` matches no arm and applies as
+nothing — and the third arm's guard is what makes that true on purpose rather than by luck.
+
+So A's real cost is not new guards. It is:
+
+1. `becomeLeader` appends `Entry{Type: EntryNormal, Term: r.term, Index: lastIndex()+1, ID: ProposalID{}, Data: nil}`;
+2. **the two existing guards become load-bearing for a new reason**, and that has to be said in both
+   places, because a guard whose stated purpose no longer covers everything resting on it is how
+   BUG-022 happened;
+3. **a mutant removes each guard and must be killed.** Today `if e.ID.Zero() { return }` protects
+   against a client op with no identity, which no path produces; after the no-op it protects against a
+   raft-internal entry answering somebody's request. That is a second reason on one line, and §22.6b's
+   rule applies — *a decision in two halves needs a mutant per half*.
+
+### 3a.1b And the survey changes what B is worth
+
+**No consumer switches exhaustively on `EntryType`.** Every one tests `== EntryConfChange` or
+`!= EntryConfChange` — `raft/raft.go` at 1274, 1573, 2335, 2509, 2743 and `store/node.go` at 1616,
+1693. A new `EntryNoOp` would therefore be routed down the **normal-command** path at every one of
+those sites, and would still need exactly the same empty-`Data` handling to be ignored.
+
+> **B buys a name, not a behaviour.** It does not make the state machine skip the no-op for free, and
+> it costs a change to the interface DESIGN-A0 D5 froze. That is the trade in one sentence, and it is
+> what the survey was for.
+
+### 3a.2 And it needs the fact table's question asked of it
+
+§4's discipline, applied to this decision before the code:
+
+| the derived fact | the wrong place to take it | the right place |
+|---|---|---|
+| whether an applied entry is a client proposal | it has `Data` | **its `ProposalID` is non-zero** — a client proposal may legitimately carry empty `Data`, and a no-op never carries an identity |
+| the term a no-op belongs to | the term when it is appended | the term at `becomeLeader` (§4 already carries this row, and A is where it becomes concrete) |
+
+**Stopping here on D-A7-6.** It is the only decision in the no-op's path that is not already ruled, and
+option B would touch the frozen interface, which is a report rather than a thing to assume.
+
+---
+
 ## 4. The timestamp-position class, applied preemptively a third time
 
 DESIGN-A5 §7 and DESIGN-A6 §8 both named every fact of this shape before the code, and A6's result
@@ -652,7 +754,16 @@ by somebody who had just read the argument against it.
 25,000, sharded, as A6 ran. `make exit-run` is one command and the machinery is built.
 
 The sequencing is fixed by ruling 6 and it is not negotiable within the phase: **the term-start no-op
-is its own commit, with a full re-measurement, before any read-index code exists.** A6's three owed
+is its own commit, on a committed baseline, with a full re-measurement, and one reason per moved
+number.**
+
+**One thing stands between here and that commit: D-A7-6 (§3a) is open.** §2 says *append an empty
+entry* and does not say what the entry is, and one of the three answers — a new `EntryType` — is a
+change to the interface DESIGN-A0 D5 froze, which is a report rather than an assumption. The
+recommendation is A (`EntryNormal`, empty `Data`, the zero `ProposalID`), chosen partly so the frozen
+interface is opened once for the change already waiting on it rather than for this. It carries a real
+obligation either way: the zero ID recurs once per election, so every structure keyed on `ProposalID`
+must skip it explicitly, and a mutant must remove that skip and be killed. A6's three owed
 measurements are discharged (CARRY-FORWARD), so nothing blocks the first commit — but the no-op moves
 the baseline they were taken against, which is why criterion 4 above asks for the power numbers again
 rather than citing A6's.
@@ -932,6 +1043,8 @@ Written here rather than in §9 so that the list is short and checkable at exit:
 
 - ~~the **restated** three-guard totality argument (ruling 13)~~ — **written, §9a.** What remains is
   the induction: `M71` re-pointed at `P` negated, and `M72` re-induced against the restated form;
+- **D-A7-6 (§3a), open** — how the no-op is represented; it gates the first commit, and option B
+  would touch the frozen raft interface;
 - ~~the ledger-side oracle for ruling 3's condition~~ — **specified, §5a**, with its independence
   argument and seven induction cases. What remains is building it and the `i - 1` mutant;
 - the counted plain-read census field (ruling 9), before any number reaches BENCHMARKS.md;

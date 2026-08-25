@@ -3593,10 +3593,11 @@ The three groups fall out of the files, not out of anybody's judgement:
 | **toy** | the patch changes `sim/toy`, which the raft sweep never runs | the opt-out is a **REDIRECTION**, not a reachability claim: the named floor must exist and its lane must run |
 | **framework** | the patch changes the code that computes the probe's verdict | measurement is **unsound**, not weak: instrument and subject are the same code. **EXEMPT, with a written argument** |
 
-**Seventeen classes are in the opt-out column** (eighteen patches carry `power:`; the canary is
-excluded by its own `expect: alive`, because a patch that must SURVIVE is not making a reachability
-claim). They partition **5 system / 4 toy / 8 framework**, and the partition is computed from the
-`---` lines of the patches rather than declared.
+**Seventeen classes were in the opt-out column when the pass ran** (eighteen patches carried
+`power:`; the canary is excluded by its own `expect: alive`, because a patch that must SURVIVE is not
+making a reachability claim). They partition **5 system / 4 toy / 8 framework**, and the partition is
+computed from the `---` lines of the patches rather than declared. *Fifteen after the rulings — §43.9b
+is what moved and why.*
 
 ### 43.2 The inductions, because a lane's verdicts do not count until they have been made to fire
 
@@ -3629,7 +3630,7 @@ the first seed, at any point in the phase and a half the claim stood.*
 
 ### 43.3 The results, over the group whose patches do not touch the instrument
 
-Nine of the seventeen. Thirty seeds each, against the unmutated tree at the same thirty — *a
+Nine of the seventeen — the five reachability claims and the four floor redirections. Thirty seeds each, against the unmutated tree at the same thirty — *a
 difference, not a presence*.
 
 | class | verdict | what the pass found |
@@ -3938,6 +3939,239 @@ asserted in prose.
 > is no evidence that fits both; so it requires none, and the well-covered case and the unexamined one
 > arrive looking identical. Splitting is not tidying. It is what makes the evidence field possible.**
 
+### 43.9b And the column is fifteen now, which is the pass's actual output
+
+Every number in §43 describes the seventeen as they stood **when the pass ran**, and that is the right
+tense for a measurement. What the rulings then did to the column is the result:
+
+| | before | after |
+|---|---|---|
+| `power-unreachable` — reachability claims | 5 | **3** |
+| `power-covered-by` — a named instrument, run by the lane | 12 | 12 |
+| **in an exemption column at all** | **17** | **15** |
+| measured every run by `power-mutants` instead | — | **`M30`** (floored, 300 seeds) and **`M67`** (sweep detector, `ForeignTagStarts`) |
+
+**Two classes left the exemption columns entirely, and one of them left because it turned out to plant
+a first-tier safety defect.** That is the pass's output stated as a change to the tree rather than as a
+report: `make power-refute-decl` now prints `3 measurable and unmeasured` where it printed 5, and the
+two that moved are re-measured on every run of a lane that has a floor to breach.
+
+### 43.9c The declaration change broke the lane that reads it, and the lane said so by reading zero
+
+Recorded because it is small, unglamorous, and exactly the shape this document is about.
+
+Teaching `power-mutants.sh` the two new declarations meant adding
+`covered=$(sed -n 's/^# power-covered-by: *//p' "$patch")` inside its report loop. **`covered` was
+already the name of the lane's counter of floored classes**, initialised at the top and incremented
+per measured class. So every iteration overwrote the counter with a string, and the lane printed:
+
+```
+   0 classes floored and ceilinged, 0 exempt by a named instrument or a named detector, 2 failures
+   power-mutants.sh: line 350: [: : integer expression expected
+```
+
+**Zero floored classes, in a run over two patches that both declare floors.** The count was not wrong
+by a bit — it was a number that had stopped being computed, sitting under a summary line that reads as
+a measurement. Had the shell not also complained about the arithmetic, the only symptom would have
+been a plausible-looking zero.
+
+> **A counter shadowed by a parser is a vacuous count**, and it is the register's own class arriving
+> in the machinery of the lane that was built to check the register's class. Renamed to `coveredby`;
+> the guard that caught it is the one already in the script — *"an empty power lane proves nothing"* —
+> which fired because a zero count is a thing this lane was already taught to refuse.
+
+**And it is an argument for the guard rather than for care.** The rename is a one-line fix and nobody
+learns anything from it. What is worth keeping is that the lane had a **floor on its own output** —
+`if [ "$covered" -eq 0 ]` — put there for an unrelated reason, and that floor is what turned a silent
+miscount into a failure.
+
+### 43.9d The written case: `power-mutants`' sweep detector could not fire in the lane's default mode
+
+CLAUDE.md: *a failing test or checker means the code is wrong until proven otherwise; if you believe a
+checker is itself buggy, stop and make the written case first.* This is that case, and it is a defect
+in a **signed phase** — the sweep detector landed at A6 (§35.1) and has never worked in the mode the
+lane actually runs in.
+
+**How it surfaced.** `M67`'s ruled disposition is `power-detector: sweep`. Applied and run
+sequentially, the lane said:
+
+```
+   BLIND    M67-minting-drops-the-node-tag   no exit criterion failed that the unmutated tree
+            does not also fail (30 seeds, current).
+```
+
+Against a measurement, taken an hour earlier, of **589 foreign-tag starts at those same thirty seeds
+on a clean tree that reads zero.** Two instruments, the same tree, the same seed count, opposite
+answers — so one of them is broken, and the arithmetic says which.
+
+**The mechanism.** `power-mutants.sh` had two measurement paths:
+
+| mode | how it measured | what it wrote |
+|---|---|---|
+| `POWER_JOBS > 1` | `measure_one`, a shared function | `$scratch/$id.result`, holding the rate line **and every `POWER-SWEEP` line** |
+| `POWER_JOBS = 1` | an inline copy of the same probe | **nothing** — and it grepped `'^POWER '`, with the trailing space, so it captured the rate line and discarded the sweep lines |
+
+The sweep branch reads the mutated failures with
+`tail -n +2 "$scratch/$id.result"`. In sequential mode that file does not exist, so the mutated set is
+**empty**, `comm -13` against the baseline finds nothing new, and the verdict is BLIND — *always,
+whatever the mutation does.*
+
+> **`POWER_JOBS` defaults to 1, and `make power-mutants` sets nothing. So the default mode of the lane
+> could not fire the detector at all.**
+
+**What it has cost, which is the part that makes it a finding rather than a bug report.** Three classes
+declare a sweep detector: `M67` (ruled today), and **`M68` and `M73`, which landed at A6**. Both have
+therefore been reporting BLIND in the default lane **since `d8589a9`** — a red verdict produced by the
+lane's plumbing rather than by either class. That is §31's shape exactly, one turn later: *a lane
+reporting red into a room with nobody in it*, except this time the red is not even about the classes.
+
+**The chain that let it happen, stated because the fix follows from it.** `POWER_JOBS` was added first
+(`ba9df9d`), which created the second path. The sweep detector was added next (`d8589a9`) and taught to
+`measure_one` — **the shared helper, which is the right place** — and the inline copy was not updated,
+because nothing in the script says the two paths must agree. *A feature added to one of two duplicated
+paths is a feature that exists in one mode.*
+
+**The fix is not to teach the second path the detector. It is to delete the second path.**
+`measure_one` is now the only thing that measures; both modes read its output; a detector added later
+lands in both by construction. That is a strengthening — sequential mode gains a verdict it never had
+— and it removes the divergence rather than patching one instance of it.
+
+> **And the general form, which is worth more than the fix:** *two code paths that compute the same
+> thing will drift, and the one that drifts is the one the tests do not run.* This project already
+> knows that about the system under test — it is why `engine/model` and the C++ engine are compared
+> byte-for-byte rather than trusted — and it had not applied it inside a lane script.
+
+### 43.9e The second half of the same defect: `POWER_JOBS > 1` could not report a pass at all
+
+§43.9d found that the lane's sequential mode could not fire the sweep detector. Chasing the same
+`M67` verdict further turned up the **other** half, and it is the worse of the two.
+
+**The symptom.** `M67` reported `ERROR -- the probe produced no measurement` from `measure_one`, in
+both parallel and sequential mode, while the identical probe run by hand on the identical tree
+completed in 146.7 s with `GOSTATUS=0` and `ForeignTagStarts:589`. Three wrong explanations were
+offered before the evidence was collected: contention, a tree copied mid-edit, and a timeout. **All
+three were guesses, and the diagnostic that settled it — keeping the probe's raw tail — was added
+because guessing had already cost four runs of a lane with no executor.**
+
+**The cause, from the trace.** The result file `measure_one` writes has a shape:
+
+```
+line 1    <status>TAB<the POWER rate line>
+line 2+   one POWER-SWEEP failure per line
+```
+
+and the reader was `status=$(cut -f1 "$file")`. **`cut` emits one field per LINE.** So:
+
+```
++ status='OK
+<sweep failure one>
+<sweep failure two>'
++ [ 'OK\n...' != OK ]        -> true
++ printf '   ERROR    %s: the probe produced no measurement.\n'
+```
+
+**The class measured perfectly and was reported as unmeasurable, because its measurement contained
+more than one line.**
+
+**And the blast radius is the whole lane, not one class.** At the seed counts this lane runs, a clean
+tree fails several *non-vacuity* criteria — *no snapshot was ever taken*, *no prewrite met a live
+lock* — so almost every probe emits sweep lines. Therefore:
+
+> **Since `d8589a9` (2026-08-23), `power-mutants` could not report a pass for essentially any class in
+> `POWER_JOBS > 1` mode, and could not fire the sweep detector in `POWER_JOBS = 1` mode. Both modes.
+> The lane whose entire purpose is to notice when detection power drops has been unable to return a
+> verdict in either configuration.**
+
+**The span is one day of wall clock, and saying "the back half of a phase" — as an earlier draft of
+this section did — was an overstatement worth correcting rather than quietly trimming.** What the
+window actually covers is not long, it is *load-bearing*: `d8589a9` to `6d479ea` is the entire
+post-A6 measurement cycle — §40's detector, §41's sweep, §42's five re-measurements and the `M56`
+finding, and §43's whole refutation pass. Every sentence in those sections that says *the lane* was
+written while the lane could not return a verdict. The numbers survive because they came through
+`--measure` (below); the characterisations of the lane's health did not have to.
+
+**Why the A6 measurements are still good.** §42's numbers were taken through `--measure` at
+`POWER_JOBS=1`, which sets `status` inline and never reads the result file, so it walked past both
+defects. That is worth stating precisely rather than reassuringly: **the measuring path worked and the
+GATING path did not.** A lane can produce correct numbers for a phase while being structurally unable
+to fail.
+
+**Why nothing noticed, which is the only part that is not new.** §37's audit, RISK-1's sentence:
+*a lane too expensive for the hook has no executor at all, so its tier is a label rather than a
+schedule.* Fifteen CPU-hours, nothing runs it, and a lane nobody runs cannot tell you it has stopped
+working. This is the third distinct way `power-mutants` has been silently broken — after §31's
+category error in two declarations and §35.1's blind `noticed()` — and all three were found by
+somebody happening to look.
+
+**The fix, and the rule.** `head -1 "$file" | cut -f1`. The rule it comes from:
+
+> **A file with a shape is parsed by that shape. `cut` does not know about line one, and a reader that
+> ignores the format its writer promised will be wrong in exactly the cases where the writer had
+> something extra to say** — which here is *every case where the detector had something to report.*
+
+**Both directions induced.** A stub result file carrying a status line plus two sweep lines parses to
+`OK` under the fix and to `OK\n<sweep>\n<sweep>` under the old read; an absent file parses to the
+empty string, which the fix maps explicitly to `ERROR` rather than letting a blank status fall through
+as something that is not `OK` for the wrong reason.
+
+### 43.9g The verdict, and the strange thing about being able to report one
+
+With both defects fixed, the two ruled classes through `power-mutants`:
+
+```
+   ok       M30-leader-counts-its-own-unsynced-append  1 of 300 (floor 1), first=178 (ceiling 300)
+   sweep    M67-minting-drops-the-node-tag             noticed by an exit criterion the baseline
+                                                       passes (30, current):
+              589 start timestamps carried the tag of a node other than the one asked for them
+   2 classes floored and ceilinged, 0 exempt by a named instrument or a named detector, 0 failures
+```
+
+**Both ruled dispositions verify at the numbers they were ruled on.** `M30`'s floor and ceiling hold
+— *detected at all*, which is the honest form for a class at 1 in 300 — and `M67`'s sweep detector
+fires on `ForeignTagStarts` against a baseline that passes.
+
+> **And this is the first verdict `power-mutants` has ever been in a position to produce, which is a
+> stranger sentence than the fix that made it possible.** Since `d8589a9` the sequential mode could
+> not fire a sweep detector and the parallel mode could not report a pass; before that, `noticed()`
+> could not see an aggregate detector at all (§35.1), and before *that* the lane floored zero mutant
+> classes (§31, and the file header has said so since A0). At no point in this lane's history has it
+> been able to return `ok` and `sweep` on two classes and mean them.
+
+**What that does NOT mean, stated because the sentence invites the overclaim.** Two classes were run,
+not sixty-one. The full lane is ~15 CPU-hours and it has *never* been run to completion under a reader
+that works — so every class whose probe emits a sweep line has, until now, been unmeasurable through
+the gating path, and what those classes actually say is **unknown rather than green**. That is on the
+owed list (§43.12) and it is a bigger unknown than it was an hour ago, because the fix means the
+question can now be asked at all.
+
+### 43.9f Two claims of mine that were wrong, recorded as written
+
+A report that flags its own premature claims is what makes the unflagged ones worth reading, so both
+of these are in the record rather than corrected in passing.
+
+**One: three confident causes, all wrong.** The `ERROR` verdict was attributed, in order, to
+contention between concurrent probes, to a working tree edited while `copy_tree` was tarring it, and
+to a probe timing out. Each was plausible, each was offered as a diagnosis rather than as a
+hypothesis, and each was wrong. **What settled it was instrumenting the thing — `set -x` inside
+`measure_one` — which was available from the first failure and was reached at the fourth**, on a lane
+whose runs cost minutes to hours. The tar hypothesis was the worst of the three, because it was
+specific enough to sound investigated and it named a mechanism (`set -e` on a broken pipeline) that
+does not apply here.
+
+> **A cause that explains the evidence is not the same as a cause the evidence establishes**, and the
+> distance between them is one command.
+
+**Two: the duplicated-path fix was described as a strengthening before it was verified.** §43.9d
+collapsed the lane's two measurement paths onto the shared helper. That is the right shape and it
+stands. But the shared helper was the broken one, so the change moved sequential mode from *silently
+blind* to *erroring*, and the improvement was asserted in a report one turn before any run confirmed
+it. **The shape was right and the claim was premature**, which is a distinction this project cares
+about because the second half is how a correct change acquires an incorrect record.
+
+Neither of these is a defect in the tree. Both are defects in what was said about the tree, and they
+are here because §31's finding — *a lane reporting red into a room with nobody in it* — has a sibling:
+a report asserting green into the same room.
+
 ### 43.10 What the pass does not do, stated before anybody quotes it
 
 #### The sizing rule, with the measurement behind it
@@ -4013,26 +4247,37 @@ recommendation I am taking.
 
 ### 43.12 What it leaves owed
 
-Four things, none of them taken on my own judgement:
+Five things — the first now ruled, the rest still Ansh's:
 
-1. **The lane is RED on `M30` and `M67`, and red is the correct colour.** §31's precedent is explicit
-   about the direction: *both changes turn a red lane green, which is the one direction that needs the
-   measurement to land first rather than the argument.* The measurements have landed and are recorded
-   in the declarations; the dispositions they justify are Ansh's to accept. Both are recommended and
-   neither is taken:
-   - **`M30` → `power-detector: sweep` at 300 seeds**, on `M73`'s precedent. Not a rate floor: a
-     floor derived from a single detection is noise, which is `floors.go`'s own rule, and 1 of 300 is
-     a single detection. What is not in doubt is that the sweep sees it — the verdict is a safety
-     violation the clean tree does not have at the same 300 seeds.
-   - **`M67` → `power-detector: sweep`**, on the same precedent, with the seed count taken properly.
-     `ForeignTagStarts` reads 589 at thirty seeds, so the count that matters is how few seeds suffice,
-     not how many.
+1. ~~**The lane is RED on `M30` and `M67`.**~~ **RULED and TAKEN.** §31's precedent held while the
+   measurements were outstanding — *turning a red lane green is the one direction that needs the
+   measurement to land first rather than the argument* — and the measurements landed, so Ansh ruled on
+   both rather than leaving them owed. **`M73`'s precedent for both**, and they diverge because the two
+   classes measured differently:
+
+   | class | disposition | why this one |
+   |---|---|---|
+   | **`M67`** | `power-detector: sweep`, 30 seeds, **naming `ForeignTagStarts`** | no per-seed rate (0 of 30) and an unambiguous sweep verdict: **589 against a criterion asserted at exactly zero across 25,000 seeds.** The margin is in the magnitude, not the seed count, so 30 is declared because 30 is what was measured |
+   | **`M30`** | **a floored class**, `power-seeds: 300`, `power-floor: 1`, `power-ceiling: 300` | it has a per-seed detection, so it takes a rate. **Ansh's reason is the one that decides it: a class with a confirmed first-tier safety detection has no business in either exempt column** |
+
+   **And `M30`'s floor and ceiling are not two independent numbers, which is said rather than papered
+   over.** At 1 detection in 300, a floor of 1 and a ceiling of 300 are the same statement —
+   *detected at all* — which is `floors.go`'s documented answer for a class too weak to carry a rate:
+   *"a floor derived from a single detection would be noise... what must not silently change is that
+   the class remains reachable."* So this class has **no kill-time signal separate from its rate**, and
+   the day it earns one is the day the rate rises. Declaring a wider sweep to manufacture separation
+   would be declaring a seed count nobody measured.
 2. **One census field would move three classes out of the exempt column** — decided-and-total
    operations per run, recorded where the history is assembled. It adds a census field and an exit
    criterion, which is not a change to make silently, and it would convert `M8`, `M9` and `M15` from
    *exempt with an argument* into *measured*.
 3. **Whether a pinned class owes a current-shape number** (§43.11). A ruling, not a recommendation.
-4. **The pass cannot tell a hard-zero criterion from a non-vacuity one.** `ForeignTagStarts != 0` is
+4. **The full `power-mutants` lane has never completed under a working reader.** Both defects at
+   §43.9d and §43.9e were fixed today, and only the two ruled classes were run afterwards. Every class
+   whose probe emits a sweep line was unmeasurable through the gating path for the whole post-A6
+   cycle, so **their verdicts are unknown rather than green.** ~15 CPU-hours, in the column with no
+   executor (RISK-1), and the first run of it is now worth more than it has ever been.
+5. **The pass cannot tell a hard-zero criterion from a non-vacuity one.** `ForeignTagStarts != 0` is
    asserted at exactly zero across the signed 25,000-seed run; *no move ever completed* is marginal at
    thirty seeds on the clean tree too. Both arrive as "a sweep criterion the baseline passes", so the
    lane prints the weaker caution for both. Making them distinguishable means the criteria saying which
@@ -4095,11 +4340,20 @@ extended to 24.
 
 ### 44.3 The colour of the tree, stated rather than implied
 
-**`make power-refute` is RED, on `M30` and `M67`.** That is the correct colour and it is the first
-thing this lane has ever said. §31's precedent governs what happens next: *turning a red lane green is
-the one direction that needs the measurement to land first rather than the argument.* Both
-measurements have landed and are recorded in the declarations themselves; both dispositions are
-recommended and neither is taken.
+**Both ruled dispositions verify, and the lane returned a verdict for the first time.**
+`ok M30 — 1 of 300 (floor 1), first=178 (ceiling 300)` and `sweep M67 — noticed by an exit criterion
+the baseline passes: 589 foreign-tag starts`, `0 failures` (§43.9g). Getting there took fixing two
+defects in `power-mutants` that had left it unable to return a verdict in either configuration
+(§43.9d, §43.9e) — which is RISK-1's demonstration and is recorded there as one paragraph rather than
+as four entries.
+
+**`make power-refute` went RED on its first complete run, on `M30` and `M67`.** That was the correct
+colour and the first thing this lane ever said. §31's precedent governed what happened next — *turning
+a red lane green is the one direction that needs the measurement to land first rather than the
+argument* — the measurements landed, and Ansh ruled both dispositions (§43.12): `M67` to a sweep
+detector naming `ForeignTagStarts`, `M30` **out of the exempt column entirely** and into a floored
+class measured from the 300-seed number, because a class with a confirmed first-tier safety detection
+has no business in either exemption.
 
 `M30` is the one that matters. It mutates a durability gate — the leader counting toward the commit
 quorum a copy it has not written — and it was exempt on the sentence *"unreachable on this schedule mix

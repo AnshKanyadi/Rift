@@ -33,6 +33,13 @@ holds a position and asks a question that does not take one, which is what made 
 fix is a frozen-interface change (DESIGN-A0 D5), so it is a **report, never an assumed
 ratification**, and it is not worth opening that interface for on its own.
 
+**And A7 declined to open it for a smaller reason, which is the rule working.** DESIGN-A7 §3a
+(D-A7-6): the term-start no-op could be a new `EntryType`, which is the typed answer this project
+usually prefers — and `Entry` rides in `Ready`, so it is the same frozen interface. The recommendation
+is the untyped one (`EntryNormal`, empty `Data`, the zero `ProposalID`) **partly in order to leave the
+interface shut**, so that when it is opened it is opened for the change that has been waiting since
+A5 rather than for a no-op. If Ansh rules the other way, the two changes should land together.
+
 ---
 
 ## Owed by A6
@@ -210,6 +217,38 @@ after running unattended — `provcheck` red across a commit, `make test` unrunn
 `power-mutants` red from the day `M67` and `M70` landed and through the back half of a phase — and
 **the mechanism that would have caught all three has never run once.** That is the risk stated as a
 measurement: the detector for "a lane stopped" is itself a lane in the column that does not run.
+
+### RISK-1's demonstration: one lane, four silent breakages, none found by anything that looks
+
+*Recorded here as the risk's demonstration rather than as four entries beside it, because the pattern
+is the argument and the individual defects are not.* Every one of these is `make power-mutants` — the
+lane whose entire purpose is to notice when detection power drops:
+
+| # | what was broken | landed | found | how |
+|---|---|---|---|---|
+| 1 | `TestPowerProbe`'s `noticed()` consulted a hand-listed subset of the detectors, so **no class with an aggregate detector could be measured at all** — and zero was read as unreachable | `c1a1f6c`, 2026-08-18 | `d8589a9`, 2026-08-23 | chasing `M62`'s zero (§35.1) |
+| 2 | `M67` and `M70` declared a **sweep** floor over a class killed by a **unit test**, a claim the probe can never satisfy — the lane was RED and shouting into an empty room | `f26435d`, 2026-08-22 | `ba9df9d`, 2026-08-23 | *while making the lane affordable, not while looking for it* (§31) |
+| 3 | the sweep detector **could not fire in `POWER_JOBS = 1`** — the lane's default mode — because the sequential path never wrote the file the detector reads. `M68` and `M73` reported BLIND throughout | `d8589a9`, 2026-08-23 | 2026-08-24 | applying `M67`'s ruled disposition (§43.9d) |
+| 4 | `status=$(cut -f1 file)` read **every** line, so any class whose probe emitted a sweep line came back as `ERROR -- the probe produced no measurement`. **`POWER_JOBS > 1` could not report a pass for essentially any class** | `d8589a9`, 2026-08-23 | 2026-08-24 | instrumenting, after three wrong guesses (§43.9e) |
+
+> **Four distinct silent breakages in one lane. Not one was found by anything that looks — each was
+> found by a person who happened to be doing something else nearby.** Two of them landed in the same
+> commit and neither was noticed by the other's fix. And 3 and 4 together mean the lane was, for the
+> whole post-A6 measurement cycle, **unable to return a verdict in either configuration**: sequential
+> could not fire the detector, parallel could not report a pass.
+
+**That is RISK-1 stated as a measurement rather than as a worry.** The claim was *a lane too expensive
+for the hook has no executor at all, so its tier is a label rather than a schedule.* The demonstration
+is that the label held for four consecutive defects in the one lane whose job was to notice things
+going quiet. **A lane nobody runs cannot tell you it has stopped working**, and the corollary the
+fourth entry adds is sharper: it cannot tell you it has stopped working *even while you are actively
+reading its output*, because what you are reading is the output of a lane that cannot fail.
+
+**What this does NOT change.** Nothing here is closable from inside the repository — §37's mitigation
+stands and is the only one available: *a millisecond check on the inputs of an hours-long lane*, which
+is why `power-decl` and `power-refute-decl` are in the hook and the measured halves are not. What the
+four entries add is the honest size of what that mitigation does not cover: **it checks the lane's
+inputs and nothing checks the lane.**
 
 **And it has a sibling that costs nothing to run and is switched off anyway.** `M56` carried an
 opt-out claiming its class was unreachable, reasoned by analogy with another mutant and never
@@ -415,11 +454,32 @@ most expensive defect was in the column the table has no room for.
 
 ## Standing, from A7's refutation pass
 
-**`M30` and `M67` are RED and their dispositions are unruled.** DESIGN-A6 §43.12. Both measured, both
-recommended for `power-detector: sweep` on `M73`'s precedent, neither taken — turning a red lane green
-is the direction §31 says needs the ruling rather than the argument. `M30` is the sharper one: it
-mutates a durability gate in `raft/` and the oracle that catches it is leader completeness, so what is
-red is a class whose defect breaks *committed is forever*.
+**~~`M30` and `M67` are RED and their dispositions are unruled.~~ DISCHARGED — ruled and taken.**
+DESIGN-A6 §43.12. `M73`'s precedent for both, and they diverge on how each measured: `M67` →
+`power-detector: sweep` at 30 seeds naming **`ForeignTagStarts`** (no per-seed rate, and 589 against a
+criterion asserted at exactly zero across the signed 25,000-seed run — the margin is in the magnitude,
+not the seed count); `M30` → **out of the exempt column entirely** and into a floored class,
+`power-seeds: 300 / power-floor: 1 / power-ceiling: 300`, measured from the 300-seed number.
+
+*Ansh, ruling: "a class with a confirmed first-tier safety detection has no business in either exempt
+column."*
+
+**Verified green, and the lane returned a verdict for the first time in its history.**
+`ok M30 — 1 of 300 (floor 1), first=178 (ceiling 300)`; `sweep M67 — 589 foreign-tag starts against a
+baseline that passes`; `0 failures`. Reaching that required fixing two defects in `power-mutants`
+(DESIGN-A6 §43.9d, §43.9e) — see RISK-1's demonstration above.
+
+**But only two of sixty-one classes were run.** The full lane has NEVER completed under a working
+reader: every class whose probe emits a sweep line was unmeasurable through the gating path for the
+whole post-A6 cycle, so those verdicts are **unknown rather than green**. ~15 CPU-hours, in the column
+with no executor. The first complete run of `power-mutants` is now worth more than it has ever been
+and there is still nothing that will run it.
+
+**What is carried rather than closed: `M30` has no kill-time signal separate from its rate.** At 1
+detection in 300, floor and ceiling say the same thing — *detected at all* — which is `floors.go`'s
+documented answer for a class too weak to carry a rate. The day the rate rises is the day this class
+can carry a real ceiling, and Amendment A2 wants one. Declaring a wider sweep now to manufacture the
+separation would be declaring a seed count nobody measured.
 
 **Three classes could leave the unmeasurable-here column for one census field.** DESIGN-A6 §43.6. `M8`, `M9` and
 `M15` are exempt because the only thing their mutations move is the `Inconclusive` count, which the

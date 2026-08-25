@@ -351,6 +351,7 @@ rhetorical:
 | 22 | **`TestPowerProbe`'s `noticed()`**, inside the power lane itself | it consulted a hand-listed subset of the harness's detectors, so no class whose detector is an aggregate assertion could be measured at all — and it reported zero for those classes as though zero meant unreachable | DESIGN-A6 §35.1 |
 | 23 | **an OPT-OUT**, which is a reachability claim | `power-mutants.sh` skips any patch carrying a `power:` line, so the claim exempts itself from the only instrument that could refute it. `M56`'s was reasoned by analogy with `M53` and never measured; it is **280 of 300, first at seed 0**, and **28 of 30 under A5's own shape** — false on the day it was written, not gone stale | DESIGN-A6 §42.3 |
 | 24 | **the DECISION about which claims to re-measure**, at DESIGN-A6 §42.1 | the pass that re-measured every class reading zero **excluded `M30` by citing `M30`'s own declaration** — *measured trace-identical over 10k seeds* — rather than a measurement. `M30` is **1 of 300 with a leader-completeness violation at seed 178**: `committed is forever`, broken. The one class reasoned out of the set was the one that was wrong | DESIGN-A6 §43.5a |
+| 25 | **`power-mutants`' MEASURING path, against its own GATING path** | `--measure` at `POWER_JOBS=1` sets its status inline and never reads the result file, so it produced correct numbers for a whole cycle — while the gating path read `cut -f1` over a multi-line file and could not report a pass for any class whose probe emitted a sweep line. **One tool, two entry points, and only one of them worked** | DESIGN-A6 §43.9e |
 
 Seven of the first eight were in the harness. The eighth was in a **verdict**, which is the difference
 between a machine that finds less than it should and a machine that certifies something false.
@@ -404,6 +405,21 @@ like triage rather than like an exemption. The rule that follows is narrow and m
 **And 24 is jointly authored**, which is recorded because the register is a record of how this project
 fails rather than of who failed: the exclusion was written by Claude and ratified by Ansh, on the same
 sentence, neither of whom asked for the number.
+
+**25 is the first entry where the two halves of ONE TOOL disagreed about whether it worked**, and that
+is what earns it a name rather than a line. Every earlier entry is an instrument that was silent when
+it should have spoken. This one *spoke correctly* — §42's five re-measurements, `M56`'s refutation, the
+whole post-A6 cycle of numbers came through `--measure` and are good — while the same script, entered
+through the path that decides pass or fail, was structurally unable to return a verdict.
+
+> **When a mechanism has a MEASURING path and a GATING path, they are two mechanisms. Each needs its
+> own induced failure, and every claim about the mechanism has to say which path produced it.**
+
+The failure mode this closes is specific and it is not "the tool is broken": it is that a correct
+number and a working gate look identical from outside, so a mechanism can accumulate a phase of
+trustworthy measurements while being incapable of failing. **A number is evidence about the path that
+produced it and about nothing else** — which is the provenance rule (entry 8) turned inward, on the
+instrument rather than on the system.
 
 **13 is the sharpest of the fourteen** and its general form is the one to carry forward:
 

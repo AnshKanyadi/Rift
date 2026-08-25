@@ -137,11 +137,28 @@ measure_one() {
   if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
     printf 'ROT\t\n' > "$out"; rm -rf "$work"; return 0
   fi
-  probe=$(cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
-    $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER' || true)
+  # # Keep the raw output, because "no measurement" is six different problems
+  #
+  # Everything that is not a clean POWER line lands as one word, ERROR, and the
+  # report says *the probe produced no measurement*. That is true of a build
+  # failure, a panic, a test timeout, a tree copied while somebody was editing
+  # it, and a probe that ran and printed nothing -- and those want different
+  # responses. Diagnosing one of them cost three runs of this lane, because the
+  # only evidence was the word ERROR.
+  #
+  # So the raw tail is kept and the report prints it. It is the cheapest possible
+  # version of the rule this project keeps re-learning: a verdict that cannot be
+  # acted on is a verdict somebody has to reproduce by hand.
+  (cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
+    $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ >"$out.log" 2>&1) || true
+  probe=$(grep '^POWER' "$out.log" || true)
   rm -rf "$work"
   rate=$(printf '%s\n' "$probe" | grep '^POWER ' || true)
-  if [ -z "$rate" ]; then printf 'ERROR\t\n' > "$out"; return 0; fi
+  if [ -z "$rate" ]; then
+    printf 'ERROR\t\n' > "$out"
+    tail -6 "$out.log" 2>/dev/null | sed 's/^/            > /' > "$out.diag" || true
+    return 0
+  fi
   printf 'OK\t%s\n' "$rate" > "$out"
   # The sweep failures, one per line, so the report can diff them against the
   # unmutated tree's. A PRESENCE is not a detection -- DESIGN-A6 §16.4 is the
@@ -193,7 +210,7 @@ optout=0
 for patch in "$PATCHDIR"/*.patch; do
   id=$(sed -n 's/^# id: *//p' "$patch")
   na=$(sed -n 's/^# power: *//p' "$patch")
-  covered=$(sed -n 's/^# power-covered-by: *//p' "$patch")
+  coveredby=$(sed -n 's/^# power-covered-by: *//p' "$patch")
   unreach=$(sed -n 's/^# power-unreachable: *//p' "$patch")
   expect=$(sed -n 's/^# expect: *//p' "$patch")
   seeds=$(sed -n 's/^# power-seeds: *//p' "$patch")
@@ -208,9 +225,9 @@ for patch in "$PATCHDIR"/*.patch; do
   # collapsing them. `covered` is a class with a better instrument than this
   # lane; `unreach` is a class making a claim this lane does not test and
   # `power-refute` does.
-  if [ -n "$covered" ]; then
+  if [ -n "$coveredby" ]; then
     optout=$((optout + 1))
-    printf '   covered  %-44s %s\n' "$id" "$covered"
+    printf '   covered  %-44s %s\n' "$id" "$coveredby"
     continue
   fi
   if [ -n "$unreach" ]; then
@@ -249,25 +266,53 @@ for patch in "$PATCHDIR"/*.patch; do
     continue
   fi
 
-  if [ "$JOBS" -gt 1 ]; then
-    status=$(cut -f1 "$scratch/$id.result" 2>/dev/null || echo ERROR)
-    out=$(cut -f2- "$scratch/$id.result" 2>/dev/null || true)
-  else
-    case $patch in
-      /*) abs=$patch ;;
-       *) abs=$ROOT/$patch ;;
-    esac
-    work="$scratch/$id"
-    copy_tree "$work"
-    if (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
-      out=$(cd "$work" && POWER_SEEDS="$seeds" POWER_CONFIG="$cfg" \
-        $GO test -count=1 -v -timeout 3600s -run TestPowerProbe ./sim/hunt/ 2>&1 | grep '^POWER ' || true)
-      status=OK
-      [ -n "$out" ] || status=ERROR
-    else
-      status=ROT
-    fi
+  # # ONE measurement path, because two of them drifted and a detector went blind
+  #
+  # This used to be an if/else: `POWER_JOBS > 1` read a result file written by
+  # `measure_one`, and the sequential branch ran its own inline copy of the same
+  # probe. The inline copy grepped `'^POWER '` -- with the trailing space, so the
+  # RATE line only -- and never wrote the result file at all.
+  #
+  # Then `power-detector: sweep` landed (§35.1) and was taught to the shared
+  # helper. It reads `$scratch/$id.result` for the `POWER-SWEEP` lines. In
+  # sequential mode that file does not exist, so the mutated sweep failures were
+  # always EMPTY, `comm -13` against the baseline always found nothing new, and
+  # **every sweep-detector class reported BLIND.**
+  #
+  # `POWER_JOBS` defaults to 1 and `make power-mutants` sets nothing, so that was
+  # the DEFAULT mode of the lane. DESIGN-A6 §43.9d is the written case.
+  #
+  # The fix is not to teach the second path the new detector. It is to delete the
+  # second path: one function measures, both modes read its output, and a
+  # detector added later cannot land in one of them.
+  if [ "$JOBS" -le 1 ]; then
+    measure_one "$patch" "$scratch/$id.result"
   fi
+  # # HEAD -1, and the bug it fixes is why this comment is long
+  #
+  # The result file `measure_one` writes has a SHAPE:
+  #
+  #     line 1   <status>TAB<the POWER rate line>
+  #     line 2+  one POWER-SWEEP failure per line
+  #
+  # This read was `cut -f1 "$file"`, which emits one field PER LINE -- so
+  # `status` came back as "OK\n<sweep>\n<sweep>" whenever the probe reported any
+  # sweep failure at all. `[ "$status" != OK ]` is then true, and the class was
+  # reported as **ERROR -- the probe produced no measurement**, having measured
+  # perfectly.
+  #
+  # At the seed counts this lane runs, a clean tree fails several NON-VACUITY
+  # criteria (*no snapshot was ever taken*, *no prewrite met a live lock*), so
+  # almost every class emits sweep lines. **The effect was that `POWER_JOBS > 1`
+  # could not report a pass for essentially any class**, and it has been that way
+  # since the sweep detector landed. Nothing noticed, because nothing runs this
+  # lane (§37, RISK-1).
+  #
+  # DESIGN-A6 §43.9e is the written case. The rule: a file with a shape is parsed
+  # by that shape, and `cut` does not know about line one.
+  status=$(head -1 "$scratch/$id.result" 2>/dev/null | cut -f1 || true)
+  out=$(head -1 "$scratch/$id.result" 2>/dev/null | cut -f2- || true)
+  [ -n "$status" ] || status=ERROR
   if [ "$status" = ROT ]; then
     printf '   ROT      %s: patch no longer applies\n' "$id"
     failed=$((failed + 1))
@@ -275,7 +320,10 @@ for patch in "$PATCHDIR"/*.patch; do
   fi
   if [ "$status" != OK ] || [ -z "$out" ]; then
     printf '   ERROR    %s: the probe produced no measurement.\n' "$id"
-    printf '            A power lane that cannot measure is a power lane reporting nothing.\n'
+    printf '            A power lane that cannot measure is a power lane reporting nothing -- and\n'
+    printf '            "no measurement" covers a build failure, a panic, a timeout, and a tree\n'
+    printf '            copied while it was being edited. The tail says which:\n'
+    cat "$scratch/$id.result.diag" 2>/dev/null || printf '            > (no output captured)\n'
     failed=$((failed + 1))
     continue
   fi
