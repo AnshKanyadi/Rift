@@ -77,7 +77,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 5 entries.
+Counts: 7 entries.
 
 ### The two general forms these entries taught
 
@@ -93,6 +93,28 @@ than on the absence of a fetch, and the isolation it did have worked perfectly
 and had nothing to block. Track A has hit the cousin of this twice. The cold
 cache is now part of what `cpp-ci` MEANS and is asserted at both ends —
 `scripts/cpp-cold-cache.sh`, induced by `COLD-fetch-despite-isolation`.
+
+**GF-3 — when an end-to-end test cannot distinguish two designs because both
+fail the same way, assert the discriminating property directly on the unit where
+the two differ.** From BM10. Our WAL checksum covers `length ‖ type ‖ payload`;
+LevelDB's covers `type ‖ data`. End to end the two are nearly
+indistinguishable — a corrupted length fails the checksum under either coverage —
+because **the difference is not in what happens, it is in what is KNOWABLE at
+the moment of failure**: with the length covered, the failure is at a known
+offset and resync has a sound starting point; without it, the bytes consumed
+before the failure are a function of data recovery has already decided not to
+trust. So the property is asserted on `FragmentCrc` itself: *same type, same
+payload, different length ⇒ different checksum*, which is false under upstream's
+coverage and true under ours, in one line, with no log image involved.
+
+The corollary is about who the defence is aimed at. **A deliberate divergence
+from a well-known upstream is not attacked, it is helpfully corrected.** BM10 is
+the one mutation in this catalogue a reviewer would most likely *approve*: it
+introduces no bug, it removes two bytes of work, and it makes us match LevelDB,
+whose header is byte-identical to ours. A defence written against a defect would
+be pointed the wrong way. This one is pointed at a competent, well-meaning
+reader — which is why the reasoning lives on the helper as a comment and not
+only in a design document nobody re-reads before a cleanup.
 
 **GF-2 — a two-field assertion where both fields read the same value under the
 defect is not an assertion.** From HARNESS-003. Track A has recorded this shape
@@ -284,3 +306,66 @@ here it arrived as a consequence of obeying §6.1.
 **What this would have caused.** Nothing, until someone iterated the map — at which point the fault
 schedule would have depended on the allocator, and a kill-point sweep would have injected against
 different files on different runs while reporting the same ordinals.
+
+### HARNESS-006 — a prefix-granular torn `Sync` was classified as exactness-suspending
+
+| field | value |
+|---|---|
+| **Found by** | writing B1.7b's discard test, which needed a torn `Sync` and found it marked the run non-evidence |
+| **Phase** | B1.3, found at B1.7b |
+| **Reproduce** | at `dfba754`: `SuspendsExactness(Injection::kTornSync)` returns true |
+| **Invariant that caught it** | none — no lane could catch it. The classification decides what a run may be *banked* as, and every run it mislabelled still passed every assertion |
+| **Mutant class** | `REGISTRY-lying-sync-not-suspending`, which existed and could not see this: it checks that members ARE members, not that non-members are not |
+| **Fix commit** | this one |
+
+**Root cause.** B1-D5 rules two things and they were collapsed into one. Prefix granularity — a kill
+inside `Sync` promoting `content[0:k)` — is **the contract model**, the thing §7.4's two-element set
+`R ∈ {G_{k−1}, G_k}` describes, and the engine is held to exactness under it. Only the *sector-subset*
+mode, where an arbitrary set of 4 KiB sectors is promoted, suspends: that is a device violating fsync's
+own ordering guarantee, and holding the engine to exactness there would report the engine for the
+disk's crime. B1.3 implemented one injector and mapped it onto the suspending registry member.
+
+**Which of the three things a surviving mutant means — except no mutant survived.** This is the case
+none of the three covers: a defect in a *classification*, where every run still behaves correctly and
+only its label is wrong. `REGISTRY-lying-sync-not-suspending` was pointed at the false-negative
+direction (a member that stops suspending). Nothing was pointed at the false-positive one.
+
+**What this would have caused.** The conservative direction, which is why it survived four ratified
+steps: runs that should have been banked as evidence were marked `kCharacterizationOnly`. Nothing
+unsafe — and at B1.9a it would have made §7.4 condition 3 **unreachable**, because the sweep-level
+assertion that *both* elements of the two-element set were observed cannot be satisfied by runs that
+are structurally uncountable as evidence. A gate that can never be satisfied is discovered late and
+looks like a bug in the engine.
+
+**Fix.** The injector is split: `kTornSync` (prefix, the contract model, does not suspend) and
+`kSectorSubsetTornSync` (an arbitrary sector left unpromoted, suspends). The registry now has exactly
+the two members §7.5 names. The test asserts **both directions** — that the two members suspend and
+that the prefix mode does not — because a classification asserted in one direction is the shape GF-2
+already names.
+
+### HARNESS-007 — `Slice` bound silently to temporary strings, and a test dangled
+
+| field | value |
+|---|---|
+| **Found by** | AddressSanitizer, inside `make cpp-mutants`'s **baseline gate** |
+| **Phase** | B1.7b |
+| **Reproduce** | at `dfba754`, with `Slice(std::string&&)` still permitted: `Op op; op.key = Slice("k");` |
+| **Invariant that caught it** | none by design. The baseline gate ran `cpp-asan` on the unpatched tree before reporting any kill, and refused to report |
+| **Mutant class** | none, and none is added: the fix is a compile error, so there is no runtime behaviour left for a mutant to blind |
+| **Fix commit** | this one |
+
+**Root cause.** `Slice` had `Slice(const std::string&)` and no `const char*` overload, so `Slice("k")`
+constructed a **temporary `std::string`** and pointed into it. The Slice outlived the full expression;
+the buffer did not.
+
+**Why the baseline gate is the entry.** The mutant lane refuses to report kills until the unpatched
+tree passes every lane a patch names — a rule borrowed from `make blind` after a lane there reported
+seven kills while one of the tests doing the killing was failing for its own reasons. Here it turned an
+unattributable run into a named ASan stack trace, and it is the second defect that gate has found
+(HARNESS-001 was the first).
+
+**Fix, and why it is structural rather than local.** `Slice(std::string&&) = delete;` makes binding to
+a temporary a **build failure**, and a `const char*` overload makes the literal case point at static
+storage. Twenty call sites had to hoist their strings into named locals; every one of them was a latent
+instance of the same bug, safe only by accident of lifetime. A class of dangling-pointer bug became a
+class of compile error.
