@@ -1,8 +1,8 @@
 # DESIGN-B2: SSTables, the bloom filter, and the manifest
 
-**Status:** **PROPOSED, awaiting decision.** Nine decisions, `B2-D1`..`B2-D9`, and three open
-questions. **No C++ file is written**: CLAUDE.md's phase rule is that a phase starts with this
-document and stops here.
+**Status:** **REVISION 2 — APPROVED 2026-08-25.** All nine decisions ratified as reasoned; the three
+open questions ruled and folded in below. Implementation proceeds under the exit criteria plus these
+answers.
 **Phase:** B2 (Track B). **Author:** Claude (Session B). **Decider:** Ansh.
 **Depends on:** B1, signed 2026-08-25. **Blocks:** B3, B4, B5.
 **Carries:** `CARRY-FORWARD.md` CF-1, which comes due in this phase.
@@ -64,6 +64,15 @@ of full keys attributed by measurement rather than inferred.
 **Rejected:** (a) — buys space, costs decode independence, unmeasured. (c) — gives up the resync
 anchor entirely.
 
+**THE CONNECTION, RECORDED BECAUSE IT IS THE SAME DECISION ONE LAYER UP.** B1's CRC covers the
+length; LevelDB's does not. Prefix compression makes a key a function of the entry before it;
+self-describing entries do not. **Both decisions are about the same question: does corruption produce
+something the reader REJECTS, or something it ACCEPTS?** A length outside the CRC yields a
+wrong-sized payload whose failure offset is unknown; a shared prefix yields a wrong key that parses
+perfectly. In both cases the cheap option does not lose detection — it converts a detected fault into
+an accepted one, which is strictly worse than an outage and is the failure mode §5.4 rejected
+candidate (b) for. Anyone reverting either one should be made to answer the same question.
+
 ---
 
 ## 2. B2-D2 — the index, and a key that does not exist
@@ -85,7 +94,12 @@ against the table's own contents, because there is nothing to validate it agains
 make the index **checkable**: every index entry must equal the last key of the block it names, and
 that is an assertion the classifier can make from the bytes alone.
 
-**Cost, stated:** a longer index. Shortening returns as an upgrade path at the same threshold as D1.
+**COST, STATED SO NOBODY LATER READS IT AS AN OVERSIGHT: the index is larger.** LevelDB's shortened
+separator is usually a few bytes where ours is a whole key, so our index grows with key length rather
+than with key *distinguishability*. On a keyspace of long, similar keys — which is what A5's MVCC
+encoding produces, since every internal key shares a user-key prefix — that difference is real and it
+is being paid deliberately. It is not an omission and it is not a TODO. Shortening returns as an
+upgrade path at the same threshold as D1: a measured index-size problem at B5, not before.
 
 ---
 
@@ -279,8 +293,14 @@ replay path share the memtable, the comparator and the internal key encoding.
 
 **Recommendation: assert both, in this order.** Each path is compared against **the harness's own
 reference state** at the watermark — the B1.9a oracle, unchanged, which asks the engine nothing — and
-*then* the two are compared with each other. The second comparison catches a shared-assumption bug
-only if it disagrees, which is a bonus; the first is what makes either result mean anything.
+*then* the two are compared with each other. **Their agreement is a THIRD CHECK, not the check.**
+
+**This is §13.4b arriving in C++ before it could cost anything, and it was inherited rather than
+paid for.** Track A learned that two paths sharing an assumption agree most confidently exactly where
+they are both wrong; here the two paths share the memtable, the comparator and the internal key
+encoding, so they would agree for reasons unrelated to either being correct. Writing that down before
+the code exists is the whole value of a shared constitution — the lesson arrives as a design
+constraint rather than as a postmortem.
 
 ---
 
@@ -306,24 +326,77 @@ function decides whether an orphan SSTable makes a run void or a violation.
 
 ---
 
-## 11. Questions remaining
+## 11. The three questions, ruled
 
-**B2-Q1 — does the flush retire §7.2's gapless check, or replace it?** §6 recommends *replace*, and
-the replacement is stated there, but the choice is a ruling: a weaker invariant here is how BM4's
-kill point loses its teeth, and I would rather have it decided than inherited.
+**B2-Q1 — the flush REPLACES §7.2's gapless check. It does not retire it.**
 
-**B2-Q2 — is CF-1's expected rise a gate or an observation?** If BM2's measured rate does not rise
-when the flush lands, is that a campaign failure or a recorded surprise? I lean **failure**: the
-accident's expiry is predicted, and a prediction that does not come true is information about the
-model. But a gate on a *rise* is unusual and I will not self-ratify it.
+Gaplessness was a property of *the WAL being the only durable record*. Once the flush exists the same
+property has to hold **across the pair**, and it is stated in that form:
 
-**B2-Q3 — how much of B4's crash rig arrives early?** The flush ordering in §6 has five steps and
-four adjacent pairs, and the natural way to check them is the kill-point sweep B1.9b already has.
-Extending it is cheap; building B4's full rig is not. My recommendation is to extend the existing
-sweep at B2.6 and leave the differential rig to B4, but the boundary is worth ruling now rather than
-drifting across.
+> Let `W` be the recovered watermark and `S` the highest sequence the SSTables hold. Recovery
+> contributes `[1, S]` from the tables and `(S, W]` from the surviving WALs. **Those intervals must
+> partition `[1, W]` exactly: nothing covered twice, nothing missing.**
 
----
+Three obligations, and the second is the one a weaker version would drop:
+
+1. **Asserted directly, not inferred from recovery succeeding.** Recovery computes the interval each
+   source contributes and checks the partition. A recovery that happens to produce plausible state is
+   not evidence that its sources tile the sequence space — that is exactly the inference the old check
+   was there to avoid.
+2. **Induced BOTH WAYS: a gap and an overlap.** A gap is a WAL deleted before the table that covers
+   it was durable. An overlap is WAL records replayed that a table already holds. They are different
+   defects with different causes and the same symptom of "recovery still worked".
+3. **A replaced check has to be shown to cover what the old one covered.** BM4 stays pointed at the
+   directory-sync failure it was written for, and must still be killed after the replacement — a
+   retired check is a check nobody is watching.
+
+**B2-Q2 — CF-1's predicted rise is a GATE, and the direction matters.**
+
+The campaign **fails** if BM2's rate does not rise when the flush lands. The prediction is the content
+of GF-5's claim: an accidental defence expires on a date, and this is the date. An unmet prediction
+means either the accident was not what we thought it was, or the flush did not do what we thought it
+did. **Both are findings**, and neither is a reason to adjust a floor.
+
+Reporting is specified, not left to judgement:
+
+- The new number is reported **against 194 per mille and first detection at kill point 14**.
+- If it rises, the report says **by how much**, and whether that is consistent with the accidental
+  defence having been **the whole** of the suppression or **only part** of it.
+- **A rise to something well short of what an unsuppressed class should measure is its own finding**
+  — it means something else is still suppressing detection, and the campaign has found the next thing
+  before anyone went looking.
+
+**B2-Q3 — bring forward only what B2's own gates cannot be induced without, each named with the gate
+that requires it.**
+
+The rule is the one this project has used since A0: *a gate is not landed until its failure has been
+induced.* So anything B2 needs to induce **its own** gates is B2 work regardless of which design
+document scheduled it, and anything beyond that waits for B4, where the rig is designed as a whole
+rather than accreted.
+
+The list, with its justifications, is §11.1. Anything not on it is B4's.
+
+### 11.1 What B2 brings forward, and why each piece
+
+| piece | the B2 gate that cannot be induced without it | verdict |
+|---|---|---|
+| the kill-point sweep's workload **extended to contain a flush** | §6's ordering has five steps and four adjacent pairs; every pair is a gate and none can be induced by a workload that never flushes | **B2 work.** The sweep exists; this is a longer workload, not a new rig |
+| **nothing else** | — | — |
+
+Everything else B2 needs is already standing and was built for B1:
+
+- **Fault injection at `RenameFile`** — `TestEnv` injects at any `CallSite` already, and `RenameFile`
+  has been a registered call site since B1.2a. B2.3 is its first *use*, not its first *support*.
+- **Byte-level fixture images for the SSTable classifier** — B2.0's gates are driven from hand-built
+  bytes exactly as B1.7a's were. No rig is involved in either.
+- **Manifest tampering for §5.1's third mechanism** — `TestEnvironment::FromImage` already reopens a
+  modified durable image; that is how B1.7b's watermark probe works.
+- **Orphan tables and covered WALs** — these are states the sweep *produces* by killing between
+  §6's steps, not states a rig has to construct.
+
+**So the honest answer is that B2 borrows one thing from B4: a longer workload.** If that reads as
+accretion the boundary is worth ruling again, but the alternative is a phase whose gates cannot be
+induced, and that is the one thing this project does not accept.
 
 ## 12. Decision summary
 
@@ -338,3 +411,9 @@ drifting across.
 | B2-D7 | `DeleteRange` | merged-view expansion; cap becomes reachable in normal use; both-directions adjudication unchanged |
 | B2-D8 | recovery equivalence | each path against the harness's reference **first**, the two against each other **second** |
 | B2-D9 | landing sequence | eight steps, observer before observed, CF-1 discharged at B2.4 and closed at B2.7 |
+
+| # | question | ruling |
+|---|---|---|
+| B2-Q1 | gapless check | **REPLACED, not retired.** The pair's intervals must partition `[1, W]`; asserted directly; induced as a **gap** and as an **overlap**; BM4 must still be killed |
+| B2-Q2 | CF-1's predicted rise | **A GATE.** The campaign fails if BM2's rate does not rise. Report against 194 per mille / kill point 14, say by how much, and say whether it is consistent with the accident being the whole of the suppression or only part |
+| B2-Q3 | how much of B4 arrives early | **One thing: a longer sweep workload**, because §6's four adjacent pairs cannot be induced by a workload that never flushes. Everything else B2 needs already exists (§11.1) |
