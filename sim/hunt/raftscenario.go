@@ -46,6 +46,14 @@ type RaftOptions struct {
 	PreVote           bool
 	SnapshotThreshold raft.Index
 
+	// ReadIndex serves PLAIN reads by read index instead of by a log entry (A7,
+	// D-A7-5 ruled A). Snapshot reads keep their entry regardless.
+	//
+	// It is an OPTION rather than a default because D-A7-4 keeps both paths for
+	// the phase: the differential oracle compares them, and a sweep that ran
+	// only one has not tested the thing the oracle is for.
+	ReadIndex bool
+
 	// GCRetention is how far behind its clock a leader collects. Zero disables.
 	GCRetention time.Duration
 
@@ -154,6 +162,15 @@ func A4Options() RaftOptions {
 // at remembered timestamps.
 // A6Options adds the bank: Percolator transactions over the accounts, on top of
 // everything A5 runs.
+// A7Options turns on read index for plain reads. It is A6's shape plus the one
+// change the phase is about, so a comparison between them is a comparison of
+// the read path and not of two workloads.
+func A7Options() RaftOptions {
+	o := A6Options()
+	o.ReadIndex = true
+	return o
+}
+
 func A6Options() RaftOptions {
 	o := A5Options()
 	o.Accounts = 8
@@ -1002,6 +1019,15 @@ type RaftResult struct {
 	NoOpReachedArm int
 	NoOpAnswered   int
 
+	// ReadsServed counts reads answered by read index rather than by the log.
+	ReadsServed int
+
+	// ReadIndexRuns is 1 when this run had the read-index path ON. It exists
+	// so the non-vacuity assertion can tell "served none" from "never asked to",
+	// which under D-A7-4's two-paths decision are different runs rather than a
+	// pass and a failure.
+	ReadIndexRuns int
+
 	// MovesOrdered and MovesCompleted are the manual rebalance's non-vacuity
 	// evidence. A sweep in which every move stalled is green about a mechanism
 	// that never finished, and a stalled move is SAFE -- which is exactly why the
@@ -1098,6 +1124,12 @@ func RunRaft(p *plan.Plan, tr *sim.Trace) (RaftResult, error) {
 // RunRaftWith drives the group with explicit build options.
 func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, error) {
 	res := RaftResult{Seed: p.Provenance.Seed}
+	if opt.ReadIndex {
+		// Recorded per run so the non-vacuity assertion can tell "this sweep
+		// served no reads off the log" from "this sweep never turned the path
+		// on", which under D-A7-4 are different runs rather than a failure.
+		res.ReadIndexRuns = 1
+	}
 	n := p.Config.Nodes
 
 	hist := sim.NewHistory()
@@ -1160,6 +1192,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			GCUnthrottled:     opt.GCUnthrottled,
 			PreVote:           opt.PreVote,
 			SnapshotThreshold: opt.SnapshotThreshold,
+			ReadIndex:         opt.ReadIndex,
 			SyncLatency:       syncLatency,
 			Transport:         run.Transport, Ledger: ledger, History: hist,
 			OnTxnApplied: func(c store.TxnCommand, r store.TxnResult, at clock.Instant, s sim.Scheduler) {
@@ -1546,6 +1579,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.NoOpsApplied += d.NoOpsApplied()
 		res.NoOpReachedArm += d.NoOpReachedArm()
 		res.NoOpAnswered += d.NoOpAnswered()
+		res.ReadsServed += d.ReadsServed()
 		res.GCProposed += d.GCProposed()
 		res.GCApplied += d.GCApplied()
 		res.VersionsCollected += d.VersionsCollected()
@@ -1672,6 +1706,8 @@ type RaftCensus struct {
 	NoOpsApplied        int
 	NoOpReachedArm      int
 	NoOpAnswered        int
+	ReadsServed         int
+	ReadIndexRuns       int
 	MovesOrdered        int
 	MovesCompleted      int
 	MovesRacingChurn    int
@@ -1788,6 +1824,8 @@ func CensusOf(seed uint64, r RaftResult) RaftCensus {
 	c.NoOpsApplied += r.NoOpsApplied
 	c.NoOpReachedArm += r.NoOpReachedArm
 	c.NoOpAnswered += r.NoOpAnswered
+	c.ReadsServed += r.ReadsServed
+	c.ReadIndexRuns += r.ReadIndexRuns
 	c.MovesOrdered += r.MovesOrdered
 	c.MovesCompleted += r.MovesCompleted
 	c.MovesRacingChurn += r.MovesRacingChurn
@@ -1931,6 +1969,8 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.NoOpsApplied, b.NoOpsApplied},
 		{&out.NoOpReachedArm, b.NoOpReachedArm},
 		{&out.NoOpAnswered, b.NoOpAnswered},
+		{&out.ReadsServed, b.ReadsServed},
+		{&out.ReadIndexRuns, b.ReadIndexRuns},
 		{&out.MovesOrdered, b.MovesOrdered}, {&out.MovesCompleted, b.MovesCompleted},
 		{&out.MovesRacingChurn, b.MovesRacingChurn},
 		{&out.MovesUnattributable, b.MovesUnattributable},

@@ -476,6 +476,15 @@ func exitCriteriaFailures(c hunt.RaftCensus) []string {
 	// produced a no-op are a green over nothing, which is this register's
 	// commonest entry -- and the term-start no-op is one per election, so the
 	// count is robustly non-zero the moment A7's change is in the tree.
+	// A7's non-vacuity. Only asserted when the sweep actually ran the read-index
+	// path: under D-A7-4 both paths exist for the phase, so a sweep on the
+	// replicated path legitimately serves none, and demanding otherwise would
+	// fail a run for being the other half of the comparison.
+	if c.ReadIndexRuns > 0 && c.ReadsServed == 0 {
+		add("the sweep ran with read index ON and not one read was served off the log. " +
+			"Every staleness assertion about the read-index path is then green over a path " +
+			"nothing took, which is this register's commonest entry (DESIGN-A7 section 8.2)")
+	}
 	if c.NoOpsApplied == 0 {
 		add("no term-start no-op was ever applied across the whole sweep. A7 appends " +
 			"one per election, so a sweep with elections and no no-ops means the entry " +

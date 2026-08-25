@@ -438,6 +438,13 @@ func (m *Node) OutOfExtentRefusals() int {
 	return m.sum(func(r *Replica) int { return r.OutOfExtentRefusals() })
 }
 
+// ReadsServed is how many reads this node answered off the log by read index.
+// A7's NON-VACUITY count: a sweep reading zero has not exercised the read path
+// at all, whatever the staleness oracles say about it.
+func (m *Node) ReadsServed() int {
+	return m.sum(func(r *Replica) int { return r.ReadsServed() })
+}
+
 // NoOpsApplied, NoOpReachedArm and NoOpAnswered aggregate D-A7-6's two
 // propositions across this node's replicas. The first is the NON-VACUITY count
 // -- one term-start no-op per election, so a sweep reading zero has exercised

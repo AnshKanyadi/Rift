@@ -476,6 +476,13 @@ const (
 	// election timeout. It is leadership transfer's only new message.
 	MsgTimeoutNow
 
+	// MsgReadIndex asks the leader for a read index; MsgReadIndexResp carries
+	// one back. A7, and the only pair whose gate is a QUORUM rather than a
+	// durability mark -- the table above says why: a read index attests to a
+	// commit index, which is already durable by the time it is committed.
+	MsgReadIndex
+	MsgReadIndexResp
+
 	numMessageTypes
 )
 
@@ -497,6 +504,10 @@ func (m MessageType) String() string {
 		return "snap"
 	case MsgTimeoutNow:
 		return "timeout-now"
+	case MsgReadIndex:
+		return "read-index"
+	case MsgReadIndexResp:
+		return "read-index-resp"
 	case numMessageTypes:
 		return "invalid"
 	}
@@ -543,6 +554,46 @@ type Message struct {
 	// because a follower installing a snapshot has to learn the membership from
 	// the same message: it is discarding the log that would otherwise tell it.
 	SnapConf []byte
+
+	// ReadCtx identifies one read-index request end to end. It is opaque to
+	// raft: the driver supplies it, raft carries it through the confirming
+	// round, and it comes back on the ReadState so the driver can match the
+	// answer to the request. Matching on anything else -- an index, a position --
+	// is BUG-004's mistake in a new place, so raft never invents one.
+	ReadCtx []byte
+
+	// ReadIndex is the commit index a read may be served at, on
+	// MsgReadIndexResp. Captured when the request ARRIVES and carried through
+	// the round (D-A7-3, ruled A), so reads arriving together share one
+	// confirmation.
+	ReadIndex Index
+}
+
+// ReadState is one confirmed read index.
+//
+// # A read index is a fact about a POSITION, not about a node
+//
+// D-A7-2: a follower handed one of these does not need its own leadership
+// confirmation. The leader's heartbeat round established that IT was leader as
+// of the broadcast; an answer pinned to that index is at least as new as the
+// confirmed commit point, whatever happens to the follower's connectivity
+// afterwards. That is A4's log-position class in a new dimension.
+type ReadState struct {
+	// Index is the commit index the read may be served at, captured when the
+	// request arrived.
+	Index Index
+
+	// Ctx is the driver's own identifier, carried through unchanged.
+	Ctx []byte
+}
+
+// readReq is one in-flight read-index request, waiting on a confirming quorum.
+type readReq struct {
+	index Index    // commitIndex when the request ARRIVED (D-A7-3, ruled A)
+	term  Term     // the term the confirming round was broadcast in
+	ctx   []byte   // the driver's identifier
+	from  NodeID   // 0 for a local request; a follower's id when forwarded
+	acks  []NodeID // who has confirmed, deduplicated
 }
 
 // HardState is the state Raft must have durable before it may act on it.
@@ -614,6 +665,18 @@ type Ready struct {
 
 	// Mark names this Ready's LOG durability point; zero if nothing to persist.
 	Mark PersistMark
+
+	// ReadStates are read-index answers whose leadership has been confirmed by a
+	// quorum at the confirming round's term. Each names the index a read may be
+	// served at and the context the driver supplied.
+	//
+	// **The driver must still wait for its own applied index to reach
+	// ReadState.Index before answering.** Confirmation establishes the POSITION;
+	// it says nothing about whether this node's state machine has got there yet.
+	// Serving before that is reading your own past, which is §1.1's second
+	// condition and the half that is easy to forget because the hard-looking one
+	// is already done.
+	ReadStates []ReadState
 
 	// SnapMark names this Ready's SNAPSHOT durability point, acknowledged
 	// through AckSnapshot. It is a separate stream with no ordering against
@@ -844,6 +907,15 @@ type Raft struct {
 	// votesGranted is parallel to peers.
 	votesGranted []bool
 	votesDenied  []bool
+
+	// termStart is the index of this term's no-op. Zero when not leading.
+	termStart Index
+
+	// pendingReads are read-index requests awaiting a confirming quorum, and
+	// readyReads are the ones a quorum has confirmed, waiting to be drained by
+	// Ready(). A7, D-A7-1 (ruled A: heartbeat-confirmed).
+	pendingReads []readReq
+	readyReads   []ReadState
 
 	// preVote turns on the extra round; preVoting says one is in progress.
 	// Pre-vote mutates no persistent state, which is why its responses are the
@@ -1310,6 +1382,29 @@ func (r *Raft) Step(m Message) error {
 		r.stepApp(m)
 	case MsgAppResp:
 		r.stepAppResp(m)
+		// A successful append response at this term is also a leadership
+		// confirmation: it says this peer still recognises us as leader now.
+		// Heartbeats are MsgApp with no entries here, so the confirming round
+		// and the replication round are the same round -- which is why read
+		// index costs no extra message.
+		if r.role == RoleLeader && m.Success {
+			r.confirmRead(m.From)
+		}
+	case MsgReadIndex:
+		// A follower asking for an index. Only a leader can answer, and the
+		// index is captured on ARRIVAL here exactly as it is for a local
+		// request -- the follower's read is no fresher than the moment its
+		// question reached the leader.
+		if r.role == RoleLeader {
+			r.recordRead(readReq{index: r.readFloor(), term: r.term,
+				ctx: append([]byte(nil), m.ReadCtx...), from: m.From})
+			r.broadcastAppend()
+		}
+	case MsgReadIndexResp:
+		// The leader confirmed. This node now owes nothing but its own apply:
+		// a read index is a fact about a position, not about a node (D-A7-2).
+		r.readyReads = append(r.readyReads, ReadState{Index: m.ReadIndex,
+			Ctx: append([]byte(nil), m.ReadCtx...)})
 	case MsgPreVote:
 		r.stepPreVote(m)
 	case MsgPreVoteResp:
@@ -1602,6 +1697,139 @@ func (r *Raft) ConfigurationAt(index Index) (Configuration, error) {
 // from the configuration before the order is issued, and nothing the caller can
 // check would have told it. It is now a runtime condition, and it fired on the
 // first sweep after membership churn landed.
+// ReadIndex requests an index at which a linearizable read may be served.
+//
+// # The protocol, and the two things it establishes
+//
+// A leader may answer from its own applied state if it can establish (1) that it
+// was still leader at some point at or after the read arrived, and (2) that its
+// state machine has applied everything committed as of that point. This call is
+// (1). The DRIVER is (2), and the split is deliberate: raft has no idea what the
+// state machine has applied.
+//
+// Nothing is appended. The cost is one heartbeat round, which a leader is
+// sending anyway, and several reads arriving together ride the same one.
+//
+// # The index is captured HERE, at arrival (D-A7-3, ruled A)
+//
+// Not at confirmation. Confirmation-time capture would be a later point and
+// therefore never stale, and it would stop reads that arrive together sharing a
+// round, because each would take a different index. Arrival capture is the
+// weaker of the two and the batching is why it is chosen -- so the safety of the
+// cheaper choice IS the claim that the stamped index is a sound floor, which
+// DESIGN-A7 §5a makes an oracle rather than a comment.
+//
+// # And why max(commitIndex, termStart)
+//
+// §2's requirement, in one line. A leader that has just won an election does not
+// know its own commit index: the figure-8 rule forbids committing earlier-term
+// entries by counting, so commitIndex is whatever was inherited. Reading against
+// it can miss writes committed before this leader took office -- a stale read
+// produced by the mechanism whose whole job is preventing stale reads.
+//
+// Taking the term-start no-op's index when it is higher fixes it without a
+// special case: the answer is never below the point at which this term's
+// commitIndex becomes true, and the driver simply waits a little longer for its
+// applied index to get there.
+func (r *Raft) ReadIndex(ctx []byte) error {
+	if len(ctx) == 0 {
+		return fmt.Errorf("raft: a read index needs a context; the zero value is refused so a " +
+			"caller cannot fall back to matching answers on arrival order, which is not an identity")
+	}
+	switch r.role {
+	case RoleLeader:
+		r.recordRead(readReq{index: r.readFloor(), term: r.term, ctx: append([]byte(nil), ctx...)})
+		r.broadcastAppend()
+		return nil
+	case RoleFollower:
+		// D-A7-2: a follower does not confirm anything itself. It asks the
+		// leader for an index and waits for its own apply to reach it -- the
+		// answer's freshness is pinned by the index, not by this node.
+		if r.leader == 0 {
+			return ErrNotLeader
+		}
+		r.send(Message{Type: MsgReadIndex, From: r.id, To: r.leader, Term: r.term,
+			ReadCtx: append([]byte(nil), ctx...)})
+		return nil
+	default:
+		return ErrNotLeader
+	}
+}
+
+// readFloor is the lowest index a read served now may reflect.
+func (r *Raft) readFloor() Index {
+	if r.termStart > r.commitIndex {
+		return r.termStart
+	}
+	return r.commitIndex
+}
+
+// recordRead files a request and self-acknowledges it: the leader's own vote
+// counts toward the confirming quorum, exactly as it does for an election.
+func (r *Raft) recordRead(q readReq) {
+	q.acks = []NodeID{r.id}
+	r.pendingReads = append(r.pendingReads, q)
+	r.maybeConfirmReads()
+}
+
+// confirmRead records one peer's acknowledgement at the CURRENT term.
+//
+// The term check is the fact §4's table names: a majority of responses confirms
+// leadership only if the responses are at the term the round was broadcast in.
+// A response from an older term confirms nothing, and a request recorded under a
+// term this node has since left is dropped rather than confirmed -- this leader
+// is no longer the one doing the confirming.
+func (r *Raft) confirmRead(from NodeID) {
+	kept := r.pendingReads[:0]
+	for _, q := range r.pendingReads {
+		if q.term != r.term {
+			continue
+		}
+		if !containsNode(q.acks, from) {
+			q.acks = append(q.acks, from)
+		}
+		kept = append(kept, q)
+	}
+	r.pendingReads = kept
+	r.maybeConfirmReads()
+}
+
+// maybeConfirmReads promotes every request a quorum has acknowledged.
+func (r *Raft) maybeConfirmReads() {
+	if len(r.pendingReads) == 0 {
+		return
+	}
+	kept := r.pendingReads[:0]
+	for _, q := range r.pendingReads {
+		voters := 0
+		for _, n := range q.acks {
+			if r.conf.IsVoter(n) {
+				voters++
+			}
+		}
+		if voters < r.quorum() {
+			kept = append(kept, q)
+			continue
+		}
+		if q.from == 0 {
+			r.readyReads = append(r.readyReads, ReadState{Index: q.index, Ctx: q.ctx})
+			continue
+		}
+		r.send(Message{Type: MsgReadIndexResp, From: r.id, To: q.from, Term: r.term,
+			ReadCtx: q.ctx, ReadIndex: q.index})
+	}
+	r.pendingReads = kept
+}
+
+func containsNode(ns []NodeID, n NodeID) bool {
+	for _, x := range ns {
+		if x == n {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Raft) TransferLeadership(target NodeID) {
 	if target == r.id {
 		panic(fmt.Sprintf("raft: node %d was asked to transfer leadership to itself", r.id))
@@ -2016,6 +2244,14 @@ func (r *Raft) becomeLeader() {
 	}
 	r.appendEntries(noop)
 
+	// termStart is the no-op's index, and read index needs it for the reason §2
+	// gives: until an entry of THIS term commits, commitIndex is inherited and
+	// can be arbitrarily far behind the true committed prefix, so a read served
+	// against it misses writes committed before this leader took office.
+	r.termStart = noop.Index
+	r.pendingReads = nil
+	r.readyReads = nil
+
 	r.broadcastAppend()
 }
 
@@ -2073,6 +2309,10 @@ func (r *Raft) HasReady() bool {
 // AckApplied(index) once entries are applied, and the two are independent.
 func (r *Raft) Ready() Ready {
 	rd := Ready{Messages: r.msgs, Mark: r.dirtyMark}
+	if len(r.readyReads) > 0 {
+		rd.ReadStates = r.readyReads
+		r.readyReads = nil
+	}
 	if r.pendingSnap != nil {
 		rd.Snapshot = r.pendingSnap
 		rd.SnapMark = r.snapMark

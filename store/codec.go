@@ -413,3 +413,16 @@ func decodeCmd(b []byte) (string, string, string, hlc.Timestamp) {
 	}
 	return string(o), string(k), string(v), hlc.Timestamp{Wall: clock.NewWall(int64(w)), Logical: uint32(l)}
 }
+
+// encodeReadCtx builds the identifier a read-index request is matched by.
+//
+// Raft carries it opaquely and hands it back on the ReadState; the driver uses
+// it to find the request that asked. It is (node, sequence) for the same reason
+// a ProposalID is: matching an answer to a request on anything positional --
+// arrival order, an index -- is BUG-004's mistake, and a read index is a
+// position, so the temptation is real.
+func encodeReadCtx(node raft.NodeID, seq uint64) []byte {
+	b := make([]byte, 0, 16)
+	b = putU64(b, uint64(node))
+	return putU64(b, seq)
+}

@@ -140,6 +140,15 @@ type Config struct {
 	// so it must not perturb the schedule itself.
 	PreVote bool
 
+	// ReadIndex turns on A7's read-index path for PLAIN reads. Snapshot reads
+	// keep their log entry regardless (D-A7-5, ruled A).
+	//
+	// It is a flag for D-A7-4's reason, not for caution: both read paths exist
+	// for the phase so the differential oracle has two halves to compare, and a
+	// sweep that ran only one of them has not tested the thing the oracle is
+	// for. Its fate is decided at exit rather than assumed now.
+	ReadIndex bool
+
 	// SnapshotThreshold is how many applied entries past the last snapshot
 	// this node tolerates before taking a new one. Zero disables snapshotting,
 	// which is what A1's corpus bundles replay against.
@@ -288,6 +297,19 @@ type Replica struct {
 	noopReachedArm int
 	noopAnswered   int
 
+	// applied is the highest index this replica's state machine has applied. A
+	// read index names a position; this is what says whether we have reached it.
+	applied raft.Index
+
+	// readsServed counts reads answered off the log by read index. Non-vacuity:
+	// a sweep reading zero has not exercised A7 at all.
+	readsServed int
+
+	// readSeq numbers this replica's read-index requests, and pendingReads holds
+	// the ones whose confirming quorum has not come back yet. A7.
+	readSeq      uint64
+	pendingReads []pendingRead
+
 	// outOfExtent counts committed commands refused at apply for naming a key
 	// outside this range's extent at that log position (BUG-014).
 	outOfExtent int
@@ -355,6 +377,19 @@ type pendingWrite struct {
 	// clearAbove is nonzero when this batch also cleared the log above that
 	// index, which is how a conflicting append is expressed on disk.
 	clearAbove raft.Index
+}
+
+// pendingRead is a client read waiting on a read index, and then on this
+// replica's own apply reaching it.
+type pendingRead struct {
+	ctx     []byte
+	histIdx int
+	key     string
+	at      hlc.Timestamp
+
+	// index is the confirmed read index, set when the ReadState arrives. Zero
+	// means the confirming quorum has not answered yet.
+	index raft.Index
 }
 
 type clientOp struct {
@@ -448,6 +483,41 @@ func (n *Replica) onClient(req Request) {
 	at := n.hlc.Now()
 	if req.ReadTS.IsSet() && req.Op == "get" {
 		at = req.ReadTS
+	}
+
+	// # A7: a PLAIN read may be served by read index instead of the log
+	//
+	// D-A7-5, ruled A. The distinction is not a carve-out and it is the whole of
+	// what read index is allowed to serve:
+	//
+	//	a PLAIN read has no timestamp to protect. It is a linearizable read of
+	//	the latest value, it participates in no transaction, and no prewrite's
+	//	correctness depends on whether it happened.
+	//
+	//	a SNAPSHOT read at T is a PROMISE about T that a later commit can break,
+	//	and BUG-022's third first-committer-wins guard rests on the read mark it
+	//	leaves. That mark is a function of the log ONLY because every read is a
+	//	log entry, so a snapshot read answered off the log stages nothing and the
+	//	guard consults a record that does not exist.
+	//
+	// So a read carrying a timestamp keeps its log entry, and only a plain get
+	// takes this path. `M71` re-pointed is this decision negated -- a snapshot
+	// read served by read index -- so the boundary is a thing the suite kills
+	// rather than a thing this comment remembers (ruling 11).
+	//
+	// D-A7-4, ruled: BOTH paths stay for the phase. The replicated path is the
+	// differential oracle's other half, and a differential between them is the
+	// only instrument that can catch a stale read no client observed.
+	if n.cfg.ReadIndex && req.Op == "get" && !req.ReadTS.IsSet() && req.Txn == nil {
+		n.readSeq++
+		ctx := encodeReadCtx(n.cfg.ID, n.readSeq)
+		if err := n.raft.ReadIndex(ctx); err != nil {
+			return
+		}
+		n.pendingReads = append(n.pendingReads, pendingRead{
+			ctx: ctx, histIdx: req.HistIdx, key: req.Key, at: at,
+		})
+		return
 	}
 
 	n.propSeq++
@@ -792,12 +862,75 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			n.flushApply(mb)
 			n.maybeGC()
 			n.cfg.Ledger.RecordApplied(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(rd.Committed), at)
-			n.raft.AckApplied(rd.Committed[len(rd.Committed)-1].Index)
+			n.applied = rd.Committed[len(rd.Committed)-1].Index
+			n.raft.AckApplied(n.applied)
 			n.maybeSnapshot(at, s)
 			n.maybeSplit(at)
 		}
 
+		// 5. A7. Confirmed read indexes arrive here, and reads whose index this
+		//    replica has now applied are answered from local state.
+		n.takeReadStates(rd.ReadStates)
+		n.serveReadyReads(at)
 	}
+}
+
+// takeReadStates records the indexes a confirming quorum has returned.
+func (n *Replica) takeReadStates(states []raft.ReadState) {
+	for _, st := range states {
+		for i := range n.pendingReads {
+			if string(n.pendingReads[i].ctx) == string(st.Ctx) {
+				n.pendingReads[i].index = st.Index
+				break
+			}
+		}
+	}
+}
+
+// serveReadyReads answers every read whose confirmed index this replica has
+// applied.
+//
+// # This is §1.1's SECOND condition, and it is the half that gets forgotten
+//
+// The confirming quorum established a POSITION: that this leader was still
+// leader at or after the read arrived, so nothing committed by a newer leader
+// can be missed below that index. It says nothing whatever about whether THIS
+// node's state machine has got there yet. Answering before it has is reading
+// your own past -- a stale read produced by the half of the protocol that looks
+// like bookkeeping next to the half that talks to a quorum.
+//
+// A read that never becomes answerable is simply never answered, which is the
+// same shape as every other unanswered request here and for the same reason: a
+// client that gets no answer knows nothing, which is honest, and a client that
+// gets a stale answer has been lied to.
+func (n *Replica) serveReadyReads(at clock.Instant) {
+	kept := n.pendingReads[:0]
+	for _, q := range n.pendingReads {
+		if q.index == 0 || n.applied < q.index {
+			kept = append(kept, q)
+			continue
+		}
+		n.readsServed++
+		val := ""
+		v, ok, err := n.mvcc.ReadAt([]byte(q.key), q.at)
+		switch {
+		case err != nil:
+			// Same rule as the replicated path: a refused read is an OUTCOME,
+			// not an answer. Ending it OK with an empty value would tell the
+			// checker the key was absent, which is a claim about history.
+			n.readsRefused++
+			if q.histIdx >= 0 {
+				n.cfg.History.End(q.histIdx, at, sim.RespError, "")
+			}
+			continue
+		case ok:
+			val = string(v)
+		}
+		if q.histIdx >= 0 {
+			n.cfg.History.End(q.histIdx, at, sim.RespOK, val)
+		}
+	}
+	n.pendingReads = kept
 }
 
 // answerAt completes the client operation whose entry has just been applied,
@@ -1008,6 +1141,10 @@ func (n *Replica) rerouteAt(e raft.Entry, op, key, value string, at clock.Instan
 // OutOfExtentRefusals is how many committed commands this replica refused to
 // apply for naming a key its extent no longer covers.
 func (n *Replica) OutOfExtentRefusals() int { return n.outOfExtent }
+
+// ReadsServed is how many reads this replica answered from local state after a
+// confirmed read index, rather than by replicating a log entry.
+func (n *Replica) ReadsServed() int { return n.readsServed }
 
 // NoOpsApplied is how many term-start no-ops this replica has applied: entries
 // with no Data and no proposal identity. It is the NON-VACUITY half -- a sweep
