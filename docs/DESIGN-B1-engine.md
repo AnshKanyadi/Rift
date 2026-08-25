@@ -2487,6 +2487,28 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
     caught this.'"* — unanswerable with no campaign.
   - `SOAK.md`: every Track B row, and the inconclusive column beside it.
   - This document, **§10, "How B1 proves itself"** — the section title becomes false, not merely thinner.
+- **Landed `f257e29`.** The sweep runs **three modes at every ordinal** — killed before the effect,
+  killed after it, and torn with authored prefixes — because the first two alone can never leave a
+  BATCH on disk without its `GROUP_END`, which is the single thing the group marker exists to prevent.
+  175 kill points, both elements observed, every printed count asserted (the census and the visit
+  count are two independent tallies that must agree).
+- **The sweep found two defects while being built, and neither was found by an assertion.**
+  - **HARNESS-011**, on its first run with torn modes, against the *unpatched* tree: a torn `Sync`
+    whose prefix covered the whole extent recorded `promoted=false`, because the flag was set by code
+    that only runs when `DoSync` runs. The oracle, reading the ledger, then refused the in-flight
+    element and **reported the engine for landing exactly where the ledger's own bytes said it
+    should**. Ruling 4 one level in: a harness record that under-reports is as damaging as an engine
+    that over-reports, and worse in one way, because it blames the engine.
+  - **HARNESS-010**, found by *measuring* the sweep's power: BM2 measured **0 of 175**. Recovery
+    applied uncommitted records above the recovered watermark, where the snapshot hid them — present
+    and unreadable. Not a defence but an accident of the read path, and one that **expires at B2**,
+    where the flush writes the memtable out and those records become durable and permanent. Every
+    lane was green and every statement true; what was wrong was its **power**, which no single run
+    can assert about itself. §10.3 exists for exactly that and it is the first thing it found.
+- **§10.3's floors, measured rather than guessed.** Three classes reached (BM2 194 per mille, BM4
+  500, BM5 62), seven not reached and each carrying a **split label** naming the instrument that
+  catches it instead — never a silent zero. `FLOOR-continuation-removed` drops BM2 from 194 to 0 and
+  is killed by `cpp-campaign` **with `cpp-sweep` staying green**, which is the whole demonstration.
 - **Revert:** **Mechanically a leaf; epistemically the whole B1 claim** — the second member of B1.4's
   class, and the standing rule applies identically, against the six targets above. **A mutant surviving
   its budget means the rig is too weak and B1 is not done, regardless of what the clean runs say.**
