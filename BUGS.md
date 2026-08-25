@@ -77,7 +77,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 4 entries.
+Counts: 5 entries.
 
 ### The two general forms these entries taught
 
@@ -227,13 +227,60 @@ the induction printed `*** GATE DID NOT FIRE ***`.
 asserted that the build root did not exist, immediately after the lane had deleted it. It was green
 unconditionally, including in the exact state HARNESS-002 occurred in.
 
-**Why this one is worth an entry despite never being committed.** It is GF-1 recurring inside the fix
-for GF-1, written by someone who had the general form in front of them at the time. A rule you can
-state and still violate one line later is a rule that needs a mechanism, and the mechanism is the
-induced-failure discipline: the draft was indistinguishable from the fix by reading, and distinguished
-in four seconds by running.
+**Why this one is worth an entry despite never being committed.**
+
+**It is the first time in either track that a general form recurred inside its own remedy.** GF-1 was
+being written down, in the same working session, by someone with the sentence in front of them — and
+the gate written to enforce it violated it one line later. The draft and the fix were
+**indistinguishable by reading**. They were distinguished **in four seconds by running**.
+
+That is the entire lesson, and it is larger than this gate. **The induced-failure rule is not a
+formality applied to gates once they are written; it is the only thing that distinguishes a fix from a
+fix-shaped edit.** Every other check in this repository — review, the general form itself, the author's
+attention — passed this draft. One `mkdir` and one `make` did not. A rule you can state and still
+violate one line later is a rule that needs a mechanism, and this is the mechanism.
 
 **Fix.** The check no longer removes what it checks for — *a check that removes the thing it is
 checking for is a check that cannot fail*. `cpp-ci` refuses when the build root exists and says how to
 clear it; a successful run removes its own tree at the end, so the next run is cold; a failed run
 leaves its tree for whoever has to debug it.
+
+### HARNESS-005 — a pointer-keyed container in `TestEnv`, and the split labels refusing to absorb it
+
+| field | value |
+|---|---|
+| **Found by** | implementing the scan rule that catches it (`A5-ADDRESS`), at B1.4 |
+| **Phase** | B1.3, found at B1.4 |
+| **Reproduce** | at `3239469`: `std::map<const void*, std::string> handles_` in `engine-cpp/src/env/test/test_env.cc` |
+| **Invariant that caught it** | §6.1 — "nothing may depend on an address — no pointer-keyed containers, no address-ordered anything", which §9.4 says the scan checks |
+| **Mutant class** | `A5-ADDRESS`'s fixture and blind patch; `A5-ADDRINT` was added at B1.5 for the arithmetic half the rule was missing |
+| **Fix commit** | `187a3eb` |
+
+**Symptom.** The first run of the new rule over `engine-cpp/src` reported a violation in code ratified
+the previous cycle.
+
+**Root cause.** `TestEnv` mapped an Env handle's address to its path, in order to know which file a
+fault was being injected against. §6.1 bans that outright. **No behaviour was wrong**: the map is
+looked up and never iterated, so no address ordering was ever observable.
+
+**The disposition is the finding, not the defect.** The obvious move was a registry entry, and the
+registry would not take it. `covered-by` requires naming an instrument that catches the class instead,
+and nothing caught it. `unreachable` requires naming a detector that would have seen it if it could
+occur, and it *did* occur — the logic was right there. **A taxonomy that refuses to absorb a defect is
+doing its job.** With a free-text reason field the entry would have written itself: "looked up, never
+iterated, harmless" — true today, unexaminable tomorrow, and indistinguishable from the seventeen
+single-labelled opt-outs Track A spent a full cycle re-deriving and found three of them wrong. **One
+label absorbing two meanings is how a real gap comes to look accounted for.**
+
+So it was fixed rather than exempted, which is the only remaining option once both labels decline.
+
+**A determinism win falling out of a hygiene fix.** `HandleId` replaced the pointer through the whole
+Env surface: an integer assigned sequentially by the creating Env, so the same workload assigns the
+same ids on every run and every machine. That makes a kill point reportable as
+`Sync(handle 3, 000001.log)` rather than `Sync(0x7f9c4a005e10)` — a bug report instead of a number that
+means nothing on the second run. §9.5 asks for exactly that and would have had to build it separately;
+here it arrived as a consequence of obeying §6.1.
+
+**What this would have caused.** Nothing, until someone iterated the map — at which point the fault
+schedule would have depended on the allocator, and a kill-point sweep would have injected against
+different files on different runs while reporting the same ordinals.

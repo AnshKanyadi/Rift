@@ -82,12 +82,30 @@ rule A5-ADDRINT any      'reinterpret_cast[[:space:]]*<[[:space:]]*(std::)?(uint
 rule A5-SYSCALL nonposix '::[[:space:]]*(open|write|read|pread|pwrite|fsync|fdatasync|rename|unlink|mkdir|rmdir|stat|lstat|fcntl|close|_exit|opendir|readdir|closedir|ftruncate|lseek)[[:space:]]*\(' 'a syscall outside env/posix/; every syscall goes through Env for the reason every clock read goes through Clock'
 # RIFT-SCAN-RULES-END
 
-# The statement cap for engine-cpp/src/env/posix, chosen against the code rather
-# than guessed. With the readdir loop moved to the seam, every function in
-# posix_env.cc is at or under 15 lines. Exactly one function in the tree exceeds
-# it -- WriteFully, at 19 -- and it is the single place in PosixEnv with real
-# logic and the single place with dedicated tests. That is the registry entry
-# earning its place rather than an accident.
+# THE STATEMENT CAP FOR engine-cpp/src/env/posix, AND ITS DERIVATION.
+#
+# Recorded here, at the constant, and not in prose elsewhere -- the same rule
+# section 8.4 applies to kMaxRecordBytes and kWalBufferBytes, for the same
+# reason: there has to be exactly one place to correct.
+#
+# Measured, not guessed. After the readdir loop moved to the raw seam, every
+# function in posix_env.cc is at or under 15 non-blank code lines:
+#
+#     DoLockFile        15      DoRead (seq/random)   9
+#     DoUnlockFile      14      DoSync / DoClose      8
+#     DoFileExists      10      everything else      <=5
+#
+# 16 sits one line above the largest conforming function. Tight enough that a
+# method cannot absorb a second responsibility without saying so, loose enough
+# that adding an errno case to DoLockFile does not redden the lane -- and a lane
+# that reddens on a benign change is a lane that gets its cap raised rather than
+# its code fixed.
+#
+# EXACTLY ONE FUNCTION IN THE TREE EXCEEDS IT: WriteFully, at 19. That is the
+# mechanism working rather than an accident. It is the single place in PosixEnv
+# with real logic and the single place with dedicated tests, so it is also the
+# one place where `covered-by` is true, and the registry entry naming those five
+# tests is what the cap exists to force somebody to write.
 POSIX_LINE_CAP=16
 
 scan_file() {  # scan_file <file> <posix: yes|no>

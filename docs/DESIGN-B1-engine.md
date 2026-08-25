@@ -1963,10 +1963,19 @@ question was open and that acting on it would extend §10.2 unruled — a commen
 state of a ruling, which is the kind that gets believed. It was corrected in `787307d`, in its own
 commit, before B1.4 enforced anything.
 
-The general form, since this document is the thing that drifted: **a ruling that is not echoed into the
-document it rules on is a ruling with two versions, and the losing version is whichever one the next
-session reads.** §0's ruling-echo sections exist for this; the cycles that skipped them are the cycles
-this happened in.
+**The general form, ruled 2026-08-24:**
+
+> **A ruling that is not written into the artifact it governs has not landed, regardless of who
+> received it.**
+
+Not "is at risk of being forgotten" — *has not landed*. A ruling with two versions has a losing one,
+and the losing one is whichever the next session reads; since sessions read the artifact and not the
+conversation, the artifact is the only version that exists.
+
+This is the **same class** as the paste that went missing on D-A7-6, one cycle after the ruling echo
+was retired as ceremony. Two tracks, two artifacts, one mechanism: the echo was the thing writing
+rulings into the documents they govern, and both losses date from its removal. §0's ruling-echo
+sections exist for this, and the cycles that skipped them are the cycles it happened in.
 
 ## 14. Landing sequence
 
