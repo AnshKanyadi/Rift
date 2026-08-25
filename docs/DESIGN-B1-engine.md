@@ -2284,6 +2284,18 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   creation and `Directory::Sync`*.
 - **Mutants:** `BM4`, `BM6`, `BM9`, `BM12`, `BM16`, `BM18`, `BM19`, `BM20`.
 - **Depends on:** B1.1, B1.3.
+- **Landed `dfba754`, and AFTER B1.7a rather than before it.** Ruled: the torn-tail rule and
+  fragment-chain legality are the freeze surface, so their gates are induced *before the writer is
+  trusted*. That is not a re-ordering — B1.7a's own entry says it depends on B1.1 alone, and §14.4
+  gives the reason the split exists. Taking that freedom means the writer's output is checked against
+  rules already seen to reject every illegal shape, rather than against a decoder written to agree
+  with it. Beyond its written scope: §8.3's two assertions live in the interception layer as
+  `env_guard.h`, so they cannot be bypassed for the same reason the fault controller cannot; `DbLock`
+  ties the mutex-depth marker to the mutex itself, because a separate marker would be left behind by
+  exactly the edit BM16 makes; the cap-ordering invariant is a `Status` rather than an abort, since
+  §10.2's induced failure has to be *observed* and an abort is observable here only through a death
+  test; and the guard has a settable violation handler for the same reason `RawWriteFn` exists — a
+  path whose only outcome is `abort()` cannot be exercised by four sanitizer lanes.
 - **Revert:** **Chokepoint.** B1.7a and B1.7b read what it writes and B1.9a's oracle is defined against
   its groups. It also carries the determinism spine: the byte digest is the C++ analogue of Track A's
   trace hash, catching ambient randomness, uninitialized padding and any float on a serialization path in
@@ -2304,6 +2316,14 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   data loss"*, which is the induced failure that names the actual consequence.
 - **Mutants:** `BM3`, `BM8`, `BM10`, `BM11`.
 - **Depends on:** B1.1 only, for its gates.
+- **Landed `e287627`, BEFORE B1.6.** Carries the frozen record layout with it, because a decoder is
+  defined against a format and cannot precede one. The CRC divergence from LevelDB lives on the
+  `FragmentCrc` helper as §5.3.3 requires, and reader and writer call that one helper so the covered
+  range has a single definition. BM10 is the one mutation in the catalogue a reviewer would most
+  likely *approve* — it introduces no bug, it aligns us with upstream — which is why the property is
+  asserted **directly** on the helper (same type, same payload, different length ⇒ different
+  checksum) rather than inferred from end-to-end behaviour, where a corrupted length fails the
+  checksum under either coverage and only the *knownness of the failure offset* differs.
 - **Revert:** **Surface** (the decode interface B1.7b consumes).
 - **Note:** **every gate here is drivable from hand-built byte images** — no writer, no memtable, no Env
   faults, just fixture bytes. That makes this the cheapest place in the sequence to induce failures
