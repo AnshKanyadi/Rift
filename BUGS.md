@@ -429,13 +429,22 @@ ask what has to be true for it to run at all, and assert that too.
 
 ### The shape behind every mutant that has survived its first induction
 
-Three have: `LEDGER-always-promoted`, `BM2-accept-torn-tail`, `BM7-drop-close-error`. All three are
-meaning #1 — a checker that cannot see it — and all three have **one shape**:
+Four have: `LEDGER-always-promoted`, `BM2-accept-torn-tail`, `BM7-drop-close-error`,
+`BM1-ack-before-sync`. All four are meaning #1 — a checker that cannot see it — and all four have
+**one shape**:
 
 > **The test never created the situation it was checking.**
 
 `BM7` is the cleanest exemplar: a Close test that only ever ran a *successful* Close cannot distinguish
 a propagated error from a swallowed one, whatever it asserts about the return value.
+
+`BM1` is the subtlest, and it sharpened the rig. The oracle learned the engine's watermark **only from
+a `Sync`'s return value** — and a killed `Sync` returns nothing, so an engine that advanced the
+watermark before writing a byte was invisible: the premature value died with the process. The fix is
+not a bigger test but a wider definition of the promise. **`DurableSeq()` is a durability claim like
+any other**, so the rig now records every value it is ever told and holds the engine to the highest,
+and the induction runs the failure through an fsync that *errors* rather than one that kills — so the
+process survives to be asked.
 
 This is **§22.6c's discriminator rule arriving in C++ independently** — a check must be run in a state
 where the thing it discriminates could actually differ — and it is cited rather than restated. It is

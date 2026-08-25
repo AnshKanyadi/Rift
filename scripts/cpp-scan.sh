@@ -199,6 +199,33 @@ printf '   files scanned  : %s\n' "$nfiles"
 printf '   rules applied  : %s\n' "$(printf '%s' "$RULE_IDS" | wc -w | tr -d ' ')"
 printf '   violations     : %s (each must be in the registry below)\n' "$nviol"
 
+# ------------------------------------------------------------- part 2b
+#
+# ORACLE INDEPENDENCE, MADE CHECKABLE.
+#
+# Section 7.4 condition 1: the oracle is "compiled against a header that does
+# not include the engine's internal state at all; its only engine-facing inputs
+# are the iterator it compares and the Sync return it holds the engine to."
+# That is a statement about includes, so a lane can check it -- and ruling 4's
+# sentence, AN ORACLE THAT INTERROGATES THE ENGINE BELIEVES THE LIE, stops being
+# a thing anyone has to remember while editing.
+printf '   oracle         : '
+oracle_bad=0
+for f in "$dir/rig/exactness_oracle.h" "$dir/rig/exactness_oracle.cc"; do
+  [ -f "$f" ] || { note "missing $f"; continue; }
+  for inc in $(sed 's://.*::' "$f" | sed -n 's/^#include "\([^"]*\)".*/\1/p'); do
+    if find "$dir/src" -name "$inc" | grep -q .; then
+      note "$f includes $inc, which is engine state -- the oracle must ask the engine nothing"
+      oracle_bad=$((oracle_bad + 1))
+    fi
+  done
+done
+if [ "$oracle_bad" -eq 0 ]; then
+  printf 'includes nothing from src/\n'
+else
+  printf '%d engine include(s)\n' "$oracle_bad"
+fi
+
 # ------------------------------------------------------------------ part 3
 printf '  [3/4] CPP-HATCHES.txt, reconciled against what actually fired\n'
 printf '  ----------------------------------------------------------\n'
