@@ -44,11 +44,19 @@ copy_tree() {
   find "$1/engine-cpp" -maxdepth 1 -type d -name 'build*' -exec rm -rf {} + 2>/dev/null || true
 }
 
-build_and_sweep() {  # build_and_sweep <tree> -> prints "points violations first"
+# ONE REGIME PER FLOOR, NEVER AGGREGATED. Section 8.4: a number measured at
+# non-default caps never mixes with a default-cap number, and B2 gives that rule
+# its first real work -- the flush regime exists because B2's gates on the flush
+# path cannot be induced by a workload that never flushes, and the default
+# regime exists because B1's floors were measured against it and must stay
+# comparable. Comparing one against the other's floor is the aggregation the
+# rule forbids, so the regime is a column in FLOORS.txt rather than a fact about
+# whoever ran the lane.
+build_and_sweep() {  # build_and_sweep <tree> <regime> -> "points violations first"
   ( cd "$1" && cmake -S engine-cpp -B engine-cpp/build/test -DRIFT_SANITIZER=none >/dev/null 2>&1 \
       && cmake --build engine-cpp/build/test --target rift_sweep -j "${WORKERS:-8}" >/dev/null 2>&1 ) || {
     echo "BUILD_FAILED"; return 0; }
-  line=$("$1/engine-cpp/build/test/rift_sweep" 2>/dev/null | grep '^SWEEP' || true)
+  line=$("$1/engine-cpp/build/test/rift_sweep" "$2" 2>/dev/null | grep "^SWEEP regime=$2 " || true)
   [ -n "$line" ] || { echo "NO_OUTPUT"; return 0; }
   printf '%s %s %s\n' \
     "$(printf '%s' "$line" | sed 's/.*points=\([0-9]*\).*/\1/')" \
@@ -62,18 +70,20 @@ printf '  ----------------------------------------------------------\n'
 # BASELINE GATE. The unpatched sweep must find nothing, or every number below is
 # unattributable and no floor means anything.
 copy_tree "$scratch/baseline"
-base=$(build_and_sweep "$scratch/baseline")
-case $base in
-  BUILD_FAILED|NO_OUTPUT)
-    printf '   INVALID  the unpatched tree does not build or run the sweep.\n\n'; exit 2 ;;
-esac
-base_points=$(printf '%s' "$base" | awk '{print $1}')
-base_viol=$(printf '%s' "$base" | awk '{print $2}')
-if [ "$base_viol" != "0" ]; then
-  printf '   INVALID  the unpatched sweep reports %s violations.\n' "$base_viol"
-  printf '   Every detection below would be unattributable.\n\n'; exit 2
-fi
-printf '   baseline ok: %s kill points, 0 violations\n' "$base_points"
+for reg in default flush; do
+  base=$(build_and_sweep "$scratch/baseline" "$reg")
+  case $base in
+    BUILD_FAILED|NO_OUTPUT)
+      printf '   INVALID  the unpatched tree does not build or run the %s sweep.\n\n' "$reg"; exit 2 ;;
+  esac
+  base_points=$(printf '%s' "$base" | awk '{print $1}')
+  base_viol=$(printf '%s' "$base" | awk '{print $2}')
+  if [ "$base_viol" != "0" ]; then
+    printf '   INVALID  the unpatched %s sweep reports %s violations.\n' "$reg" "$base_viol"
+    printf '   Every detection below would be unattributable.\n\n'; exit 2
+  fi
+  printf '   baseline ok (%s): %s kill points, 0 violations\n' "$reg" "$base_points"
+done
 
 fails=0
 checked=0
@@ -84,6 +94,11 @@ while IFS= read -r line; do
   ceil=$(printf '%s' "$line" | awk -F'|' '{print $3}' | sed 's/^ *//; s/ *$//')
   meas=$(printf '%s' "$line" | awk -F'|' '{print $4}' | sed 's/^ *//; s/ *$//')
   why=$(printf '%s' "$line"  | awk -F'|' '{print $5}' | sed 's/^ *//; s/ *$//')
+  reg=$(printf '%s' "$line"  | awk -F'|' '{print $6}' | sed 's/^ *//; s/ *$//')
+  [ -n "$reg" ] || reg=default
+  case $reg in default|flush) ;; *)
+    printf '   BAD      %s: unknown regime "%s"\n' "$cls" "$reg"; fails=$((fails + 1)); continue ;;
+  esac
 
   patch_file=engine-cpp/mutants/$cls.patch
   if [ ! -f "$patch_file" ]; then
@@ -111,7 +126,7 @@ while IFS= read -r line; do
   copy_tree "$work"
   ( cd "$work" && patch -p1 --silent --forward < "$ROOT/$patch_file" ) || {
     printf '   ROT      %s: patch no longer applies\n' "$cls"; fails=$((fails + 1)); continue; }
-  out=$(build_and_sweep "$work")
+  out=$(build_and_sweep "$work" "$reg")
   case $out in
     BUILD_FAILED|NO_OUTPUT)
       printf '   BROKEN   %s: the patched tree does not build or run\n' "$cls"
@@ -124,8 +139,8 @@ while IFS= read -r line; do
   checked=$((checked + 1))
 
   if [ "$MEASURE" = yes ]; then
-    printf '   measured %-30s %d/%d = %d per mille, first at kill point %s\n' \
-      "$cls" "$viol" "$points" "$permille" "$first"
+    printf '   measured %-30s [%s] %d/%d = %d per mille, first at kill point %s\n' \
+      "$cls" "$reg" "$viol" "$points" "$permille" "$first"
     continue
   fi
 
@@ -146,8 +161,8 @@ while IFS= read -r line; do
     printf '                reasoning   : %s\n' "$why"
     fails=$((fails + 1))
   else
-    printf '   holds    %-30s %d per mille (floor %s), first at %s (ceiling %s)\n' \
-      "$cls" "$permille" "$rate" "$first" "$ceil"
+    printf '   holds    %-30s [%s] %d per mille (floor %s), first at %s (ceiling %s)\n' \
+      "$cls" "$reg" "$permille" "$rate" "$first" "$ceil"
   fi
 done < "$FLOORS"
 
