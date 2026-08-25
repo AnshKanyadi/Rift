@@ -94,6 +94,29 @@ and had nothing to block. Track A has hit the cousin of this twice. The cold
 cache is now part of what `cpp-ci` MEANS and is asserted at both ends —
 `scripts/cpp-cold-cache.sh`, induced by `COLD-fetch-despite-isolation`.
 
+**GF-4 — AN UNSATISFIABLE GATE. A classification that decides whether evidence
+counts must be tested in BOTH directions, because the safe-looking direction is
+the one no assertion notices.** From HARNESS-006.
+
+Every other entry in this file is a check that COULD NOT FAIL. This is the
+opposite shape and it needs its own name: a check that could not PASS. A
+classifier that marks too much as non-evidence breaks nothing — the engine still
+behaves correctly, every assertion still holds, every lane stays green — and the
+only consequence is that a column stays empty. It is invisible precisely BECAUSE
+it is conservative.
+
+**The consequence is the sharpest part.** The cost does not arrive where the
+defect is. It arrives one or two steps downstream, as a gate nothing can
+satisfy: §7.4 condition 3 requires both elements of the two-element recovery set
+to have been observed across the sweep, and a sweep whose runs are structurally
+uncountable as evidence can never satisfy it. Found there, **it presents as a
+bug in the engine rather than in the classifier, so the debugging starts in the
+wrong component** — which is the expensive part, not the fix.
+
+The audit this forced is in HARNESS-006. Closed by §7.5's registry holding
+exactly its two named members, asserted both ways, and by every other
+evidence-deciding function in Track B now being asserted both ways too.
+
 **GF-3 — when an end-to-end test cannot distinguish two designs because both
 fail the same way, assert the discriminating property directly on the unit where
 the two differ.** From BM10. Our WAL checksum covers `length ‖ type ‖ payload`;
@@ -325,23 +348,58 @@ mode, where an arbitrary set of 4 KiB sectors is promoted, suspends: that is a d
 own ordering guarantee, and holding the engine to exactness there would report the engine for the
 disk's crime. B1.3 implemented one injector and mapped it onto the suspending registry member.
 
-**Which of the three things a surviving mutant means — except no mutant survived.** This is the case
-none of the three covers: a defect in a *classification*, where every run still behaves correctly and
-only its label is wrong. `REGISTRY-lying-sync-not-suspending` was pointed at the false-negative
-direction (a member that stops suspending). Nothing was pointed at the false-positive one.
+**A NEW SHAPE: an unsatisfiable gate.** This does not belong beside the vacuous-green entries and is
+not filed with them. Every one of those is a check that *could not fail*. This is a check that *could
+not pass*. It survived four ratified steps because it was **conservative**, and conservative is the
+direction no assertion notices: the engine behaved correctly, every test held, every lane was green,
+and the only symptom was that a column would have stayed empty. `REGISTRY-lying-sync-not-suspending`
+existed and could not see it — it is pointed at a member that stops suspending, and nothing was
+pointed at a non-member that starts.
 
-**What this would have caused.** The conservative direction, which is why it survived four ratified
-steps: runs that should have been banked as evidence were marked `kCharacterizationOnly`. Nothing
-unsafe — and at B1.9a it would have made §7.4 condition 3 **unreachable**, because the sweep-level
-assertion that *both* elements of the two-element set were observed cannot be satisfied by runs that
-are structurally uncountable as evidence. A gate that can never be satisfied is discovered late and
-looks like a bug in the engine.
+**What it would have cost, and where.** Not here. At B1.9a: §7.4 condition 3 requires that *both*
+elements of the two-element recovery set were observed across the sweep, and runs that are
+structurally uncountable as evidence can never satisfy it. **Found there, it presents as a bug in the
+engine rather than in the classifier, so the debugging starts in the wrong component.** That is the
+expensive part. The fix is four lines.
+
+**The general form is GF-4**, and §7.5 of DESIGN-B1 cross-references it: the registry holding exactly
+its two named members, asserted in both directions, is what closes this.
+
+**THE AUDIT IT FORCED, and its result.** The same question was asked of every place in Track B that
+decides whether a run counts as evidence. Six exist:
+
+| function | decides | both directions asserted before the audit? |
+|---|---|---|
+| `SuspendsExactness` | whether a run is characterization-only | **no** — this entry |
+| `OutcomeFloor` | the same, one layer up | **no** — only ever called with `true` |
+| `OutcomeForCapVerdict` | whether a cap verdict is a pass, a void or a violation | **no** — `kNormal` never asserted |
+| `IsDivergence` | whether a cap verdict fails the run | **no** — only the two true cases |
+| `CountsAsRecoveryEvidence` | what may be banked | yes, all five kinds |
+| `AggregateRuns` | whether runs may be banked *together* | yes, both regimes |
+
+**Three more instances, all the same shape**, and two of them reachable: `OutcomeFloor` returning
+`kCharacterizationOnly` unconditionally, and `OutcomeForCapVerdict` filing a normal run as `kVoid`.
+Both make the evidence column permanently empty with nothing going red. Mutants `FLOOR-always-suspends`
+and `VERDICT-normal-is-void` now exist for exactly those, and all six functions are asserted in both
+directions.
 
 **Fix.** The injector is split: `kTornSync` (prefix, the contract model, does not suspend) and
 `kSectorSubsetTornSync` (an arbitrary sector left unpromoted, suspends). The registry now has exactly
 the two members §7.5 names. The test asserts **both directions** — that the two members suspend and
 that the prefix mode does not — because a classification asserted in one direction is the shape GF-2
 already names.
+
+### A shape three of this cycle's defects shared
+
+**HARNESS-006, `HEADER-conditional`, and the near half of BM2's survival are all the same thing: a
+check placed somewhere that something else decides whether it runs.** The exactness classification ran
+off an injector enum that had collapsed two ruled cases into one; the FILE_HEADER validation ran inside
+a loop bounded by whether a `GROUP_END` existed; the discard assertion ran on a workload where the
+records it was checking never reached a file. In each, the check itself was correct and its *reachability*
+was decided elsewhere — so it passed, and reported on a situation that had not occurred.
+
+Worth one sentence rather than three entries, because the remedy is one habit: when writing a check,
+ask what has to be true for it to run at all, and assert that too.
 
 ### HARNESS-007 — `Slice` bound silently to temporary strings, and a test dangled
 
@@ -361,8 +419,13 @@ the buffer did not.
 **Why the baseline gate is the entry.** The mutant lane refuses to report kills until the unpatched
 tree passes every lane a patch names — a rule borrowed from `make blind` after a lane there reported
 seven kills while one of the tests doing the killing was failing for its own reasons. Here it turned an
-unattributable run into a named ASan stack trace, and it is the second defect that gate has found
-(HARNESS-001 was the first).
+unattributable run into a named ASan stack trace.
+
+**Defects found by the baseline gate while doing its actual job: 2** (HARNESS-001, HARNESS-007). The
+count is kept because it is the argument for the gate. Its stated purpose is to make kills
+attributable; what it has actually done twice is find defects nothing else was looking for, in a tree
+that every other lane called green. A mechanism that keeps paying outside its stated purpose is worth
+more than the purpose.
 
 **Fix, and why it is structural rather than local.** `Slice(std::string&&) = delete;` makes binding to
 a temporary a **build failure**, and a `const char*` overload makes the literal case point at static

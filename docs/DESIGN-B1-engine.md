@@ -1183,6 +1183,16 @@ recovery contract, in any column, ledger, or README sentence, and the suppressio
 Ruled further: the sector-subset torn `Sync` gets the **identical** treatment through the **same**
 mechanism — one suppression mechanism, two injectors, not two mechanisms that can drift apart.
 
+**The registry is asserted in BOTH directions, and that is not symmetry for its own sake.** Members
+must suspend, and **non-members must not** — because the second direction is the one nothing else
+notices. A prefix-granular torn `Sync` was classified as a member at B1.3 and stayed that way for four
+ratified steps: the engine behaved correctly, every assertion held, every lane was green, and the only
+consequence was that bankable runs were being marked characterization-only. Its cost would have
+arrived here, at §7.4 condition 3, as a gate nothing can satisfy — *both elements observed across the
+sweep* is unsatisfiable if every run is structurally uncountable as evidence — and it would have
+presented as a bug in the engine rather than in the classifier. BUGS.md records it as HARNESS-006 and
+generalizes it as **GF-4, an unsatisfiable gate**.
+
 **The registry.** Exactly one list, and both entries live in it:
 
 ```cpp
