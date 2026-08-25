@@ -322,8 +322,41 @@ why this class costs so much more than it looks like it should.
 
 ### Where it sits in the class
 
-The eighth, and the first inside an oracle. The register, so the count is checkable rather than
-rhetorical:
+The eighth, and the first inside an oracle. **And the register's summary now begins with its
+twenty-sixth entry, because that one demonstrates the thesis the other twenty-five argue:**
+
+> **This class is not a competence problem.**
+>
+> Entry 26 is two unit tests, written to assert two propositions that had just been ruled on, by an
+> author who had spent that same day writing up **twenty-five prior instances of vacuous verification**
+> — including the one where an opt-out exempted itself from measurement and the one where a lane could
+> not return a verdict in either configuration. Both tests passed under the exact mutation each existed
+> to catch. Neither was catchable by reading it. **One command — the induction — found both, in
+> seconds.**
+>
+> The conditions are the finding: maximum attention, maximum recent exposure to the failure mode,
+> a rule requiring exactly this check, and the tests were still vacuous. **Twenty-five entries argued
+> that knowing about this class does not protect you from it. This one is the experiment.**
+
+**And the turn that produced 26 produced four catches, which is the sharper number.** All four were
+found by **mechanisms** — the induced-failure rule, `make power-decl`, and a non-vacuity criterion —
+and **none by review**, in a turn where review was maximally alert: two vacuous unit tests, two mutant
+declarations carrying `power-measured: PENDING`, and a census field folded in one place and not the
+other. **That is RISK-1 argued from the opposite direction.** RISK-1 says a lane nobody runs cannot
+tell you it has stopped working; this says the lanes that *do* run find what the most attentive reading
+of the same code does not.
+
+**The fourth is the shortest demonstration in the register and gets its own line.** A non-vacuity
+criterion — `NoOpsApplied == 0` — **caught a defect in its own plumbing before it had ever guarded
+anything.** The three new census fields were folded into `CensusOf` and not into `AddCensus`, so the
+accumulated sweep read zero against 465 elections. The place it happened is the place whose own doc
+comment says *"A counter added to one place and not the other is a number that reads low."*
+
+> **Writing the warning is not the same as running the check.** The warning was correct, present, and
+> in the right file, and the defect landed under it. The criterion that caught it had existed for
+> minutes and had never yet protected the thing it was written for.
+
+The register, so the count is checkable rather than rhetorical:
 
 | # | mechanism | what it reported | source |
 |---|---|---|---|
@@ -352,6 +385,7 @@ rhetorical:
 | 23 | **an OPT-OUT**, which is a reachability claim | `power-mutants.sh` skips any patch carrying a `power:` line, so the claim exempts itself from the only instrument that could refute it. `M56`'s was reasoned by analogy with `M53` and never measured; it is **280 of 300, first at seed 0**, and **28 of 30 under A5's own shape** — false on the day it was written, not gone stale | DESIGN-A6 §42.3 |
 | 24 | **the DECISION about which claims to re-measure**, at DESIGN-A6 §42.1 | the pass that re-measured every class reading zero **excluded `M30` by citing `M30`'s own declaration** — *measured trace-identical over 10k seeds* — rather than a measurement. `M30` is **1 of 300 with a leader-completeness violation at seed 178**: `committed is forever`, broken. The one class reasoned out of the set was the one that was wrong | DESIGN-A6 §43.5a |
 | 25 | **`power-mutants`' MEASURING path, against its own GATING path** | `--measure` at `POWER_JOBS=1` sets its status inline and never reads the result file, so it produced correct numbers for a whole cycle — while the gating path read `cut -f1` over a multi-line file and could not report a pass for any class whose probe emitted a sweep line. **One tool, two entry points, and only one of them worked** | DESIGN-A6 §43.9e |
+| 26 | **two unit tests written FOR two propositions, by an author who had spent the day on this exact class** | both passed under the exact mutation each existed to catch: one asserted three predicates while the guard it meant to test was elsewhere, the other asserted `err != nil` where `ErrNotLeader` satisfies it regardless of the rule. **One command found both** | DESIGN-A6 §22.6c, DESIGN-A7 §3a.4 |
 
 Seven of the first eight were in the harness. The eighth was in a **verdict**, which is the difference
 between a machine that finds less than it should and a machine that certifies something false.

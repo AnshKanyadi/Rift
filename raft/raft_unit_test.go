@@ -179,8 +179,25 @@ func TestLeaderCountsItsOwnCopyOnlyWhenDurable(t *testing.T) {
 	if err := r.Propose(ProposalID{Node: 1, Seq: 1}, []byte("x")); err != nil {
 		t.Fatalf("propose: %v", err)
 	}
+	// # The shape moved at A7 and the PROPERTY did not
+	//
+	// becomeLeader now appends a term-start no-op (D-A7-6), so the log a fresh
+	// leader hands over is [1: the no-op, 2: this proposal] rather than [1: this
+	// proposal]. That is §7's *every existing count moves* arriving in a unit
+	// test, and the counts below are updated rather than the assertion relaxed:
+	// what is still asserted, unchanged, is that the leader's own copy is not
+	// counted toward the quorum until it is durable.
+	//
+	// The no-op is asserted here rather than skipped over, so this test also
+	// fails if it stops being produced.
 	rd := r.Ready()
-	if len(rd.Entries) != 1 || rd.Entries[0].Index != 1 {
+	if len(rd.Entries) != 2 {
+		t.Fatalf("expected the term-start no-op and the proposal: %+v", rd.Entries)
+	}
+	if rd.Entries[0].Index != 1 || len(rd.Entries[0].Data) != 0 || !rd.Entries[0].ID.Zero() {
+		t.Fatalf("entry 1 is not the term-start no-op: %+v", rd.Entries[0])
+	}
+	if rd.Entries[1].Index != 2 {
 		t.Fatalf("the proposal was not handed over for persistence: %+v", rd.Entries)
 	}
 	mark := rd.Mark
@@ -188,8 +205,8 @@ func TestLeaderCountsItsOwnCopyOnlyWhenDurable(t *testing.T) {
 		t.Fatal("an appended entry issued no persist mark, so nothing can gate on its durability")
 	}
 
-	// One follower has it on disk. The leader does not, yet.
-	if err := r.Step(Message{Type: MsgAppResp, From: 2, To: 1, Term: 1, Success: true, MatchIndex: 1}); err != nil {
+	// One follower has both on disk. The leader has neither, yet.
+	if err := r.Step(Message{Type: MsgAppResp, From: 2, To: 1, Term: 1, Success: true, MatchIndex: 2}); err != nil {
 		t.Fatalf("app resp: %v", err)
 	}
 	if got := r.Ready(); len(got.Committed) != 0 {
@@ -202,8 +219,8 @@ func TestLeaderCountsItsOwnCopyOnlyWhenDurable(t *testing.T) {
 	// Now the leader's own write lands: two durable copies, a real quorum.
 	r.AckPersisted(mark)
 	got := r.Ready()
-	if len(got.Committed) != 1 || got.Committed[0].Index != 1 {
-		t.Fatalf("index 1 did not commit once the leader's own copy was durable: %+v", got.Committed)
+	if len(got.Committed) != 2 || got.Committed[1].Index != 2 {
+		t.Fatalf("index 2 did not commit once the leader's own copy was durable: %+v", got.Committed)
 	}
 }
 

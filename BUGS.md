@@ -1296,7 +1296,7 @@ against 0 of 10 clean. §22.6 has the class both survivals belong to.
 | **Phase** | A6 |
 | **Reproduce (test)** | `go test ./sim/hunt -run TestBUG022` |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M71-a-read-leaves-no-mark.patch && go run ./cmd/simctl replay --bundle seeds/BUG-022` |
-| **Reproduce (seed)** | seed **2521**: the audit at `1600000008790243029.0` sums to **-19** |
+| **Reproduce (seed)** | **seed 266** (re-pinned; originally seed 2521 — see below) |
 | **First violating step** | range **1, index 111** — the commit record for `a00` at `1600000007630000000.3072`, written after the read at index 107 had been answered at `1600000007750000000.514` |
 | **Invariant that caught it** | bank conservation over client-observed history |
 | **Mutant class** | none existed — added **two**, `M71-a-read-leaves-no-mark` and `M72-prewrite-ignores-the-read-mark`, in the same commit as the fix, one per independently implementable half |
@@ -1380,6 +1380,23 @@ lock, or sits below `startTS` and so below `commitTS`. It rests on `startTS != c
 because both are minted and two mints never collide — the node tag separates nodes, the logical
 counter separates mints on one node, and `IdentityCollisions` asserts the cross-node half at zero on
 every exit run.
+
+**RE-PINNED at A7: seed 2521 → seed 266.** A7's term-start no-op (D-A7-6) adds one entry per election
+per range, which moves every trace, and seed 2521 stopped carrying this finding. The corpus lane caught
+it as **WEAK** rather than STALE — *diverges under `M71` but produces NO FINDING* — which is the
+distinction that matters: the schedule still notices the mutation, and **sensitivity is not
+reproduction**. Under the looser criterion considered at A5 (*any observable difference*) it would have
+read `ok` (DESIGN-A6 §16.3c).
+
+The new pin comes from a search over 600 seeds with `M71` applied and the mutation **verified present
+in the tree** before the sweep: **2 of 600, first at seed 266.** Seed 266 reproduces the finding under
+`M71` and replays clean without it. **The old seed is recorded rather than replaced** because the seed
+moving is itself evidence about what the no-op changed.
+
+**And this seed does double duty.** Ruling 13 requires the three-guard totality argument restated under
+read index with `M71` and `M72` re-induced against the restated form — *a mutant that passes because
+the property it attacks moved has stopped meaning anything* — and seed 266 is where that re-induction
+runs.
 
 **What the fix does to the same schedule.** Seed 2521 replays identically up to index 109, where txn
 16's prewrite is now refused by `a00`'s mark, and txn 16 aborts explicitly at index 110. Txn 26 then

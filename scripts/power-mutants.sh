@@ -137,6 +137,26 @@ measure_one() {
   if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
     printf 'ROT\t\n' > "$out"; rm -rf "$work"; return 0
   fi
+  # # patch(1) exiting 0 is NOT proof the mutation is present
+  #
+  # An EMPTY patch file -- zero bytes, or one whose hunks all fail to parse into
+  # anything -- makes patch exit 0 having changed nothing. Measured:
+  #
+  #     empty.patch   patch exit=0   tree=IDENTICAL
+  #     junk.patch    patch exit=2   tree=IDENTICAL
+  #
+  # Junk is caught by the exit status. Empty is not, and the consequence differs
+  # by lane. In `mutants.sh` an unmutated tree reports ALIVE, which is loud. HERE
+  # it reports **zero detections**, and this lane reads zero detections as the
+  # reachability claim CONFIRMED -- a green over a tree that was never mutated,
+  # by the pass whose entire purpose is refusing claims nothing checks.
+  #
+  # So the mutation is verified PRESENT rather than assumed from an exit code:
+  # at least one file the patch names must actually differ.
+  tgt=$(grep '^--- a/' "$abs" | head -1 | sed 's|^--- a/||')
+  if [ -n "$tgt" ] && cmp -s "$ROOT/$tgt" "$work/$tgt"; then
+    printf 'UNMUTATED\n' > "$out"; rm -rf "$work"; return 0
+  fi
   # # Keep the raw output, because "no measurement" is six different problems
   #
   # Everything that is not a clean POWER line lands as one word, ERROR, and the
@@ -313,6 +333,13 @@ for patch in "$PATCHDIR"/*.patch; do
   status=$(head -1 "$scratch/$id.result" 2>/dev/null | cut -f1 || true)
   out=$(head -1 "$scratch/$id.result" 2>/dev/null | cut -f2- || true)
   [ -n "$status" ] || status=ERROR
+  if [ "$status" = UNMUTATED ]; then
+    printf '   UNMUTATED %s: the patch applied and the tree did not change.\n' "$id"
+    printf '            patch(1) exits 0 on an EMPTY patch, so this class would otherwise have\n'
+    printf '            measured the CLEAN tree and reported its own detection rate as zero.\n'
+    failed=$((failed + 1))
+    continue
+  fi
   if [ "$status" = ROT ]; then
     printf '   ROT      %s: patch no longer applies\n' "$id"
     failed=$((failed + 1))

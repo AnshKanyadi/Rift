@@ -1,0 +1,19 @@
+# id: M74-noop-reaches-a-state-machine-arm
+# covering-test: TestRaftExitCriteria
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 30
+# power-detector: sweep
+# power-measured: 30 seeds, current, sharded once: the sweep detector fires with 1599 dataless entries matching a state-machine arm, against a clean tree at sweepfail=0 -- so the criterion is a DIFFERENCE and not a presence. Per-seed rate is 0 of 30 because a no-op reaching the KV arm decodes to an empty command and changes nothing observable per seed; the class is visible only as an aggregate, which is why it declares a sweep detector on M73's precedent. 1599 is the same number NoOpsApplied reads on the clean tree, which is the tightest possible confirmation that the mutation routes every no-op into the arm
+# mutates: the apply switch's last arm drops its len(e.Data) > 0 guard, so a term-start no-op falls into the KV command path and is decoded as a command. D-A7-6's FIRST proposition -- no committed entry with empty Data ever reaches a state-machine arm -- negated. Ansh, ruling A: a guard whose stated purpose no longer covers everything resting on it is exactly how BUG-022 happened, so each of the two guards gets its own mutant per section 22.6b: they are independently removable and a single mutant would pass on half the protection
+--- a/store/node.go
++++ b/store/node.go
+@@ -712,7 +712,7 @@
+ 						n.machine.applySplit(n, spec, e.Index, at, s)
+ 						n.splitPending = false
+ 					}
+-				case len(e.Data) > 0:
++				default:
+ 					if noop {
+ 						n.noopReachedArm++
+ 					}

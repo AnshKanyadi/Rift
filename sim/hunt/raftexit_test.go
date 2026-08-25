@@ -464,6 +464,39 @@ func exitCriteriaFailures(c hunt.RaftCensus) []string {
 	// All three are safe to add against the signed run rather than by argument:
 	// its recorded shard censuses carry ForeignTagStarts=0, StaleRestarts=0 and
 	// StaleIncarnation=5195 across 25,000 seeds.
+	// # D-A7-6's two propositions, and the non-vacuity that makes them mean
+	// # something
+	//
+	// Ansh, ruling A: *assert what A makes true rather than trusting it. No
+	// committed entry with empty Data and a zero ID ever reaches a state-machine
+	// arm, and no such entry ever answers a client. Both are checkable, both are
+	// cheap, and A's correctness is precisely those two propositions.*
+	//
+	// The non-vacuity comes first deliberately. Two zeros over a sweep that never
+	// produced a no-op are a green over nothing, which is this register's
+	// commonest entry -- and the term-start no-op is one per election, so the
+	// count is robustly non-zero the moment A7's change is in the tree.
+	if c.NoOpsApplied == 0 {
+		add("no term-start no-op was ever applied across the whole sweep. A7 appends " +
+			"one per election, so a sweep with elections and no no-ops means the entry " +
+			"is not being produced -- and the two assertions below are then green over " +
+			"a property nothing exercised (DESIGN-A7 section 3a.2)")
+	}
+	if c.NoOpReachedArm != 0 {
+		add(fmt.Sprintf("%d dataless entries matched a state-machine arm. The apply "+
+			"switch's arms are isTxnCommand, isSplitCommand and len(e.Data) > 0 with NO "+
+			"default, so a term-start no-op matches nothing by construction. This firing "+
+			"means the construction stopped being true and the no-op is mutating the "+
+			"state machine (M74)", c.NoOpReachedArm))
+	}
+	if c.NoOpAnswered != 0 {
+		add(fmt.Sprintf("%d dataless, zero-identity entries completed a client operation. "+
+			"answerAt returns on e.ID.Zero(), and that guard is the only thing between a "+
+			"raft-internal entry and somebody's in-flight request. This firing means a "+
+			"client was told its request applied when what applied was raft's own no-op "+
+			"(M75)", c.NoOpAnswered))
+	}
+
 	if c.ForeignTagStarts != 0 {
 		add(fmt.Sprintf("%d start timestamps carried the tag of a node other than the one asked "+
 			"for them. A restart that adopts RestartAt instead of minting above it hands the "+

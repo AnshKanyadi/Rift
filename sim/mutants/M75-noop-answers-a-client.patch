@@ -1,0 +1,16 @@
+# id: M75-noop-answers-a-client
+# covering-test: TestANoOpDoesNotAnswerAZeroIdentityClientOp
+# package: ./store/
+# expect: killed
+# power-covered-by: TestANoOpDoesNotAnswerAZeroIdentityClientOp -- MEASURED to be out of the sweep's reach, and the reason is structural rather than statistical. This class needs an in-flight client op carrying the ZERO ProposalID, and P-NOOP makes that unreachable: Propose refuses the zero id, and every clientOp is built from ProposalID{Node: cfg.ID, Seq: propSeq}, which is never zero. So nothing in a run can match, inflight never shrinks, and the sweep detector reported BLIND at 30 seeds against a baseline that passes -- correctly. The covering test constructs the state a run cannot produce and kills the mutant deterministically in under a second, which is the right instrument for a class whose condition the system structurally excludes. NOTE this makes the guard DEFENCE-IN-DEPTH BEHIND P-NOOP rather than an independent protection, and it is why section 25.1's third meaning does NOT apply: deleting the guard would be correct today and would make P-NOOP's failure silent tomorrow, which is exactly what DESIGN-A7 section 4.1a names as the premise's break mode
+# mutates: answerAt drops its zero-identity guard, so a term-start no-op completes whichever client operation happens to hold the zero ProposalID. D-A7-6's SECOND proposition -- no such entry ever answers a client -- negated. answerAt sits OUTSIDE the apply loop's data switch and `owned` defaults true, so a no-op does arrive there; this guard is the only thing between a raft-internal entry and an in-flight request, and a client would be told its write applied when what applied was raft's own no-op. The second of the two mutants section 22.6b requires: the guards are independently removable, so one mutant would pass on half the protection
+--- a/store/node.go
++++ b/store/node.go
+@@ -833,6 +833,6 @@
+ func (n *Replica) answerAt(e raft.Entry, op, key string, readTS hlc.Timestamp, at clock.Instant) {
+-	if e.ID.Zero() {
++	if false {
+ 		return
+ 	}
+ 	kept := n.inflight[:0]
+ 	for _, c := range n.inflight {

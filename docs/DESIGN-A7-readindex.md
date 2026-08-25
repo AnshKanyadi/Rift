@@ -322,7 +322,7 @@ the suite kills rather than a thing the code remembers.
 
 ---
 
-## 3a. D-A7-6: how the term-start no-op is REPRESENTED **[open]**
+## 3a. D-A7-6: how the term-start no-op is REPRESENTED **[RULED: A]**
 
 §2 says *"the fix is one entry: on becoming leader, append an empty entry in the new term."* It does
 not say what that entry **is**, and the three ways to say it differ in one respect that matters:
@@ -365,6 +365,66 @@ sees.
 
 **Recommendation: A**, and it is chosen partly to *avoid* B rather than because typing is unwelcome —
 the frozen interface should be opened once, for the change that has been waiting for it, not for this.
+
+> **RULED: A. `EntryNormal`, nil `Data`, zero `ProposalID`.** Ansh: *"The survey decides it, not
+> preference. B's only remaining benefit is the name, because the behaviour it would buy is already
+> present… A name is not worth opening a frozen interface. C is rejected on your argument, which is
+> the better one: the split's marker exists because the state machine owns that concept and raft must
+> not, and the no-op inverts that, so C puts a raft-level fact into a state-machine-level encoding."*
+
+**And the frozen interface now has a standing rule** (CARRY-FORWARD): it opens **once**, for
+`raft.Configuration()` taking an index — *a change with a defect behind it*, the site that made
+BUG-015 possible. Anything else that wants it opened waits and rides with that change, and a request
+to open it for convenience is refused.
+
+### 3a.3 The condition A was ruled under, which is the whole cost of A
+
+Ansh: *"Both existing guards acquire a second reason, and a guard whose stated purpose no longer
+covers everything resting on it is exactly how BUG-022 happened."* Three things follow, all landed
+with the no-op:
+
+1. **Each guard's comment is REWRITTEN to state both reasons, not appended to.** `store/replay.go`'s
+   `applyOne` skip and `store/node.go`'s `answerAt` zero-ID return each now name (i) what they
+   originally protected and (ii) that raft appends one of these per term since A7. A reader deciding
+   whether the line may go can see everything resting on it.
+2. **A mutant per guard**, per §22.6b — `M74` and `M75`, **two and not one, because they are
+   independently removable and a single mutant would pass on half the protection.**
+3. **The two propositions are asserted rather than trusted**, §3a.2 below.
+
+### 3a.2 What A makes true, counted on every run
+
+Ansh: *"assert what A makes true rather than trusting it. No committed entry with empty Data and a
+zero ID ever reaches a state-machine arm, and no such entry ever answers a client. Both are checkable,
+both are cheap, and A's correctness is precisely those two propositions."*
+
+| census field | must read | what it is |
+|---|---|---|
+| `NoOpsApplied` | **non-zero** | the non-vacuity half: one no-op per election, so zero means the entry is not being produced and the two below are green over nothing |
+| `NoOpReachedArm` | **zero** | proposition 1 — `M74` |
+| `NoOpAnswered` | **zero** | proposition 2 — `M75` |
+
+All three are exit criteria. **The non-vacuity is listed first deliberately**: two zeros over a sweep
+that never produced a no-op are this register's commonest entry.
+
+### 3a.4 The induction found both unit tests vacuous, in one command
+
+Written before the mutants, both propositions got a unit test, and **both passed under the mutation
+they were supposed to catch.** Recorded because it is the induced-failure rule doing the only thing it
+is for:
+
+- **Proposition 1's test** asserted the three arms do not match a dataless entry. Removing
+  `applyOne`'s `if len(e.Data) == 0 { return }` left it green — because `applyOne` **has a `default:`
+  arm**, and what protects it there is `decodeCmd` returning an op the inner `switch op` matches
+  nothing for. The early return is a fast path, not the guard. **The node path and the replay path
+  protect one property by two different mechanisms**, and snapshot equivalence compares their results,
+  so both are now asserted.
+- **Proposition 2's test** read `if err := r.Propose(ProposalID{}, …); err == nil { fail }`. A
+  zero-value `Raft` returns `ErrNotLeader` whatever the id is, so relaxing the zero-ID rule left it
+  green. It is now asserted as a **difference** — the zero id must be refused for a reason a named id
+  is not — and it fails when the rule goes.
+
+> **Two tests, written carefully, both vacuous, both caught by one command that tried to make them
+> fail.** Neither would have been caught by reading them.
 
 ### 3a.1 What A costs, surveyed rather than guessed
 
@@ -472,10 +532,36 @@ does this mechanism's correctness argument assume, and does this system provide 
 | a follower's applied index is a sound freshness bound | follower reads' | yes, **because a read index is a fact about a position rather than about a node** (D-A7-2) |
 | the term-start no-op is committed before any read is served in that term | read index's | **not automatically** — a leader can receive a read between `becomeLeader` and the no-op's commit, and the read must wait for it rather than take the inherited `commitIndex` |
 | serving a read locally does not advance any replicated state | read index's | **no, if the mark is ever moved off the log** (D-A7-5B), which is why B is a phase and not a decision |
+| **`Propose` will never issue the zero `ProposalID`** | **D-A7-6's**, and load-bearing since the no-op landed | **yes today, by an explicit refusal in `Propose` — and that refusal is now holding up something it was not written for.** §4.1a |
 
-**Six assumptions, three of which this system does not provide.** That ratio is the argument for
+**Seven assumptions, three of which this system does not provide.** That ratio is the argument for
 running the audit at all: the table of facts came out clean at A6 and the phase's most expensive
 defect was in the column the table has no room for.
+
+### 4.1a P-NOOP, the named premise D-A7-6 rests on, written so it expires loudly
+
+Ansh, ruling A: *"say plainly what the no-op's identity rests on… and add it to the assumption audit
+as a named premise so it expires loudly, in the form §9a uses."*
+
+> **P-NOOP. `Propose` refuses the zero `ProposalID`, so no client proposal can ever carry it.**
+
+The refusal exists already, and its stated reason is about proposal identity:
+
+> *"a proposal needs an identifier; the zero value is refused so a caller cannot fall back to matching
+> on log index, which is not a proposal identity"*
+
+**That sentence no longer covers everything resting on the line.** Since the term-start no-op landed,
+the zero `ProposalID` is *the no-op's identity* — the one value nothing else in the system can produce,
+which is exactly why it was chosen over a new `EntryType`.
+
+| premise | breaks when | what happens |
+|---|---|---|
+| **P-NOOP** | the refusal in `Propose` is relaxed, or any path is added that mints a zero id | **the no-op stops being distinguishable from a client proposal.** `answerAt`'s guard then either withholds real answers or lets the no-op complete somebody's request — and **nothing errors.** It breaks SILENTLY |
+
+**Asserted rather than trusted**, in the form the rest of this phase uses: `TestTheNoOpAnswersNobody`
+requires the zero id to be refused **for a reason a named id is not**, which is a difference and not a
+presence. The first version of that test asserted only `err != nil`, was satisfied by `ErrNotLeader`,
+and passed under the exact mutation it existed to catch (§3a.4).
 
 ---
 
@@ -669,6 +755,66 @@ detection power is lost quietly.
 curve, mutant power floors under A6's shape, the unthrottled collector. The no-op moves the baseline
 those are taken against, so the order matters: **A6's owed measurements are taken before A7's first
 commit**, or they measure a shape that no longer exists.
+
+---
+
+## 7a. The re-measurement, and what one extra entry per election actually moved
+
+Ruling 6: *the no-op lands alone, on a committed baseline, with a full re-measurement and one reason
+per moved number.* This is that measurement.
+
+### 7a.1 Thirty seeds could not attribute anything, and the control is how that was established
+
+A first pass compared pre and post at 30 seeds: **55 of 80 census fields moved.** Naming a reason for
+each would have been false precision, because once the trace diverges at the first election every later
+count comes from a different run. So a **control** was run — the *unchanged* tree over a different
+30-seed window — to measure how much these fields move with no change at all.
+
+**They move a lot.** 34 of 51 comparable fields sat inside a single window shift, including
+`Inconclusive 1 → 0` and `ConfRecoveries −14` (window Δ **−15**). And the field whose direction the
+causal story predicts most cleanly, `SnapshotsTaken +497`, had a window Δ of **+538** — larger than the
+effect. **A correct causal story does not make a number attributable.**
+
+> **Ruling 6 is not satisfiable at 30 seeds**, and the answer is more seeds rather than weaker
+> attribution. Sums over `N` seeds grow like `N` and their noise like `√N`, so relative noise falls as
+> `1/√N`; with treatment ≈ noise at 30, a 3× margin needs `√(N/30) = 3`, i.e. **N ≈ 270**.
+
+### 7a.2 The measurement at 300 seeds, with three control contrasts
+
+Pre and post at seeds 0–300, plus the unchanged tree at 300–600 and 600–900, giving **three control
+contrasts** so the bar is a measured spread rather than one difference. A field attributes only if its
+movement exceeds the widest of the three.
+
+**7 of 55 attribute. 48 do not**, and the 48 are reported with their bands rather than dropped —
+they are the evidence that the bar exists.
+
+| attributed | pre → post | no-op Δ | control band |
+|---|---|---|---|
+| `GCApplied` | 64841 → 70227 | **+5386** | 519 |
+| `SnapshotsTaken` | 75733 → 79540 | **+3807** | 558 |
+| `VersionsCollected` | 43267 → 46264 | **+2997** | 376 |
+| `GCProposed` | 19568 → 21138 | **+1570** | 249 |
+| `SnapshotsApplied` | 6755 → 7227 | **+472** | 302 |
+| `SplitsApplied` | 5596 → 5703 | **+107** | 69 |
+| `ConfRecoveries` | 304 → 259 | **−45** | 10 |
+
+**One reason names all seven.** One extra entry per election per range → the applied-entry snapshot
+threshold (`SnapshotThreshold: 6`) is reached sooner → more snapshots and more truncation, hence more
+GC proposed and applied, more versions collected, more splits applied per unit of log, and **fewer
+configuration entries surviving in a recovered log tail** — which is `ConfRecoveries` falling.
+
+### 7a.3 The field that failed at 30 and cleared at 300 is the evidence the bar is real
+
+`SnapshotsTaken` is **inside** the band at 30 seeds and **6.8× outside** it at 300. `ConfRecoveries` is
+`−14` against a band of `−15` at 30, and `−45` against a band of `10` at 300.
+
+> **A bar that only ever confirms is a bar chosen to confirm.** These two failed it and then cleared it
+> at a seed count derived from the noise rather than picked — which is the difference between a
+> threshold that is measured and one that is set where the answer already is.
+
+`Inconclusive` moved `2 → 1` at 300 against a band of `1` and **remains unattributed**, which is the
+same verdict it got at 30 for a much better reason. `StaleEpochRefusals` is the sharpest case for the
+bar: **+5081**, the largest raw movement in the census, against a control band of **6155**.
 
 ---
 

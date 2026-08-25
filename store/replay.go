@@ -72,6 +72,19 @@ type Replay struct {
 	db   *model.DB
 	b    *engine.Batch
 	next int
+
+	// noopReachedSwitch counts dataless, identity-less entries that got past the
+	// skip below and into the switch. **It must be zero**, and it exists because
+	// snapshot equivalence cannot see why this path is correct -- only that its
+	// output matches the node's (DESIGN-A6 §13.4b).
+	//
+	// The node protects the same property with a switch that has NO default and a
+	// last arm guarded by len(e.Data) > 0. This path protects it with the early
+	// return, backed by decodeCmd returning an inert op. Equivalence compares the
+	// two RESULTS, so it is green whichever mechanism is holding it up -- and a
+	// mechanism can rot to zero load without anything noticing. Asserting at each
+	// path is what closes that.
+	noopReachedSwitch int
 }
 
 // NewReplay starts a replay from a range's birth payload.
@@ -106,6 +119,11 @@ func (r *Replay) Apply(entries []raft.Entry) {
 	r.flush()
 }
 
+// NoOpReachedSwitch is how many term-start no-ops got past this path's skip and
+// into the command switch. **It must be zero.** DESIGN-A6 §13.4b: the property
+// is asserted here rather than inferred from this path agreeing with the node's.
+func (r *Replay) NoOpReachedSwitch() int { return r.noopReachedSwitch }
+
 // Applied is how many entries this replay has consumed.
 func (r *Replay) Applied() int { return r.next }
 
@@ -129,9 +147,38 @@ func (r *Replay) flush() {
 	r.b.Reset()
 }
 
+// applyOne applies one committed entry to the replayed state machine.
+//
+// # The empty-Data skip protects TWO things, and both are named here
+//
+// This guard is stated with both reasons rather than one plus an appended note,
+// because a guard whose comment covers less than what rests on it is how BUG-022
+// happened: the reader who has to decide whether the line may go must be able to
+// see everything it holds up.
+//
+//  1. **A dataless entry carries no command.** Nothing below decodes to a txn
+//     command, a split, or a KV write, so applying it would mean decoding an
+//     empty slice into whichever arm happened to be first.
+//
+//  2. **Since A7, raft appends one of these per term.** The term-start no-op is
+//     EntryNormal with nil Data (DESIGN-A7 §3a, D-A7-6 ruled A), and it exists to
+//     make the leader's commitIndex true, not to change the state machine. If
+//     this skip goes, every election injects an entry into the replayed state and
+//     snapshot equivalence fails against a node that correctly ignored it --
+//     which would read as a divergence in the state machine rather than as a
+//     defect here.
+//
+// `M74` removes it and must be killed.
 func (r *Replay) applyOne(e raft.Entry) {
+	noop := len(e.Data) == 0 && e.ID.Zero()
 	if len(e.Data) == 0 {
 		return
+	}
+	if noop {
+		// Unreachable while the skip above stands, which is the point: this is
+		// the assertion AT THIS PATH rather than inferred from agreeing with the
+		// node's.
+		r.noopReachedSwitch++
 	}
 	switch {
 	case isTxnCommand(e.Data):

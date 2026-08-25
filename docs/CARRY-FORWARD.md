@@ -33,6 +33,58 @@ holds a position and asks a question that does not take one, which is what made 
 fix is a frozen-interface change (DESIGN-A0 D5), so it is a **report, never an assumed
 ratification**, and it is not worth opening that interface for on its own.
 
+### The standing rule: a pre-ruling on a result carries a PROVENANCE CONDITION
+
+*Ansh, after the `M73` fabrication:* **"I may pre-rule what a result means, but never before its
+provenance is established, so any pre-ruling on a null now carries an explicit provenance condition —
+the measurement counts only if the instrument was demonstrated to be doing the thing being
+measured."**
+
+**The instance.** A7's no-op broke three corpus bundles, and three re-pin searches were launched. The
+null case was pre-ruled to save a turn:
+
+> *"For `M71` and `M73` over 600 seeds under current: if either comes back empty, that is a stronger
+> signal, because those are not rare classes. An empty result there means the no-op moved the schedule
+> out of the defect's reach, which is a measurement of the no-op and belongs in the report as one."*
+
+`M73` came back `0 of 600`. **The patch had never applied** — `sh` does not expand a glob in a
+redirection, so `patch` received zero bytes, exited 0, and the search swept 600 seeds of clean code.
+
+> **A measurement of unmutated code would have landed as a measurement of the change under test,
+> wearing a ruling that authorised the interpretation.**
+
+**This is a distinct shape, not vacuous-green.** Vacuous-green is an instrument that reports nothing
+while looking like it is working. Here the instrument was fine and **the interpretation was decided
+before the result existed**, which removed the step that would have caught the result being wrong:
+the turn in which somebody asks *where did this number come from*.
+
+**And the pre-ruling was wrong on its facts as well as its form.** It rested on *those are not rare
+classes*; `M73`'s own declaration is **per-seed 0 of 200, sweep-detected**, so an empty per-seed search
+is the expected result rather than a signal. *Not found at this budget* is the right reading.
+
+**The rule, binding on both of us:**
+
+> **A pre-ruling may fix what a result MEANS. It may not fix that before the result's PROVENANCE is
+> established. Every pre-ruling on a null therefore carries the condition: the measurement counts only
+> if the instrument was demonstrated to be doing the thing being measured.**
+
+For a mutation search, "demonstrated" is one comparison — does the file the patch names actually
+differ. That check is now in the search scripts and in `power-refute`, `power-mutants` and
+`mutant-covered` (DESIGN-A6 §43.14, §43.14b, §43.14c).
+
+### The standing rule: the frozen interface opens ONCE, and this is the change it opens for
+
+*Ansh, ruling D-A7-6:* **the frozen interface opens once, for `raft.Configuration()` taking an index,
+which is the site that made BUG-015 possible. That is a change with a defect behind it. Anything else
+that wants the interface opened waits and rides with it, and a request to open it for convenience is
+refused.**
+
+The test is not how small the change is. It is **whether a defect is behind it**: `Configuration()`
+qualifies because BUG-015 happened at that exact site — a caller holding a position, asking a question
+that does not take one. A new `EntryType` for the term-start no-op does not qualify, and it is the
+better case for the rule precisely because it was *reasonable*: typed, idiomatic, and the survey still
+found it bought a name rather than a behaviour.
+
 **And A7 declined to open it for a smaller reason, which is the rule working.** DESIGN-A7 §3a
 (D-A7-6): the term-start no-op could be a new `EntryType`, which is the typed answer this project
 usually prefers — and `Entry` rides in `Ready`, so it is the same frozen interface. The recommendation

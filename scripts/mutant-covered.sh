@@ -190,6 +190,21 @@ cover_one() {
   if ! (cd "$work" && patch -p1 --silent --forward -i "$ROOT/$patch") >/dev/null 2>&1; then
     printf 'ROT\n' > "$out"; return 0
   fi
+  # # An UNMUTATED tree yields no changed lines, and so does a legitimate
+  # # addition-only patch. They are not the same thing.
+  #
+  # `patch` exits 0 on an EMPTY patch file having changed nothing (DESIGN-A6
+  # section 43.14b), and this lane then diffs `orig` against a target identical
+  # to it, finds no deleted-or-replaced run, and reports **SKIP** -- the same
+  # verdict a real addition-only mutant gets. Absence is absorbed into a benign
+  # category and the class reads as legitimately unaskable.
+  #
+  # The two are distinguishable in one comparison: an addition-only patch CHANGES
+  # the target (it adds lines) while leaving the deleted set empty; an unapplied
+  # one leaves the target byte-identical. Ask that before ascribing the skip.
+  if cmp -s "$work/orig" "$work/$target"; then
+    printf 'UNMUTATED\n' > "$out"; return 0
+  fi
   lines=$(python3 -c '
 import sys, difflib
 a=open(sys.argv[1]).readlines(); b=open(sys.argv[2]).readlines()
@@ -311,6 +326,12 @@ for patch in sim/mutants/*.patch; do
     # The work was done above; this loop only reports it, in patch order.
     status=$(cut -f1 "$tmp/$name.result" 2>/dev/null || echo ERROR)
     case "$status" in
+      UNMUTATED)
+        printf '   UNMUTATED %-44s the patch applied and the target is byte-identical.\n' "$name"
+        printf '             patch(1) exits 0 on an empty patch, and this lane would otherwise\n'
+        printf '             have recorded it as an addition-only SKIP -- absence absorbed into a\n'
+        printf '             benign category (DESIGN-A6 section 43.14c).\n'
+        fail=$((fail + 1)); continue ;;
       SKIP) skipped=$((skipped + 1)); continue ;;
       ROT)  printf '   ERROR    %-44s patch does not apply cleanly\n' "$name"
             fail=$((fail + 1)); continue ;;
@@ -322,60 +343,41 @@ for patch in sim/mutants/*.patch; do
     miss=$(cut -f2- "$tmp/$name.result" 2>/dev/null || true)
     report_one; continue
   fi
-  # Every file the patch names is copied, not only the first: a multi-file patch
-  # applied against a partial copy fails, and the failure looks like a rotted
-  # patch rather than a lane that did not lay the ground out.
-  work="$tmp/$name"
-  ok=1
-  for f in $(sed -n 's|^--- a/||p' "$patch"); do
-    mkdir -p "$(dirname "$work/$f")"
-    cp "$ROOT/$f" "$work/$f" 2>/dev/null || ok=0
-  done
-  [ "$ok" = 1 ] || { skipped=$((skipped+1)); continue; }
-  cp "$ROOT/$target" "$work/orig" 2>/dev/null || { skipped=$((skipped+1)); continue; }
-  if ! (cd "$work" && patch -p1 --silent --forward -i "$ROOT/$patch") >/dev/null 2>&1; then
-    printf '   ERROR    %-44s patch does not apply cleanly\n' "$name"
-    fail=$((fail + 1)); continue
-  fi
 
-  lines=$(python3 -c '
-import sys, difflib
-a=open(sys.argv[1]).readlines(); b=open(sys.argv[2]).readlines()
-gone=set()
-for tag,i1,i2,_,_ in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes():
-    if tag in ("delete","replace"): gone.update(range(i1+1,i2+1))
-# The FIRST line of each contiguous deleted-or-replaced run: the point at which
-# the mutation takes effect. See the header for why the interior lines are not
-# askable.
-print(" ".join(str(n) for n in sorted(gone) if n-1 not in gone))' "$work/orig" "$work/$target")
-
-  if [ -z "$lines" ]; then
-    skipped=$((skipped + 1)); continue   # addition-only: no original line to cover
-  fi
-
+  # # ONE apply-and-diff path, because the duplicate swallowed a guard
+  #
+  # This loop used to carry its own inline copy of `cover_one`'s logic for the
+  # sequential case. That is the shape DESIGN-A6 §43.9d found in
+  # `power-mutants.sh`, where the sweep detector was taught to the shared helper
+  # and the inline copy silently did not have it, leaving the lane unable to fire
+  # the detector in its DEFAULT mode for a full cycle.
+  #
+  # It then happened again HERE, an hour after that was written up: the
+  # UNMUTATED guard was added to `cover_one`, the induction reported `1 skipped`
+  # instead of `UNMUTATED`, and the reason was that sequential mode was running
+  # the other copy. **A shape that has produced two silent failures will produce
+  # a third**, so the copy is gone rather than guarded: `cover_one` measures,
+  # both modes read its output, and anything added later lands in both by
+  # construction.
+  #
+  # `TestOneApplyPath` in ./cmd/simctl/ asserts there is exactly one call site.
+  cover_one "$patch" "$name" "$tmp/$name.result"
+  status=$(cut -f1 "$tmp/$name.result" 2>/dev/null || echo ERROR)
+  case "$status" in
+    UNMUTATED)
+      printf '   UNMUTATED %-44s the patch applied and the target is byte-identical.\n' "$name"
+      printf '             patch(1) exits 0 on a hunk that changes nothing, and this lane would\n'
+      printf '             otherwise record it as an addition-only SKIP (DESIGN-A6 §43.14c).\n'
+      fail=$((fail + 1)); continue ;;
+    SKIP) skipped=$((skipped + 1)); continue ;;
+    ROT)  printf '   ERROR    %-44s patch does not apply cleanly\n' "$name"
+          fail=$((fail + 1)); continue ;;
+    ERROR) printf '   ERROR    %-44s %s did not run\n' "$name" "$test_name"
+          tail -3 "$tmp/$name.log" 2>/dev/null | sed 's/^/              /'
+          fail=$((fail + 1)); continue ;;
+  esac
   checked=$((checked + 1))
-  prof="$tmp/$name.cov"
-  if ! $GO test -count=1 -timeout "$TEST_TIMEOUT" -run "^${test_name}\$" \
-        -coverpkg="./$(dirname "$target")/" \
-        -coverprofile="$prof" "$pkg" >"$tmp/$name.log" 2>&1; then
-    printf '   ERROR    %-44s %s did not run\n' "$name" "$test_name"
-    tail -3 "$tmp/$name.log" | sed 's/^/              /'
-    fail=$((fail + 1)); continue
-  fi
-
-  miss=$(python3 -c '
-import sys
-prof, target = sys.argv[1], sys.argv[2]
-want=set(int(x) for x in sys.argv[3:]); cov=set()
-for line in open(prof):
-    if line.startswith("mode:") or ":" not in line: continue
-    fname, rest = line.rsplit(":",1)
-    if not (fname.endswith("/"+target) or fname.endswith(target)): continue
-    span,_st,cnt = rest.split()
-    lo=int(span.split(",")[0].split(".")[0]); hi=int(span.split(",")[1].split(".")[0])
-    if int(cnt)>0: cov.update(range(lo,hi+1))
-print(",".join(map(str,sorted(want-cov))))' "$prof" "$target" $lines)
-
+  miss=$(cut -f2- "$tmp/$name.result" 2>/dev/null || true)
   report_one
 done
 

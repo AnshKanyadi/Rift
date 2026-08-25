@@ -22,12 +22,12 @@
  	r.broadcastAppend()
  	return nil
  }
-@@ -806,7 +802,7 @@
+@@ -1969,7 +1969,7 @@
  		r.nextIndex[i] = last + 1
  		r.matchIndex[i] = 0
  	}
 -	r.matchIndex[r.peerIdx(r.id)] = r.tail.persisted
 +	r.matchIndex[r.peerIdx(r.id)] = last
- 	r.broadcastAppend()
- }
  
+ 	// # The term-start no-op, which is not optional and is one line
+ 	//

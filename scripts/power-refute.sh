@@ -183,6 +183,26 @@ measure_one() {
   if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
     printf 'ROT\n' > "$out"; rm -rf "$work"; return 0
   fi
+  # # patch(1) exiting 0 is NOT proof the mutation is present
+  #
+  # An EMPTY patch file -- zero bytes, or one whose hunks all fail to parse into
+  # anything -- makes patch exit 0 having changed nothing. Measured:
+  #
+  #     empty.patch   patch exit=0   tree=IDENTICAL
+  #     junk.patch    patch exit=2   tree=IDENTICAL
+  #
+  # Junk is caught by the exit status. Empty is not, and the consequence differs
+  # by lane. In `mutants.sh` an unmutated tree reports ALIVE, which is loud. HERE
+  # it reports **zero detections**, and this lane reads zero detections as the
+  # reachability claim CONFIRMED -- a green over a tree that was never mutated,
+  # by the pass whose entire purpose is refusing claims nothing checks.
+  #
+  # So the mutation is verified PRESENT rather than assumed from an exit code:
+  # at least one file the patch names must actually differ.
+  tgt=$(grep '^--- a/' "$abs" | head -1 | sed 's|^--- a/||')
+  if [ -n "$tgt" ] && cmp -s "$ROOT/$tgt" "$work/$tgt"; then
+    printf 'UNMUTATED\n' > "$out"; rm -rf "$work"; return 0
+  fi
   run_probe "$work" "$cfg" > "$out.raw"
   rm -rf "$work"
   if ! grep -q '^POWER ' "$out.raw"; then printf 'ERROR\n' > "$out"; return 0; fi
@@ -285,6 +305,12 @@ elif [ -n "$sys_list" ]; then
       measure_one "$patch" "$scratch/$id.result" "$cfg"
     fi
     status=$(head -1 "$scratch/$id.result" 2>/dev/null || echo ERROR)
+    if [ "$status" = UNMUTATED ]; then
+      printf '   UNMUTATED %-44s the patch applied and the tree did not change.\n' "$id"
+      printf '             patch(1) exits 0 on an EMPTY patch, so a zero-detection result here\n'
+      printf '             would have CONFIRMED this claim against a clean tree.\n'
+      failed=$((failed + 1)); continue
+    fi
     if [ "$status" != OK ]; then
       printf '   %-9s %-44s the probe produced no measurement\n' "$status" "$id"
       failed=$((failed + 1)); continue

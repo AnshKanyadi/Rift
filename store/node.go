@@ -266,6 +266,28 @@ type Replica struct {
 	// answered tracks client ops already responded to, by history index.
 	inflight []clientOp
 
+	// # A7's two propositions, counted rather than trusted
+	//
+	// D-A7-6 ruled that the term-start no-op is EntryNormal with nil Data and the
+	// zero ProposalID. **A's correctness is exactly two propositions**, so both
+	// are asserted rather than argued:
+	//
+	//   noopsApplied      how many dataless, identity-less entries were applied.
+	//                     Non-vacuity: one per election, so a sweep reading zero
+	//                     has not exercised any of this.
+	//   noopReachedArm    a dataless entry that MATCHED a state-machine arm.
+	//                     Must be zero. Ansh, on the ruling: *assert what A makes
+	//                     true rather than trusting it.*
+	//   noopAnswered      a dataless, zero-id entry that ANSWERED a client.
+	//                     Must be zero, and it is the second proposition.
+	//
+	// The two zeros are the guards at store/replay.go:applyOne and answerAt
+	// stated as counts. A guard is a claim about what cannot happen; a count is
+	// the claim being checked on every run.
+	noopsApplied   int
+	noopReachedArm int
+	noopAnswered   int
+
 	// outOfExtent counts committed commands refused at apply for naming a key
 	// outside this range's extent at that log position (BUG-014).
 	outOfExtent int
@@ -427,6 +449,7 @@ func (n *Replica) onClient(req Request) {
 	if req.ReadTS.IsSet() && req.Op == "get" {
 		at = req.ReadTS
 	}
+
 	n.propSeq++
 	id := raft.ProposalID{Node: n.cfg.ID, Seq: n.propSeq}
 	if err := n.raft.Propose(id, encodeCmd(req.Op, req.Key, req.Value, at)); err != nil {
@@ -617,8 +640,19 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			for _, e := range rd.Committed {
 				op, k, v, owned := "", "", "", true
 				var cmdTS hlc.Timestamp
+				// D-A7-6's two propositions, counted at the site each is about.
+				// A dataless entry is a term-start no-op: it must match no arm
+				// below, and it must answer nobody. Both are asserted in the
+				// exit criteria rather than trusted (DESIGN-A7 §3a.2).
+				noop := len(e.Data) == 0 && e.ID.Zero()
+				if noop {
+					n.noopsApplied++
+				}
 				switch {
 				case isTxnCommand(e.Data):
+					if noop {
+						n.noopReachedArm++
+					}
 					// A transaction step is a command to the state machine like
 					// any other. Everything it needs travels in the entry, so
 					// every replica reaches the same conclusion from the same
@@ -654,6 +688,9 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 					}
 
 				case isSplitCommand(e.Data):
+					if noop {
+						n.noopReachedArm++
+					}
 					// A split is a command to the state machine like any other,
 					// and raft has no business knowing what a range is.
 					//
@@ -677,6 +714,9 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 						n.splitPending = false
 					}
 				case len(e.Data) > 0:
+					if noop {
+						n.noopReachedArm++
+					}
 					op, k, v, cmdTS = decodeCmd(e.Data)
 					// # The extent is checked HERE, at the log position, and
 					// # the check at arrival cannot stand in for it
@@ -740,7 +780,11 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 					if op == "get" {
 						n.flushApply(mb)
 					}
+					before := len(n.inflight)
 					n.answerAt(e, op, k, cmdTS, at)
+					if noop && len(n.inflight) != before {
+						n.noopAnswered++
+					}
 				} else {
 					n.rerouteAt(e, op, k, v, at, s)
 				}
@@ -752,6 +796,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			n.maybeSnapshot(at, s)
 			n.maybeSplit(at)
 		}
+
 	}
 }
 
@@ -767,6 +812,26 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 // the correct outcome rather than a gap. The client genuinely does not know
 // whether its write happened, so the history leaves it in flight and the checker
 // treats it as may-or-may-not-have-happened -- the honest answer.
+//
+// # The zero-ID guard below protects TWO things, and both are named here
+//
+// Stated with both reasons rather than one plus an appended note, for the reason
+// BUG-022 gives: a guard whose comment covers less than what rests on it will be
+// removed by somebody who checked the comment.
+//
+//  1. **An entry with no proposal identity has no client to answer.** Matching on
+//     a zero id would match the zero value of any half-built clientOp, which is
+//     an answer sent to nobody or, worse, to the wrong somebody.
+//
+//  2. **Since A7, raft appends one of these per term.** The term-start no-op is
+//     EntryNormal, nil Data, ZERO ProposalID (DESIGN-A7 §3a, D-A7-6 ruled A). It
+//     reaches this function -- `owned` defaults true and this call sits OUTSIDE
+//     the data switch, so an entry matching no arm still arrives here -- and this
+//     guard is the only thing between a raft-internal entry and somebody's
+//     in-flight request. Without it a no-op would complete whichever client op
+//     happens to hold the zero id, answering a request the cluster never applied.
+//
+// `M75` removes it and must be killed.
 func (n *Replica) answerAt(e raft.Entry, op, key string, readTS hlc.Timestamp, at clock.Instant) {
 	if e.ID.Zero() {
 		return
@@ -943,6 +1008,24 @@ func (n *Replica) rerouteAt(e raft.Entry, op, key, value string, at clock.Instan
 // OutOfExtentRefusals is how many committed commands this replica refused to
 // apply for naming a key its extent no longer covers.
 func (n *Replica) OutOfExtentRefusals() int { return n.outOfExtent }
+
+// NoOpsApplied is how many term-start no-ops this replica has applied: entries
+// with no Data and no proposal identity. It is the NON-VACUITY half -- a sweep
+// reading zero has not exercised D-A7-6 at all, whatever the two zeros below say.
+func (n *Replica) NoOpsApplied() int { return n.noopsApplied }
+
+// NoOpReachedArm is how many dataless entries matched a state-machine arm.
+// **It must be zero.** DESIGN-A7 §3a: the apply switch's arms are
+// isTxnCommand(e.Data), isSplitCommand(e.Data) and len(e.Data) > 0, with no
+// default, so an entry carrying no Data matches nothing -- by construction
+// rather than by luck. This counts the construction being true.
+func (n *Replica) NoOpReachedArm() int { return n.noopReachedArm }
+
+// NoOpAnswered is how many dataless, zero-identity entries completed a client
+// operation. **It must be zero.** answerAt returns on e.ID.Zero(), and that
+// guard is what stands between a raft-internal entry and somebody's in-flight
+// request. This counts it holding.
+func (n *Replica) NoOpAnswered() int { return n.noopAnswered }
 
 // onDurable turns an engine sync completion into AckPersisted, and records what
 // is now durable into the ledger.

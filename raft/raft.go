@@ -1970,6 +1970,52 @@ func (r *Raft) becomeLeader() {
 		r.matchIndex[i] = 0
 	}
 	r.matchIndex[r.peerIdx(r.id)] = r.tail.persisted
+
+	// # The term-start no-op, which is not optional and is one line
+	//
+	// A leader that has just won an election DOES NOT KNOW ITS OWN COMMIT INDEX.
+	// maybeCommit implements the figure-8 rule: only entries from the CURRENT
+	// term are committed by counting, because an earlier-term entry replicated
+	// on a majority can still be overwritten by a later leader with a shorter
+	// log. So commitIndex is whatever this leader inherited, and that can be
+	// arbitrarily far behind the true committed prefix.
+	//
+	// Read index takes `readIndex := commitIndex` at the moment a read arrives.
+	// Taken here, that value is TOO LOW, and a read served against it misses
+	// writes committed before this leader took office -- a stale read produced
+	// by the mechanism whose entire job is preventing stale reads.
+	//
+	// Appending one entry of our own fixes it: committing it commits everything
+	// below it, and commitIndex becomes true. DESIGN-A7 §2.
+	//
+	// # What this entry IS: D-A7-6, ruled A
+	//
+	// EntryNormal, nil Data, and the ZERO ProposalID. Not a new EntryType --
+	// Entry rides in Ready, so a new type would be a change to the interface
+	// DESIGN-A0 D5 froze, and the survey (DESIGN-A7 §3a.1b) found it would buy a
+	// NAME rather than a BEHAVIOUR: no consumer switches exhaustively on
+	// EntryType, every one tests == or != EntryConfChange, so a new type routes
+	// down the normal-command path everywhere and still needs the same
+	// empty-Data handling.
+	//
+	// The zero ProposalID is the identity, and it is not a convention. Propose()
+	// REFUSES a zero id -- "a proposal needs an identifier; the zero value is
+	// refused so a caller cannot fall back to matching on log index" -- so no
+	// client proposal can ever carry it. The no-op is identified by holding the
+	// one identity the propose path is forbidden to issue.
+	//
+	// **That refusal is now load-bearing for this entry, not only for proposal
+	// identity.** If it is ever relaxed, this no-op stops being distinguishable
+	// from a client proposal and breaks SILENTLY. DESIGN-A7 §4.1 carries it as a
+	// named premise for that reason.
+	noop := Entry{
+		Type:  EntryNormal,
+		Term:  r.term,
+		Index: r.lastIndex() + 1,
+		Data:  nil,
+	}
+	r.appendEntries(noop)
+
 	r.broadcastAppend()
 }
 

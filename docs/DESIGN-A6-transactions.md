@@ -506,6 +506,50 @@ assertion rather than a tuned test.
 > oracle, `M63` was never a class and `M66` is unreached — which leaves **`M64` as the one covered by
 > a mutant alone**, and that is a shorter and more useful sentence than the original claim was.
 
+#### 13.4b A second gap: replay equivalence cannot see two paths that agree for different reasons
+
+> **UNCAUGHT BY REPLAY EQUIVALENCE: the node path and the replay path protecting one property by two
+> different mechanisms.**
+
+Found at A7, applying D-A7-6, and it belongs in this ledger rather than in a test write-up because it
+is a limit of **the instrument that replaced the independent model**, not a defect in either path.
+
+**The instance.** A committed entry with empty `Data` must not change the state machine. Both paths
+provide it and neither provides it the same way:
+
+| path | what actually protects the property |
+|---|---|
+| `store/node.go`, the apply loop | the switch has **no `default:`** and its last arm is `case len(e.Data) > 0:`, so a dataless entry matches nothing |
+| `store/replay.go`, `applyOne` | the early `if len(e.Data) == 0 { return }` is a **fast path**. The switch **does** have a `default:`, and what protects it there is `decodeCmd` returning an op the inner `switch op` matches nothing for |
+
+**Snapshot equivalence compares their RESULTS.** Both produce an unchanged state machine, so the
+comparison is green — and it is green whichever mechanism is doing the work on either side. **The two
+paths agree on the output while disagreeing on why**, and agreement on output is the entire signal
+this instrument has.
+
+**Why that is a gap and not a curiosity.** Remove `applyOne`'s early return and equivalence stays
+green, because `decodeCmd` catches it. Remove the node's `len(e.Data) > 0` guard and equivalence
+**also** stays green for a while — until a dataless entry appears whose decode is not inert. The
+instrument reports on the *conjunction* of two mechanisms and can never tell you which one is holding
+it up, so a mechanism can rot to zero load and be discovered only when the other one moves.
+
+> **Replay equivalence judges an independent EXECUTION (§13.1). Two executions that reach the same
+> state by different reasoning are exactly what it was built to accept — which is its strength against
+> a shared-code model, and is this gap.**
+
+**What closes it, and it is the general form rather than this instance:**
+
+> **The property must be asserted AT EACH PATH, never inferred from the two paths agreeing.**
+
+Applied here: the node path counts `NoOpReachedArm` at its own switch and the replay path counts
+`NoOpReachedSwitch` at its own, each asserted at zero, each induced by removing the guard it is about.
+Agreement between the paths remains a check — it is the one that catches a defect neither
+per-path assertion anticipated — but it is no longer the *only* thing standing behind the property.
+
+**And it generalises past this property.** Any invariant held by both the apply path and the replay
+path is a candidate: the two were written at different times, by different reasoning, and equivalence
+has never had a way to say *these agree because both are right* rather than *these agree*.
+
 #### 13.4a The burden discharged, with the number that discharges it
 
 Ansh, ratifying the detector: this is the entry §13.4 has been waiting for, and it goes in the
@@ -900,6 +944,74 @@ where only the trace moves, and it cost the same search. **Whether the criterion
 itself should tighten is still Ansh's**: it is one line in
 `scripts/corpus-reproduces.sh`, and tightening it silently would be changing a
 ruled-on lane while nobody was looking.
+
+### 16.3b The standing rule: a lane's verdict is read against its own verdict before the change
+
+**Ansh, on the A7 no-op's corpus regeneration:** *"a lane's verdict after a change is read against its
+verdict before, field by field, and a green with no baseline is not a result."*
+
+**What earned it.** A7's term-start no-op moves every trace, so all 25 bundles failed
+`TestEveryStoredBundleReplays` and were re-recorded. Afterwards:
+
+> **`make corpus` was GREEN in 102 seconds, and three bundles had stopped carrying their findings.**
+
+The before verdict had been taken first — **19 ok, 4 skip, 1 STALE** — so the after read as a
+difference rather than as a colour:
+
+| bundle | before | after | mutant |
+|---|---|---|---|
+| `BUG-009` | ok | **STALE** — replays identically | `M34` |
+| `BUG-024` | ok | **STALE** — replays identically | `M73` |
+| `BUG-022` | ok | **WEAK** — diverges, no finding | `M71` |
+| `BUG-015` | STALE | STALE | pre-existing, blocked on a ruling |
+
+**Without the baseline, the after verdict is `16 ok, 4 skip, 3 STALE, 1 WEAK` on a lane that has a
+known-red entry** — and distinguishing *the one that was already red* from *the three the change
+broke* would have been a matter of memory. With it, the three are a two-line diff.
+
+> **A green with no baseline is not a result.** It generalises past the corpus to every lane whose
+> verdict has more than one possible cause: the question is never *is it green*, it is *what changed*,
+> and only one of those is answerable without the before.
+
+**And it is the cheapest lesson in the cycle.** Taking the before cost one run of a lane that was going
+to be run anyway. Not taking it would have cost three bundles quietly retaining their names while
+carrying nothing — which is §16's original finding, arriving through the door the fix for §16 left
+open.
+
+### 16.3c `BUG-022` went WEAK, and the criterion I nearly weakened is what caught it
+
+Of the three bundles the no-op broke, `BUG-022`'s is the one to read.
+
+```
+   WEAK     BUG-022      diverges under M71-a-read-leaves-no-mark.patch but produces NO FINDING.
+            The bundle is sensitive to SOMETHING; only the finding returning proves
+            it is sensitive to the thing it was recorded for.
+```
+
+**It is not STALE.** The trace *does* move when `M71` is applied — the schedule notices the mutation.
+What does not happen is the finding coming back.
+
+> **Sensitivity is not reproduction.** A bundle that diverges under its mutant has proved only that the
+> mutation touches something the schedule reaches. The bundle exists to carry a *finding*, and the
+> finding is the only thing whose return proves the schedule still reaches the defect.
+
+**And this is the strict criterion earning itself for the second time.** §16.2 records the first: the
+lane originally required a *difference* — a violation, a panic, an error, or a diverged trace — and
+`BUG-003` and `BUG-008` satisfied that while not producing their findings. The stricter reading, *it
+must produce THE FINDING*, was left as Ansh's to rule on rather than tightened quietly. **Under the
+loose criterion, `BUG-022` would have read `ok` here.** A diverged trace is exactly what it has.
+
+**The second time is on the bundle that matters most**, which is what makes it worth this much space:
+
+- `BUG-022` is the read-mark defect — *a reader is a first committer* — and the one A6 closed on;
+- `M71` is its recording half, and **ruling 13 requires `M71` re-induced against §9a's restated
+  totality argument**, because a mutant that passes because the property it attacks moved has stopped
+  meaning anything;
+- so a `BUG-022` bundle that no longer reproduces is not a corpus-hygiene item. **It is A7's own exit
+  criterion arriving early, through the corpus lane instead of through the phase's mutant work.**
+
+The re-pin search for `M71` therefore does double duty: the seed it finds is both the bundle's new pin
+and the seed ruling 13's re-induction runs at.
 
 ### 16.3 The general form, which survives the correction
 
@@ -1549,6 +1661,79 @@ being covered the way this one now is. Recorded rather than fixed here, because
 the right moment to write a mutant is the moment its blind spot is precise, and
 these three are precise now: they go in the same commit as the next change that
 touches them.
+
+#### 22.6c And a test of a GUARD asserts the discriminator, never the outcome
+
+Second instance in this project of a guard test passing for a reason unrelated to the guard, so it is
+a rule now rather than two anecdotes.
+
+**The instance.** D-A7-6's second proposition is that a term-start no-op answers no client, and it
+rests on `Propose` refusing the zero `ProposalID`. The test read:
+
+```go
+if err := r.Propose(raft.ProposalID{}, []byte("x")); err == nil { t.Error(...) }
+```
+
+A zero-value `Raft` is not a leader, so `Propose` returns `ErrNotLeader` **whatever the id is**.
+Relaxing the zero-id rule left the test green. It asserted the OUTCOME — *refused* — and the outcome
+has another cause.
+
+**The repair is to assert the DISCRIMINATOR**: the zero id must be refused *for a reason a named id is
+not*, which is a difference between two calls on one receiver rather than a property of one call.
+
+> **A guard exists to make one input behave differently from another. So a test of a guard compares
+> the two inputs; it never checks that the guarded input produced the guarded outcome, because the
+> guarded outcome has other causes and one of them will be present.**
+
+**Why this pairs with §22.6b rather than standing alone.** 22.6b says a decision in two halves needs a
+mutant per half. This says the *test* of each half must be able to tell that half's mechanism from
+everything else that produces the same answer. Together they are the two ways a guard's coverage goes
+hollow: one mutant for two guards, and one outcome for two causes.
+
+
+#### 22.6d Independently REMOVABLE and independently REACHABLE are different properties
+
+Ansh, on `M75`: *"independently removable and independently reachable are different properties and I
+conflated them. Two mutants was correct on removability; the reachability difference is what makes one
+of them killable by the sweep and the other not."* Recorded because the conflation will recur wherever
+defence-in-depth sits behind a structural rule.
+
+The two guards behind D-A7-6 are **independently removable** — deleting either leaves the other
+compiling and the system running — so §22.6b's rule applied and each got its own mutant. They are
+**not independently reachable**:
+
+| mutant | guard removed | can a run reach the defect? |
+|---|---|---|
+| `M74` | the apply switch's `len(e.Data) > 0` | **yes.** Every no-op falls into the KV arm: 1599 in 30 seeds |
+| `M75` | `answerAt`'s `e.ID.Zero()` | **no.** It needs an in-flight client op carrying the zero id, and `Propose` refuses to issue one |
+
+> **Removability decides how many mutants. Reachability decides which instrument can kill them.** Ask
+> both: the first tells you whether one mutant would pass on half the protection, the second tells you
+> whether a sweep or a constructed unit test is the thing that kills it.
+
+### 25.1c A fourth meaning, or a qualifier on the third: DEFENCE-IN-DEPTH is not dead code
+
+§25.1 gives three meanings for a surviving mutant, and `M75` is a case none of them cleanly covers. It
+looks exactly like the third — *the code it removes cannot be reached, so delete the code and the
+mutant* — and the third's response would be wrong here.
+
+> **Dead code is code no correct future can need. Defence-in-depth is code no CURRENT run can reach,
+> but whose reachability is held shut by a named premise — and the premise can expire.**
+>
+> **The test for which: is a named premise doing the work?** If nothing makes it unreachable except
+> the code's own shape, it is dead and goes. **If a premise is doing the work, the guard stays, and the
+> premise's expiry is precisely what the guard is for.**
+
+`M75`'s guard is unreachable because of **P-NOOP** (DESIGN-A7 §4.1a): `Propose` refuses the zero
+`ProposalID`. Delete the guard and today's tree is still correct. Relax P-NOOP tomorrow and a
+raft-internal entry completes somebody's request **with nothing erroring** — which is the exact break
+mode P-NOOP is written to expire loudly on. So the guard stays, and §25.1's second meaning applies
+instead: **route a test through it**, constructing the state a run cannot produce.
+
+**And the disposition follows the split label without needing a new one.** `M75` is
+`power-covered-by: TestANoOpDoesNotAnswerAZeroIdentityClientOp`, with the measurement as its evidence
+— *measured out of the sweep's reach for a structural rather than a statistical reason*. §43.13 records
+that the taxonomy absorbed a case it was not designed against, one turn after landing.
 
 ### 22.7 The guard that read zero, and the class it belongs to
 
@@ -4171,6 +4356,196 @@ about because the second half is how a correct change acquires an incorrect reco
 Neither of these is a defect in the tree. Both are defects in what was said about the tree, and they
 are here because §31's finding — *a lane reporting red into a room with nobody in it* — has a sibling:
 a report asserting green into the same room.
+
+### 43.14 A search that reports "no seed reproduces" while measuring an unmutated tree
+
+Found while re-pinning the corpus bundles the A7 no-op broke, in a scratch search script rather than in
+the repository — and it is recorded because of what it nearly produced and what it then found in the
+repository's own lanes.
+
+**What happened.** The search applied each mutant with
+`patch -p1 --silent --forward < .../${id}-*.patch`. **`sh` does not expand a glob in a redirection**, so
+`patch` was handed **zero bytes**, exited **0**, and the tree stayed clean. The search then swept 600
+seeds against an unmutated tree and reported `0 of 600, sweepfail=0`.
+
+**What that would have been reported as.** Ansh had pre-ruled the null case: *"For `M71` and `M73` over
+600 seeds under current: if either comes back empty, that is a stronger signal, because those are not
+rare classes. An empty result there means the no-op moved the schedule out of the defect's reach,
+which is a measurement of the no-op."*
+
+> **A fabricated measurement of the change under test, pre-authorised as a finding.** The result was
+> not merely wrong; it was wrong in the exact shape a ruling had already licensed reporting.
+
+**What caught it.** Nothing in the script. `M71` — run through the same loop — printed a visible patch
+failure, which made the *other* results untrustworthy by association, and the trees were then compared
+against the originals. `M71`'s own result survived that check (its tree differs; `2 of 600, first at
+seed 266` is real). `M73`'s did not.
+
+> **The check that settles it is one line: does the file the patch names actually differ?** It was not
+> in the script, and no amount of reading the script would have produced it — the script *looks*
+> correct, and `patch` reported success.
+
+### 43.14b And the repository's own lanes trust the same exit code
+
+The scratch script's glob bug is not in the tree. The *assumption underneath it* is, in six places —
+`mutants.sh`, `power-mutants.sh`, `power-refute.sh`, `mutant-covered.sh`, `corpus-reproduces.sh` and
+`blind-analyzer.sh` all apply their patch and **take `patch`'s exit status as proof the mutation is
+present.** Measured on this machine:
+
+| patch input | exit | tree |
+|---|---|---|
+| empty file | **0** | unchanged |
+| junk body | 2 | unchanged |
+| declaration lines, no hunks | 2 | unchanged |
+| already applied, under `--forward` | 1 | unchanged |
+
+**Three of the four are caught by the exit status. The empty file is not.** And the consequence differs
+by lane in a way worth stating: in `mutants.sh` an unmutated tree reports `ALIVE`, which is loud and
+wrong in the safe direction. In **`power-refute.sh` it reports zero detections, and this lane reads
+zero detections as the reachability claim CONFIRMED** — a green over a tree that was never mutated, by
+the pass built to refuse claims nothing checks.
+
+So both lanes now verify the mutation is **present** rather than inferring it from an exit code, and
+refuse with `UNMUTATED` when the named file is unchanged. Induced: a declaration-only patch takes
+`power-refute` from **`0 failures` to `1 failures`**.
+
+**And the guard is defence-in-depth by §25.1c's own test, which is worth spelling out because the rule
+was written an hour earlier and this is the first thing it was pointed at.** Every shape reachable
+through the lanes today exits non-zero and is already caught as `ROT`. So: is a named premise doing the
+work, or is the guard dead code?
+
+> **P-PATCH. `patch(1)` exits non-zero whenever it leaves the tree unchanged.**
+
+That premise holds for BSD `patch 2.0-12u11-Apple`, which is what this machine runs. It is a claim
+about a **third-party tool on one platform**, GNU patch differs in several of these cases, and CI would
+run Linux. A premise is doing the work, its expiry mode is a platform change nobody would think to
+re-measure the lanes after, and by §25.1c that is precisely what a guard is for. **It stays.**
+
+### 43.14c All six lanes audited, and the asymmetry that decides which ones are dangerous
+
+Ansh: *"You named six lanes trusting the exit code and fixed two. Report what the other four do with a
+silently-absent mutation, and fix any that read absence as evidence."*
+
+| lane | what an unmutated tree produces | verdict |
+|---|---|---|
+| `mutants.sh` | the covering test passes → **ALIVE** | **loud**, and wrong in the safe direction |
+| `blind-analyzer.sh` | the blinded rule's test passes → `got=alive` ≠ `expect=killed` → **mismatched** | **loud** |
+| `corpus-reproduces.sh` | replays identically → **STALE** | **loud** |
+| `mutant-covered.sh` | no deleted-or-replaced run → **SKIP** | **absorbed** — see below |
+| `power-mutants.sh` | zero detections → DROPPED | loud, **guarded anyway** |
+| `power-refute.sh` | zero detections → **CONFIRMED** | **silent** — fixed |
+
+> **The same silent failure is loud in four lanes and confirming in one, and the discriminator is
+> whether the lane reads ABSENCE AS EVIDENCE.** A lane that expects the mutation to make something
+> happen treats nothing-happened as failure. `power-refute` expects the mutation to make nothing
+> happen — that is what confirming a reachability claim *is* — so nothing-happened is exactly what it
+> was looking for, and an unmutated tree hands it the answer it wanted.
+
+**`mutant-covered.sh` is the third category and needed fixing.** Absence is not loud and not confirming;
+it is **absorbed into a benign class**. An unmutated tree yields no deleted lines, and so does a
+legitimate addition-only mutant, so the class reports `SKIP` alongside `M23` and `M48` and reads as
+properly unaskable. The two are one comparison apart: an addition-only patch *changes* the target while
+leaving the deleted set empty; an unapplied one leaves it byte-identical.
+
+**And the reachable shape is a context-only hunk, measured rather than assumed:**
+
+```
+context-only hunk: patch exit=0
+  tree=IDENTICAL
+```
+
+Not an empty file — a patch with a well-formed hunk containing only context lines. `patch` applies it,
+reports success, and changes nothing. So this guard is **reachable**, unlike `power-refute`'s, which
+rests on P-PATCH.
+
+### 43.14d The duplicated measurement path, in a second lane
+
+The guard was added to `cover_one` and the induction reported **`1 skipped`** instead of `UNMUTATED`.
+
+`mutant-covered.sh` has **two copies of the apply-and-diff logic** — `cover_one` for `COVER_JOBS > 1`
+and an inline copy for sequential — and the guard had landed in one of them.
+
+> **That is §43.9d exactly, in a second lane, found the same way: by a guard failing to fire where it
+> should have.** `power-mutants` had two copies of its measurement path, the sweep detector was taught
+> to one, and the lane could not fire it in its default mode. Here the same duplication swallowed a
+> guard added an hour after that lesson was written up.
+
+**Collapsed**, in its own change: the sequential path now calls `cover_one`, so there is one
+apply-and-diff site, and `TestOneApplyPath` asserts it stays one — induced by adding a second site.
+
+### 43.14e The rule is not "one path", and the duplication test found that out by failing wrongly
+
+The ruling was *collapse the duplication; count the call sites or make the second a caller of the
+first.* Applied to `mutant-covered.sh` that was right. Applied to `power-mutants.sh` **it would have
+been wrong**, and the test written to enforce it said so by failing on a script that was correct.
+
+`power-mutants.sh` invokes the probe twice **on purpose**: once on the mutated tree in `measure_one`,
+once on the clean tree in `baseline_sweep`. Those are two measurements, not two copies of one. Deleting
+either would delete the comparison.
+
+**But the failure pointed at something real.** The lane's sweep verdict is *"a criterion the baseline
+passes"* — a **difference** between those two runs — and a difference is only meaningful if both sides
+were measured the same way. Nothing asserted that. A baseline taken at a different timeout, or against
+a different test, is not a baseline, and **that hole sits under every sweep verdict this lane has ever
+produced.**
+
+> **The rule, in its corrected form:** *one path where the two runs must be the same experiment; two
+> paths where they must be the same experiment on different trees — and in the second case the flags
+> are **proven equal**, not assumed.*
+
+`TestBaselineAndMeasurementAgree` proves it, induced by setting the baseline's timeout to 900s against
+the measurement's 3600s, which prints both lines and fails.
+
+**And this is the third time this cycle a mechanism produced a finding other than the one it was aimed
+at**, which is worth stating as a pattern rather than three coincidences:
+
+| mechanism | aimed at | what it actually found |
+|---|---|---|
+| the induced-failure rule | confirming two new unit tests worked | **both were vacuous** (§43.9f, register 26) |
+| the `NoOpsApplied` non-vacuity criterion | protecting the two zeros | **a census field folded in one place and not the other** — its own plumbing |
+| `TestOneApplyPath` | one duplicated apply path | **a baseline and a measurement with no proof they match** |
+
+Each was cheap, each was pointed somewhere specific, and each returned something else. That is an
+argument for *running* small mechanisms rather than for choosing them well: the finding a check
+produces is frequently not the finding it was written for, and a check that is never run produces
+neither.
+
+
+**Induced, after both paths were guarded:**
+
+```
+   UNMUTATED M98-context-only    the patch applied and the target is byte-identical.
+   0 checked, 0 skipped, 0 unchecked, 1 dead
+```
+
+### 43.13 The taxonomy absorbed a case it was not designed against, one turn after landing
+
+The split label was built from `M56`, `M30` and `M67` — three reachability claims that were wrong. It
+was not designed for a class that is **genuinely** out of the sweep's reach, and one arrived the next
+turn.
+
+`M75` (A7's second no-op guard) reports BLIND at 30 seeds, and correctly: the defect it plants needs an
+in-flight client op carrying the zero `ProposalID`, and `Propose` refuses to issue one, so no run can
+produce the condition. The honest claim is neither of the two that were wrong before:
+
+- **not `power-unreachable`** in the sense the label was built to catch — that label's failure mode is
+  a *statistical* claim made without measuring, and this one is **structural** and measured;
+- **not a floor**, because there is no rate to floor.
+
+**It is `power-covered-by`, with the measurement as its evidence** — a deterministic unit test that
+constructs the state a run cannot produce, kills the mutant in under a second, and is **run by the
+pass**. No new label was needed.
+
+> **A taxonomy earns its keep when it absorbs a case it was not designed against without growing.**
+> The Track A cycle that produced it spent itself proving what happens when one label carries two
+> meanings; this is the same test from the other side — three labels, and the fourth case fitted one of
+> them exactly, because the labels are keyed on *what evidence is owed* rather than on *why the class
+> is unusual*.
+
+**And it required the reachability distinction to see** (§22.6d): `M74` and `M75` are independently
+removable, so §22.6b gave each a mutant — and they are **not** independently reachable, which is what
+made one killable by a sweep and the other only by a constructed test. Removability decides how many
+mutants; reachability decides which instrument kills them.
 
 ### 43.10 What the pass does not do, stated before anybody quotes it
 

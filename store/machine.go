@@ -438,6 +438,26 @@ func (m *Node) OutOfExtentRefusals() int {
 	return m.sum(func(r *Replica) int { return r.OutOfExtentRefusals() })
 }
 
+// NoOpsApplied, NoOpReachedArm and NoOpAnswered aggregate D-A7-6's two
+// propositions across this node's replicas. The first is the NON-VACUITY count
+// -- one term-start no-op per election, so a sweep reading zero has exercised
+// none of it -- and the other two must be zero on every run. DESIGN-A7 §3a.2.
+func (m *Node) NoOpsApplied() int {
+	return m.sum(func(r *Replica) int { return r.NoOpsApplied() })
+}
+
+// NoOpReachedArm must read zero: a dataless entry that matched a state-machine
+// arm is the first proposition failing.
+func (m *Node) NoOpReachedArm() int {
+	return m.sum(func(r *Replica) int { return r.NoOpReachedArm() })
+}
+
+// NoOpAnswered must read zero: a dataless, zero-identity entry that completed a
+// client operation is the second proposition failing.
+func (m *Node) NoOpAnswered() int {
+	return m.sum(func(r *Replica) int { return r.NoOpAnswered() })
+}
+
 // A5's counters, summed over this machine's replicas.
 func (m *Node) GCProposed() int { return m.sum(func(r *Replica) int { return r.GCProposed() }) }
 func (m *Node) GCApplied() int  { return m.sum(func(r *Replica) int { return r.GCApplied() }) }

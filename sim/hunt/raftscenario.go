@@ -995,6 +995,13 @@ type RaftResult struct {
 	StaleSplits         int
 	OutOfExtentRefusals int
 
+	// D-A7-6's two propositions plus their non-vacuity. NoOpsApplied must be
+	// NON-zero once A7's term-start no-op lands (one per election); the other two
+	// must be zero. DESIGN-A7 §3a.2.
+	NoOpsApplied   int
+	NoOpReachedArm int
+	NoOpAnswered   int
+
 	// MovesOrdered and MovesCompleted are the manual rebalance's non-vacuity
 	// evidence. A sweep in which every move stalled is green about a mechanism
 	// that never finished, and a stalled move is SAFE -- which is exactly why the
@@ -1536,6 +1543,9 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.StaleEpochRefusals += d.StaleEpochRefusals()
 		res.StaleSplits += d.StaleSplits()
 		res.OutOfExtentRefusals += d.OutOfExtentRefusals()
+		res.NoOpsApplied += d.NoOpsApplied()
+		res.NoOpReachedArm += d.NoOpReachedArm()
+		res.NoOpAnswered += d.NoOpAnswered()
 		res.GCProposed += d.GCProposed()
 		res.GCApplied += d.GCApplied()
 		res.VersionsCollected += d.VersionsCollected()
@@ -1659,6 +1669,9 @@ type RaftCensus struct {
 	SplitsApplied       int
 	StaleEpochRefusals  int
 	OutOfExtentRefusals int
+	NoOpsApplied        int
+	NoOpReachedArm      int
+	NoOpAnswered        int
 	MovesOrdered        int
 	MovesCompleted      int
 	MovesRacingChurn    int
@@ -1772,6 +1785,9 @@ func CensusOf(seed uint64, r RaftResult) RaftCensus {
 	c.SplitsApplied += r.SplitsApplied
 	c.StaleEpochRefusals += r.StaleEpochRefusals
 	c.OutOfExtentRefusals += r.OutOfExtentRefusals
+	c.NoOpsApplied += r.NoOpsApplied
+	c.NoOpReachedArm += r.NoOpReachedArm
+	c.NoOpAnswered += r.NoOpAnswered
 	c.MovesOrdered += r.MovesOrdered
 	c.MovesCompleted += r.MovesCompleted
 	c.MovesRacingChurn += r.MovesRacingChurn
@@ -1912,6 +1928,9 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.SplitsProposed, b.SplitsProposed}, {&out.SplitsApplied, b.SplitsApplied},
 		{&out.StaleEpochRefusals, b.StaleEpochRefusals},
 		{&out.OutOfExtentRefusals, b.OutOfExtentRefusals},
+		{&out.NoOpsApplied, b.NoOpsApplied},
+		{&out.NoOpReachedArm, b.NoOpReachedArm},
+		{&out.NoOpAnswered, b.NoOpAnswered},
 		{&out.MovesOrdered, b.MovesOrdered}, {&out.MovesCompleted, b.MovesCompleted},
 		{&out.MovesRacingChurn, b.MovesRacingChurn},
 		{&out.MovesUnattributable, b.MovesUnattributable},

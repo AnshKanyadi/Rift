@@ -1,6 +1,6 @@
 {
   "seed": 153,
-  "commit": "01d6fe438dc18c2e56b4a26d2bcbe32cff9db51e",
+  "commit": "c39a53adfb8cabd791e62366714738edf5468450",
   "workload": "toy",
   "scenario": {
     "flaw": "ack-counting",
