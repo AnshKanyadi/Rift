@@ -96,6 +96,21 @@ while IFS= read -r line; do
   why=$(printf '%s' "$line"  | awk -F'|' '{print $5}' | sed 's/^ *//; s/ *$//')
   reg=$(printf '%s' "$line"  | awk -F'|' '{print $6}' | sed 's/^ *//; s/ *$//')
   [ -n "$reg" ] || reg=default
+  # A THIRD BOUND, AND B2 IS WHAT EARNED IT: the DETECTION COUNT.
+  #
+  # A rate is a fraction, and B2 changed its denominator without changing any
+  # class's power -- the manifest added Env calls, so the sweep visits 300 kill
+  # points where it visited 175, and every one of them is a point at which these
+  # classes are not detectable. Every rate fell; not one count did. A lane that
+  # broke the build on that would be reporting arithmetic as a regression.
+  #
+  # The count is immune to the denominator and blind to per-point dilution; the
+  # rate is the reverse. That is the same argument the rate and the kill-point
+  # ceiling already make about each other -- BOTH BOUNDS, BECAUSE THEY DEGRADE
+  # INDEPENDENTLY -- and it is why this is a third column rather than a
+  # replacement.
+  minn=$(printf '%s' "$line" | awk -F'|' '{print $7}' | sed 's/^ *//; s/ *$//')
+  [ -n "$minn" ] || minn=0
   case $reg in default|flush) ;; *)
     printf '   BAD      %s: unknown regime "%s"\n' "$cls" "$reg"; fails=$((fails + 1)); continue ;;
   esac
@@ -145,6 +160,10 @@ while IFS= read -r line; do
   fi
 
   bad=0
+  if [ "$viol" -lt "$minn" ]; then
+    printf '   BELOW FLOOR  %s: %d detections < count floor %s\n' "$cls" "$viol" "$minn"
+    bad=1
+  fi
   if [ "$permille" -lt "$rate" ]; then
     printf '   BELOW FLOOR  %s: detection %d per mille < floor %s\n' "$cls" "$permille" "$rate"
     bad=1
@@ -161,8 +180,8 @@ while IFS= read -r line; do
     printf '                reasoning   : %s\n' "$why"
     fails=$((fails + 1))
   else
-    printf '   holds    %-30s [%s] %d per mille (floor %s), first at %s (ceiling %s)\n' \
-      "$cls" "$reg" "$permille" "$rate" "$first" "$ceil"
+    printf '   holds    %-30s [%s] %d detections (floor %s), %d per mille (floor %s), first at %s (ceiling %s)\n' \
+      "$cls" "$reg" "$viol" "$minn" "$permille" "$rate" "$first" "$ceil"
   fi
 done < "$FLOORS"
 

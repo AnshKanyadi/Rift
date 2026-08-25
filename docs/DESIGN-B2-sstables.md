@@ -417,3 +417,117 @@ induced, and that is the one thing this project does not accept.
 | B2-Q1 | gapless check | **REPLACED, not retired.** The pair's intervals must partition `[1, W]`; asserted directly; induced as a **gap** and as an **overlap**; BM4 must still be killed |
 | B2-Q2 | CF-1's predicted rise | **A GATE.** The campaign fails if BM2's rate does not rise. Report against 194 per mille / kill point 14, say by how much, and say whether it is consistent with the accident being the whole of the suppression or only part |
 | B2-Q3 | how much of B4 arrives early | **One thing: a longer sweep workload**, because §6's four adjacent pairs cannot be induced by a workload that never flushes. Everything else B2 needs already exists (§11.1) |
+
+---
+
+## 13. Revision 3 — what implementation changed, and why
+
+**A ruling that is not written into the artifact it governs has not landed.** This section records
+every place B2's implementation diverged from B2's design, and every decision the design left to
+implementation that turned out to have a wrong answer available. Nothing here is a change to a
+ruling; each is a report against one.
+
+### 13.1 The internal key order, and the defect B2-D6's ordering caught before a writer existed
+
+§3's rejection list says *entries not strictly ascending within a block*. The classifier was drafted
+comparing entries with `Slice::compare`, and that is **wrong for the format it was validating**:
+internal keys sort *user key ascending, tag DESCENDING*, and the tag is stored little-endian, so a
+bytewise comparison orders two versions of one user key **the wrong way round**. A table validated
+that way looks perfectly well formed while a reader seeking a snapshot finds the *oldest* visible
+version.
+
+It was invisible because the fixtures used single-letter keys with no tag, for which the two orders
+agree — the one case where the disagreement can be written down is two versions of one user key, and
+that fixture did not exist yet. It was found by **building the fixtures the format actually
+requires**, which is B2-D6's ordering paying off one step earlier than the plan expected: the point
+of landing the classifier first is that its own construction interrogates the format.
+
+`src/internal_key.{h,cc}` is the remedy — one encoder and one comparator, moved out of the
+memtable's private helpers the moment the layout acquired a second holder. **BM34** (a caller
+substituting memcmp) and **BM35** (the comparator itself inverted) are what keep it found.
+
+### 13.2 B2-D4: the manifest names the live WALs, and it creates before it names
+
+§6 states the replacement for B1's gapless check as *"every file number the manifest names exists,
+and every WAL present is either named or above the manifest's counter."* Implementing it produced
+two findings, both from the kill-point sweep, both engine defects that never shipped.
+
+**The order matters more than the rule.** Naming a WAL *before* creating it is the order that
+prevents the state you can name — a file the manifest has not heard of — and it creates the state
+you cannot: **a durable name with no file**. That name persists into every later manifest, so
+`named and absent` stops meaning `lost directory entry` from that moment on. The sweep refused it 41
+times. **Creating first inverts it into a window that closes itself**: nothing is written to a WAL
+before its name is durable, so a crash between creation and naming leaves an *empty* unnamed file.
+Both halves of the rule then hold with no exception in either direction.
+
+**An unnamed WAL is not necessarily empty.** The emptiness argument covers one of the two ways a WAL
+becomes unnamed; the other is a flush, which drops a WAL's name in the same manifest group that adds
+the table covering it. The sweep found that as 64 more violations. The rule is now stated as a
+property of the state rather than of its provenance: **nothing in an unnamed WAL may be above what
+the SSTables cover.** That is B2-Q1's *nothing covered twice* from the file side, and it is strictly
+stronger than the check it replaced.
+
+Both are recorded as **BUG-001** and **BUG-002** — the first two entries in BUGS.md's engine list.
+
+### 13.3 D7's forward binding: the one place the letter does not hold, reported not adapted
+
+§5.1 mechanism 1 reads *"no manifest record has a watermark field ... enforced by there being
+nothing to write it into."* B2-D4(c) reuses the WAL's framing, and that framing's `GROUP_END`
+carries a `high_seq`. **So the sentence is not literally true of the manifest.** What is true, and
+is what the mechanism was for:
+
+- no manifest **edit** has such a field — `EditKind`'s payloads carry file numbers, sizes, key
+  bounds and a per-table largest sequence, and nothing else;
+- `ManifestState` has **nowhere to receive one**;
+- a manifest `GROUP_END` whose sequence is non-zero **fails the open**. Writer writes zero, reader
+  refuses anything else, both directions asserted, **BM47** induces it.
+
+### 13.4 B2-Q1: the first implementation of the partition invariant was unsound
+
+The invariant was implemented as *the replayed WALs' batch sequences form one contiguous run*, which
+would have caught a lost file. **It is wrong**: a Write whose `Apply` is refused by a cap consumes
+its sequence and writes no batch — deliberately, per the Write path's own note that the contract
+requires monotonicity and not density — so a legitimate hole is indistinguishable from a lost file,
+and the check would have refused the normal case in the name of the abnormal one. That is the
+inversion §5.4 rejected candidate (a) for. **A B1 test caught it**, because its fixture writes
+batches at sequences 4 and 9.
+
+What sequences can answer is **order** (each file's first batch above the previous file's last) and
+**the join** (the first replayed batch above what the tables cover). What they cannot answer is
+*nothing missing*, which is a question about files and is answered with file identities — §13.2.
+
+### 13.5 The sweep has two regimes, and that is the whole of B2-Q3's borrow list
+
+`default` is the caps as shipped: no flush occurs, so it is the **direct successor** of the sweep
+B1's floors were measured against. `flush` sets a low threshold and appends a workload tail that
+crosses it, and is the only regime in which the flush path has kill points at all. They are run
+separately and never aggregated (§8.4), and the regime is a column in `FLOORS.txt` rather than a
+fact about whoever ran the lane.
+
+The borrowed item, with the gate that required it: **a sweep workload long enough to contain a
+flush**, required by every gate on B2-D5's ordering — steps 1 through 5 have no kill points
+otherwise. Nothing else was brought forward.
+
+### 13.6 Three harness facts the flush broke, and why they survived all of B1
+
+`FactsFrom` computed *did this Sync make the in-flight group durable* as **the `promoted` flag of the
+last `kWritableFileSync` in the ledger**. Every clause was true only by accident: the WAL was the
+only file this engine ever synced; a torn injection at a `Flush` records its promotion on the
+**Flush** entry; and the flush creates a second WAL inside the same `Sync` whose empty file promotes
+nothing. Recorded as **HARNESS-012**, with **ORACLE-facts-last-sync** as the mutant.
+
+The order in which they were found is the interesting part: **scoping the question to *this* `Sync`
+is what exposed the other two.** Without scoping, one successful Sync answered for every group after
+it, and the fact was accidentally correct exactly when it mattered.
+
+### 13.7 Smaller divergences, recorded so none is a silent adaptation
+
+| what | why |
+|---|---|
+| `src/sst/format.h` is named `table_format.h` | Every directory under `src/` is on the include path, so two headers sharing a basename resolve by SEARCH ORDER. This one worked only because every file that included it happened to live beside it. |
+| `kFlushBytes` lives in `wal::Caps` | §6 puts its derivation at the definition site; joining Caps is what lets the sweep set it low, and makes a run at a non-default value a different regime by construction. |
+| `Recover` no longer takes the directory lock | B2 must read the manifest under the same lock, and a function that both locks and recovers cannot be composed with one that must run inside the lock. `DB::Open` locks. |
+| `Write` holds the lock across `wal_->Apply` | The flush replaces the WAL *and* the memtable; in B1's gap a Write could name the old WAL and apply to the new memtable — a lost write with no corruption. `Apply` makes no Env call, so the mutex-depth guard is unaffected. |
+| `DurableSeq` is a maximum over the WAL and the flushed tables | Rolling the WAL gives the new one a durable sequence of zero, so reading the WAL alone would send the watermark backwards at every flush. |
+| Reads capture shared pointers to their stores | `memtable.h`'s note said B2 must revisit arena lifetime "the moment a memtable can be retired". Refcounts, not lifetime by argument. |
+| `kConcurrencyClaim` widened to two patterns | In the diff that widened the harness and not before it, per the ruling at the constant. The flush is the engine's first operation that replaces the WAL and the memtable under a concurrent writer. |

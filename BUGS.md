@@ -17,8 +17,7 @@ lot of tests" and "we can show you what the tests found and why they found it."
    the most valuable entry in the file. It must additionally record what checker was missing and
    whether one was added.
 
-**Counts:** 0 entries (engine bugs; the fenced harness-defect section below is counted separately and does not satisfy this gate). *(A0 is in progress; the phase gate for A1 requires this file to be nonempty,
-because a harness that finds nothing is a harness that is too weak.)*
+**Counts:** 2 entries (engine bugs; the fenced harness-defect section below is counted separately and does not satisfy this gate). *(Both are Track B's, found by the kill-point sweep at B2. Track A's A1 gate is a separate obligation and is unaffected by them.)*
 
 ---
 
@@ -59,7 +58,83 @@ the seed pass.
 
 ## Entries
 
-*(none yet)*
+Counts: 2 entries. Both were found by `make cpp-sweep` — the kill-point sweep — in the cycle that
+wrote the code, before either reached a commit anyone else would have built. Neither is a bug in
+signed work; both are recorded because rule 1 makes no exception for a defect a checker caught early,
+and because **what they have in common is worth more than either**: an ordering argument that was
+right about the state it named and wrong about the state it did not.
+
+### BUG-001 — a database that had crashed once refused to open ever again
+
+| field | value |
+|---|---|
+| **Found by** | `make cpp-sweep`, first run in the default regime: **41 violations of 300 kill points** |
+| **Phase** | B2.4, found at B2.6 — before the code was ever run outside a lane |
+| **Reproduce** | `rift_sweep default` at the commit before the fix; every kill from ordinal 26 onward |
+| **Invariant that caught it** | the exactness oracle, via `reopen failed: db/000002.log: named by the manifest and absent` |
+| **Mutant class** | **BM59-wal-named-before-it-exists**, added in the same PR as the fix |
+| **Fix commit** | this one |
+
+**Symptom.** After any crash between naming a WAL in the manifest and creating the file, every later
+`Open` fails with *"named by the manifest and absent"* — permanently. The database is intact; it
+simply cannot be opened again.
+
+**Root cause.** B2-D5 replaces B1's gapless numbering check with *"every file number the manifest
+names exists"*. Naming a WAL **before** creating it looks like the safer order — it guarantees no
+file exists that the manifest has not heard of — and a crash in that window leaves **a name with no
+file**. That name is durable. It persists into every subsequent manifest, so `named and absent`
+stops meaning `lost directory entry` from that moment on, and the only available repair is an
+exception ("the highest named number may be absent") that then has to be justified at every Open
+forever after — and which the sweep also refused, because a *second* crash in the same window makes
+the previously-absent name no longer the highest.
+
+**The fix inverts the order.** A WAL is **created, then named, then written to**. A crash between
+creation and naming leaves an *empty unnamed file*, which carries nothing and is deleted. Both halves
+of the rule then hold with **no exception in either direction**: every named WAL exists, and nothing
+in an unnamed one is above what the tables cover.
+
+**What it would have caused in production.** Total unavailability after an ordinary power cut, on a
+database with no data loss and no corruption. The worst kind: nothing to recover, nothing to
+diagnose, and the engine insisting it was right.
+
+**The general form.** *An ordering that looks safer because it prevents the state you can name may
+create the state you cannot.* Both orders leave a crash window; the question is not which window is
+smaller but **which one closes itself**. Create-then-name leaves a file that provably carries
+nothing; name-then-create leaves a durable claim that nothing can ever discharge.
+
+---
+
+### BUG-002 — recovery would have discarded committed records in a WAL a flush had retired
+
+| field | value |
+|---|---|
+| **Found by** | `make cpp-sweep`, flush regime: **64 violations of 985 kill points** |
+| **Phase** | B2.4, found at B2.6 |
+| **Reproduce** | `rift_sweep flush` at the commit before the fix; every kill from ordinal 149 onward |
+| **Invariant that caught it** | the exactness oracle, via `db/000002.log: present, not named by the manifest, and holding 46 committed batches` |
+| **Mutant class** | **BM62-unnamed-wal-unchecked**, added in the same PR as the fix |
+| **Fix commit** | this one |
+
+**Symptom.** After a crash between the manifest edit that retires a WAL and the deletion of the file,
+`Open` refuses — reporting a WAL that is *supposed* to be there.
+
+**Root cause.** BUG-001's fix rested on an argument: *a present unnamed WAL is one caught between
+creation and naming, so it is empty*. That is true of one of the two ways a WAL can be unnamed. The
+other is a flush: the manifest drops a WAL's name in the same group that adds the table covering it,
+so between that group and the file's deletion there is an unnamed WAL **full of records**. The
+emptiness check was an assumption about how the state arose rather than a statement about the state.
+
+**The fix states the property instead of the provenance.** *Nothing in an unnamed WAL may be above
+what the SSTables cover.* An empty one satisfies it trivially; a retired one satisfies it because the
+table covers it; and a WAL whose records nobody covers — the case worth refusing — still fails it.
+This is B2-Q1's **"nothing covered twice"** seen from the file side, and it is a strictly stronger
+check than the one it replaced.
+
+**What it would have caused in production.** The same total unavailability as BUG-001, in a narrower
+window — and the check that produced it was the one added to *prevent* silent loss, which is the
+shape worth noticing: **a safety rule stated in terms of how a state arises rather than what it
+contains will refuse legitimate states the moment a second path reaches the same state.**
+
 
 ---
 
@@ -77,7 +152,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 11 entries.
+Counts: 12 entries.
 
 ### The two general forms these entries taught
 
@@ -568,3 +643,63 @@ landing exactly where the ledger's own bytes said it should**.
 the lie. This is one level in: **a harness record that under-reports is as damaging as an engine that
 over-reports**, and it is worse in one way — it blames the engine. The ledger is now written from the durable image
 before and after the injection, so it records what happened rather than which code path ran.
+
+---
+
+### HARNESS-012 — the oracle's durability fact rested on there being exactly one file
+
+| field | value |
+|---|---|
+| **Found by** | `make cpp-sweep` in the flush regime, against the **unpatched** engine, after BUG-001 and BUG-002 were fixed |
+| **Phase** | B1.9a, found at B2.6 |
+| **Reproduce** | before the fix: `rift_sweep flush` reports violations at kill points 149, 159, 167, 178, and `rift_sweep default` at 59 |
+| **Invariant that caught it** | the exactness oracle reporting the ENGINE for landing on a group the ledger's own bytes said was durable |
+| **Mutant class** | **ORACLE-facts-last-sync**, added in the same PR as the fix |
+| **Fix commit** | this one |
+
+**Symptom.** `VIOLATION at ordinal 149 (kWritableFileSync, before effect): recovery landed on sequence
+46, a batch boundary strictly inside a group.` The engine was right; the harness was wrong three
+different ways in one line of code.
+
+**Root cause.** `FactsFrom` computed `in_flight_durability_applied` as *the `promoted` flag of the
+last `kWritableFileSync` entry in the ledger*. Every clause of that was true only by accident:
+
+1. **the last file, not the WAL.** A group lives in the WAL. Until B2 the WAL was the only file this
+   engine ever synced, so "the last Sync" and "the WAL's Sync" were the same entry. The flush syncs
+   three — the table, the manifest, and the WAL — and reading the last one reports the *manifest's*
+   durability as the group's.
+2. **only a `Sync`, not any call that promoted.** A torn injection at a `Flush` promotes a prefix,
+   and the promotion is recorded on the **Flush** entry. A filter that looked only at Sync calls
+   reported "not durable" about bytes that were.
+3. **the last one, not any one.** Durability is not undone. The flush creates a *second* WAL inside
+   the same `Sync`, and that empty file's own sync promotes nothing — so the last `.log` entry says
+   "not durable" about a group made durable moments earlier by the WAL being retired.
+
+**Why all three survived B1.** Without scoping the question to *this* `Sync`, one successful Sync
+answers for every group after it. That masked (1) and (2) completely: the last `.log` Sync in the
+whole run was almost always a successful earlier one, so the fact was accidentally `true` exactly
+when it needed to be. **Scoping made the harness strict, and strictness is what exposed the other
+two.** Fixing one defect is what made the others visible — the reverse of the usual order.
+
+**The lesson.** HARNESS-011 said a harness record that under-reports is worse than an engine that
+over-reports, because it blames the engine. This is the same shape one level up: **a harness FACT
+derived from "the last event of a kind" is a fact about the world having one of that kind.** The
+question the oracle asks is "did *this* Sync make *the WAL's* in-flight group durable"; the code now
+asks exactly that, scoped, filtered, and monotone.
+
+---
+
+### The fifth mutant to survive its first induction, and the shape has not changed
+
+**BM52-current-parsed-leniently** survived. The test fed eight malformed `CURRENT` bodies and asserted
+every one was refused — and every one was refused **because the manifest it named did not exist**, so
+a lenient parse failed too, for a reason that had nothing to do with parsing. *The test never created
+the situation it was checking.*
+
+That is the same sentence as `LEDGER-always-promoted`, `BM2`, `BM7` and `BM1` before it. The remedy
+is the same one section 22.6c's discriminator rule states: **ask what must be true for the check to
+run at all, and assert that too.** Here it was one line — put a real `MANIFEST-000001` in the
+directory — and with it the mutant dies, because `MANIFEST-1\n` is then a body a lenient parse
+RESOLVES.
+
+The count is now five of ninety-seven, and the shape has been identical every time.

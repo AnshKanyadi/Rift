@@ -168,7 +168,13 @@ cpp-scan-blind: ## Blind one scope-scan rule at a time; each must stop firing on
 cpp-sweep: ## The kill-point sweep: every Env call, killed before and after its effect
 	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
 	$(CMAKE) --build $(CPP_BUILD)/test --target rift_sweep -j $(WORKERS)
-	$(CPP_BUILD)/test/rift_sweep
+# BOTH REGIMES, ALWAYS. The default regime never flushes -- its threshold is
+# four megabytes and the workload writes six keys -- so a lane that ran only it
+# would visit no kill point on the flush path at all, and every gate B2 put
+# there would be green for the reason that nothing reached it. They are run
+# separately and their numbers are never aggregated (section 8.4).
+	$(CPP_BUILD)/test/rift_sweep default
+	$(CPP_BUILD)/test/rift_sweep flush
 
 .PHONY: cpp-build
 cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
