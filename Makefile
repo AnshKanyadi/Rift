@@ -20,7 +20,7 @@ CPP_MUTANTS  := ./scripts/cpp-mutants.sh
 # The lane set `make cpp-ci` runs under network isolation. It grows as
 # lanes un-stub; every member must be runnable by hand, because nothing
 # runs it for us.
-CPP_LANES    := cpp-vendor-check cpp-vendor-build cpp-test cpp-asan cpp-ubsan
+CPP_LANES    := cpp-vendor-check cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -101,8 +101,8 @@ cpp-vendor-check: ## Vendored GoogleTest matches its recorded tree hash (offline
 cpp-vendor-build: ## Vendored GoogleTest configures and builds, with no network
 	@printf '\n  vendored framework build\n'
 	@printf '  ----------------------------------------------------------\n'
-	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD) -DCMAKE_BUILD_TYPE=Debug
-	$(CMAKE) --build $(CPP_BUILD) --target gtest_main -j $(WORKERS)
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/vendor -DCMAKE_BUILD_TYPE=Debug
+	$(CMAKE) --build $(CPP_BUILD)/vendor --target gtest_main -j $(WORKERS)
 
 .PHONY: cpp-lane-set
 cpp-lane-set: $(CPP_LANES) ## Every Track B lane, in order, without isolation
@@ -120,6 +120,53 @@ cpp-ci: ## The whole Track B lane set with networking disabled, and proof it was
 .PHONY: cpp-mutants
 cpp-mutants: ## Track B mutant catalogue: each patch must redden the lane it names
 	@$(CPP_MUTANTS)
+
+
+# Four lanes, four separate build directories, four separate reasons to go red.
+# Each asserts AT COMPILE TIME that it has the sanitizer it claims -- and
+# cpp-test asserts it has none, because it is the uninstrumented control that
+# makes a red in the other three attributable. See
+# engine-cpp/test/sanitizer_lane_test.cc; a lane that lost its -fsanitize flag
+# fails to build rather than passing quietly.
+
+.PHONY: cpp-build
+cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
+	@# Not a member of CPP_LANES: cpp-test subsumes it. It exists so a mutant can
+	@# declare a control that separates "the lane caught the defect" from "the
+	@# patch broke the build", which are different results that look identical in
+	@# an exit code.
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test -j $(WORKERS)
+
+.PHONY: cpp-test
+cpp-test: ## C++ unit suite, uninstrumented -- the control the other three need
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_engine_test rift_tsan_harness -j $(WORKERS)
+	$(CPP_BUILD)/test/rift_engine_test
+	@# The TSan harness is BUILT here and deliberately NOT RUN. Building it
+	@# makes cpp-test a real control for the TSan canary -- the race patch
+	@# compiles, so cpp-tsan's red is the race and not a broken build.
+	@# Running it here would defeat that: an unlocked counter across four
+	@# threads produces a wrong total often enough that cpp-test would go
+	@# red too, and the control would be gone.
+
+.PHONY: cpp-asan
+cpp-asan: ## C++ unit suite under AddressSanitizer
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/asan -DRIFT_SANITIZER=address
+	$(CMAKE) --build $(CPP_BUILD)/asan --target rift_engine_test -j $(WORKERS)
+	ASAN_OPTIONS=abort_on_error=0:detect_leaks=0 $(CPP_BUILD)/asan/rift_engine_test
+
+.PHONY: cpp-ubsan
+cpp-ubsan: ## C++ unit suite under UndefinedBehaviorSanitizer
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/ubsan -DRIFT_SANITIZER=undefined
+	$(CMAKE) --build $(CPP_BUILD)/ubsan --target rift_engine_test -j $(WORKERS)
+	UBSAN_OPTIONS=print_stacktrace=1 $(CPP_BUILD)/ubsan/rift_engine_test
+
+.PHONY: cpp-tsan
+cpp-tsan: ## ThreadSanitizer over the dedicated multi-threaded harness, not the unit suite
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/tsan -DRIFT_SANITIZER=thread
+	$(CMAKE) --build $(CPP_BUILD)/tsan --target rift_tsan_harness -j $(WORKERS)
+	TSAN_OPTIONS=halt_on_error=1 $(CPP_BUILD)/tsan/rift_tsan_harness
 
 # ---------------------------------------------------------------- stub lanes
 
@@ -139,18 +186,6 @@ mutants: ## [STUB->A0.12] Mutant suite; must kill every mutant within budget, re
 bench: ## [STUB->B5/I2] Benchmark smoke with regression tracking
 	@$(STUB) bench B5/I2 "no benchmark number is published until it reproduces by script"
 
-.PHONY: cpp-test
-cpp-test: ## [STUB->B1] C++ engine unit tests
-	@$(STUB) cpp-test B1 "CMake + GoogleTest in engine-cpp/ (Track B)"
-
-.PHONY: cpp-asan
-cpp-asan: ## [STUB->B1] C++ engine tests under AddressSanitizer
-	@$(STUB) cpp-asan B1 "Track B"
-
-.PHONY: cpp-ubsan
-cpp-ubsan: ## [STUB->B1] C++ engine tests under UndefinedBehaviorSanitizer
-	@$(STUB) cpp-ubsan B1 "Track B"
-
 .PHONY: killpoints
 killpoints: ## [STUB->B4] Crash-consistency kill-point sweep across the write path
 	@$(STUB) killpoints B4 "Track B"
@@ -166,8 +201,8 @@ lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
 	@echo "       hatches blind"
 	@echo "       cpp-vendor-check cpp-vendor-build cpp-ci cpp-mutants"
-	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12)"
-	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
+	@echo "       cpp-test cpp-asan cpp-ubsan cpp-tsan"
+	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12) bench(B5/I2)"
 	@echo "       killpoints(B4) differential(B4)"
 	@echo
 	@echo "A stub lane passes trivially and proves nothing."
