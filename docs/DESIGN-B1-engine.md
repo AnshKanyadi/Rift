@@ -524,6 +524,33 @@ Runtime virtual dispatch rather than templates, unchanged: the differential and 
 construct a production DB and a TestEnv DB in one process, and one virtual call per syscall is
 unmeasurable against a syscall.
 
+#### 3.2.0 The choke point has two halves, added at B1.9a
+
+**A change to a structure ratified three steps earlier**, recorded as such
+rather than folded in silently.
+
+B1.2a landed the interception as a single hook: the public wrapper calls
+`Intercept`, and a non-ok return suppresses the implementation. That is
+sufficient for every fault a rig can *impose* and it cannot express one the
+contract requires — §7.4's *"a `Sync` can complete on the device with the kill
+preempting its return: the bytes are durable, the caller never learned it."*
+An injector running **before** the effect can suppress a `Sync` or tear it. It
+cannot let one **succeed** and then take the process before the answer gets
+home.
+
+So the wrapper now calls `AfterEffect` after the implementation and before its
+Status reaches the caller. It **consumes no ordinal** and is not a kill point of
+its own: it is the second half of one Env call, not a second call, which leaves
+the kill-point identity in §9.5 exactly as it was — a sweep still names a point
+by one ordinal.
+
+**The reason it was not visible at B1.2a is worth keeping.** The gap was not in
+the Env surface, which is complete; it was in what the *oracle* would later need
+to observe. Nothing about the seam looked wrong until §7.4 condition 3 demanded
+that both elements of the recovery set be individually induced, and one of them
+turned out to be unreachable by construction. A design is not finished being
+reviewed when the thing that reviews it has not been built.
+
 #### 3.2.1 The residual bypass, stated rather than implied
 
 NVI makes bypass impossible **from an implementation**. It does not make it impossible from an edit to

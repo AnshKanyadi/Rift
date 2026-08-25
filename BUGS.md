@@ -94,6 +94,31 @@ and had nothing to block. Track A has hit the cousin of this twice. The cold
 cache is now part of what `cpp-ci` MEANS and is asserted at both ends —
 `scripts/cpp-cold-cache.sh`, induced by `COLD-fetch-despite-isolation`.
 
+**GF-5 — AN ACCIDENTAL DEFENCE IS WORSE THAN A MISSING ONE.** From HARNESS-010,
+and new to both tracks.
+
+A missing defence measures as missing. An **accidental** one — a property that
+holds for a reason nobody chose, in a component that was not trying to provide
+it — makes a real gap **measure as covered**, and then removes itself on a
+schedule nobody is tracking.
+
+The instance: recovery applied records it never committed, and they were
+invisible only because every read went through a snapshot pinned at the
+recovered watermark. Correct state, correct lanes, correct counts — and the
+whole sweep reported 175 passes on an engine with a live recovery defect. The
+read path was not defending anything; it simply had no way to show the damage.
+**And it expires at B2**, where the flush writes the memtable out and those
+records become durable, visible and permanent.
+
+Two obligations follow, and the second is the one that is easy to skip:
+
+1. When a defence is found to be accidental, say so where it is measured — a
+   floor derived from an accident is a floor measuring the accident.
+2. **Put its expiry in `CARRY-FORWARD.md` as a dated obligation, not a note.**
+   An accidental defence has a date, and the date is the phase that removes it.
+   If nobody is holding that date, the gap reopens silently and the measurement
+   that would have caught it is the one the accident was inflating.
+
 **GF-4 — AN UNSATISFIABLE GATE. A classification that decides whether evidence
 counts must be tested in BOTH directions, because the safe-looking direction is
 the one no assertion notices.** From HARNESS-006.
