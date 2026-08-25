@@ -128,7 +128,16 @@ cpp-ci: ## The whole Track B lane set with networking disabled, and proof it was
 
 .PHONY: cpp-mutants
 cpp-mutants: ## Track B mutant catalogue: each patch must redden the lane it names
-	@$(CPP_MUTANTS)
+	@# COST, MEASURED, BECAUSE NOTHING ELSE RUNS THIS. There is no CI here, so a
+	@# lane's wall-clock is a fact about whether it gets run at all -- Track A
+	@# records that as RISK-1. The full catalogue is minutes, not seconds, because
+	@# each patch needs a control run and a covering run and both build from cold.
+	@#
+	@# To work on one mutant without paying for all of them:
+	@#     make cpp-mutants ONLY="BM4-missing-dir-sync BM9-apply-does-io"
+	@# The baseline gate still runs for every lane those patches name, so a subset
+	@# run is a smaller experiment and not a weaker one.
+	@$(CPP_MUTANTS) engine-cpp/mutants $(ONLY)
 
 
 # Four lanes, four separate build directories, four separate reasons to go red.
