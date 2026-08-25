@@ -2341,6 +2341,21 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   file; the open must fail*.
 - **Mutants:** `BM2`, `BM3`, `BM4`, `BM11`.
 - **Depends on:** B1.3, B1.5, B1.6, B1.7a — the most-depended step in the sequence.
+- **Landed `a634266`.** Two things it added that its written scope did not name, both because a test
+  demanded them. The FILE_HEADER is validated **unconditionally**, before the committed-records loop:
+  written inside that loop it was conditional on a GROUP_END existing, so a WAL with the wrong name
+  passed whenever it held no closed group — and §5.3.4 lists a foreign file and a file whose name and
+  contents disagree among the things that record exists to catch. And `Slice(std::string&&)` is
+  **deleted**, after ASan caught a dangling Slice in the mutant lane's baseline gate; twenty call
+  sites were latent instances of the same bug, safe only by accident of lifetime.
+- **Corrects B1.3.** `SuspendsExactness` classified a **prefix-granular** torn `Sync` as
+  exactness-suspending. B1-D5 rules prefix as *the contract model* — §7.4's two-element set is that
+  exact case and the engine is held to exactness under it — and only the sector-subset mode suspends.
+  The error was conservative and therefore invisible to every lane: mislabelled runs still passed
+  every assertion, they were merely unbankable. At B1.9a it would have made §7.4 condition 3
+  **unreachable**, since "both elements were observed across the sweep" cannot be satisfied by runs
+  that are structurally uncountable as evidence. The injector is split; the registry now holds exactly
+  the two members §7.5 names.
 - **Revert:** **Chokepoint.** B1.8 and B1.9 both consume it.
 
 ---
