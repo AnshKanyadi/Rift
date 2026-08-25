@@ -77,7 +77,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 9 entries.
+Counts: 11 entries.
 
 ### The two general forms these entries taught
 
@@ -482,3 +482,64 @@ a temporary a **build failure**, and a `const char*` overload makes the literal 
 storage. Twenty call sites had to hoist their strings into named locals; every one of them was a latent
 instance of the same bug, safe only by accident of lifetime. A class of dangling-pointer bug became a
 class of compile error.
+
+### HARNESS-010 — the sweep could not see BM2, because the snapshot was hiding the damage
+
+| field | value |
+|---|---|
+| **Found by** | measuring the sweep's power against every class, per GF-4's sibling discipline in §10.3 |
+| **Phase** | B1.9b |
+| **Reproduce** | apply `BM2-accept-torn-tail`, run `make cpp-sweep` before the post-reopen continuation existed: 175 points, 175 passes |
+| **Invariant that caught it** | none. The **measurement** caught it: a class that should be sweep-detectable measured **0 of 175** |
+| **Mutant class** | `FLOOR-continuation-removed`, which makes the regression repeatable |
+| **Fix commit** | this one |
+
+**Root cause.** With BM2 applied, recovery applies BATCH records past the last `GROUP_END` — records that were
+never committed. They land in the memtable at sequences **above** the recovered watermark, and every read goes
+through a snapshot pinned at that watermark, so **they are present and unreadable**. The oracle compares the
+visible state, which is correct, and passes.
+
+That is not a defence. It is an accident of the read path, and it expires: at **B2 the flush writes the memtable
+out**, and uncommitted records become durable, visible and permanent. The engine would have shipped a recovery
+path that quietly retains data it never promised, with a 175-point sweep reporting 175 passes.
+
+**Why the measurement found it and no assertion could.** Every lane was green and correct. The sweep visited every
+kill point, observed both elements of the recovery set, and reported no violation — all true. What was wrong was
+its **power**, and power is not a property any single run can assert about itself. §10.3 exists for exactly this,
+and it is the first thing it found.
+
+**Fix.** The sweep now **continues after reopening**: one write, then a comparison. A reopened database keeps
+serving, and the new write takes the sequence the hidden records already occupy, so they become visible at exactly
+the moment a real database would have resumed service. BM2 went from 0 to **194 per mille**, first detected at
+kill point 14.
+
+**The floor that keeps it.** `BM2`'s rate floor is 90 per mille — roughly half the measurement, and set against
+**the suppressed number rather than under today's**: the value that matters is the 0 this class measured before the
+continuation existed. `FLOOR-continuation-removed` induces exactly that regression, and its control is
+`cpp-sweep` **staying green** — the lane whose job is finding defects is perfectly healthy while its power has
+collapsed.
+
+### HARNESS-011 — TestEnv's ledger under-reported what a torn `Sync` promoted
+
+| field | value |
+|---|---|
+| **Found by** | `make cpp-sweep`, on its first run with torn modes enabled, against the **unpatched** tree |
+| **Phase** | B1.3, found at B1.9b |
+| **Reproduce** | before the fix: a torn `Sync` whose prefix covers the whole newly covered extent records `promoted=false` |
+| **Invariant that caught it** | the exactness oracle — it reported a violation at kill point 35 |
+| **Mutant class** | none added: the ledger field is now written from the durable image itself, so there is no separate flag to blind |
+| **Fix commit** | this one |
+
+**Symptom.** `VIOLATION at ordinal 35 (kWritableFileSync, before effect): recovery landed on sequence 6, a batch
+boundary strictly inside a group.`
+
+**Root cause.** `promoted` was set by `RecordPromotion`, which only runs when `DoSync` runs. A torn `Sync` kills
+*instead of* running `DoSync` — so however much of the extent it actually promoted, the ledger said it promoted
+nothing. When the prefix happened to cover the entire group, durability really had advanced, and the oracle,
+reading `promoted=false`, refused to offer the in-flight element of the recovery set and **reported the engine for
+landing exactly where the ledger's own bytes said it should**.
+
+**The lesson, and it is not the one it looks like.** Ruling 4 says an oracle that interrogates the engine believes
+the lie. This is one level in: **a harness record that under-reports is as damaging as an engine that
+over-reports**, and it is worse in one way — it blames the engine. The ledger is now written from the durable image
+before and after the injection, so it records what happened rather than which code path ran.

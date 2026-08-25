@@ -18,12 +18,13 @@ VENDOR_CHECK := ./scripts/cpp-vendor-check.sh
 NO_NETWORK   := ./scripts/cpp-no-network.sh
 CPP_MUTANTS  := ./scripts/cpp-mutants.sh
 CPP_SCAN     := ./scripts/cpp-scan.sh
+CPP_CAMPAIGN := ./scripts/cpp-campaign.sh
 CPP_SCAN_BLIND := ./scripts/cpp-scan-blind.sh
 COLD_CACHE   := ./scripts/cpp-cold-cache.sh
 # The lane set `make cpp-ci` runs under network isolation. It grows as
 # lanes un-stub; every member must be runnable by hand, because nothing
 # runs it for us.
-CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan
+CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-sweep
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -126,6 +127,14 @@ cpp-ci: ## The whole Track B lane set with networking disabled, and proof it was
 	@$(NO_NETWORK) $(MAKE) cpp-lane-set CPP_BUILD=$(CPP_BUILD_CI)
 	@$(COLD_CACHE) $(CPP_BUILD_CI) after
 
+.PHONY: cpp-campaign
+cpp-campaign: ## A floor under every planted flaw class; fails when one drops below it
+	@# Not a member of CPP_LANES: it rebuilds the sweep once per class and costs
+	@# minutes. Run it when the sweep, the workload or a mutant changes -- those
+	@# are exactly the edits that move detection power without moving any lane.
+	@#     make cpp-campaign MEASURE=--measure   prints instead of asserting
+	@$(CPP_CAMPAIGN) $(MEASURE)
+
 .PHONY: cpp-mutants
 cpp-mutants: ## Track B mutant catalogue: each patch must redden the lane it names
 	@# COST, MEASURED, BECAUSE NOTHING ELSE RUNS THIS. There is no CI here, so a
@@ -154,6 +163,12 @@ cpp-scan: ## Env surface: one wrapper, one Do*, one CallSite -- names, not just 
 .PHONY: cpp-scan-blind
 cpp-scan-blind: ## Blind one scope-scan rule at a time; each must stop firing on its fixture
 	@$(CPP_SCAN_BLIND)
+
+.PHONY: cpp-sweep
+cpp-sweep: ## The kill-point sweep: every Env call, killed before and after its effect
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_sweep -j $(WORKERS)
+	$(CPP_BUILD)/test/rift_sweep
 
 .PHONY: cpp-build
 cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
@@ -227,7 +242,8 @@ lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
 	@echo "       hatches blind"
 	@echo "       cpp-vendor-check cpp-vendor-build cpp-ci cpp-mutants"
-	@echo "       cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-scan cpp-scan-blind"
+	@echo "       cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-scan cpp-scan-blind cpp-sweep"
+	@echo "       cpp-campaign"
 	@echo "       cpp-build"
 	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12) bench(B5/I2)"
 	@echo "       killpoints(B4) differential(B4)"
