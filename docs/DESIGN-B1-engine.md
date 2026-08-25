@@ -1,10 +1,14 @@
 # DESIGN-B1: Env, the WAL, the memtable, and the recovery contract
 
-**Status:** **REVISION 4 — revision 3 ratified 2026-08-17; the revision-4 rulings of the same day
-applied; §14 is the full landing sequence.** Nothing is self-ratified, so nothing is marked PROVISIONAL.
-One question is open, **B1-Q12**, and it was opened by a ruling rather than by discovery (§13). **No
-C++ file is written**: the remote gate has not cleared, now for four cycles, and both the vendored tree
-and the first CMake file are implementation.
+**Status:** **REVISION 5 — revision 4 ratified 2026-08-17; B1.0 through B1.4 ratified 2026-08-24 and
+landed as code.** Nothing is self-ratified, so nothing is marked PROVISIONAL. **§13 is closed**:
+B1-Q12 was ruled as recommended, and this revision records the ruling that revision 4 predated.
+**Track B is out of design.** Five steps of §14's sequence exist as code on `rift-b`; §14.2 carries a
+**Landed** line for each, naming what it added beyond its written scope, because the sequence is now
+half history and a plan that does not admit what happened is a plan nobody checks against.
+
+This revision is **the four owed items of §12.3 batched**, landed as B1.4 closed rather than as a
+cycle of its own. Track B does not need another doc revision as an event.
 **Phase:** B1 (Track B). **Author:** Claude (Session B). **Decider:** Ansh.
 **Blocks:** all of Track B. **Depends on:** the `engine/` interface frozen at A0.5, which this must
 meet exactly — not approximately, because B4's differential rig defines "correct" as "byte-identical
@@ -544,6 +548,7 @@ type system rather than of anyone's diligence.
 | `Env::NewWritableFile` | — nothing synced yet | — no bytes yet | — ⁽¹⁾ | ✓ `EACCES`, `EMFILE`, `EIO` | ✓ `ENOSPC` on inode allocation | ✓ |
 | `Env::NewSequentialFile` | — read path | — read path | — ⁽¹⁾ | ✓ `ENOENT`, `EIO` | — read path | ✓ |
 | `Env::NewRandomAccessFile` *(declared; first used B2)* | — read path | — read path | — ⁽¹⁾ | ✓ | — read path | ✓ |
+| `Env::NewDirectory` ⁽²⁾ | — nothing synced yet | — no bytes yet | — ⁽¹⁾ | ✓ `ENOENT`, `EIO`, `ENOTDIR` | — | ✓ |
 | `Env::GetChildren` | — no durable state of its own | — no bytes | — ⁽¹⁾ | ✓ | — | ✓ |
 | `Env::GetFileSize` / `FileExists` | — query only | — query only | — ⁽¹⁾ | ✓ | — | ✓ |
 | `Env::DeleteFile` | ✓ the unlink lands in `content` and not in `durable` until the directory is synced | — a directory entry is all-or-nothing | — ⁽¹⁾ | ✓ | — | ✓ |
@@ -556,6 +561,15 @@ type system rather than of anyone's diligence.
 | `WritableFile::Sync` | ✓ **the primary site**; returns OK, `durable` not advanced — an exactness-suspending injector, §7.5 | ✓ a kill inside `Sync` promotes a **prefix** of the newly covered extent to `durable`; the sole producer of torn tails (B1-D5) | — ⁽¹⁾ | ✓ `EIO`, including report-once-then-clear | ✓ `ENOSPC` surfacing here under delayed allocation | ✓ |
 | `WritableFile::Close` | — no promotion of its own | — | — ⁽¹⁾ | ✓ **the dropped-close-error class**: `close(2)` reports `EIO` for writeback that failed after the last `Sync` | ✓ | ✓ |
 | `SequentialFile::Read` | — read path | — read path | — a short read at EOF is normal and is not a fault | ✓ | — | ✓ |
+| `RandomAccessFile::Read` ⁽²⁾ *(declared; first used B2)* | — read path | — read path | — a short read at EOF is normal and is not a fault | ✓ | — | ✓ |
+
+⁽²⁾ **A CORRECTION TO THIS TABLE, NOT AN ADDITION TO THE SURFACE.** Both rows were missing from
+revision 4 and were found at B1.2a by the act of enumerating the surface: the table lists
+`Directory::Sync`, and a `Directory` has to be obtained by *some* syscall, which is `Env::NewDirectory`;
+and it lists `Env::NewRandomAccessFile`, and a handle with no read is not a handle. Neither is a new
+capability — they were always implied by rows that were already here, and the standing requirement is
+that **no cell of this table is blank**, which a missing row satisfies only by not existing. Recorded
+as a correction so nobody reads them as scope that grew.
 
 ⁽¹⁾ **Short writes are not expressible at this seam at all, and the gap is recorded rather than
 implied.** `WritableFile::Append` is all-or-nothing by contract, so TestEnv — which never calls
@@ -1635,6 +1649,50 @@ checking the protocol and one checking the instrument.
 | `BM21-network-in-build` | add `FetchContent_Declare` to CMake | the network-isolated `cpp-ci` run | immediate |
 | `BM23-upgrade-the-claim` | edit `kConcurrencyClaim` toward "race-free" | `TestConcurrencyClaimWording` | immediate |
 
+### 10.1.1 Every mutant has a landing step, re-checked once
+
+**Owed by §12.3 item 2(i), done here.** The three splits of revision 4 moved boundaries without moving
+content, and a mutant with no introducing step is a mutant nobody is responsible for landing. Checked
+against §14.2's thirteen steps:
+
+| mutant | introduced at | status |
+|---|---|---|
+| `BM13` | B1.1 | **landed and killed** |
+| `BM17` | B1.2a (static half), B1.3 (reachability half) | **landed and killed**, split into `BM17a`/`BM17b` (§10.1.2) |
+| `BM21` | B1.0 | **landed and killed** |
+| `BM6`, `BM14`, `BM22`, `BM23` | B1.5 | not yet reached |
+| `BM4`, `BM9`, `BM12`, `BM16`, `BM18`, `BM19`, `BM20` | B1.6 | not yet reached |
+| `BM3`, `BM8`, `BM10`, `BM11` | B1.7a | not yet reached |
+| `BM2` | B1.7b | not yet reached |
+| `BM7` | B1.8 | not yet reached |
+| `BM1`, `BM5`, `BM15` | B1.9a | not yet reached |
+
+Every catalogue mutant has exactly one introducing step and none is orphaned. `BM3`, `BM4`, `BM9` and
+`BM11` appear in more than one step's **Mutants** line; that is a mutant re-*asserted* by a later step,
+not a second landing, and the introducing step is the earliest one.
+
+### 10.1.2 Mutants this catalogue did not name
+
+Twelve exist that §10.1 does not list. They are recorded here rather than folded into the tables above,
+because the catalogue is the *designed* flaw set and these are the ones the code asked for as it was
+written — and the distinction is worth keeping visible.
+
+| id | what it plants | why it exists |
+|---|---|---|
+| `LANE-cpp-test/asan/ubsan/tsan` | one defect only that lane can see | B1.1's four reds, one per lane. A red per lane with a control that stays green is what makes a red attributable rather than four counts of one broken build |
+| `BM17a`, `BM17b` | a public virtual on the base; a wrapper with no `CallSite` | the two directions of the 1:1:1 assertion, which §14.2 names but §10.1 counts as one mutant |
+| `BM17c` | `env.cc` intercepts with a *neighbour's* `CallSite` | **the scan structurally cannot see this.** It reads declarations; the enumerator a wrapper actually passes lives in `env.cc`. Its control is cpp-scan staying *green*, which is the demonstration that the two halves are not redundant |
+| `BM17d` | an enumerator dropped from `AllCallSites()` | `AllCallSites()` is a fourth artifact the correspondence must bind, added at B1.3 because the census iterates it |
+| `SEAM-*` (3) | short-count ignored; `EINTR` fatal; the zero-return bound removed | B1.2b's three gates, made repeatable. §14.2 says "Mutants: none" for that step, which is a statement about the **BM catalogue** — `PosixEnv` is outside the fault matrix and gets no BM number — not a statement that its gates need no induction |
+| `MODEL-*` (3), `LEDGER-*`, `REGISTRY-*`, `CENSUS-*` (2) | the power-loss model, the ledger's promotion column, the registry, both censuses | B1.3's gates |
+| `SCAN-*` (5), `COLD-*` | the scope-scan rules, the registry, the claims, the cold cache | B1.4's gates |
+
+**A standing consequence, and it is the reason this subsection exists rather than a note.** Two of
+these — `BM17c` and `BM17d` — were written because building the checker exposed something the checker
+could not see. Amendment A2 requires a new mutant class in the same PR as the gap it names, and that
+obligation reads most naturally as applying to *bugs*. It applies to **checkers** identically: the
+moment a checker is written is the only moment anyone has a precise description of its blind spot.
+
 ### 10.2 Gates
 
 **Every gate is landed only once its failure has been induced and observed**, and the induced failure is
@@ -1685,6 +1743,44 @@ padding, and any float that reached a serialization path. It is also why MSan st
 
 ---
 
+### 10.3 The harness-power floor, as a forward binding on B1.9b
+
+**Owed by §12.3 item 2(ii), done here.** Track A built this after discovering a harness defect that
+quietly cut detection to a sixth with every lane green; Ansh approved Track B mirroring the actual
+construct rather than inventing a parallel one, so what follows is `sim/hunt/floors.go`'s shape with
+kill points substituted for seeds (§10.1: kill points are the C++ analogue of seeds-to-detection).
+
+> **Every planted flaw class in the C++ sweep carries a floor — a minimum detection rate and a maximum
+> kill-points-to-detection — and the campaign lane FAILS when a class drops below its floor.**
+
+Six properties, each of which Track A's version has for a reason:
+
+1. **A table, not a threshold.** One entry per flaw class carrying the minimum rate, the maximum
+   kill-points-to-detection, **the measurement the floor was derived from**, and **the reasoning for
+   where it sits**. The first question on a red lane is "is the floor wrong, or is the harness?", and
+   the answer has to be in the output or the lane gets edited instead of investigated.
+2. **Both bounds, because they degrade independently.** A class can hold its detection rate while its
+   first detection moves far later in the kill-point space, and that is exactly what decides whether a
+   cheap sweep would ever see it.
+3. **Floors with margin, never exact values.** The sweep is deterministic, so an exact assertion is
+   *possible* and is deliberately not used: it would fail on any benign change — one more Env call, a
+   different workload — and **a lane that cries wolf is a lane people delete**. A floor passes drift
+   and fails a collapse, which is the only failure worth a build break.
+4. **The number that matters is the suppressed one.** Track A floors `ack-before-sync` at roughly half
+   its measured rate because the defect had held it at 82 per mille against a measured 504. The floor
+   is set to fail loudly on a regression *of that kind*, not to sit just under today's number.
+5. **A weak class is floored at "detected at all" plus a kill-point bound**, never at a rate derived
+   from a single detection — that asserts noise and breaks whenever a change reshuffles which point
+   happens to hit it. What must not silently change is that the class remains *reachable*.
+6. **Every flaw class must have a floor, asserted.** Track A's `TestEveryObservableFlawHasAFloor` stops
+   the table falling behind the flaw set: a class added without a floor is a class with no standing
+   measurement, which is how a bug class drifts back into being uncatchable one flaw at a time.
+   Exemptions are **named and reasoned**, not silent.
+
+**And it is induced rather than described**, per standing policy: restoring a known harness defect must
+drop a class below both bounds and fail the lane with the floor, the measurement and the reasoning
+printed. B1.9b does not close until that has been observed.
+
 ## 11. Known idealizations
 
 Item 1 is ratified and is being carried into DESIGN-A0 §7 by Ansh (§1.1); the rest are B1-local.
@@ -1731,9 +1827,22 @@ Item 1 is ratified and is being carried into DESIGN-A0 §7 by Ansh (§1.1); the 
    mechanical mapping onto one syscall with no logic beyond a retry loop; **(b)** the short-write,
    `EINTR` and zero-return unit tests at the internal raw-write seam (§3.3 ⁽¹⁾, idealization 2); and
    nothing else. There is no lane in B1 that would notice `PosixEnv` calling `pwrite` where it promised
-   `write`, syncing the wrong descriptor, or dropping a flag. **The first real evidence about it arrives
-   at B5**, with the standalone numbers taken on a real filesystem, and the first *adversarial* evidence
-   arrives later still, in I2's chaos lane.
+   `write`, syncing the wrong descriptor, or dropping a flag.
+
+   **Updated by B1-Q12's ruling (§13).** Clause **(a)** is no longer a belief: the thinness rule is
+   stated at B1.2b and enforced at B1.4, so logic can no longer accumulate here unnoticed. A third leg
+   was added by B1.4 that this text predates — the readdir enumeration moved to the raw seam and
+   acquired four tests, because it was the one function in `PosixEnv` with real logic and no
+   instrument, and the thinness rule has no honest label for that. **The first real evidence about
+   `PosixEnv` now arrives at B1.8**, not B5, with the semantics suite run against it on a real
+   filesystem — fault-free, making no durability claim, never entering the recovery ledger. The first
+   *adversarial* evidence still arrives in I2's chaos lane.
+
+   **What has not changed, and is the sentence to keep:** `PosixEnv` has **zero executed lines** in
+   B1. Every B1 test runs on `TestEnv`. The single thing verified about it today is that
+   `NewPosixEnv` instantiates the concrete class, so a signature that drifted from the Env surface is
+   a compile error. A component with zero coverage and a written argument for why is acceptable; a
+   component with zero coverage and no argument is not, and this item is the argument.
 
    Four things would raise the confidence, ordered by cost. §13's **B1-Q12** asks which, if any, are
    cheap enough to be worth doing at B1; my recommendation is there rather than here, because acting on
@@ -1779,26 +1888,46 @@ The procedure, binding from revision 4 forward:
 4. **Ansh performs every merge to `main`** and tells Session B when one has landed.
 5. **Session B never writes the Track A worktree again, docs included.**
 
-### 12.3 Owed
+### 12.3 Owed — all four items closed by revision 5
 
-1. **Ansh is carrying to Track A:** §1.1's verification-scope text into DESIGN-A0 §7 and README, and the
-   `Makefile` plus `.github/workflows/cpp.yml` changes covering `cpp-test`/`cpp-asan`/`cpp-ubsan`
-   un-stubbing, the new `cpp-tsan`, and `cpp-ci`'s network-isolated run. **B1.1 is gated on these.**
-   Also `engine/model/model.go` lines 24–26, the stale pre-fix comment; recorded only so the thread
-   closes.
-2. **Owed by me in revision 5, and deliberately not done in revision 4.** (i) Re-check §10.1's mutant
-   catalogue against §14.2's thirteen steps once, confirming every mutant still has a landing step that
-   introduces it — the three splits moved boundaries even though they moved no content, and a mutant
-   with no introducing step is a mutant nobody is responsible for landing. (ii) Add the **harness-power
-   principle** from Track A as a forward binding on B1.9b: every planted flaw class in the C++ sweep
-   carries a **floor** — a minimum detection rate and a maximum seeds-to-detection — and the campaign
-   lane **fails** when a class drops below its floor. Track A is building that lane after discovering a
-   harness defect that quietly cut detection to a sixth with every lane green; this is the second time
-   in this document that Track A's experience has arrived as a forward binding rather than as a lesson
-   Track B had to repeat, and that is the point of a shared constitution.
+1. **CLOSED, and reassigned.** §1.1's verification-scope text into DESIGN-A0 §7 and README remains
+   Ansh's to carry, along with `engine/model/model.go` lines 24–26. The `Makefile` and
+   `.github/workflows/cpp.yml` half is **no longer his**: it was committed on `rift-b` by this session
+   at B1.0/B1.1, under §12.2's amended mechanism.
+
+   **Why the reassignment rather than a request.** §12.3 was written while the rule was "Session B
+   never writes a file that lives on `main`", and §12.2 replaced that with "Session B commits on
+   `rift-b` and Ansh merges" — for the reason Ansh gave, that *design docs do not live on `main`, they
+   live wherever their track's session can commit them*. The same reasoning covers lane definitions
+   exactly: **a lane this session cannot run is a lane this session cannot induce**, and the whole
+   discipline is that no gate counts until its failure has been observed. Carrying the lane file across
+   a worktree boundary would have put every Track B induced failure behind someone else's merge.
+   Ratified 2026-08-24.
+2. **CLOSED.** (i) is **§10.1.1** — every catalogue mutant has exactly one introducing step and none
+   is orphaned; §10.1.2 additionally records the twelve mutants the catalogue did not name. (ii) is
+   **§10.3**, mirroring Track A's `sim/hunt/floors.go` construct rather than inventing a parallel one,
+   with kill points substituted for seeds. This is the second time Track A's experience has arrived as
+   a forward binding rather than as a lesson Track B had to repeat, and that is the point of a shared
+   constitution.
 3. Revision 4 is committed on `rift-b` per §12.2; the sha is in the cycle report.
 
 ### 12.4 Done
+
+**2026-08-24 — Track B out of design.** Five steps of §14's sequence landed as code on `rift-b`, plus
+one correction, plus this revision:
+
+| sha | step |
+|---|---|
+| `f57ad9b` | **B1.0** — GoogleTest vendored at `52eb8108…` (v1.17.0), the offline hash lane, `cpp-ci` |
+| `646fca5` | **B1.1** — closed enums, four lanes un-stubbed, the ALIVE canary |
+| `29bebd2` | **B1.2a** — the Env choke point, zero implementations |
+| `cf12938` | **B1.2b** — `PosixEnv` and the raw-write seam |
+| `3239469` | **B1.3** — `TestEnv`, the content/durable split, threshold 3 |
+| `787307d` | correction — B1-Q12 is ruled, not open; the thinness rule stated |
+| `187a3eb` | **B1.4** — the scope scan, the split-label registry, `CLAIMS.txt`, the blind-patch set |
+
+The `Makefile` and `.github/workflows/cpp.yml` lane definitions are in those commits, on `rift-b`, per
+§12.3 item 1's reassignment. Merges to `main` remain Ansh's.
 
 **2026-08-17.** Revision 3 committed as `60e4ced`, one file, subject `DESIGN-B1 revision 3: the NVI
 choke point, the two-element oracle, one registry`. `rift-b` fast-forwarded from `1390969` onto `main`,
@@ -1810,47 +1939,47 @@ session makes to the Track A worktree, under §12.2 item 5.
 
 ## 13. Questions remaining
 
-**One.** B1-Q11 was ruled 2026-08-17 and closed; B1-Q12 was opened the same day **by a ruling rather
-than by discovery** — Ansh's §11 item 9 amendment ends "then say what would raise the confidence, and
-whether any of it is cheap enough to be worth doing at B1", and answering it in the affirmative adds
-rows to §10.2, which is not mine to extend unruled.
+**None. §13 is closed.**
 
-> **B1-Q12.** "Which, if any, of the four measures that would raise confidence in `PosixEnv` (§11 item
-> 9) are cheap enough to land at B1, given that B1's verification deliberately runs around it?"
+B1-Q12 was **ruled as recommended**: measures 1 and 2 land at B1, measure 3 at B4, measure 4 declined
+for B1 as already scheduled into I2.
 
-**The four, ordered by cost, with what each actually buys.**
+> **Measure 1 — thinness as a checked property.** Each private `Do*` in `env/posix/` is a mechanical
+> mapping onto one syscall: no branching beyond a documented retry loop, no state beyond the descriptor
+> and the path, no arithmetic on offsets or lengths beyond what the public wrapper passed, and a
+> per-method statement cap. **Rule stated at B1.2b, enforced at B1.4.**
+>
+> **Measure 2 — B1.8's semantics suite run against `PosixEnv` on a real filesystem.** Approved **under
+> the scoping condition**, which is part of the ruling and not a footnote to it: it injects no faults,
+> makes no durability claim, and its runs are **not evidence** under §7.5 — the same distinction that
+> separates characterization from evidence, applied to a lane rather than to a run. It is a correctness
+> lane about a mapping, and describing it as anything more would be the exact overstatement §11 exists
+> to prevent.
 
-| # | measure | buys | cost | where it would land |
-|---|---|---|---|---|
-| 1 | **Thinness as a checked property.** A scan rule: each private virtual is a mechanical mapping onto one syscall — no branching but a documented retry loop, no state beyond the descriptor, no arithmetic on offsets or lengths beyond what the public wrapper passed, and a per-method statement cap | converts §11 item 9's assumption **(a)** from a belief about a person into a property the lane holds. Today "the implementation is thin" is *asserted*, and it is the load-bearing half of the argument | **low.** A rule inside the B1.4 lane, which already parses these sources | rule stated at **B1.2b**, enforced at **B1.4**, whose induced-failure set gains *thicken a `PosixEnv` method past the cap; the lane must fail* |
-| 2 | **Run B1.8's semantics suite against `PosixEnv` on a real filesystem**, no fault injection | catches the entire class §11 item 9 names as currently uncatchable: wrong syscall, wrong descriptor, dropped flag, mis-set offset — anything that breaks read-back-what-you-wrote against a real kernel | **near zero marginal.** The suite exists at B1.8 and `Env` is pluggable by construction; this is a build target and a fixture directory, not a harness | **B1.8** |
-| 3 | **Differential Env lane:** one op sequence through `PosixEnv` and through `TestEnv` in no-fault mode, comparing every observable including on-disk state after each `Sync` | more than 2, and in a direction worth naming: it tests **`TestEnv`** as hard as it tests `PosixEnv`. `TestEnv`'s power-loss model is a *model*, and nothing in B1 checks that its fault-free behaviour matches a real filesystem's | **moderate.** Needs an adapter that reads a real directory into the shape `TestEnv` reports | **B4**, not B1 — the differential harness against `engine/model` already exists there, and this is a second axis of that rig rather than a new one |
-| 4 | **Real crash testing on a real filesystem** — true `_exit` or device-level power cut, `dm-log-writes` or equivalent | adversarial evidence about production durability | **high**, and needs a machine and privilege story | **I2's chaos lane**, where the production-adjacent Env is already in scope |
+**A drift worth recording, because the ruling-echo discipline used to catch exactly this.** The ruling
+postdates revision 4, and revision 4 was never revised, so §13 printed B1-Q12 as *open* for a week
+after it had been decided. B1.2b was written against the document and stated in its own header that the
+question was open and that acting on it would extend §10.2 unruled — a comment that misdescribed the
+state of a ruling, which is the kind that gets believed. It was corrected in `787307d`, in its own
+commit, before B1.4 enforced anything.
 
-**Recommendation: 1 and 2 at B1; 3 at B4; 4 declined for B1 as already scheduled.**
-
-The reasoning for taking 1 and 2 and no more. Measure 1 is the only one that touches the argument's
-actual weak point: §11 item 9 rests on (a) thinness and (b) the seam tests, and (b) is already a checked
-property while (a) is not — so 1 costs a lane rule and removes the asymmetry. Measure 2 is close to free
-because B1.8's suite and the `Env` seam were built to make exactly this substitution possible; declining
-it would mean having built a pluggable interface and then not plugging anything into it. Measure 3 is
-genuinely valuable and genuinely not a B1 shape: it needs a comparison rig, and B4 is where the
-comparison rig lives.
-
-**One scoping condition on measure 2, stated so it is not discovered later.** A real-filesystem lane
-cannot be deterministic in the byte-digest sense and must never enter the recovery ledger: it makes no
-durability claim, injects no faults, and its runs are **not evidence** under §7.5 — the same distinction
-that separates characterization from evidence, applied to a lane rather than to a run. It is a
-correctness lane about a mapping, and describing it as anything more would be the exact overstatement
-§11 exists to prevent.
-
----
+The general form, since this document is the thing that drifted: **a ruling that is not echoed into the
+document it rules on is a ruling with two versions, and the losing version is whichever one the next
+session reads.** §0's ruling-echo sections exist for this; the cycles that skipped them are the cycles
+this happened in.
 
 ## 14. Landing sequence
 
-Nothing has started. §13 is closed, so the only remaining gate on B1.0 is the remote gate; B1.1 is
-additionally gated on §12.3's Track A items. Thirteen landings across ten numbers — §14.4 gives the
-reason for the three splits.
+**Five of the thirteen have landed** (`f57ad9b`, `646fca5`, `29bebd2`, `cf12938`, `3239469`,
+`187a3eb` — six commits, one of them a correction). §13 is closed, §12.3 is closed, and the remote gate
+was lifted on 2026-08-24; there is still no `origin` and CI has still never run, which is why every
+lane here is one a person runs by hand and why each carries its own induced failure rather than a
+promise that someone else's runner will notice.
+
+Each landed step below carries a **Landed** line naming its sha and what it added beyond its written
+scope. Recording that is not bookkeeping: this sequence is now half plan and half history, and **a plan
+that does not admit what happened is a plan nobody checks against.** Thirteen landings across ten
+numbers — §14.4 gives the reason for the three splits.
 
 **Two ordering invariants govern the whole sequence, and everything below is a consequence of them.**
 
@@ -1939,6 +2068,13 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   networking available and fail under isolation*.
 - **Mutants:** `BM21`.
 - **Depends on:** nothing.
+- **Landed `f57ad9b`.** Beyond its written scope: `cpp-vendor-build` as a lane whose claim is only that
+  the vendored tree configures and builds; the `cpp-mutants` runner itself, with **direction controls**
+  — a patch may declare a lane it must NOT break, so "the lane caught it" and "the patch broke the
+  build" stop being the same exit code; and the isolation wrapper's own positive control, which proves
+  it isolated (reachable outside, blocked inside) before trusting itself, and reports INVALID rather
+  than green when it did not. macOS has no `unshare`; `sandbox-exec` is the mechanism here and the
+  Linux branch has never been executed.
 - **Revert:** **Surface** (`gtest`'s API). Independently *replaceable* at any time — re-pin to another
   commit and nothing above notices, because everything above depends on the framework's API and not on
   the vendoring. Independently *revertible* only if nothing above has landed. The distinction matters:
@@ -1962,6 +2098,13 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   is the first step at which any test of ours exists, so there is no earlier body to retire. B1.0's two
   checks are about the vendored tree and the network and cannot be engine-account tests, there being no
   engine — recorded so the empty answer is a classification and not an omission.
+- **Landed `646fca5`.** Beyond its written scope: each sanitizer lane **asserts at compile time** that
+  it has the sanitizer it claims, and `cpp-test` asserts it has none — a lane that lost its
+  `-fsanitize` flag now fails to build rather than passing quietly, which is a guarantee no canary can
+  give because it cannot be reached by a test that was skipped. Also `cpp-build` (build everything, run
+  nothing), which exists **solely** as a control lane for mutants and has since separated a caught
+  mutant from a broken patch three times; and `rift_rig` as an archive separate from `rift_engine`, so
+  the oracle is not reachable from the thing it judges.
 - **Revert:** **Chokepoint, and the widest one in B1.** `Status::Code` and `RunOutcome` are consumed by
   every step above; nothing above survives their removal. The mitigation is not that the revert gets
   cheaper — it is that the enum can only *grow* under §7.6 clause 6, so the surface stays small enough
@@ -1979,6 +2122,14 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   interception*; and *delete one `CallSite` registration*, the other direction of the same 1:1:1.
 - **Mutants:** `BM17` (its static half; the reachability half is B1.3's).
 - **Depends on:** B1.1.
+- **Landed `29bebd2`.** Beyond its written scope: §3.3 gained two rows it had always implied but never
+  printed (`Env::NewDirectory`, `RandomAccessFile::Read`) — recorded there as a **correction**, not an
+  addition. The scan parses under a **strict grammar**: a line it cannot classify is a lane failure,
+  never a line it skips, because a parser that silently ignores what it does not understand reports the
+  health of its own grammar and calls it coverage. And `BM17c`, which is not in the catalogue: the scan
+  reads *declarations*, so it cannot see which `CallSite` a wrapper actually passes to `Intercept`, and
+  a copy-paste slip there satisfies 1:1:1 perfectly while aiming a kill point at the wrong call. Its
+  control is cpp-scan staying green.
 - **Revert:** **Chokepoint.** Every Env implementation, every fault injection point and every kill point
   above stands on it.
 - **Note:** it lands with **zero implementations**, and can, because the count assertion is structural.
@@ -1996,6 +2147,13 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   unit-tested here and are deliberately absent from the kill-point sweep, so they never combine with
   another injected fault in one run.
 - **Depends on:** B1.2a.
+- **Landed `cf12938`.** Beyond its written scope: the three seam gates exist as repeatable `SEAM-*`
+  patches rather than a one-time hand induction — there is no CI here, and an induction nobody can
+  re-run decays into a sentence in a commit message. §14.2's "Mutants: none" is a statement about the
+  **BM catalogue**, not a statement that the gates need no induction. The seam test's fake writer also
+  **caps its own call count**, so a `WriteFully` that fails to terminate fails a test instead of
+  hanging a lane: "must not spin" is a liveness property, and a lane that hangs while checking one
+  reports nothing at all.
 - **Revert:** **Leaf — the only unqualified one in B1.** No B1 test uses `PosixEnv`; every B1 test runs
   on `TestEnv`. It becomes load-bearing at B5's cgo path and at I1, and until then it is the single step
   in this sequence that can be removed at any moment with nothing above it noticing.
@@ -2020,6 +2178,15 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   a syscall's **return value** — short count, `EINTR`, zero — not about durable state. B1.3 records that
   classification explicitly; had any of them asserted that bytes were on disk, it would be retired here,
   because before this step nothing could have justified the assertion.
+- **Landed `3239469`.** Beyond its written scope: `AllCallSites()` became a **fourth** artifact bound
+  by the correspondence, because the census iterates it and a hand-written array beside a hand-written
+  enum is a drift waiting to happen (`BM17d`). `TestEnvironment::ContentNow` was added because
+  `content = durable` on a kill is otherwise unobservable — after a kill the Env is dead and cannot be
+  read through — and an unobservable line of a model is a line that rots. The real-`_exit` half needed
+  somewhere to put the durable image, and that somewhere could not be `TestEnv`: writing a file from
+  `engine-cpp/src` outside `env/posix/` is exactly what the A5 scan bans, so `TestEnv` offers the image
+  through a hook and `rig/durable_mirror` owns the file. `rig::OutcomeFloor` is the mechanical link
+  from "a registry injector ran" to `kCharacterizationOnly`.
 - **Revert:** **Chokepoint.** Every gate from B1.5 upward runs through it. It is also the step whose
   revert is least visible and most damaging: the tree still builds without it, and everything above
   quietly stops being able to fail correctly.
@@ -2046,6 +2213,18 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
     Env seam"*.
   - This document, **§3.2.1** and **§11 item 8**: the *"two independent checks"* residual — which becomes
     one check, and then zero.
+- **Landed `187a3eb`.** Beyond its written scope, and the first item is a **defect in ratified work
+  found by implementing the rule that catches it**: B1.3's `TestEnv` held
+  `std::map<const void*, std::string>`, a pointer-keyed container, which §6.1 bans outright and says
+  this scan checks. Nothing behaved wrongly — the map is looked up and never iterated — but there is no
+  honest split label for it, so it was **fixed rather than exempted**: `HandleId`, an integer assigned
+  sequentially by the creating Env, now threads the whole surface, which also makes a kill point
+  reportable as `Sync(handle 3, 000001.log)` instead of an address that means nothing on the second
+  run. The readdir enumeration moved to the raw seam and gained four tests for the same reason — it was
+  the one function in `PosixEnv` with real logic and no instrument, and the thinness rule has no true
+  label for that. Also `cpp-scan-blind` (ten rules, ten fixtures, one surviving canary),
+  `cpp-cold-cache` (§14.5's note), and `CLAIMS.txt`. **Retires: nothing** — the scan observes source,
+  not the engine's account of itself.
 - **Revert:** **Mechanically a leaf; epistemically a chokepoint.** Nothing consumes the lane, so
   reverting it breaks no build and reddens no test — and it reduces every sentence above from a property
   to programmer discipline. **This class is the dangerous one**, because it is the class that can be
@@ -2258,6 +2437,27 @@ one that shows up in review.
 Each split is a repackaging. **No gate, mutant or decision moves, and none is added or dropped;** §10.1
 and §10.2 are unchanged by this revision.
 
+### 14.4.1 A property of `cpp-ci` the sequence did not name
+
+**A lane that verifies an ABSENCE must run in a state where the thing could actually be present.**
+
+`cpp-ci` claims no lane touches the network. It was resting on a warm `FetchContent` cache rather than
+on the absence of a fetch — the isolation worked perfectly and had nothing to block — and mutant BM21
+survived it. The mutant was right and the lane was wrong. Track A has hit the cousin of this twice.
+
+So the cold cache is now part of what `cpp-ci` **means**, asserted rather than assumed: the lane
+refuses when its build root exists and does **not** delete it, a successful run removes its own tree so
+the next one is cold, and a failed run leaves its tree for whoever has to debug it. After the run it
+checks directly that no `_deps` tree appeared — downstream of the isolation rather than in place of it,
+so a failure of the isolation is still visible.
+
+The gate took two attempts, and the first one is the reason this subsection exists rather than a code
+comment. The draft asserted the build root's absence *immediately after the lane's own `rm -rf`*:
+green unconditionally, including in the exact state the defect occurred in. It is the general form
+recurring inside the fix for the general form, written with the form in front of me. **A rule you can
+state and still violate one line later is a rule that needs a mechanism** — and the mechanism is that
+the gate was run and printed `GATE DID NOT FIRE`.
+
 ### 14.5 What is deliberately not in this sequence
 
 No flush, so the memtable and WAL set grow without bound and every B1 test is small; nothing here
@@ -2286,3 +2486,8 @@ land before any I2 benchmark number is taken. `kBusy` and the poller are B5, und
 | B1-D10 | sequence space | **approved.** Collapse the batch; one sequence per `Apply` |
 | B1-D11 | enforcing the non-syscall half of A5 | **approved.** Scan lane with a checked-in registry and blind patches |
 | B1-D12 | kill mechanism and identity | **approved.** Dead-flag in-process plus sampled real `_exit`; ordinal, labels, census |
+
+**B1-Q12** (not a `B1-D`, since it was opened by a ruling rather than proposed): **ruled as
+recommended and closed.** `PosixEnv` thinness becomes a checked scan rule, stated at B1.2b and enforced
+at B1.4; B1.8's semantics suite runs against `PosixEnv` on a real filesystem, **scoped as not
+evidence**; the differential Env lane is B4's; real crash testing stays at I2. §13.
