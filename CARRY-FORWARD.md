@@ -25,6 +25,10 @@ somebody is holding the date. This file holds the dates.
 
 ## CF-1 — BM2's detection rate must be re-measured the cycle the flush lands
 
+**Status: DISCHARGED WITH REFUTATION, B2.7, 2026-08-25.** Ansh's ruling: the deviation from this
+entry's fail-the-campaign instruction is approved, and the entry is AMENDED rather than closed,
+because the prediction it rested on was wrong in a way worth keeping.
+
 | field | value |
 |---|---|
 | **Raised** | B1.9b, 2026-08-25 |
@@ -54,7 +58,7 @@ The accident ends there.
 - The floor is re-derived from the new measurement in the same commit, and the
   reasoning column records that it was re-derived and why.
 
-**Closing note (B2), 2026-08-25 — DISCHARGED, WITH A FINDING RATHER THAN THE PREDICTED RISE.**
+**Closing note (B2), 2026-08-25 — DISCHARGED WITH REFUTATION.**
 
 Re-measured under B2's shape, in both regimes, at B2.7:
 
@@ -63,36 +67,99 @@ Re-measured under B2's shape, in both regimes, at B2.7:
 | **default** (no flush) | **34 / 300 = 113 per mille**, first at kill point **39** | count **unchanged at 34**; rate fell; first detection +25 |
 | **flush** | **36 / 985 = 36 per mille**, first at kill point **39** | count **34 → 36**; rate fell |
 
-**By how much, and why.** The rate fell in both regimes and **not one detection was lost**. B2 added
-125 kill points to the default regime — the manifest's Env calls — and 685 more to the flush regime,
-and BM2 is not detectable at any of them. The first detection moved from 14 to 39 by the same fixed
-prefix: `DB::Open` now opens a manifest before it touches a WAL.
+### What was predicted
 
-**Was it consistent with the accident being the whole of the suppression?** Yes, and the answer is
-sharper than expected. **The accident was the whole of it, and the sweep's post-reopen continuation
-was the whole of the remedy** — the flush adds nothing the continuation had not already exposed.
+That the rate would **rise**, because the flush writes the memtable out and uncommitted records
+recovery had applied — merely hidden under the snapshot in B1 — would become durable, visible and
+permanent in an SSTable. *"The flush gives the defect a second and more permanent way to show."*
 
-That was established rather than assumed. The sweep's continuation was extended twice to look for the
-second path CF-1 predicted: first with a `Sync` after the continuation write, then with enough filler
-to guarantee the flush regime actually flushes, then with **a second kill and a second recovery** —
-because the mechanism CF-1 describes needs one. Records recovery applied but never committed are
-written into a table, and a table's largest sequence is what the NEXT open takes its watermark from,
-so on a second recovery they are promoted rather than hidden. **The count did not move under any of
-the three.** Every kill point at which the flush would expose the defect is one the continuation
-already exposes, because a torn tail leaves its first uncommitted batch at exactly watermark + 1 —
-which is exactly the sequence the continuation write takes.
+### What was measured
 
-**What was NOT done, and it is Ansh's call.** This entry's rule says *"if it falls, that is not the
-accident expiring — that is a regression, and the campaign must fail rather than the floor be
-lowered."* The rate fell. **The campaign was not failed**, because the quantity the rule protects —
-detection power — did not fall, and the fall is arithmetic: a denominator that grew by 125 points at
-which nothing is detectable. Failing the build on that would be reporting arithmetic as a regression,
-and lowering the rate floor alone would have removed the bound for the right reason while satisfying
-the wrong one.
+The count did not move. Not under a `Sync` after the continuation write; not with filler enough to
+guarantee the flush regime actually flushes; and **not under a second kill and a second recovery**,
+which is the mechanism this entry describes and which the sweep did not previously perform. All three
+extensions were made specifically to look for the predicted path. **The count is 36 against 34, and
+the two extra detections are the longer workload's extra torn-sync points — not the flush.**
 
-**What was done instead.** `FLOORS.txt` gained a **third bound, a detection-COUNT floor**, and the
-campaign fails on it. The count is immune to the denominator and blind to per-point dilution; the
-rate is the reverse; the ceiling sees only how early. BM2's count floor is **30**, against 34 and 36.
-That is the bound CF-1 was protecting, expressed in a quantity B2 could not move by accident.
+### Why the predicted mechanism cannot exist
 
-**This is reported as a deviation from CF-1's literal instruction, not as a resolution of it.**
+**A torn tail leaves its first uncommitted batch at exactly watermark + 1**, and watermark + 1 is
+exactly the sequence the post-reopen continuation write takes. So every kill point at which the
+flush could expose the defect is a kill point the continuation *already* exposes. The second path is
+not weak, or hard to reach, or unlucky — it is **coextensive with the first**. A flush cannot add a
+detection where one already exists.
+
+### What survives and what does not
+
+**GF-5's claim survives in full.** The accidental defence was real — BM2 measured ZERO before the
+continuation existed — and it did expire on schedule. What did not survive is **the specific
+consequence attached to it**: that its expiry would be *visible as a rise*. The remedy (the
+continuation) was already complete, so the expiry has no observable consequence in this sweep.
+
+**A measurement refuting a predicted mechanism is worth more than the confirmation would have been**,
+and it is why this entry is amended rather than deleted: an entry that recorded only "re-measured, no
+change" would have left the theory intact and unexamined.
+
+### The instrument that replaced the failing one
+
+`FLOORS.txt` gained a **detection-COUNT floor** as a third bound. BM2's is **30**, against 34 and 36.
+See the general form below, which this is the second instance of.
+
+### The second recovery stays
+
+The sweep keeps the second kill and second recovery it grew while hunting the predicted path. It is a
+real second detection path; that it adds nothing is a fact about **this defect**, not about the lane,
+and a later defect that the continuation cannot reach will find it already there.
+
+---
+
+## The general rule this taught, recorded because it is the second instance
+
+**A RATE IS A RATIO AND BOTH TERMS MOVE.** A floor on a rate alone cannot tell a loss of detection
+power from a denominator that grew into territory where the class was never detectable. B2 grew the
+default regime from 175 kill points to 300 by adding a manifest, and every floor in this file fell
+while not one detection was lost.
+
+So a rate floor needs **one of two things beside it**:
+
+- **a floor on the COUNT**, which is immune to the denominator and blind to per-point dilution — the
+  rate is the reverse, which is why it is a third bound and not a replacement; or
+- **a REGIME LABEL** that keeps incomparable denominators from being compared at all.
+
+**Track A learned the regime half at A6. This is the count half.** Both halves are now in
+`FLOORS.txt`: a `regime` column and a detection-count column.
+
+---
+
+## CF-2 — every mutant class without a standing measurement
+
+| field | value |
+|---|---|
+| **Raised** | B2.7, 2026-08-25 |
+| **Raised by** | Ansh, on B2's close |
+| **Discharged by** | **B3** |
+| **Check** | `comm -23` of the patch basenames in `engine-cpp/mutants/` against the class column of `engine-cpp/FLOORS.txt` |
+| **Compare against** | **47 of 98 classes unlisted at B2's close.** The check must print zero. |
+
+**The obligation.** `FLOORS.txt` says in its own header: *"An exempt class is still listed: a class
+missing from this file is a class with no standing measurement, which is how a bug class drifts back
+into being uncatchable one flaw at a time."* At B2's close **47 of 98 classes are missing from it.**
+All 47 predate B2; B2's own 40 are all listed.
+
+**What is and is not true of them.** Every one of the 47 carries a `covering-lane` in its patch
+header and is killed by `make cpp-mutants`, so none is uncaught. What none of them has is a **standing
+measurement** or a **split label naming the instrument** — the `covered-by: <test>` that says *which
+assertion* catches it rather than *which lane*. By lane: 28 `cpp-test`, 12 `cpp-scan`, 2 `cpp-tsan`,
+2 `cpp-ci`, 1 `cpp-asan`, 1 `cpp-ubsan`, 1 `cpp-campaign`.
+
+**The cost of leaving it.** This is the M56 situation with the labels **absent rather than wrong**,
+which is the cheaper half to fix and the easier half to forget. A class killed by a lane but named by
+nothing is a class whose covering assertion can be deleted without any lane going red — the mutant
+still dies, on some *other* assertion in the same lane, and the class quietly stops testing what it
+was written to test.
+
+**Why B3 and not B2.** Ansh's ruling: *do not fold it into B2's close.* It is 47 entries of research
+into which specific test catches each class, and folding it in would mix a bookkeeping sweep with a
+phase whose evidence is otherwise self-contained.
+
+**Closing note (B3):** *not yet discharged.*

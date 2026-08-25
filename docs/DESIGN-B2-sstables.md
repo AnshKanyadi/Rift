@@ -201,6 +201,13 @@ Three mechanisms, because "intended" is what this document is supposed to stop:
 1. **No manifest record has a watermark field.** The binding is not enforced by review; it is
    enforced by there being nothing to write it into. A closed record enum, `-Werror=switch`, and a
    scan rule that no manifest encoder references a durability watermark.
+
+   > **AMENDED AT B2's CLOSE.** This is not what landed, and what landed is stronger. Reusing the
+   > WAL's framing means reusing `GROUP_END`, which carries a sequence field, so a manifest record
+   > structurally has one. What holds instead: **no manifest EDIT has one**, `ManifestState` has
+   > nowhere to receive one, and **a non-zero one fails the open**, asserted both ways. Absence is a
+   > property of the current schema; a rejecting assertion is a property of every future one. See
+   > §13.3.
 2. **Every sequence the manifest *does* record is verified against the file that justifies it.** An
    SSTable's entry carries the highest sequence it contains — needed so recovery can skip WAL records
    already flushed — and **recovery re-derives it from the table's own largest internal key and fails
@@ -469,7 +476,13 @@ stronger than the check it replaced.
 
 Both are recorded as **BUG-001** and **BUG-002** — the first two entries in BUGS.md's engine list.
 
-### 13.3 D7's forward binding: the one place the letter does not hold, reported not adapted
+### 13.3 D7's forward binding: the letter does not hold, and what holds is stronger
+
+> **RULED, 2026-08-25.** Approved as implemented, and B1-D7's own text amended to say so rather than
+> left with its letter unmet. *"What matters is that no manifest record carries a watermark the WAL
+> cannot justify, and a structurally-present-but-always-zero field that fails the open if non-zero
+> satisfies that more strongly than absence would, because absence is a property of the current
+> schema and a rejecting assertion is a property of every future one."*
 
 §5.1 mechanism 1 reads *"no manifest record has a watermark field ... enforced by there being
 nothing to write it into."* B2-D4(c) reuses the WAL's framing, and that framing's `GROUP_END`
@@ -495,6 +508,14 @@ batches at sequences 4 and 9.
 What sequences can answer is **order** (each file's first batch above the previous file's last) and
 **the join** (the first replayed batch above what the tables cover). What they cannot answer is
 *nothing missing*, which is a question about files and is answered with file identities — §13.2.
+
+**THE ERROR HAS A NAME AND A PRECEDENT.** It is a conflation: two quantities that agree on every input
+the system normally produces, treated as one. Track A made the same one in the read-index oracle,
+which compared against `Index` where it meant something else, and **both were caught by an existing
+test rather than by review** — here, a B1 fixture that happens to write batches at sequences 4 and 9
+because it was probing something unrelated. A conflation survives review precisely because the two
+quantities *are* equal in every example anyone looks at; only a test whose fixture had a different
+reason to separate them can tell.
 
 ### 13.5 The sweep has two regimes, and that is the whole of B2-Q3's borrow list
 

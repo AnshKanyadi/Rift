@@ -52,11 +52,38 @@ copy_tree() {
 # comparable. Comparing one against the other's floor is the aggregation the
 # rule forbids, so the regime is a column in FLOORS.txt rather than a fact about
 # whoever ran the lane.
+# THE SAME WATCHDOG cpp-mutants CARRIES, AND FOR THE SAME REASON. A mutation
+# that unbounds a loop makes the sweep spin instead of report, and a campaign
+# waiting on it is indistinguishable from a campaign working. HARNESS-013.
+LANE_TIMEOUT=${LANE_TIMEOUT:-1200}
+
+kill_tree() {  # kill_tree <pid>
+  for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done
+  kill -9 "$1" 2>/dev/null || true
+}
+
+with_timeout() {  # with_timeout <cmd...>  -> 124 on timeout
+  "$@" & wt_pid=$!
+  ( sleep "$LANE_TIMEOUT"; kill_tree "$wt_pid" ) >/dev/null 2>&1 &
+  wt_killer=$!
+  # `|| wt_rc=$?` under `set -e`; see cpp-mutants.sh for why.
+  wt_rc=0
+  wait "$wt_pid" || wt_rc=$?
+  kill "$wt_killer" 2>/dev/null || true
+  wait "$wt_killer" 2>/dev/null || true
+  [ "$wt_rc" -ge 128 ] && return 124
+  return "$wt_rc"
+}
+
 build_and_sweep() {  # build_and_sweep <tree> <regime> -> "points violations first"
   ( cd "$1" && cmake -S engine-cpp -B engine-cpp/build/test -DRIFT_SANITIZER=none >/dev/null 2>&1 \
       && cmake --build engine-cpp/build/test --target rift_sweep -j "${WORKERS:-8}" >/dev/null 2>&1 ) || {
     echo "BUILD_FAILED"; return 0; }
-  line=$("$1/engine-cpp/build/test/rift_sweep" "$2" 2>/dev/null | grep "^SWEEP regime=$2 " || true)
+  sweep_out=$(mktemp)
+  with_timeout "$1/engine-cpp/build/test/rift_sweep" "$2" >"$sweep_out" 2>/dev/null
+  if [ $? -eq 124 ]; then rm -f "$sweep_out"; echo "TIMEOUT"; return 0; fi
+  line=$(grep "^SWEEP regime=$2 " "$sweep_out" || true)
+  rm -f "$sweep_out"
   [ -n "$line" ] || { echo "NO_OUTPUT"; return 0; }
   printf '%s %s %s\n' \
     "$(printf '%s' "$line" | sed 's/.*points=\([0-9]*\).*/\1/')" \
@@ -73,6 +100,8 @@ copy_tree "$scratch/baseline"
 for reg in default flush; do
   base=$(build_and_sweep "$scratch/baseline" "$reg")
   case $base in
+    TIMEOUT)
+      printf '   INVALID  the unpatched %s sweep did not finish in %ss.\n\n' "$reg" "$LANE_TIMEOUT"; exit 2 ;;
     BUILD_FAILED|NO_OUTPUT)
       printf '   INVALID  the unpatched tree does not build or run the %s sweep.\n\n' "$reg"; exit 2 ;;
   esac
@@ -143,6 +172,12 @@ while IFS= read -r line; do
     printf '   ROT      %s: patch no longer applies\n' "$cls"; fails=$((fails + 1)); continue; }
   out=$(build_and_sweep "$work" "$reg")
   case $out in
+    TIMEOUT)
+      printf '   TIMEOUT  %s [%s]: the sweep did not finish in %ss\n' "$cls" "$reg" "$LANE_TIMEOUT"
+      printf '            The mutation makes the sweep HANG rather than detect. A lane that\n'
+      printf '            does not report has measured nothing, and a measurement of nothing\n'
+      printf '            is not a floor.\n'
+      fails=$((fails + 1)); continue ;;
     BUILD_FAILED|NO_OUTPUT)
       printf '   BROKEN   %s: the patched tree does not build or run\n' "$cls"
       fails=$((fails + 1)); continue ;;

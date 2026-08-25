@@ -152,7 +152,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 12 entries.
+Counts: 13 entries.
 
 ### The two general forms these entries taught
 
@@ -529,9 +529,13 @@ ask what has to be true for it to run at all, and assert that too.
 
 ### The shape behind every mutant that has survived its first induction
 
-Four have: `LEDGER-always-promoted`, `BM2-accept-torn-tail`, `BM7-drop-close-error`,
-`BM1-ack-before-sync`. All four are meaning #1 — a checker that cannot see it — and all four have
-**one shape**:
+**THIS IS A STANDING PATTERN, NOT A LIST OF INCIDENTS.** Five have survived a first induction:
+`LEDGER-always-promoted`, `BM2-accept-torn-tail`, `BM7-drop-close-error`, `BM1-ack-before-sync`, and
+`BM52-current-parsed-leniently`. **All five are meaning #1** — a checker that cannot see it — and all
+five have **one shape**. Across ninety-eight classes and four phases, this shape accounts for **five
+of Track B's survivals and zero of anything else**: no survival has ever been meaning #2 (a defence
+that was never there) or meaning #3 (unreachable code). When a mutant here survives, this is the
+first hypothesis and so far it has been the only one.
 
 > **The test never created the situation it was checking.**
 
@@ -546,10 +550,20 @@ any other**, so the rig now records every value it is ever told and holds the en
 and the induction runs the failure through an fsync that *errors* rather than one that kills — so the
 process survives to be asked.
 
+`BM52` is the fifth and the plainest, which is why it is worth recording that the shape did not have
+to be rediscovered. Eight malformed `CURRENT` bodies were each asserted to be refused, and each was —
+**because the manifest it named did not exist**, so a lenient parse failed too, for a reason with
+nothing to do with parsing. One line fixed it: put a real `MANIFEST-000001` in the directory, and
+`MANIFEST-1\n` becomes a body a lenient parse *resolves*.
+
 This is **§22.6c's discriminator rule arriving in C++ independently** — a check must be run in a state
 where the thing it discriminates could actually differ — and it is cited rather than restated. It is
 also the same family as GF-1, one level in: GF-1 is about a *lane* verifying an absence, this is about
 an *assertion* verifying a distinction. Filed once here; individual survivals are not entries.
+
+**THE STANDING QUESTION, since the pattern is now five for five:** before declaring a mutant a
+harness weakness, ask *what must be true for this assertion to run at all*, and assert that too. In
+every one of the five that question was the whole of the fix.
 
 ### HARNESS-007 — `Slice` bound silently to temporary strings, and a test dangled
 
@@ -689,17 +703,91 @@ asks exactly that, scoped, filtered, and monotone.
 
 ---
 
-### The fifth mutant to survive its first induction, and the shape has not changed
+### HARNESS-013 — the mutant lane waited eleven and a half hours for a lane that was never going to report
 
-**BM52-current-parsed-leniently** survived. The test fed eight malformed `CURRENT` bodies and asserted
-every one was refused — and every one was refused **because the manifest it named did not exist**, so
-a lenient parse failed too, for a reason that had nothing to do with parsing. *The test never created
-the situation it was checking.*
+| field | value |
+|---|---|
+| **Found by** | reading `ps` while answering "how long will the catalogue take" |
+| **Phase** | B1.3 (the lane), found at B2's close |
+| **Reproduce** | before the fix: `make cpp-mutants` on a tree where `BM35-tag-sorts-ascending` is reached; it never returns |
+| **Invariant that caught it** | none — **nothing was watching**, which is the entry |
+| **Mutant class** | none can be added: a permanent catalogue member that hangs would hang the catalogue. The mechanism was induced with a throwaway patch that makes a lane `sleep`, and the watchdog was seen to fire, report TIMEOUT and fail the lane |
+| **Fix commit** | this one |
 
-That is the same sentence as `LEDGER-always-promoted`, `BM2`, `BM7` and `BM1` before it. The remedy
-is the same one section 22.6c's discriminator rule states: **ask what must be true for the check to
-run at all, and assert that too.** Here it was one line — put a real `MANIFEST-000001` in the
-directory — and with it the mutant dies, because `MANIFEST-1\n` is then a body a lenient parse
-RESOLVES.
+**Symptom.** The catalogue sat at `control BM35-tag-sorts-ascending: cpp-build still alive, as it
+must` for **11 hours 34 minutes**, with `rift_engine_test` in that mutant's scratch tree burning
+**690 minutes of CPU at 99.3%**. Nothing was wrong with the machine and nothing was logged. I read the
+log's last line, saw a lane in progress, and gave an estimate for the remaining patches built entirely
+on the assumption that progress was what I was looking at.
 
-The count is now five of ninety-seven, and the shape has been identical every time.
+**Root cause, two halves.**
+
+*The engine half.* `BM35` inverts the tag half of the internal key order. `IterImpl`'s advance and
+retreat loops carry comments reading *"strictly advances, so this loop terminates"* — an invariant
+that rests **entirely on the comparator being the order it claims to be**. Invert the comparator and
+the loops no longer terminate. `Flush.ReadsSeeTheMemtableAndTheTablesTogether` is where it spins,
+because that is the test with a backward scan over a merged view.
+
+*The lane half, and it is the one that matters.* `run_lane` was `( cd "$1" && $MAKE "$2" ) >"$3" 2>&1`
+with **no timeout**. A mutation that makes a lane HANG is neither a kill nor a survival: the lane
+never reports. So the catalogue waits, forever, and **a waiting catalogue is indistinguishable from a
+working one**.
+
+**The fix, both halves.** The loops now `RIFT_CHECK` the progress their comments assert — the user key
+is compared bytewise, which is a property of the merged order that does *not* depend on the tag
+comparator, so the assertion can catch the comparator being wrong. `BM35` now aborts in **0 seconds**
+instead of spinning for eleven hours. And `cpp-mutants` and `cpp-campaign` grew a per-lane watchdog
+that kills the whole process tree and reports **TIMEOUT** as a distinct outcome, counted as broken,
+failing the lane.
+
+**A second defect inside the remedy, which is GF-1's habit and worth the line.** The first watchdog
+killed the hung lane correctly and then **died itself, printing nothing**: under `set -e`, a failing
+`wait` and a function returning 124 both exit the script before the reporting line runs. It took two
+rounds of induction to see, because the first round looked like "the lane stopped", which is what it
+was supposed to produce. **A watchdog that cannot report is the defect it was written to fix.**
+
+**The general form, and it is the sharpest one this project has produced about lanes rather than
+code:**
+
+> **A HANG IS NOT A FAILURE, AND EVERY LANE MUST BE ABLE TO DECIDE.** A lane reports pass or fail; a
+> lane that can do neither has stopped being a lane, and it stops *silently*, wearing the appearance
+> of work. This is Amendment A4's "inconclusive is a first-class outcome" arriving one level out: A4
+> is about a checker that ran and could not conclude, and this is about a checker that never
+> finished. Both must be named, neither may be waited on, and neither is evidence.
+
+**What it cost.** Eleven and a half hours of wall clock and one confidently wrong estimate given to
+Ansh. What it did not cost: any result. The 30 patches that completed before the hang all reported
+correctly, and the campaign that ran before it was green.
+
+---
+
+### GF-6 — a rate is a ratio, and a floor on one needs a floor on the count beside it
+
+**Raised by** B2.7's re-measurement of every harness-power floor. **Second instance** of a rate
+moving for a reason unrelated to detection power.
+
+A floor on a detection RATE cannot tell a loss of power from **a denominator that grew into territory
+where the class was never detectable**. B2 added a manifest, so the sweep visits 300 kill points where
+it visited 175 — and every added point is one at which `BM2`, `BM4` and `BM5` cannot be detected.
+**Every rate in `FLOORS.txt` fell. Not one detection count did.** A lane that broke the build on that
+would be reporting arithmetic as a regression; a maintainer who then lowered the rate floor would have
+lowered it for the wrong reason and lost the bound for the right one.
+
+**The rule.** A rate floor needs one of two things beside it:
+
+- **a floor on the COUNT** — immune to the denominator, blind to per-point dilution. The rate is the
+  reverse, which is why this is a *third* bound and not a replacement; or
+- **a REGIME LABEL** that stops incomparable denominators from being compared at all.
+
+**Track A learned the regime half at A6. This is the count half.** Both are now columns in
+`FLOORS.txt`.
+
+**Where it bites hardest, and B2 has an example.** `BM4-missing-dir-sync` in the default regime now
+measures **290 of 290, first at kill point 1** — its count rose from 80 to 290 because the manifest
+NAMES the WAL, so a lost directory entry is refused at every kill point rather than only where the
+loss mattered. That is a real strengthening **and it costs the class its usefulness as a measure of
+sweep power**: a class detected everywhere measures only that the lane ran. Its rate and ceiling are
+kept because a collapse would still cross them, and are recorded as no longer discriminating so that
+nobody reads 1000 per mille as a result.
+
+

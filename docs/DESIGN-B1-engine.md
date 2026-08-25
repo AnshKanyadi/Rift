@@ -1171,6 +1171,19 @@ independently justify**, and `max+1` numbering stops being safe the moment B2 de
 which is where the file-number counter moves into the manifest. **Rejected:** (b) — a second authority.
 (c) — B2 scope.
 
+**AMENDED AT B2's CLOSE, 2026-08-25, on Ansh's ruling.** The forward binding was written expecting to
+be met by ABSENCE — no field to write a watermark into. B2-D4(c) reuses the WAL's physical framing for
+the manifest, and that framing's `GROUP_END` carries a sequence field, so the letter is not met: a
+manifest record structurally *has* one. **The binding is met more strongly than absence would have met
+it.** No manifest EDIT carries such a field; `ManifestState` has nowhere to receive one; and a manifest
+`GROUP_END` whose sequence is non-zero **fails the open**, asserted in both directions.
+
+The reason this is stronger, and it is the reason the amendment is worth making rather than the letter
+worth restoring: **absence is a property of the current schema, and a rejecting assertion is a property
+of every future one.** A field that is not there today can be added tomorrow by someone who does not
+know why it was not there; a field that is there, always zero, and refuses the open when it is not,
+cannot be repurposed without deleting a check that names its own reason. See DESIGN-B2 §13.3.
+
 ### 7.3 The oracle, written so it never asks the engine anything
 
 The rig's inputs are **its own call log** — every `Write`, every `Sync`, in issue order, with return
