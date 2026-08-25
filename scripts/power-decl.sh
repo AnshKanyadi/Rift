@@ -27,6 +27,9 @@ bad=0; checked=0
 for patch in "$PATCHDIR"/*.patch; do
   id=$(sed -n 's/^# id: *//p' "$patch")
   na=$(sed -n 's/^# power: *//p' "$patch")
+  covered=$(sed -n 's/^# power-covered-by: *//p' "$patch")
+  unreach=$(sed -n 's/^# power-unreachable: *//p' "$patch")
+  expect=$(sed -n 's/^# expect: *//p' "$patch")
   seeds=$(sed -n 's/^# power-seeds: *//p' "$patch")
   floor=$(sed -n 's/^# power-floor: *//p' "$patch")
   ceiling=$(sed -n 's/^# power-ceiling: *//p' "$patch")
@@ -37,15 +40,82 @@ for patch in "$PATCHDIR"/*.patch; do
 
   say() { printf '   BAD      %-44s %s\n' "$id" "$1"; bad=$((bad + 1)); }
 
+  # # The opt-out label was SPLIT, because one label held two opposite meanings
+  #
+  # `# power: n/a -- <reason>` covered both *this class is out of the sweep's
+  # reach* and *this class is covered by a better instrument than a sweep*. Those
+  # are opposites, and a reader could not tell them apart. Measured: the eight
+  # framework classes wearing that label are killed by their covering tests in
+  # about a SECOND each -- the best-covered classes in the tree -- and they wore
+  # the same sentence as `M56`, whose claim was false on the day it was written.
+  #
+  # > **A label that collapses two opposite meanings is worse than no label,
+  # > because it makes the well-covered case indistinguishable from the
+  # > unexamined one.**
+  #
+  # So there are two declarations now, each with its own required evidence:
+  #
+  #   # power-covered-by: <instrument> -- <argument>
+  #        the class is covered by a NAMED instrument that is not a sweep rate.
+  #        The evidence is the instrument, and the refutation pass RUNS it.
+  #
+  #   # power-unreachable: <detector> -- <argument>
+  #        the class is claimed out of the sweep's reach. The evidence is the
+  #        DETECTOR the number was taken against, plus an argument that no other
+  #        detector sees the class more often -- which is the field `M67` would
+  #        have failed: its number was right and it named IdentityCollisions,
+  #        while ForeignTagStarts reads 589 in thirty seeds.
+  #
+  # A class that declares NEITHER is refused. The bare `# power:` survives only
+  # for a patch that must SURVIVE, where it is earned by `expect: alive` rather
+  # than granted by the sentence.
   if [ -n "$na" ]; then
-    # An opt-out must carry a reason, and "n/a" alone is not one.
-    if [ "$(printf '%s' "$na" | wc -c)" -lt 40 ]; then
-      say "opts out with a reason of $(printf '%s' "$na" | wc -c) characters; an opt-out is a claim"
+    if [ "$expect" = alive ]; then
+      continue
+    fi
+    say "carries the retired bare 'power:' opt-out. Say which claim you are making: power-covered-by: <instrument> -- <why>, or power-unreachable: <detector> -- <why>. One label for two opposite meanings is how a class killed in one second read the same as a class nobody had measured"
+    continue
+  fi
+
+  if [ -n "$covered" ] && [ -n "$unreach" ]; then
+    say "declares BOTH power-covered-by and power-unreachable; they are opposite claims and a class making both has made neither"
+    continue
+  fi
+
+  if [ -n "$covered" ]; then
+    inst=${covered%% -- *}
+    case "$covered" in
+      *" -- "*) : ;;
+      *) say "declares power-covered-by with no ' -- <argument>'; naming an instrument without saying why it is the right one is the old label with a new name" ;;
+    esac
+    [ -n "$inst" ] || say "declares power-covered-by with no instrument"
+    if [ "$(printf '%s' "$covered" | wc -c)" -lt 60 ]; then
+      say "declares power-covered-by with a $(printf '%s' "$covered" | wc -c)-character argument; the evidence for this label is which instrument covers the class and why a sweep is not it"
     fi
     continue
   fi
 
-  [ -n "$seeds" ] || { say "declares neither an opt-out nor power-seeds"; continue; }
+  if [ -n "$unreach" ]; then
+    det=${unreach%% -- *}
+    case "$unreach" in
+      *" -- "*) : ;;
+      *) say "declares power-unreachable with no ' -- <argument>'" ;;
+    esac
+    [ -n "$det" ] || say "declares power-unreachable with no detector named"
+    # # The named-detector rule, which is M67's finding as a check
+    #
+    # A reachability number is a property of the DETECTOR that produced it. An
+    # opt-out citing a number has bounded itself to that one detector and is
+    # silent about every other criterion in the list -- including, four times in
+    # this project now, the one that catches the class.
+    case "$unreach" in
+      *"NO OTHER DETECTOR"*) : ;;
+      *) say "declares power-unreachable and does not argue NO OTHER DETECTOR. A reachability number is a property of the detector that produced it, so naming the detector is half the claim and arguing that no other detector sees the class more often is the other half. M62, M73, M47 and M67 are four occurrences of exactly that gap" ;;
+    esac
+    continue
+  fi
+
+  [ -n "$seeds" ] || { say "declares neither power-seeds nor one of the two exemptions (power-covered-by / power-unreachable). Saying nothing is how thirty-one classes ended up sharing four floors"; continue; }
 
   # # A sweep expectation on a handful of seeds is not a measurement
   #

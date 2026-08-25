@@ -2,7 +2,8 @@
 # covering-test: TestUnavailabilityIsNotAViolation
 # package: ./sim/checker/
 # expect: killed
-# power: n/a -- as M8 -- a framework defect, deterministic covering test
+# power-covered-by: TestUnavailabilityIsNotAViolation -- as M8 -- a framework defect, deterministic covering test. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: the class that makes this scope rule necessary, and it is DEMONSTRATED rather than argued -- run the pass with --demonstrate. Scoring an unreturned operation as returned manufactures SAFETY VIOLATIONS, so the probe detection rate goes UP while every system-side census field is unchanged: the sweep saw the checker arithmetic, not the system. A pass that read that rate as a refutation would be inventing findings, which is BUG-016 standard. A sound refutation would have to attribute the detection to something other than the verdict this patch writes, and there is nothing to attribute it to, because the system behaviour did not move.
 # mutates: an operation that never returned is scored as a safety failure rather than unknown
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go

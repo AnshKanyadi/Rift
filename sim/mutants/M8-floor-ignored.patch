@@ -2,7 +2,8 @@
 # covering-test: TestEmptyHistoryIsInconclusiveNeverPass
 # package: ./sim/checker/
 # expect: killed
-# power: n/a -- breaks the oracle FRAMEWORK, not the system under test; a sweep of the system cannot see it and its covering test is deterministic
+# power-covered-by: TestEmptyHistoryIsInconclusiveNeverPass -- breaks the oracle FRAMEWORK, not the system under test; a sweep of the system cannot see it and its covering test is deterministic. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: the probe reads a verdict this patch computes. Both hunks suppress a floor whose only observable effect is the Inconclusive count, and that count is written by the mutated lines, so a difference measured here is the mutation reporting on itself. A sound instrument would judge vacuity from a number the mutation does not compute: decided-and-total operations per run carried in the census, recorded where the history is ASSEMBLED rather than where it is scored, plus an exit criterion that no run banked a pass below the floor. That is buildable and does not exist; until it does, TestEmptyHistoryIsInconclusiveNeverPass is the only judge independent of the mutation.
 # mutates: the operation floor is ignored, so a checker that consumed nothing reports pass
 --- a/sim/oracle.go
 +++ b/sim/oracle.go

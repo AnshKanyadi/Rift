@@ -33,7 +33,14 @@ printf '\n  pre-push: the every-change lanes\n'
 # RED since M67 and M70 landed and that nothing on this machine runs: the
 # measurement costs fifteen CPU-hours, the DECLARATION costs milliseconds, and
 # the failure that actually happened was a declaration nobody could satisfy.
-for lane in build lint lane-coverage bundle-seeds assertions provenance power-decl test corpus; do
+#
+# power-refute-decl is here on the same argument, applied the day its lane was
+# written rather than after it cost something. The refutation pass runs a probe
+# per measurable opt-out, which puts it straight into the remembered column
+# beside the lane it repairs; its cheap half checks the PARTITION and the
+# HEADERS, which is what catches a class arriving in the exempt column carrying a
+# label instead of an argument.
+for lane in build lint lane-coverage bundle-seeds assertions provenance power-decl power-refute-decl test corpus; do
   printf '  ---- make %s\n' "$lane"
   if ! make "$lane" >/tmp/rift-hook.log 2>&1; then
     printf '\n  FAILED: make %s\n\n' "$lane"

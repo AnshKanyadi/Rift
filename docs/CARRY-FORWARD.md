@@ -99,6 +99,13 @@ seeds and the bidirectional assertion still holds, so the record is still correc
 forward to A7**, where the term-start no-op moves every trace anyway and is therefore the next moment
 the reshape is free. DESIGN-A6 §30.3.
 
+**And A7's ruling 6 constrains HOW it lands, which is worth recording before somebody takes the
+obvious shortcut.** *"The no-op lands separately and first, with a full re-measurement — one reason
+per moved number."* The reshape moves every trace too, so riding it on the no-op commit is exactly the
+shape the ruling forbids: one commit, every count moved, two causes, and a power regression that
+cannot be attributed to either. **The reshape is its own commit with its own re-measurement**, before
+or after the no-op, and never inside it.
+
 ---
 
 ## Standing, from A6
@@ -172,6 +179,11 @@ per-mutant seed counts are re-derived under the new cost, or the lane moves to t
 Amendment A2 says the choice has to keep kill-time monitored either way. Re-measure before A7 widens
 the shape again.
 
+**RULED into A7's exit criteria** (DESIGN-A7 §8.2 criterion 4): every floored class is re-measured
+under A7's shape rather than inherited from A6's, and the refutation pass is run and reported beside
+it. The term-start no-op is what widens the shape, so the re-measurement is taken against the tree the
+no-op produces, not against this one.
+
 **The transaction identity gap.** DESIGN-A6 §15.6. A transaction record is addressed by `(primary
 key, start timestamp)`, which Percolator can rely on because a single TSO issues start timestamps.
 Per-node HLCs do not guarantee it: two nodes can mint the identical `(wall, logical)` pair. Asserted
@@ -206,6 +218,19 @@ claim was **false on the day it was written**, not gone stale. It stood because 
 **skips** any patch with a `power:` line — *an opt-out exempts itself from the only instrument that
 could refute it.* Different mechanism, same shape: **a claim nothing re-tests.** DESIGN-A6 §42.3,
 where the refutation pass and its scope problem are written down.
+
+**The sibling is now closed, and it closed differently from its parent.** `scripts/power-refute.sh`
+is built, scoped and reported (DESIGN-A6 §43), and the label that made the claim possible is **split**:
+`power-covered-by:` names an instrument the pass RUNS, `power-unreachable:` names the detector its
+number was taken against and must argue NO OTHER DETECTOR, and the bare `power:` is retired. **Three
+of the five reachability claims that can be measured turned out to be wrong** — `M30` at 1 of 300 with
+a leader-completeness violation, `M67` at 589 foreign-tag starts in thirty seeds, and `M56` before
+them. RISK-1 itself is *unclosable from inside the
+repository* — nothing in the tree can make a lane execute. The opt-out sibling was closable from
+inside, because what switched the instrument off was a sentence in an artefact rather than the
+absence of a machine. **That is the distinction to carry: a lane nobody runs needs an executor; a
+claim that exempts itself needs a rule that the exemption be earned by a fact rather than granted by
+a sentence.** The second is buildable and has been built. The first is still RISK-1.
 
 **Why the usual answers do not close it.** `make lane-coverage` keeps the *list* honest and cannot
 make the list *run*. A pre-push hook can hold eight lanes and cannot hold fifteen CPU-hours. Moving a
@@ -340,6 +365,86 @@ found by the same mutant surviving twice.
 log, digest per `Ready` on the node and per entry in the replay and look for the divergence across a
 **skip** in the node's indices. A7 (read index, where a lease or an index read can be answered
 mid-batch) and B4 (kill points, where a kill lands inside a batch) will both want it.
+
+---
+
+## Owed by A7
+
+Created by the thirteen rulings on DESIGN-A7. Each names the ruling that made it.
+
+**The three-guard totality argument, restated under read index.** Ruling 13. A6 §28.3's argument names
+a log position in every clause — *before the prewrite*, *after the prewrite*, *blocks on the lock* —
+and read index answers reads that occupy none, so **the proof expired with its premises**. The
+restatement is an exit criterion rather than a paragraph, and `M71`/`M72` are re-induced **against the
+restated form** rather than re-run against the old one and observed to still pass.
+
+*Ansh: "a mutant that passes because the property it attacks moved has stopped meaning anything."*
+
+**The oracle for ruling 3's condition, and the defect that induces it.** *A read arriving at index `i`
+and confirmed later must be provably not answerable at any index below `i`.* Arrival capture is the
+weaker of D-A7-3's two options by construction, so the safety of the cheaper choice **is** that claim,
+and it is not allowed to live in prose. A ledger-side invariant, plus a planted defect that serves a
+read one index low.
+
+**`M71` re-pointed, with the boundary planted as the defect.** Ruling 11. The mutant is *a snapshot
+read is served by read index* — ruling 8's decision applied as a patch — killed by a **conservation
+failure** rather than a structural check, because that is what BUG-022 looked like. If the boundary
+between the two read paths can be erased by simplifying a conditional, it is a comment; if erasing it
+fails a run, it is a mechanism.
+
+**A counted plain-read census field, before any number reaches BENCHMARKS.md.** Ruling 9. §4.2's
+one-in-ten is **derived** from a configured ratio (`SnapshotReads / 0.4`), not counted. And
+BENCHMARKS.md states A7 in the ruled terms — *the correctness mechanism CLAIM 4 names, with a
+throughput win on one read in ten* — carrying both qualifications, the derivation and the fact that
+the mix is this workload's, whose audits are a checker reading rather than a client.
+
+**The fate of the replicated read path, decided at exit and recorded.** Ruling 4. A fallback nobody
+decided to keep is a second code path with no owner.
+
+**Non-vacuity for the two things this phase adds.** Rulings 2 and 5: a sweep in which every read was
+served by a leader has not tested follower reads, and a differential that compared nothing is this
+register's commonest entry. Both carry a count.
+
+**Standing from A7, not owed by it: the assumption audit.** Ruling 10. Both audits are reported at
+every phase close from A7 onward — the fact table asks *where is this fact taken from*, the assumption
+audit asks *what does this mechanism's correctness argument assume, and does this system provide it*.
+**They fail differently, which is why there are two.** A6's fact table came out clean and the phase's
+most expensive defect was in the column the table has no room for.
+
+---
+
+## Standing, from A7's refutation pass
+
+**`M30` and `M67` are RED and their dispositions are unruled.** DESIGN-A6 §43.12. Both measured, both
+recommended for `power-detector: sweep` on `M73`'s precedent, neither taken — turning a red lane green
+is the direction §31 says needs the ruling rather than the argument. `M30` is the sharper one: it
+mutates a durability gate in `raft/` and the oracle that catches it is leader completeness, so what is
+red is a class whose defect breaks *committed is forever*.
+
+**Three classes could leave the unmeasurable-here column for one census field.** DESIGN-A6 §43.6. `M8`, `M9` and
+`M15` are exempt because the only thing their mutations move is the `Inconclusive` count, which the
+mutated lines write. One field — decided-and-total operations per run, recorded where the history is
+ASSEMBLED rather than where it is scored — is independent of all three and would convert them from
+*exempt with an argument* into *measured*. It adds a census field and an exit criterion, so it is not
+a change to make quietly.
+
+**A pinned class is measured every run, under a shape no run uses.** DESIGN-A6 §43.11. `M18` (`a1`),
+`M34` (`a2`) and `M14` (`a3`) pin themselves with `power-config:`. This is a *lesser* sibling of the
+opt-out: the pin is honest — the report prints `(a1)` on the line — and the class is re-measured. But
+*is this class still reachable by the sweep this project actually executes* is a question nothing
+asks. Whether a pin also owes a current-shape number, even one that reads zero, is a ruling.
+
+**The pass cannot tell a hard-zero exit criterion from a non-vacuity one.** DESIGN-A6 §43.12 item 4.
+`ForeignTagStarts != 0` is asserted at exactly zero across the signed 25,000-seed run; *no move ever
+completed* is marginal at thirty seeds on the clean tree as well. Both reach the pass as "a criterion
+the baseline passes", so it prints the weaker caution for both and understates the strong case.
+Distinguishing them means the criteria declaring their own kind, which is a change to the
+exit-criteria list.
+
+**The refutation pass cannot refute its own unmeasurable-here column, at any seed count.** That is its ceiling,
+stated so it is never quoted past it: it converts *nothing re-tests this claim* into *this claim is
+re-tested, or it is exempt for a written reason the artefact earns*. It does not convert the second
+into the first.
 
 ---
 

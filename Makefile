@@ -196,7 +196,7 @@ assertions: ## Every declared every-run assertion mechanism must actually be inv
 	$(GO) test -count=1 -run 'TestEveryAssertionMechanismIsInvoked|TestAssertionRegistryIsWellFormed' ./sim/hunt/
 
 .PHONY: power
-power: power-toy power-decl power-mutants ## Harness-power floors: every planted flaw class must still be detected at its floor
+power: power-toy power-decl power-refute power-mutants ## Harness-power floors: every planted flaw class must still be detected at its floor
 
 .PHONY: power-toy
 power-toy: ## The toy's four flaw classes, floored since A0
@@ -213,6 +213,32 @@ power-decl: ## Every mutant's power DECLARATION is consistent -- milliseconds, n
 .PHONY: power-mutants
 power-mutants: ## Every MUTANT class: detection rate against a standing floor, or an explicit opt-out
 	@$(POWERMUTANTS)
+
+# The refutation pass, and why it is a lane rather than a one-off audit.
+#
+# `power-mutants` SKIPS any patch carrying a `power:` line. So a floored class is
+# re-measured every time that lane runs and an opted-out class is re-measured
+# NEVER -- an opt-out exempts itself from the only instrument that could refute
+# it. `M56` cost a phase and a half to that: an opt-out reasoned by analogy,
+# never measured, and false on the day it was written (280 of 300).
+#
+# `power-refute` re-measures every opt-out the probe can judge SOUNDLY, and
+# refuses an exemption that is not earned by the patch's own file list. Where the
+# patch modifies the instrument, measurement is unsound rather than merely weak,
+# and the class carries a written argument saying what a sound refutation would
+# have to look like.
+#
+# `power-refute-decl` is its cheap half -- the partition and the headers, no
+# probe, milliseconds -- and it is in the pre-push hook for the reason `power-decl`
+# is: the failure that actually happens is a declaration nobody could satisfy, on
+# a lane nothing runs.
+.PHONY: power-refute
+power-refute: ## Every OPT-OUT re-measured where measurement is sound; exemptions earned by the file list
+	sh scripts/power-refute.sh
+
+.PHONY: power-refute-decl
+power-refute-decl: ## The refutation pass's declarations only -- milliseconds, no probe
+	sh scripts/power-refute.sh --declarations
 
 .PHONY: hygiene
 hygiene: ## No tracked .orig/.rej: patch leftovers are stale duplicate source
@@ -302,7 +328,8 @@ differential: ## [STUB->B4] Differential engine lane: C++ engine vs engine/model
 .PHONY: lanes
 lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
-	@echo "       hatches blind power power-toy power-mutants assertions provenance corpus"
+	@echo "       hatches blind power power-toy power-mutants power-refute assertions"
+	@echo "       provenance corpus"
 	@echo "       smoke soak"
 	@echo "       mutants"
 	@echo "STUB : (none in A0)"

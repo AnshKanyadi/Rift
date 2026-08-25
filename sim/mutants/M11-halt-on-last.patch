@@ -2,7 +2,8 @@
 # covering-test: TestOracleHaltsAtTheFirstViolation
 # package: ./sim/
 # expect: killed
-# power: n/a -- as M8 -- a framework defect, deterministic covering test
+# power-covered-by: TestOracleHaltsAtTheFirstViolation -- as M8 -- a framework defect, deterministic covering test. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: as M10 -- unobservable on a correct tree, since nothing halts and so nothing is recorded late. And the property is narrower than "a violation was found": it is WHICH violation is reported, which no aggregate over a sweep can express even on a run that has one. Composition plus an ordering assertion is the only sound shape, and TestOracleHaltsAtTheFirstViolation plants two violations precisely to make the ordering observable.
 # mutates: the loop keeps running after a violation, so it records the last rather than the first
 --- a/sim/loop.go
 +++ b/sim/loop.go

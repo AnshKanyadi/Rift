@@ -54,9 +54,30 @@
 # So a class declares both, and breaching either fails the lane. A floor with no
 # ceiling is half an instrument, and this project has now shipped the half twice.
 #
-# or an explicit opt-out with a reason:
+# or ONE of the two exemptions, which used to be one label and are now two:
 #
-#   # power: n/a -- <why>
+#   # power-covered-by: <instrument> -- <why>
+#        this class is covered by a NAMED instrument that is not a sweep rate.
+#
+#   # power-unreachable: <detector> -- <why, including NO OTHER DETECTOR>
+#        this class is claimed out of the sweep's reach, and the detector the
+#        claim was taken against is named.
+#
+# # Why one label became two
+#
+# `# power: n/a -- <reason>` meant both *nothing can reach this* and *something
+# better than a sweep already covers this*, which are opposites. The eight
+# framework classes wearing it are killed by their covering tests in about a
+# SECOND each -- the best-covered classes in the tree -- and they wore the same
+# sentence as `M56`, whose reachability claim was false on the day it was
+# written. **A label that collapses two opposite meanings is worse than no label,
+# because it makes the well-covered case indistinguishable from the unexamined
+# one.** DESIGN-A6 §43.
+#
+# The bare `# power:` is retired and survives only on a patch that must SURVIVE,
+# where the exemption is earned by `expect: alive` rather than granted by the
+# sentence. `scripts/power-refute.sh` re-measures the `power-unreachable` claims
+# it can judge soundly and RUNS the instrument every `power-covered-by` names.
 #
 # A patch declaring neither FAILS the lane. That is the whole point: the previous
 # arrangement let a class be uncovered by saying nothing, which is how thirty-one
@@ -151,6 +172,8 @@ if [ "$JOBS" -gt 1 ]; then
   running=0
   for patch in "$PATCHDIR"/*.patch; do
     id=$(sed -n 's/^# id: *//p' "$patch")
+    [ -n "$(sed -n 's/^# power-covered-by: *//p' "$patch")" ] && continue
+    [ -n "$(sed -n 's/^# power-unreachable: *//p' "$patch")" ] && continue
     [ -n "$(sed -n 's/^# power: *//p' "$patch")" ] && continue
     [ -n "$(sed -n 's/^# power-seeds: *//p' "$patch")" ] || continue
     measure_one "$patch" "$scratch/$id.result" &
@@ -170,6 +193,9 @@ optout=0
 for patch in "$PATCHDIR"/*.patch; do
   id=$(sed -n 's/^# id: *//p' "$patch")
   na=$(sed -n 's/^# power: *//p' "$patch")
+  covered=$(sed -n 's/^# power-covered-by: *//p' "$patch")
+  unreach=$(sed -n 's/^# power-unreachable: *//p' "$patch")
+  expect=$(sed -n 's/^# expect: *//p' "$patch")
   seeds=$(sed -n 's/^# power-seeds: *//p' "$patch")
   floor=$(sed -n 's/^# power-floor: *//p' "$patch")
   ceiling=$(sed -n 's/^# power-ceiling: *//p' "$patch")
@@ -178,9 +204,30 @@ for patch in "$PATCHDIR"/*.patch; do
   detector=$(sed -n 's/^# power-detector: *//p' "$patch")
   [ -n "$detector" ] || detector=rate
 
-  if [ -n "$na" ]; then
+  # The two exemptions are reported by KIND, so the report itself stops
+  # collapsing them. `covered` is a class with a better instrument than this
+  # lane; `unreach` is a class making a claim this lane does not test and
+  # `power-refute` does.
+  if [ -n "$covered" ]; then
     optout=$((optout + 1))
-    printf '   n/a      %-44s %s\n' "$id" "$na"
+    printf '   covered  %-44s %s\n' "$id" "$covered"
+    continue
+  fi
+  if [ -n "$unreach" ]; then
+    optout=$((optout + 1))
+    printf '   unreach  %-44s %s\n' "$id" "$unreach"
+    continue
+  fi
+  if [ -n "$na" ]; then
+    if [ "$expect" = alive ]; then
+      optout=$((optout + 1))
+      printf '   n/a      %-44s %s\n' "$id" "$na"
+      continue
+    fi
+    printf '   RETIRED  %-44s carries the bare power: opt-out.\n' "$id"
+    printf '            One label meant both "nothing can reach this" and "something better than a\n'
+    printf '            sweep covers this". Declare power-covered-by: or power-unreachable:.\n'
+    failed=$((failed + 1))
     continue
   fi
   # In --measure mode only the seed count is needed: that mode exists to PRODUCE
@@ -298,7 +345,7 @@ for patch in "$PATCHDIR"/*.patch; do
 done
 
 printf '  ----------------------------------------------------------------\n'
-printf '   %d classes floored and ceilinged, %d opted out with a reason, %d failures\n\n' "$covered" "$optout" "$failed"
+printf '   %d classes floored and ceilinged, %d exempt by a named instrument or a named detector, %d failures\n\n' "$covered" "$optout" "$failed"
 
 if [ "$covered" -eq 0 ]; then
   printf '  No class carries a floor. An empty power lane proves nothing.\n\n'

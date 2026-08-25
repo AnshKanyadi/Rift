@@ -2,7 +2,8 @@
 # covering-test: TestNoLeaderIsInconclusiveNotPass
 # package: ./sim/hunt/
 # expect: killed
-# power: n/a -- as M8 -- a verdict-classification defect, deterministic covering test
+# power-covered-by: TestNoLeaderIsInconclusiveNotPass -- as M8 -- a verdict-classification defect, deterministic covering test. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: the probe REIMPLEMENTS the property this patch removes, so it cannot see the removal: noticed() checks r.Census.ElectionsWon == 0 itself and returns the same answer before and after. That is a stronger reason than the original opt-out gave, and it splits the question in two. REACHABILITY is establishable independently -- SeedsWithNoLeader is counted in CensusOf, which this patch does not touch -- so whether the sweep produces a leaderless run is a measurable fact. DETECTION is not, because the property is a statement about the verdict such a run banks, and every field that moves is one the patched function writes. TestNoLeaderIsInconclusiveNotPass is the sound instrument.
 # mutates: a run that never elected a leader keeps its pass, so a safety verdict is banked over a cluster that never did the thing whose safety is asserted
 --- a/sim/hunt/raftscenario.go
 +++ b/sim/hunt/raftscenario.go

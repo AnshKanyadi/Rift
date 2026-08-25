@@ -346,6 +346,11 @@ rhetorical:
 | 17 | **`tools/provcheck`**, the lane that enforces oracle-input provenance | **red across a whole commit** and nobody saw it, because there is no remote and the lane only runs when somebody remembers to type it | DESIGN-A6 §20 |
 | 18 | **`make test` itself**, the every-change lane | `go test ./...` with nothing set runs the exit sweep at its 10,000-seed default — about 26 hours at A6's cost, and dead on Go's ten-minute timeout long before that. Unrunnable since A1, unnoticed for the same reason as 17 | DESIGN-A6 §20 |
 | 19 | **the guard for BUG-021's own class**, keyed on `(primary, startTS)` | the class was predicted and guarded, and the key was one field too wide: a version is addressed by `EncodeKey(ns, key, startTS)`, which has no primary in it, so the counter read **zero** on precisely the seed that had the collision | DESIGN-A6 §22.7 |
+| 20 | **a CORRECTION written to stop a repeat mistake**, pointing the next reader at `TxnRecord.Restarts` | the field was written by nothing and read zero however many restarts occurred, so the correction converted *I do not know* into *no* | DESIGN-A6 §29.2 |
+| 21 | **`make power-mutants`'s declarations**, asserted against measurements nobody had taken | red since `M67` and `M70` landed and unseen for half a phase, because the lane costs fifteen CPU-hours and nothing on this machine runs it. The cheap check over its inputs found **six** inconsistent declarations in milliseconds | DESIGN-A6 §31, §37.2 |
+| 22 | **`TestPowerProbe`'s `noticed()`**, inside the power lane itself | it consulted a hand-listed subset of the harness's detectors, so no class whose detector is an aggregate assertion could be measured at all — and it reported zero for those classes as though zero meant unreachable | DESIGN-A6 §35.1 |
+| 23 | **an OPT-OUT**, which is a reachability claim | `power-mutants.sh` skips any patch carrying a `power:` line, so the claim exempts itself from the only instrument that could refute it. `M56`'s was reasoned by analogy with `M53` and never measured; it is **280 of 300, first at seed 0**, and **28 of 30 under A5's own shape** — false on the day it was written, not gone stale | DESIGN-A6 §42.3 |
+| 24 | **the DECISION about which claims to re-measure**, at DESIGN-A6 §42.1 | the pass that re-measured every class reading zero **excluded `M30` by citing `M30`'s own declaration** — *measured trace-identical over 10k seeds* — rather than a measurement. `M30` is **1 of 300 with a leader-completeness violation at seed 178**: `committed is forever`, broken. The one class reasoned out of the set was the one that was wrong | DESIGN-A6 §43.5a |
 
 Seven of the first eight were in the harness. The eighth was in a **verdict**, which is the difference
 between a machine that finds less than it should and a machine that certifies something false.
@@ -368,6 +373,37 @@ carries: 9 and 10 in the mutant and power lanes, 12 in the power lane's floor sh
 label, and 13 in the corpus lane. The things that watch are the things nobody watches. 11 is the one
 exception, and it is the one that shows where to look next: it was in a *mechanism the oracles depend
 on*, one layer below where the audit was looking, because the previous ten had been in oracles.
+
+**Instances 20 to 23 close A6, and 23 is the one that changes what the register is FOR.** The first
+twenty-two are all mechanisms that were *supposed* to be looking: an oracle, a floor, a lane, a
+probe, a correction. Every remedy this register has produced is therefore some version of *make the
+instrument look harder*. **23 is the first entry where the instrument was switched off BY the claim
+it was supposed to check.** `M56` did not drift out of reach and no measurement went stale. A patch
+wrote `power: n/a` with a reason it had inferred by analogy, and the lane's own rule — do not measure
+an opt-out — made that sentence unfalsifiable for a phase and a half. The general form, which is the
+one to carry into every future exemption mechanism:
+
+> **A claim that turns off its own instrument is not a weak claim, it is an unfalsifiable one. A
+> floored class is re-measured every time the lane runs; an opted-out class is re-measured never — so
+> the exemption has to be earned by a fact about the artefact, never granted by a sentence inside
+> it.**
+
+`scripts/power-refute.sh` is that rule mechanised: it re-measures every reachability claim it can
+judge soundly, **runs the instrument every covered-by claim names**, and where measurement is unsound
+requires the exemption to be *earned by the patch's file list* and to carry a written argument saying
+what a sound refutation would have to look like. DESIGN-A6 §43.
+
+**And 24 is 23 one level up, which is the pair worth reading together.** 23 is a claim that switched
+off the instrument that could refute it. 24 is a claim that switched off the *decision* to point an
+instrument at it — and it is harder to see, because excluding a class from a measurement pass looks
+like triage rather than like an exemption. The rule that follows is narrow and mechanical:
+
+> **An exclusion from a measurement pass may cite a measurement, or an argument about reachability. It
+> may never cite the excluded class's own declaration.**
+
+**And 24 is jointly authored**, which is recorded because the register is a record of how this project
+fails rather than of who failed: the exclusion was written by Claude and ratified by Ansh, on the same
+sentence, neither of whom asked for the number.
 
 **13 is the sharpest of the fourteen** and its general form is the one to carry forward:
 

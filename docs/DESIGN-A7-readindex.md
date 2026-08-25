@@ -1,7 +1,9 @@
 # DESIGN-A7: read index, and linearizable reads that do not cost a log entry
 
-**Status:** written before the code, to the point of decisions. Every decision below is marked
-**[open]** and waits for a ruling; none is assumed. **Author:** Claude. **Decider:** Ansh.
+**Status:** **RULED.** Written before the code, to the point of decisions; every decision below was
+marked `[open]` and none was assumed. All thirteen open questions are now answered — §9 carries the
+rulings, §8 carries the exit criteria they produce. **No A7 code is written yet**: the first commit is
+the term-start no-op on its own, per ruling 6. **Author:** Claude. **Decider:** Ansh.
 **Phase:** A7 — the last Track A phase. **Depends on:** A6.
 
 **Revised after BUG-022.** A6's last defect put a dependency directly in this phase's path: the read
@@ -104,7 +106,7 @@ assertions, split thresholds and every fire count shift underneath it. §7 is ab
 
 ---
 
-## 3. The candidates **[open]**
+## 3. The candidates **[RULED]**
 
 ### D-A7-1: how leadership is confirmed
 
@@ -132,9 +134,11 @@ so most reads cost nothing at all.
 - *against*: it is the cost A7 exists to remove, and CLAUDE.md's headline claims linearizable reads
   *via read index*, which is a claim about a mechanism and not about an outcome.
 
-**Recommendation: A.**
+**Recommendation: A.** — **RULED: A** (§9.1), with the refusal to reopen leases held to the same
+discipline as A6's TSO refusal: a deferral spent on a purpose it was not granted for is a mechanism
+widening itself.
 
-### D-A7-2: follower reads **[open]**
+### D-A7-2: follower reads **[RULED: yes]**
 
 CLAUDE.md scopes A7 as *"Full protocol including the term-start no-op requirement; follower reads via
 read index."* So followers serve reads too: a follower asks the leader for a read index, waits for
@@ -158,7 +162,10 @@ stale answer has been lied to.
 **Recommendation: implement it.** It is in scope and it is the case that makes read index worth
 having in a multi-range system, where the leaseholder-equivalent is not always the nearest replica.
 
-### D-A7-3: what the read index is taken from **[open]**
+**RULED: yes** (§9.2), and the sweep must exercise them **non-vacuously** — a run in which every read
+was served by a leader has not tested them.
+
+### D-A7-3: what the read index is taken from **[RULED: A, at arrival]**
 
 Two candidates, and this is D-A7-1's detail rather than a separate decision, but it has its own
 failure mode:
@@ -172,13 +179,22 @@ is the standard and the batching is the reason.
 
 **Recommendation: A**, with the index captured *before* the broadcast and carried with the round.
 
-### D-A7-4: what happens to the existing read path **[open]**
+**RULED: A** (§9.3), **with a condition that is the ruling's substance**: a read arriving at index `i`
+and confirmed later must be **provably not answerable at any index below `i`**, stated as an oracle
+and **induced**. Arrival capture is the weaker of the two options by construction — confirmation-time
+capture is a later point and can never be stale — so the safety of the cheaper choice is exactly the
+claim that the stamped index is a sound floor, and a claim that load-bearing does not live in prose.
+
+### D-A7-4: what happens to the existing read path **[RULED: B for the phase, decided at exit]**
 
 Today a read is a log entry (`opGet`), stamped at propose, answered at apply. Under read index it
 becomes a local answer with no entry at all.
 
 **A. Replace it.** All reads go through read index.
 **B. Keep both**, and choose per request.
+
+**RULED: keep both for the phase, decide at exit** (§9.4) — and the decision is *made* at exit and
+recorded, not left to lapse. A fallback nobody decided to keep is a second code path with no owner.
 
 **Recommendation: B, temporarily, and A by the exit criteria.** Keeping both for the phase's
 duration is what makes the staleness checker meaningful: the two paths answer the same question and
@@ -188,7 +204,7 @@ which of those is D-A7-4's real question.
 
 ---
 
-### D-A7-5: the read mark — **A7's governing constraint** **[open]**
+### D-A7-5: the read mark — **A7's governing constraint** **[RULED: A]**
 
 Ansh, on the A6 sign-off: *"BUG-022's fix rests on the read mark being a function of the log because
 every read is a log entry, and read index exists to stop reads being log entries. So A7 cannot be
@@ -288,6 +304,10 @@ Refuse any prewrite whose key *might* have been read off-log — which, without 
 - *for*: safe.
 - *against*: it refuses everything. Listed because it is the reflex answer and it needs to be written
   down as unusable rather than left as a thing somebody proposes in week three.
+
+**RULED: A** (§9.8), and record B as the thing that would lift the restriction along with what it
+would cost — **its handover argument named as a phase rather than a decision**, which is what stops it
+being smuggled back in as one.
 
 **Recommendation: A**, and record B as the thing that would lift the restriction along with what it
 would cost. The measurement that would change the recommendation is the share of the read volume that
@@ -398,7 +418,7 @@ in other people's work.
 
 ---
 
-## 5. The oracle **[open]**
+## 5. The oracle **[RULED: three properties, 3 is a fixture]**
 
 CLAUDE.md's exit criterion: *"staleness checker green under partitions and leader churn."*
 
@@ -421,8 +441,90 @@ Three properties, and the third is the one that needs the most care:
    moment must agree. This is the property that catches a stale read *nobody else observed*, which
    is the class property 1 cannot see, and it is available only while both paths exist.
 
-**Open question:** whether 3 is a lane or a permanent fixture. It costs a second read per checked
-read, and it is the only oracle here that can catch a stale read in a quiet history.
+**RULED: a fixture while both paths exist** (§9.5). It costs a second read per checked read, and
+*being the only instrument that can catch a stale read no client observed is exactly why.* Property 1
+catches a stale read only if some client observed the write it missed; in a quiet history nobody did,
+and porcupine is green over a lie. **It carries a non-vacuity count**, because a differential that
+compared nothing is this register's commonest entry.
+
+---
+
+## 5a. Ruling 3's oracle, specified before it is built
+
+Ruling 3 approved arrival-capture **with a condition**: *a read arriving at index `i` and confirmed
+later must be provably not answerable at any index below `i`, induced.* That condition is §5's
+property 2 made concrete, and it is specified here on §40's pattern — assert, independence, induction
+cases — because an oracle designed in the same commit that needs it is an oracle shaped to pass.
+
+### 5a.1 Why this is the gate rather than a detail
+
+Arrival-capture is the **weaker** of D-A7-3's two options *by construction*. Confirmation-time capture
+takes a later commit index, so it can never be stale; arrival-capture takes an earlier one, and it is
+chosen because reads arriving together can then share one confirmation round. **So the entire safety
+case for the cheaper choice is the claim that the stamped index is a sound floor** — and a claim
+carrying that much weight is not allowed to live in prose.
+
+### 5a.2 What it asserts
+
+> **For every read answered off the log at stamped index `i`: every write acknowledged to a client
+> before that read was issued occupies a log index at or below `i`.**
+
+That is the linearizable-read condition stated as a position rather than as a value — *a read index is
+a fact about a position, not about a node* (D-A7-2), so the check is about positions too. The
+derivation it protects is the standard one and it is worth writing out, because the oracle exists
+exactly where the derivation could silently stop being true:
+
+- a write completes only after it is committed, so at the instant it is acknowledged its index is at
+  or below the leader's `commitIndex`;
+- the read captures `i = commitIndex` **at arrival**, which is after that acknowledgement;
+- `commitIndex` is monotonic, so `i >= ` that write's index.
+
+Each of the three is a place the implementation can go wrong: acknowledging before commit, capturing
+after the answer rather than at arrival, and a `commitIndex` that moves backwards across a term change
+— which is §2's no-op, from the other side.
+
+### 5a.3 Why it is independent of the thing it judges
+
+Two inputs, neither of them produced by the read-index implementation:
+
+| input | where it comes from | why that is independent |
+|---|---|---|
+| the call and return instants of every client operation | the harness's own client driver, which is what porcupine already consumes | it is a record of what the harness did, not of what the system says it did — `tools/provcheck`'s rule, and the reason `raft.tail.persisted` could not be read back from the engine (DESIGN-A1 §5c) |
+| the log index of every acknowledged write | the `raftcheck` ledger's committed prefix, per range | the same walk `resolution-only-breaks-expired-locks` uses (§40.2): the supplier **decodes and stops**, and no comparison is re-run inside it |
+
+The stamped index `i` rides in the answer, which is the carried-value pattern this codebase already
+uses for `ExpireAt` and the commit timestamp, and for the same reason: *a fact derived at one point and
+carried, so every observer compares the same two values.* **The oracle never recomputes `i`** — if it
+did, it would be re-running the rule under test, which is precisely how the retired model failed
+(DESIGN-A6 §13.1).
+
+### 5a.4 The induction, which is what discharges the gate
+
+Built directly, in milliseconds, before any seed search — because the sweep is the thing whose reach
+this phase is uncertain about:
+
+| case | required |
+|---|---|
+| a read stamped at `commitIndex` at arrival, served after confirmation | **silent** |
+| a read stamped at `commitIndex - 1` | **violation**, naming the write it could miss and the index it was stamped at |
+| a read stamped at arrival, answered after further commits have landed | **silent** — a later state is never stale, and the oracle must not mistake freshness for a fault |
+| a read whose stamped index is above the leader's confirmed commit | **violation** — §5's property 2 in the other direction, and the one an over-eager optimisation produces |
+| a follower read stamped by the leader, answered after the follower's apply reaches it | **silent** — the answer is pinned by the index, not by the follower's connectivity (D-A7-2) |
+| a follower read answered **before** its apply reaches the stamped index | **violation** |
+| a run in which no write was acknowledged before any read | **silent, and NOT counted** |
+
+**The last row is the non-vacuity case**, and it is why the count exists: a sweep in which no read ever
+had a preceding acknowledged write has exercised none of this and would report a silence that means
+only that the workload did not overlap. The census carries the number of reads the oracle actually
+judged, and `exitCriteriaFailures` refuses a sweep in which it is zero — the same construction
+`ResolverDeclarations` got (§40.5), added against a measurement rather than by argument.
+
+### 5a.5 The mutant
+
+`i - 1` is the mutation: stamp the read one index low. It is the smallest possible version of the
+defect and the one an optimisation would actually produce, and it must be killed by this oracle rather
+than by porcupine — **because porcupine can only see it when some client observed the write that was
+missed**, which is §5's stated weakness in property 1 and the whole reason property 2 exists.
 
 ---
 
@@ -437,7 +539,7 @@ read, and it is the only oracle here that can catch a stale read in a quiet hist
 
 ---
 
-## 7. The change that moves every number, and what to do about it **[open]**
+## 7. The change that moves every number, and what to do about it **[RULED: A]**
 
 The term-start no-op adds **one entry per election**. Every count in the exit run shifts, and several
 assertions are phrased against counts:
@@ -453,6 +555,8 @@ Two ways to handle it, and this is a genuine decision rather than a chore:
 **A. Land the no-op first, re-measure everything, then build read index on the new baseline.**
 **B. Build read index behind a flag, measure both, land together.**
 
+**RULED: A** (§9.6) — *one reason per moved number.*
+
 **Recommendation: A.** The no-op is a correctness requirement for the mechanism and it is one line;
 separating it means the re-measurement has exactly one cause. B produces a single commit in which
 every number moved for two reasons at once, which is the shape that makes a power regression
@@ -466,79 +570,372 @@ commit**, or they measure a shape that no longer exists.
 
 ---
 
-## 8. Exit criteria, proposed **[open]**
+## 8. Exit criteria — **RULED**
 
-Ansh sets these; this is the proposal.
+Ansh sets these. What follows is the ruled set, not the proposal: *the thirteen answers in §9, plus
+the standing set.* The proposal it replaces is preserved in the git history of this file.
 
-1. Read index implemented with the **term-start no-op**, and the no-op induced — a mutant that
-   removes it must be killed by a read that goes stale.
-2. **Follower reads** via read index, exercised in the sweep and asserted non-vacuous: a sweep in
-   which every read was served by a leader has not tested them.
-3. Per-key linearizability green with reads served by read index, under partitions and leader churn.
-4. The **differential** against the replicated path green, or its removal decided and recorded.
-5. Every count the exit run prints asserted or deleted, and every new oracle induced.
-6. §4's **ten** facts reported before-and-after with exclusions stated, and §4.1's six assumptions
-   re-asked against the code that landed.
-7. **`M71` re-pointed at A7's shape** (D-A7-5): a mutant that serves a mark-leaving read off the log,
-   killed by a conservation failure. BUG-022's guard is the thing A7 is most able to break silently,
-   and the boundary between the two read paths should be something the suite kills rather than
-   something the code remembers.
-8. A6's three owed measurements taken **before** A7's first commit (§7).
-9. Seed count at exit: Ansh's call. A6 ran 25,000 sharded; the machinery for that is now built and
-   `make exit-run` is one command.
+### 8.1 The thirteen, as gates
+
+Each ruling in §9 is an exit gate. Five of them are gates a run can fail rather than statements a
+reader can agree with, and those five are listed here with the shape of their evidence:
+
+| # | gate | evidence that discharges it |
+|---|---|---|
+| 3 | the read index is captured at ARRIVAL | **a read arriving at index `i` and confirmed later is provably not answerable at any index below `i`** — stated as an oracle over the ledger and **induced**, not argued in prose |
+| 6 | the term-start no-op lands **separately and first** | two commits, and a re-measurement between them in which **every moved number has exactly one reason** |
+| 11 | `M71` is re-pointed at A7's shape | the boundary between the two read paths is planted as a defect — *a snapshot read served by read index* — and killed by a conservation failure |
+| 13 | the three-guard totality argument is restated under read index | the restated argument in this document, and `M71`/`M72` **re-induced against the restated form** |
+| 5 | the differential oracle is a fixture while both paths exist | a sweep in which it ran, with its non-vacuity asserted; and D-A7-4's fate decided at exit rather than assumed |
+
+The other eight are decisions with consequences the code has to match, and §9 states each one's.
+
+### 8.1a A7's own exemptions use the split labels from the start
+
+**Ansh, adding one item to the thirteen:** *"A7's own opt-outs use the split labels and the
+named-detector field from the start, so the phase does not create a new cohort of the thing you just
+spent a cycle refuting."*
+
+Every mutant A7 lands either carries a measured floor and ceiling, or **one** of:
+
+- **`# power-covered-by: <instrument> -- <why a sweep is not the instrument>`** — and the instrument is
+  named precisely enough that `make power-refute` can run it. A covering test must match the patch's
+  `covering-test:`; a floor must exist in `floors.go`. The pass executes it and it must kill.
+- **`# power-unreachable: <detector> -- <why, including NO OTHER DETECTOR>`** — naming the detector the
+  number was taken against, and arguing that nothing else in the exit-criteria list sees the class more
+  often. `make power-decl` refuses the declaration without that clause, in milliseconds.
+
+The bare `# power:` does not exist in this phase. It is retired, and it survives in the tree only on a
+patch that must SURVIVE, where the exemption is earned by `expect: alive`.
+
+**Why this is an exit criterion and not a style note.** A7 is the phase most likely to produce
+exemptions of exactly the refuted kind. Read index adds a read path with no log entry, so several
+mutants will attack code whose defect is *invisible to the sweep by construction* — and that sentence
+is `M56`'s, `M30`'s and `M67`'s sentence. The three failure modes are all live here:
+
+| the mode | what it looks like in A7 |
+|---|---|
+| **false when written**, reasoned by analogy (`M56`) | *"as the other read-path mutant — the sweep cannot produce a stale read"*, citing a class's number instead of taking one |
+| **stale**, a claim about a schedule mix that moved (`M30`) | any reachability measured **before** the term-start no-op lands, since ruling 6 moves every trace by design |
+| **bounded to its detector** (`M67`) | *"porcupine did not catch it"* — which is a claim about porcupine, and §5's whole point is that a stale read nobody observed is invisible to porcupine and visible to the differential |
+
+The third is the one to watch, because A7's own oracle design already says the per-key checker is the
+**weakest** of its three properties. A declaration citing it and stopping there would be `M67` written
+by somebody who had just read the argument against it.
+
+### 8.2 The standing set
+
+1. **Every new oracle induced.** No gate counts until its failure has been induced. This covers the
+   staleness properties in §5 and the ledger-side invariant, and it covers the read-index-at-arrival
+   oracle from ruling 3.
+2. **Every bug found in this phase is in BUGS.md with its mutant class**, and where no existing class
+   would have caught it, the new class lands **in the same PR as the fix** — Amendment A2, not a
+   follow-up issue.
+3. **Both corpus lanes green.** `make corpus` (every bundle still replays) and `make corpus-reproduces`
+   (every bundle still *exercises its defect*). They are different questions and A5 paid to learn it;
+   the no-op moves every trace, so regeneration is a **search** and its reproduction verdict is read
+   rather than assumed (DESIGN-A6 §16.3).
+4. **Power floors and ceilings re-measured under A7's shape, with the refutation pass reported.**
+   Every floored class is measured against the shape the no-op produces, not inherited from A6's; and
+   `make power-refute` is run and its result stated — how many reachability claims were re-measured,
+   how many were refuted, and which classes are exempt with the unmeasurable-here argument. Every
+   `power-covered-by` instrument is **run**, not read. DESIGN-A6 §43.
+5. **25,000 seeds, zero safety violations, and the inconclusive rate explained** rather than reported.
+   Amendment A4: an inconclusive is never a pass, and a rising rate is answered by shrinking the
+   window or partitioning harder, never by loosening the checker.
+6. **§4's fact count and §4.1's assumption audit both reported at close.** Ten facts named before the
+   code, reported before-and-after with exclusions stated; six assumptions re-asked against the code
+   that landed. **They fail differently and that is why there are two** — ruling 10.
+
+### 8.3 Seed count and sequencing
+
+25,000, sharded, as A6 ran. `make exit-run` is one command and the machinery is built.
+
+The sequencing is fixed by ruling 6 and it is not negotiable within the phase: **the term-start no-op
+is its own commit, with a full re-measurement, before any read-index code exists.** A6's three owed
+measurements are discharged (CARRY-FORWARD), so nothing blocks the first commit — but the no-op moves
+the baseline they were taken against, which is why criterion 4 above asks for the power numbers again
+rather than citing A6's.
 
 ---
 
-## 9. Open questions, verbatim, each with a recommendation
+## 9. The thirteen rulings
 
-Every one of these is a decision I am not making.
+Every one of these was a decision I did not make. Each is recorded with the ruling, and then with what
+the ruling **obliges** — because a ruling recorded without its consequence is a ruling that gets
+re-litigated when the consequence arrives.
 
-1. **D-A7-1 — how is leadership confirmed?** *Recommendation: heartbeat-confirmed read index. Leases
-   are struck and reconsidering them here would be a deferral spent on a purpose it was not granted
-   for.*
-2. **D-A7-2 — do followers serve reads?** *Recommendation: yes; it is in CLAUDE.md's scope for the
-   phase and it is what makes read index worth having in a multi-range system.*
-3. **D-A7-3 — is the read index captured at arrival or at confirmation?** *Recommendation: at
-   arrival, so reads arriving together share one confirmation round.*
-4. **D-A7-4 — does the replicated read path survive the phase?** *Recommendation: keep it for the
-   phase as the differential oracle's other half, and decide its fate at exit rather than now.*
-5. **§5 — is the differential oracle a lane or a fixture?** *Recommendation: a fixture while both
-   paths exist, because it is the only instrument that can catch a stale read no client observed.*
-6. **§7 — does the no-op land separately?** *Recommendation: yes, first, with a full re-measurement,
-   so that when every number moves there is exactly one reason.*
-7. **§7 — are A6's three owed measurements taken before A7 starts?** *Recommendation: yes. They
-   measure a baseline the no-op is about to move.*
-8. **D-A7-5 — may read index serve A6's transaction snapshot reads, given that those reads leave a
-   read mark BUG-022's guard depends on?** *Recommendation: no. Read index serves the linearizable
-   read path; snapshot reads keep their log entry, because a plain read makes no promise a later
-   commit can break and a snapshot read at `T` does. Record the leaseholder-local timestamp cache as
-   the design that would lift the restriction, together with the fact that its handover argument needs
-   either a lease's clock bound or a new replicated low-water-mark protocol — a phase, not a
-   decision.*
-9. **D-A7-5 — is the share of read volume that is transactional measured before this is ruled on?**
-   *Taken, §4.2: plain reads are about **one in ten** of this sweep's read volume. It does not
-   overturn recommendation 8 — B's handover argument is still a phase and not a decision — and it does
-   change what A7 is FOR: read index becomes the correctness mechanism CLAUDE.md's fourth headline
-   claim names, with a throughput win on 10% of reads, and BENCHMARKS.md has to say so in those terms.
-   Two qualifications: the plain figure is derived from a configured ratio rather than counted, and
-   the mix is this workload's, whose audits are a checker reading rather than a client.*
-10. **§4.1 — does the assumption audit become standing practice, alongside the fact table?**
-    *Recommendation: yes. The fact table came out clean at A6 and the phase's most expensive defect
-    was an assumption in the protocol's own correctness argument that the table has no column for.
-    Two audits, and they fail differently.*
-11. **§8.1 — is `M71` re-pointed at A7's shape as part of this phase?** *Recommendation: yes, and the
-    mutant is the design decision itself planted as a defect — a snapshot read served by read index.
-    That makes the boundary between the two read paths something the suite kills rather than something
-    the code remembers.*
-12. **D-A7-5a — is the branch "exclude keys under transactional locks" repaired to "exclude the
-    transactional keyspace"?** *Recommendation: yes, and it is not a wording change. BUG-022's read was
-    answered before any lock existed, so a rule keyed on the key being locked at read time would have
-    let it through and left no mark. The property that matters is whether the key CAN be prewritten,
-    not whether it is prewritten now.*
-13. **D-A7-5b — does A7's exit require the three-guard totality argument restated under read index and
-    `M71`/`M72` re-induced against the restated form?** *Recommendation: yes, as an exit criterion
-    rather than a paragraph. Every clause of A6's argument names a log position, and read index answers
-    reads that occupy none, so the proof expired with its premises. A mutant that passes because the
-    property it attacks moved has stopped meaning anything.*
+### 1. D-A7-1 — how is leadership confirmed?
 
-**Stopping here for rulings, as the protocol requires.** No A7 code is written.
+**Ruled: A, heartbeat-confirmed read index.** And on the refusal to reopen leases: *refusing on the
+grounds that a deferral would be spent on a purpose it was not granted for is the same discipline as
+the TSO refusal.*
+
+That pairing is the useful part of the ruling. A6 §22.3 refused a timestamp source that would have
+solved a real problem, because the authorisation to use one was granted for a different contingency.
+Here the same shape appears as a *deferral* rather than an authorisation: leases are deferred to
+STRETCH, and reaching for them because they would make A7 faster spends the deferral on a purpose it
+was not granted for. **A mechanism that widens itself is the same defect whichever direction it
+widens in**, and naming the two instances together is what makes it a rule rather than two refusals.
+
+*Obliges:* nothing in A7 may depend on a clock for read correctness. The envelope experiment stays
+STRETCH's and the clock machinery that landed at A0.4 stays unused by this phase.
+
+### 2. D-A7-2 — do followers serve reads?
+
+**Ruled: yes.** It is CLAUDE.md's scope for the phase.
+
+*Obliges:* the sweep must **exercise** them and the exercise must be non-vacuous — a run in which
+every read was served by a leader has not tested follower reads, and a census field has to say so.
+
+### 3. D-A7-3 — is the read index captured at arrival or at confirmation?
+
+**Ruled: A, at arrival**, so reads arriving together share one confirmation round — **with the
+condition that a read arriving at index `i` and confirmed later must be provably not answerable at any
+index below `i`, induced.**
+
+The condition is the whole ruling. Capturing at arrival is the *weaker* of the two options by
+construction: confirmation-time capture is a later point and therefore never stale, and arrival-time
+capture is chosen for batching. So the safety of the cheaper choice is exactly the claim that the
+index a read was stamped with is a sound floor, and a claim that load-bearing is not allowed to live
+in prose. **It is an oracle, over the ledger, and it is induced before it counts.**
+
+*Obliges:* a ledger-side invariant asserting, for every read answered off the log, that no write
+committed at an index below the read's stamped index was invisible to it — and a planted defect that
+serves a read one index low, killed by that invariant.
+
+### 4. D-A7-4 — does the replicated read path survive the phase?
+
+**Ruled: keep it for the phase as the differential oracle's other half, and decide its fate at exit.**
+
+*Obliges:* the decision is *made* at exit and recorded, not left to lapse. A fallback nobody decided
+to keep is a second code path with no owner.
+
+### 5. §5 — is the differential oracle a lane or a fixture?
+
+**Ruled: a fixture while both paths exist**, and: *being the only instrument that can catch a stale
+read no client observed is exactly why.*
+
+Property 1 — per-key linearizability — catches a stale read only if some client observed the write it
+missed. In a quiet history nobody observed it and porcupine is green over a lie. The differential is
+the only instrument in this phase that does not need a witness.
+
+*Obliges:* it is on in the sweep, not in a nightly lane; and it carries a non-vacuity count, because
+a differential that compared nothing is this register's commonest entry.
+
+### 6. §7 — does the no-op land separately?
+
+**Ruled: yes, first, with a full re-measurement**, and: *one reason per moved number.*
+
+*Obliges:* the no-op commit and the read-index commits are separate, and between them every count the
+exit run prints is re-measured. A single commit in which every number moved for two reasons at once is
+the shape that makes a power regression unattributable, and Amendment A2 exists because unattributable
+regressions are how detection power is lost quietly.
+
+### 7. §7 — are A6's three owed measurements taken before A7 starts?
+
+**Ruled: yes — and all three are taken.** The unthrottled collector (40 seeds, 49m32s, 48.8× the
+collections, zero violations, and A5's detection figure not reproducing); the race-lane bound (which
+produced a *third* answer — the lane split by what it is for, with a budget per half); and the mutant
+power measurement under A6's shape (§34, and the five zeros it re-took at §42).
+
+*Obliges:* nothing blocks the first commit. But the no-op moves the baseline all three were taken
+against, so the power half is re-taken under A7's shape at exit — §8.2 criterion 4.
+
+### 8. D-A7-5 — may read index serve A6's transaction snapshot reads?
+
+**Ruled: no.** Read index serves the linearizable read path; A6's snapshot reads keep their log entry.
+**With the leaseholder-local timestamp cache recorded as the design that lifts the restriction, and
+its handover argument named as a phase rather than a decision.**
+
+The distinction is principled rather than a carve-out: **a plain read makes no promise a later commit
+can break, and a snapshot read at `T` does.** Only the second needs a mark, and only the second pays
+for one.
+
+*Obliges:* B is written down here as a design with a price, not left as a thing somebody re-proposes
+in week three. Its price is a leadership-handover argument, and the two known ways to make one are a
+lease's clock bound — struck, and the whole reason read index is A7's mechanism — or a replicated
+low-water mark carried at term change, which is a new protocol with its own recovery story. **Either
+is a phase.** Naming it as a phase is what stops it being smuggled in as a decision.
+
+### 9. D-A7-5 — is the transactional share of read volume measured first?
+
+**Ruled: taken, and the reframing is right.** §4.2: plain reads are about **one in ten** of this
+sweep's read volume. It does not overturn ruling 8, and it changes what A7 is *for*:
+
+> **Read index is the correctness mechanism CLAUDE.md's fourth headline claim names — *linearizable
+> reads via read index* — delivered on the path where linearizable reads live. Its throughput win is
+> on one read in ten.**
+
+*Obliges:* **BENCHMARKS.md says exactly that, in those terms, including both qualifications.** The
+plain figure is *derived* from a configured ratio rather than counted, so a counted census field is
+added before the number is quoted; and the mix is **this workload's**, whose audits are a checker
+reading rather than a client. A phase sold as a latency win that removes 10% of read traffic would be
+the kind of claim this project takes apart in other people's work.
+
+### 10. §4.1 — does the assumption audit become standing practice?
+
+**Ruled: yes, beside the fact table.** And the reason is the argument: *the table came out clean at A6
+while the phase's most expensive defect was an assumption in the protocol's own correctness argument
+that the table has no column for.* **Two audits that fail differently.**
+
+The fact table asks *where is this fact taken from* and walks derivations that exist. BUG-022's fact
+was one **nothing took** — there was no derivation to walk to. The assumption audit asks *what does
+this mechanism's correctness argument assume, and does this system provide it*, and a missing
+provision is visible to it precisely because it is asked about the argument rather than about the
+code.
+
+*Obliges:* both are reported at every phase close from A7 onward, with their exclusions stated. Six
+assumptions are on the table in §4.1 and **three of them this system does not provide** — that ratio
+is the argument for running it at all.
+
+### 11. §8.1 — is `M71` re-pointed at A7's shape?
+
+**Ruled: yes** — and **the boundary decision itself is planted as a defect, so the suite kills it
+rather than the code remembering it.**
+
+The mutant is *a snapshot read is served by read index*: ruling 8's decision, applied as a patch. If
+the boundary between the two read paths is a thing a future reader can erase by simplifying a
+conditional, then it is a comment; if erasing it fails a run, it is a mechanism.
+
+*Obliges:* `M71` is re-pointed in the phase, with its covering test, its floor and its ceiling, and it
+is killed by a **conservation failure** — the bank losing money — rather than by a structural check,
+because that is what BUG-022 actually looked like.
+
+### 12. D-A7-5a — is "exclude keys under transactional locks" repaired to "exclude the transactional keyspace"?
+
+**Ruled: yes, and it is not a wording change.** *BUG-022's read was answered before any lock existed,
+so a rule keyed on currently-locked would have let it through and left no mark. The property is
+whether the key **can** be prewritten.*
+
+The five log entries are the counterexample and they are in §3 above: the `txn-get` at idx 107 is
+answered, the prewrite arrives at idx 109, the commit lands at idx 111 **below the answered read**.
+A rule keyed on the key being locked *at read time* passes that read straight through, records
+nothing, and BUG-022 is back with the guard still in place and still green.
+
+*Obliges:* the scoping predicate is written against the transactional keyspace, and the narrow
+reading is recorded here as a repaired defect rather than deleted — because it is the reading a reader
+reaches for first and it **fails silently**.
+
+### 13. D-A7-5b — does exit require the totality argument restated and `M71`/`M72` re-induced?
+
+**Ruled: yes, as an exit criterion rather than a paragraph.** And the sentence goes in the doc:
+
+> **A mutant that passes because the property it attacks moved has stopped meaning anything.**
+
+Every clause of A6 §28.3's argument names a log position — *before the prewrite*, *after the
+prewrite*, *blocks on the lock* — and read index answers reads that occupy none. The proof expired
+with its premises. A guard proven total under one set of premises is a guard whose proof expired when
+the premises did.
+
+*Obliges:* the restated argument lands in this document, and `M71` and `M72` are re-induced **against
+the restated form** — not re-run against the old one and observed to still pass.
+
+---
+
+## 9a. The three-guard totality argument, restated under read index
+
+Ruling 13 requires this before A7 closes, and it is written here rather than deferred because every
+other decision in this phase is taken inside it (D-A7-5). **`M71` and `M72` are re-induced against
+*this* form, not against A6 §28.3's.**
+
+### 9a.1 Why the old argument does not carry
+
+A6 §28.3, in full:
+
+> After the guard, `readMark(key) <= startTS < commitTS`. So no read **before** the prewrite was
+> answered at or above the commit timestamp; and a read **after** the prewrite either sits at or above
+> `startTS` and blocks on the lock, or sits below `startTS` and so below `commitTS`.
+
+**Every clause names a position in one log.** *Before the prewrite* and *after the prewrite* are
+orderings of log entries. *Blocks on the lock* is a property of applying a read entry against applied
+state. And the mark itself is a function of the log for one reason only: **in A6 every read IS a log
+entry, and every replica applies it and stages the identical mark.**
+
+Read index answers reads that occupy no position. So the argument is not weakened — it is **not
+stated about this system any more**. A guard proven total under one set of premises is a guard whose
+proof expired when the premises did.
+
+### 9a.2 The premise ruling 8 supplies
+
+The restatement is possible at all because D-A7-5 was ruled **A**: read index serves the linearizable
+read path, and A6's snapshot reads keep their log entry. So the system has two read paths, and the
+argument needs exactly one fact about the boundary between them:
+
+> **P. Every read that names a timestamp — every operation whose answer is a promise a later commit
+> could break — is a log entry, applied by every replica, staging the identical mark.**
+
+`P` is not an assumption about the implementation; it is the decision, and §8.1's gate makes it a
+thing the suite kills rather than a thing the code remembers (ruling 11). **`M71` re-pointed is `P`
+negated**: a snapshot read served by read index.
+
+### 9a.3 The restatement
+
+Take a prewrite of key `k` by a transaction with start timestamp `startTS`, committing at `commitTS`.
+The three guards are: the lock check, the write-conflict check, and BUG-022's read mark.
+
+**Every read of `k` is one of two kinds, and the split is exhaustive by `P`.**
+
+**Kind 1 — a read that names a timestamp** (`OpTxnGet`, a snapshot read at `T`). By `P` it is a log
+entry, so it holds a position in `k`'s range's log and it staged `readMark(k) >= T`. The old argument
+applies verbatim to this kind, because the old argument's premises are exactly `P`:
+
+- the guard gives `readMark(k) <= startTS < commitTS`, so any such read **before** the prewrite was
+  answered strictly below `commitTS`;
+- any such read **after** the prewrite either sits at or above `startTS` and blocks on the lock, or
+  sits below `startTS` and hence below `commitTS`.
+
+`startTS != commitTS` holds for BUG-021's reason: both are minted, and two mints never collide — the
+node tag separates nodes, the logical counter separates mints on one node, and `IdentityCollisions`
+asserts the cross-node half at zero on every exit run.
+
+**Kind 2 — a read that names no timestamp** (a plain read, served by read index). It is answered off
+the log, stages no mark, and occupies no position. **The claim is that it needs none**, and the reason
+is not that it is harmless but that it makes no promise a later commit can break:
+
+> A plain read is a linearizable read of the **latest** value. Its correctness condition is that it
+> reflects every write acknowledged before it was issued — a statement about a *prefix*, discharged
+> entirely by the read index protocol (§1.1: leadership confirmed at or after arrival, applied index
+> at or past the captured commit index). It asserts nothing about any *future* commit, so there is no
+> `commitTS` that could land below it and make its answer retroactively false.
+>
+> A snapshot read at `T` is the opposite: it is a promise that the state at `T` is what it said, and a
+> commit at `commitTS <= T` landing afterwards **breaks that promise**. That is BUG-022, and it is why
+> only Kind 1 needs a mark.
+
+**Therefore the three guards are total over both kinds:** Kind 1 is covered by the mark, whose premises
+`P` restores; Kind 2 needs no guard, and the argument for that is a property of what a plain read
+claims rather than of where it was answered.
+
+### 9a.4 What the restatement rests on, listed so it can expire loudly
+
+Three premises, each with the thing that would break it:
+
+| premise | breaks when |
+|---|---|
+| **`P`** — every timestamped read is a log entry | a snapshot read is served by read index. **`M71` re-pointed is exactly this**, killed by a conservation failure |
+| the read index protocol is correct for the prefix property | the term-start no-op is missing (§2), or leadership is confirmed at the wrong term, or a read is served against an index below the one it arrived at (ruling 3's induced oracle) |
+| `startTS != commitTS` | two mints collide — BUG-021's class, asserted at zero as `IdentityCollisions` |
+
+**And the honest limit, stated because it is the shape D-A7-5B would change.** This argument buys
+nothing about a *future* phase in which the mark moves off the log. A leaseholder-local timestamp
+cache (D-A7-5B) reinstates the problem in a new place: the mark would then be a fact one node
+remembers rather than a function of the log, and every clause above that says *staged by every
+replica* would need a leadership-handover argument to replace it. That is why B is a phase and not a
+decision, and why this restatement is written against A rather than against both.
+
+---
+
+## 10. What this document still owes
+
+Written here rather than in §9 so that the list is short and checkable at exit:
+
+- ~~the **restated** three-guard totality argument (ruling 13)~~ — **written, §9a.** What remains is
+  the induction: `M71` re-pointed at `P` negated, and `M72` re-induced against the restated form;
+- ~~the ledger-side oracle for ruling 3's condition~~ — **specified, §5a**, with its independence
+  argument and seven induction cases. What remains is building it and the `i - 1` mutant;
+- the counted plain-read census field (ruling 9), before any number reaches BENCHMARKS.md;
+- the fate of the replicated read path (ruling 4), decided at exit and recorded here.
+
+**No A7 code is written.** The next commit is the term-start no-op, alone, with the re-measurement it
+requires.

@@ -2,7 +2,8 @@
 # covering-test: TestPlantedViolationHaltsTheRun
 # package: ./sim/
 # expect: killed
-# power: n/a -- as M8 -- a framework defect, deterministic covering test
+# power-covered-by: TestPlantedViolationHaltsTheRun -- as M8 -- a framework defect, deterministic covering test. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: not observable on a correct tree at any seed count. The patch discards a violation the loop was handed, and on a tree where no oracle fires there is no violation to discard -- so the census is byte-identical by construction and the probe rate cannot move in either direction. The only sound instrument is COMPOSITION: apply this patch together with a defect known to be caught, and require the composition still to be caught. TestPlantedViolationHaltsTheRun is exactly that composition, deterministic and in milliseconds, which is why the sweep is the wrong lane rather than a lane that is too short.
 # mutates: OnStep violations are discarded by the loop, so no oracle can ever halt a run
 --- a/sim/loop.go
 +++ b/sim/loop.go

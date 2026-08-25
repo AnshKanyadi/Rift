@@ -506,6 +506,54 @@ assertion rather than a tuned test.
 > oracle, `M63` was never a class and `M66` is unreached — which leaves **`M64` as the one covered by
 > a mutant alone**, and that is a shorter and more useful sentence than the original claim was.
 
+#### 13.4a The burden discharged, with the number that discharges it
+
+Ansh, ratifying the detector: this is the entry §13.4 has been waiting for, and it goes in the
+ledger's own terms rather than as a cross-reference.
+
+> **`resolution-only-breaks-expired-locks` measures 18 of 200, first at seed 20, against 0 of 300 and
+> `sweepfail=0` before it existed. The first detecting seed reports a lock 434 milliseconds short of
+> its deadline, and the transaction that held it killed.**
+>
+> That is the first demonstration that **the mutant suite actually discharges the burden it inherited
+> from the retired model.** The burden was named at §13.1: replay equivalence judges an independent
+> execution, not an independent model, so an apply path wrong identically on every replica is
+> invisible to it, and what stands in the model's place is a LIST of mutant classes. A list is a
+> claim. The claim has now been tested twice and repaid twice, and the second repayment is the one
+> that counts — `M61` produced a survivor an invariant over the final state could answer, while `M62`
+> was measured to be reachable *and* invisible to every client-facing oracle by construction, and it
+> was answered with a mechanism rather than with a longer list.
+
+**Two limits stay attached to the number, and neither is a caveat that expires.**
+
+**The rate is a LOWER BOUND, by construction and not by seed count.** The oracle takes **any**
+authorising resolve as sufficient rather than the earliest, which is the only sound reading available
+without an ordering the log does not give: a correct run may hold several resolves for one
+transaction, early ones that waited and a later one that expired it, and demanding that the *first* be
+authorised would fire on every ordinary resolution. The cost is a masking case — a transaction killed
+unlawfully at `t1` whose log also holds a lawful resolve at `t2 > deadline` reads as authorised. It is
+**stated rather than measured**, because closing it needs the record's creation event, and creation is
+not observable in the log at all, only its inputs and its result (§40.2).
+
+**And the oracle is a function of the log, which is D-A7-5's general form standing in a second
+place.** The permission a resolver claimed is readable only because *a resolve is a log entry* — true
+today for the same reason every read was until A7: because nothing has taken the work off the log
+yet. An optimisation that resolved a lock without proposing a command — a leaseholder deciding
+locally — would leave this oracle reading an **empty permission set**:
+
+> **It would not break. It would stop looking** — and `ResolverDeclarations` going to zero is the only
+> thing that would say so, which is why that count is an exit criterion rather than a log line (§40.5).
+
+That is the same sentence as the read mark's in a different mechanism, and the pairing is the reason
+it is written twice:
+
+> **A fact maintained by the apply path is a function of the log. The moment an operation is answered
+> off the log, every fact that operation used to maintain becomes a fact somebody has to maintain
+> somewhere else — and the place it used to live will still compile.**
+
+A7 does not do this to resolves; STRETCH's leases are where the shape lives. The entry exists so that
+the day something proposes it, the cost is already written down.
+
 ---
 
 ## 14. BUG-018, the method that found it, and three corrections
@@ -2846,6 +2894,60 @@ put a bound on, and the bound is **21,600s** — six hours, against a pathologic
 > the fix is those tests — the same fix `M65` and `M66` got when their covering test turned out to be
 > the exit run — and not a larger number.**
 
+### 36.7 The method: prove which verdicts CAN move before measuring whether they did
+
+**Accepted, and the reason it was accepted is the reason it is written down here.** Ansh, ratifying
+§36.4: *"the static proof is accepted, and flagging the substitution as yours is why."* The question
+asked was *re-run the full lane under both rules and report every verdict that moves*. What was
+delivered was a proof that **48 of 61 verdicts cannot move**, plus a bounded run over the thirteen
+that can. That is **a different answer, not a cheaper version of the same one**, and it is only
+admissible because it was labelled as a substitution at the point of delivery rather than presented as
+the run.
+
+It is worth generalising because this project will want the move again — every rule change to every
+lane raises the same question, and *proving a lane's verdicts unmovable beats running it.*
+
+**Three arguments, in the order to try them.**
+
+**1. Is the change MONOTONE? Then half the question is already answered.** The new rule requires the
+first line of each contiguous run; the old required every line. The new required set is *by
+construction* a subset of the old, so the rule **can only demand less** — and therefore **no verdict
+can move from `ok` to `DEAD`.** The entire risk of a rule change is that it breaks something, and one
+sentence about the construction eliminates that direction for every patch in the tree at once. What
+remains is the opposite direction: did it wrongly *clear* something, which is a much smaller and much
+more readable question.
+
+**2. Where the two sets are EQUAL, the verdict is unmovable whatever the measurement says.** This is
+not a probabilistic argument and it does not depend on coverage at all. Computed mechanically by
+applying each patch and diffing the two required sets: **48 of 61 identical, so thirteen patches are
+the entire space in which anything can move.** Two properties of that number matter more than its
+size. It made the lane's two known budget failures irrelevant to the question — `M19` and `M46` are
+both identical, so the two covering tests that cannot finish inside `TEST_TIMEOUT` contribute nothing,
+which would otherwise have looked like two hours of unexamined lane. And it is checkable by a reader:
+the diff is a mechanical operation on artefacts in the tree, not a claim about a run nobody can
+reproduce.
+
+**3. Is the INSTRUMENT monotone? Then a bounded run answers the unbounded question, in one
+direction.** Coverage is monotone in seeds — running more seeds executes a superset of lines — so a
+line covered at 25 seeds is covered at 500, `miss` measured at 25 is a **superset** of `miss` at 500,
+and **an empty `miss` at 25 is an empty `miss` at 500.** The thirteen were therefore settled at 25
+seeds. The direction is the whole point and it has to be stated every time it is used: this makes a
+bounded `ok` into an unbounded `ok`, and it makes a bounded `DEAD` into **nothing at all**.
+
+**What the method does NOT license, and the failure it would produce.** Argument 1 is a claim about
+the construction of the new rule, and it is a proof only if that claim is true. A rule change that
+looked monotone and was not would make every "unmovable" verdict in the tree an assertion with
+nothing behind it, and the lane would report green over a question it never asked — which is the
+vacuous-green class arriving through the door marked *proof* rather than the one marked *measurement*.
+So the construction gets checked, not assumed, and §36.5 is what that check earning its keep looks
+like: the table predicted `M29` would clear under the new rule, the proof-shaped reasoning predicted
+it from the wrong premise, and the run said `DEAD → DEAD` because the hunk had **two** contiguous runs
+rather than one. **The prediction was wrong and the discipline was not** — the thirteen were measured
+precisely because they were the ones the argument could not settle.
+
+> **Ask which verdicts can move before measuring whether they did. Then measure only those, and say
+> plainly that you did.**
+
 ---
 
 ## 37. Which lanes actually run, and the cheap half of the one that did not
@@ -2857,7 +2959,7 @@ fix **and** for the list: which lanes run automatically, and which run when some
 
 | | lanes |
 |---|---|
-| **Run automatically** — the pre-push hook, the only executor on this machine | `build` `lint` `lane-coverage` `bundle-seeds` `assertions` `provenance` `test` `corpus` — **8** |
+| **Run automatically** — the pre-push hook, the only executor on this machine | `build` `lint` `lane-coverage` `bundle-seeds` `assertions` `provenance` `power-decl` `power-refute-decl` `test` `corpus` — **10** |
 | **Configured to run on push** — `make ci` and `.github/workflows/ci.yml`, which **has never executed** | those 8 plus `race` `blind` `power` `smoke` `mutants` `mutant-covered` `corpus-reproduces` — **15** |
 | **Run when somebody remembers** | the 7 in `ci` that the hook does not run, plus `covering` `exit-run` `soak` `nightly` `solo` `race-soak` |
 
@@ -2868,6 +2970,21 @@ fix **and** for the list: which lanes run automatically, and which run when some
 cost roughly twenty CPU-hours. `power-mutants` went red the day two mutants landed and stayed red for
 the back half of a phase, and the reason is not carelessness: **the only thing that executes here does
 not run it, and the thing that would costs fifteen hours.**
+
+**Updated at §43's close, and the update is the pattern rather than the count.** The hook holds **ten**
+now: `power-decl` joined when `power-mutants` was found red, and `power-refute-decl` joined **on the
+day its own lane was written** rather than after that lane cost something. Both are the same
+mitigation — *a millisecond check on the inputs of an hours-long lane* — and both are in the hook for
+the same reason: the expensive half has no executor, and the failures that actually happen are failures
+in the **inputs**. `power-decl` found six inconsistent declarations on its first run. `power-refute-decl`
+checks, in 1.3 seconds, that every exemption is classified, that every `power-covered-by` names an
+instrument matching its covering test, and that every `power-unreachable` argues NO OTHER DETECTOR —
+which is the check `M67` would have failed.
+
+**What has NOT changed is the thing that matters.** `power-refute`'s measured half — a probe per
+measurable class — went straight into the remembered column beside the lane it repairs, and it is red
+there right now on `M30` and `M67`. A lane whose first complete run is red, in a column nothing
+executes, is RISK-1 restated with a fresh example rather than a new problem.
 
 That is the **third cost of having no remote**, in those words. The first was that every lane runs on
 memory. The second (§20.2) was that the lanes and the thing that runs them drift apart invisibly. The
@@ -3253,6 +3370,12 @@ Two classes had already been settled by something stronger and are not re-measur
 
 - **`M30`** — *"measured trace-identical over 10k seeds"*. A trace-identity claim is stronger than
   anything the probe reports; a mutation that changes no trace changes no census.
+  **CORRECTED at §43.5: the reasoning is sound and its premise is false.** The refutation pass reports
+  `M30`'s census as **not** identical — `ElectionsStart` 492 → 481, and `ElectionsWon`, `SplitVotes`,
+  `Pass` and `Inconclusive` with it — so the trace is not identical under the shape the sweep runs
+  today, and this exclusion was derived from the class's own declaration rather than from a
+  measurement. **That is `M56`'s move applied one level up: to the decision about which claims to
+  re-take.**
 - **`M66`** — settled at A6's close by a **byte-identical census** across 40 seeds with
   `ForeignLocksKept` included (§35.3). Same instrument, same strength.
 
@@ -3354,3 +3477,658 @@ stops it being a five-minute change is **scope**: several opt-outs patch the ora
 differences for reasons that are not refutations. A pass that reports false refutations is worse than
 no pass (BUG-016's standard), so the scope rule is a decision rather than an implementation detail,
 and it is on the record as a proposal rather than landed on my own judgement.
+
+**RULED, scoped and built — §43.** *"Your reason for holding it is real but it is an argument for
+scoping, not for deferring."* The scope rule is that the exemption is earned by the patch's file list
+rather than granted by its header, and the first complete run refuted two more.
+
+---
+## 43. The refutation pass, scoped and run
+
+### What this pass found, in one class
+
+> **`M30` plants a durability defect in `raft/`: the leader advances its own match index on append
+> rather than on `AckPersisted`, counting toward the commit quorum a copy it has not written. It was
+> exempt from measurement on the sentence *"unreachable on this schedule mix by construction; a floor
+> would be a floor on zero."*
+>
+> **It is reachable at one seed in three hundred, and the oracle that catches it is leader
+> completeness: an entry committed and applied, and a later leader without it.** *Committed is
+> forever*, broken, sitting behind a declaration that said it could not happen.
+
+Thirty seeds said only that the *reason* was false. Three hundred said the *class* was real. **That is
+the strongest available argument for this pass existing**, and it is the argument the pass could not
+have made about itself before it was built: the claim had stood since the class was written, nothing
+in the repository had ever asked it a question, and the one instrument that could have — the power
+lane — skips any patch carrying an opt-out.
+
+*(Ordering re-ruled after the 300-seed measurement landed. The label finding below led this section in
+the first draft, on the evidence available then; it is unchanged and it is still the more general
+lesson. `M30` leads because a first-tier safety defect behind an unexamined exemption is the concrete
+case that makes the general lesson worth the cycle.)*
+
+### And the general lesson, which is about the label
+
+Ansh, on the first report: *"the exempt-column result is the one that changes my mind about what the
+pass found."*
+
+Eight classes carried `# power: n/a`, and the pass put them through the mutant lane: **8 killed, 0
+mismatched, 0 rotted, about a second each.** They are the **best-covered classes in the tree**, not the
+worst — a deterministic kill in one second is a stronger statement than a rate floor over thirty
+seeds, not a weaker one. And `M56` carried the *same sentence* over a reachability claim that was
+false on the day it was written.
+
+> **A label that collapses two opposite meanings is worse than no label, because it makes the
+> well-covered case indistinguishable from the unexamined one.**
+
+That is more general than the three refutations below and it is the durable result. The defect was
+never missing coverage. It was that *exempt because covered better* and *exempt because nobody looked*
+were written in the same words, and no reader — and no lane — could tell them apart.
+
+**So the label is split.** Two declarations, different names, each with its own required evidence, and
+a class declaring neither is refused:
+
+| declaration | the claim | the required evidence | who checks it |
+|---|---|---|---|
+| `# power-covered-by: <instrument> -- <why>` | something better than a sweep already covers this | **the instrument**, and this pass **runs** it | a floor must be in `floors.go` and its lane is executed; a covering test must match `covering-test:` and is put through the mutant lane, where it must kill |
+| `# power-unreachable: <detector> -- <why>` | the sweep cannot reach this class | **the detector the number was taken against**, plus an argument that **no other detector sees the class more often** | the pass re-measures it where measurement is sound; where it is not, the class owes the `power-refutation:` argument |
+
+The bare `# power:` is retired. It survives only on a patch that must SURVIVE, where the exemption is
+earned by `expect: alive` — a fact the script checks — rather than granted by the sentence.
+
+**`power-decl` refuses, in milliseconds, a class that declares neither, a class that declares both, a
+`power-covered-by` naming an instrument that is not its covering test, and a `power-unreachable` that
+does not argue NO OTHER DETECTOR.** All four induced (§43.2).
+
+---
+
+
+§42.3 proposed it and did not build it, and the reason it gave was scope rather than effort: *several
+opt-outs patch the oracle framework itself, and running the raft probe against a mutated checker will
+report differences for reasons that are not refutations. A pass that reports false refutations is
+worse than no pass.*
+
+**Ansh's ruling: the reason is real and it is an argument for scoping, not for deferring. So scope
+it.** Partition the seventeen, run the pass over the group whose patches do not touch the instrument,
+and for the group whose patches do, *state per class what a sound refutation would have to look like
+given that the instrument is what the patch modifies.* If some are genuinely unrefutable by
+measurement, that is a real category and it gets named, with each member carrying a written argument
+rather than a label. **What must not survive is a class whose only defence is that nothing checks
+it.**
+
+`scripts/power-refute.sh` is that pass. `make power-refute` runs it; `make power-refute-decl` is its
+cheap half and is in the pre-push hook.
+
+### 43.1 The rule that makes the scoping a mechanism rather than a policy
+
+The failure being repaired is *a claim that switches off its own instrument*. A pass that let a class
+into the exempt column by writing a sentence would be the same defect with an extra step. So:
+
+> **The exemption is earned by the patch's FILE LIST, never granted by its header.**
+
+A patch that does not touch the instrument cannot buy its way out by writing `power-refutation:`, and
+a patch that does touch it cannot stay silent — the lane fails on a bare exemption and on a thin one.
+
+**And the reason a number taken here is not evidence in EITHER direction**, which is the whole
+argument for the rule and belongs beside it rather than three subsections away:
+
+> **Detection up is the mutation scoring itself. Detection flat is the mutation being invisible to the
+> thing it broke.** `M12` manufactures safety violations and "detects" at 27 of 30; the other seven
+> framework classes move nothing at all and read 0 of 30. Neither number says anything about
+> reachability, because the quantity being measured is computed by the code under test. §43.7 is that
+> as a measurement.
+
+**Ansh, ratifying: this is the same move as provenance typing, and for the same reason.**
+`tools/provcheck` exists because *an oracle which interrogates the engine believes the lie* — a
+verdict must not be derived from a fact the system under test supplied about itself. The scope rule
+here is that sentence applied to an exemption: **a lane must not decide whether to check a class from
+a fact the class supplied about itself.** In both cases the fix is the same shape — the property is
+recomputed from something the subject does not control, provenance from the harness's own
+observations and scope from the patch's `---` lines.
+The three groups fall out of the files, not out of anybody's judgement:
+
+| group | the fact that decides it | what the pass does |
+|---|---|---|
+| **system** | the patch changes the system under test | the raft probe is independent of it, so it is **MEASURED** |
+| **toy** | the patch changes `sim/toy`, which the raft sweep never runs | the opt-out is a **REDIRECTION**, not a reachability claim: the named floor must exist and its lane must run |
+| **framework** | the patch changes the code that computes the probe's verdict | measurement is **unsound**, not weak: instrument and subject are the same code. **EXEMPT, with a written argument** |
+
+**Seventeen classes are in the opt-out column** (eighteen patches carry `power:`; the canary is
+excluded by its own `expect: alive`, because a patch that must SURVIVE is not making a reachability
+claim). They partition **5 system / 4 toy / 8 framework**, and the partition is computed from the
+`---` lines of the patches rather than declared.
+
+### 43.2 The inductions, because a lane's verdicts do not count until they have been made to fire
+
+Eleven arms across the two lanes, eleven inductions, and the first one is the historical case rather
+than a synthetic one:
+
+| arm | induced with | result |
+|---|---|---|
+| **REFUTED** | `M56`'s patch put back into the opt-out it actually carried, **verbatim** | **30 of 30, first at seed 0.** The pass refutes, on the first seed, the claim that stood for a phase and a half |
+| **CLAIM-BROKEN** | *not synthetic — it fired on the real run*, `M30` | §43.5 |
+| **BARE** | `M8` with its `power-refutation:` line deleted | *"is exempt from measurement and carries no argument"* — the class whose only defence is that nothing checks it |
+| **THIN** | `M8` with a 25-character argument | *"an exemption is a claim that no sound instrument exists; say what one would have to look like, or it is a label"* |
+| **UNNAMED** | `M1` naming no floor after `floors.go` | *"a redirection nobody can follow is an exemption with extra words"* |
+| **MISSING** | `M1` naming a floor that is not in `floors.go` | *"a redirection to a floor that no longer exists READS as coverage"* |
+| **BOTH** | `M8` declaring `covered-by` **and** `unreachable` | *"they are opposite claims; a class making both has made neither"* |
+| **RETIRED** | `M8` carrying the bare `# power:` with `expect: killed` | refused, naming the two declarations that replace it |
+| **MISMATCH** | `M8` naming an instrument that is not its `covering-test` | *"the instrument this class claims must be the one the mutant lane runs"* |
+| **does not kill** | `M8` pointed at `TestLinearizableHistoryPasses`, which does not cover it | **`ONLY 0 of 1 killed`** — *a class exempt because something better covers it, whose something-better does not kill it, is exempt for nothing* |
+| **no detector named** | `M47` with its `NO OTHER DETECTOR` clause removed | refused by `power-decl` in milliseconds |
+
+The green path and the exit codes were induced too: a framework-only directory exits 0, the same
+directory with one bare exemption exits 1, and a directory in which nothing was examined exits 2
+rather than reporting a green over nothing.
+
+**`M56`'s induction is worth more than the other five put together.** It is not a constructed failure:
+it is the exact declaration that was in the tree, measured by the instrument that did not exist when
+it was written, refuted on seed 0 of 30. *The pass would have caught the thing it was built for, on
+the first seed, at any point in the phase and a half the claim stood.*
+
+
+### 43.3 The results, over the group whose patches do not touch the instrument
+
+Nine of the seventeen. Thirty seeds each, against the unmutated tree at the same thirty — *a
+difference, not a presence*.
+
+| class | verdict | what the pass found |
+|---|---|---|
+| `M47` superseded split applied anyway | **confirmed** | 0 of 30, no new criterion, **census byte-identical** |
+| `M53` empty mark releases through | **confirmed** | 0 of 30, no new criterion |
+| `M66` commit takes any lock | **confirmed** | 0 of 30, no new criterion, **census byte-identical** |
+| `M30` leader counts its own unsynced append | **REFUTED** | 0 of 30 with the census MOVED — and at 300 seeds, **1 of 300, first at seed 178, a SAFETY VIOLATION** the clean tree does not have |
+| `M67` minting drops the node tag | **REFUTED** | per-seed 0 of 30, and an exit criterion the baseline passes: **589 foreign-tag starts** |
+| `M1`–`M4`, covered by `floors.go` | **instrument RUN** | each names a floor, each floor is present, and the lane those floors live in was executed and is green |
+| `M8`–`M16`, covered by a covering test | **instrument RUN** | **8 killed, 0 mismatched, 0 rotted** — about a second each |
+
+**Three of the five measurable classes are wrong.** None is wrong in the way `M56` was, and none is
+wrong in the same way as either of the others.
+
+### 43.4 `M67`: the declaration reasoned about the detector it had in mind
+
+The opt-out is careful, and that is what makes it worth reading:
+
+> *"measured twice and both times zero, and the reason is the class rather than the instrument. As a
+> RATE: 0 of 1 and then 0 of 60 with the sweep detector on. Its sweep-level detector is
+> `IdentityCollisions`, which fired 38 times in 25,000 seeds — about 1 in 660 — so a floor honest
+> enough to assert would need a sweep of thousands, roughly five hours for one class."*
+
+Every number in it is right. The conclusion is wrong, because **`IdentityCollisions` is not the only
+criterion that sees this class.** `ForeignTagStarts` is, and it reads **589 in thirty seeds** against a
+clean tree that reads zero — and not zero-at-thirty-seeds: the signed exit run carries
+`ForeignTagStarts = 0` across **25,000** seeds, which is why the criterion is asserted at exactly zero
+rather than floored.
+
+So the honest statement is not *this class needs a sweep of thousands*; it is **this class is detected
+by a thirty-seed sweep, through a criterion the declaration never considered.**
+
+### 43.4a The DETECTOR-NOT-THE-CLASS shape, named — four occurrences, and a required field
+
+**Ansh, ratifying `M67` as the fourth: this is the most frequently recurring failure in the project
+after vacuous-green itself, and it deserves a named entry rather than being counted case by case.**
+
+> **A reachability number is a property of the DETECTOR that produced it, never of the class. So a
+> number that reads zero means "the detector I used did not see it" — and every declaration that
+> cites one has silently bounded itself to that detector alone.**
+
+| # | class | the detector it was taken against | what actually saw it |
+|---|---|---|---|
+| 1 | `M62` | per-seed rate, 0 of 300, and then 0 of 100 with the sweep detector on | **nothing did** — reachable and invisible to every client-facing oracle, until `resolution-only-breaks-expired-locks` was built for it: 18 of 200 (§35.4, §40) |
+| 2 | `M73` | per-seed rate, 0 of 200, twice | the **sweep verdict**: `StaleIncarnation` 9–15 per fifty seeds → flat zero, failing in all four shards (§42.2) |
+| 3 | `M47` | the per-seed rate — *"zero firings in 300 A4 seeds"*, which is a DETECTION claim | **census identity**, which said something strictly stronger: 0 of 76 fields move, so there was nothing to detect (§42.2b) |
+| 4 | `M67` | `IdentityCollisions`, 38 in 25,000 — *"a floor honest enough would need a sweep of thousands"* | **`ForeignTagStarts`: 589 in thirty seeds**, a criterion asserted at exactly zero across the signed run |
+
+`M66` sits beside 3 on the same instrument and is counted with it rather than separately, because the
+census-identity view was what settled both.
+
+**And `M30` is the shape one level up rather than a fifth occurrence** (§43.5a): its detector was the
+strongest one available — trace identity — and what failed was not the choice of detector but the
+decision to cite the claim instead of re-taking it.
+
+**The remedy is a required field, not a caution.** `power-unreachable` must name its detector *and*
+argue **NO OTHER DETECTOR** — that nothing else in the criteria list sees the class more often —
+and `make power-decl` refuses the declaration without it, in milliseconds. `M67` is the demonstration:
+every number in its declaration was right, and the field it never filled in is the one that would have
+caught it.
+
+**One qualification on the verdict's LABEL, which the lane states in general terms and which is
+stronger here.** The pass prints `REFUTED?` when the only ground is an aggregate criterion, and
+instructs a re-take at a higher seed count, because several exit criteria are *non-vacuity*
+assertions — *no move ever completed*, *no prewrite met a live lock* — and at thirty seeds those are
+marginal on the clean tree too. `ForeignTagStarts` is not one of those. It is a **hard zero**, carried
+at zero over the signed 25,000-seed run, so there is nothing marginal about 589. The general caution
+is right; it does not apply to this instance, and the pass cannot currently tell the two kinds of
+criterion apart — see §43.10.
+
+### 43.5 `M30`: a claim that exempted itself from the DECISION about what to measure
+
+**Recorded as jointly authored, at Ansh's instruction.** *"`M30` is mine as much as yours and record
+it that way. I ratified the exclusion citing trace-identity, and the exclusion was derived from the
+class's own declaration rather than from a measurement, which is exactly the move `M56` exposed one
+level down."*
+
+`M30`'s declaration:
+
+> *"unreachable on this schedule mix by construction: every node has the same modelled disk, so the
+> leader's own fsync always lands before any follower's ack. **Measured trace-identical over 10k
+> seeds.** A floor would be a floor on zero."*
+
+**The pass reports the census as not identical at 30 seeds** — `ElectionsStart` 492 → 481, with
+`ElectionsWon`, `SplitVotes`, `Pass` and `Inconclusive` moving with it. A trace-identical mutation
+changes no census, so the trace is not identical and the sentence went **stale** when A5 and A6
+reshaped the mix. That is A2's kill-time amendment: *a schedule mix is a claim about reachability.*
+
+**And then the measurement it deserved said something worse than stale.** Thirty seeds cannot tell
+*the defect occurred and nothing saw it* from *the schedule merely diverged*, so the class was
+re-measured at **300 seeds against a clean tree at the same 300**:
+
+| | detections | first | sweep verdict |
+|---|---|---|---|
+| the clean tree, 300 seeds | **0 of 300** | — | `sweepfail=0` |
+| `M30`, 300 seeds | **1 of 300** | **seed 178** | **`SAFETY VIOLATION`** |
+
+The oracle that names it, replayed on the first detecting seed:
+
+```
+range 1: entry index 187 term 1 was committed (first applied by node 1 at instant 7133514064)
+but node 1, leading in later term 2 from instant 9201825394, had persisted 0 entries above a
+snapshot at 186, without it
+```
+
+**That is leader completeness, and it is `committed is forever` broken** — an entry committed and
+applied, and a later leader without it. It is precisely what the mutation plants: the leader advances
+its own match index on append rather than on `AckPersisted`, counts toward the commit quorum a copy it
+has not written, and loses the unsynced write.
+
+> **`M30` is not "unreachable on this schedule mix by construction". It is reachable at one seed in
+> three hundred, and the harness catches it with a first-tier safety oracle.**
+
+### 43.5a The general form, and the rule Ansh drew from it
+
+The exclusion at §42.1 is the part that matters more than the class:
+
+> *"`M30` — measured trace-identical over 10k seeds. A trace-identity claim is stronger than anything
+> the probe reports; a mutation that changes no trace changes no census."*
+
+The reasoning is valid. Its premise was the class's own declaration.
+
+> **A claim that exempts itself from measurement is one failure. A claim that exempts itself from the
+> DECISION about what to measure is the same failure applied to the meta-level — and it is harder to
+> see, precisely because it looks like triage.**
+
+A re-measurement pass that excludes a class on the strength of that class's own declaration has
+re-measured everything except the thing most likely to be wrong. `M56` was found by re-measuring a set
+of zeros; `M30` was in that same set and was the one case reasoned out of it, on a sentence.
+
+**The rule, ruled:**
+
+> **An exclusion from a measurement pass may cite a measurement, or an argument about reachability. It
+> may never cite the excluded class's own declaration.**
+
+`M47` and `M66` were excluded and re-included on the right grounds — a *census-identity measurement*,
+not a sentence — and both survived. The distinction is not pedantic: it is the difference between the
+two classes that held and the one that did not.
+
+**This is the twenty-fourth entry in the vacuous-green register** (DESIGN-A1 §5c), and it is the first
+one in a *decision about what to check* rather than in a check.
+
+### 43.6 The unmeasurable-here category, named — and its members are covered, not unexamined
+
+**Eight classes are genuinely unrefutable by this instrument, and one of them is unrefutable in
+principle.** The reason is not cost and it is not difficulty:
+
+> **The probe's detection signal is a verdict these patches compute. A number taken here is the
+> mutation reporting on itself.**
+
+`noticed()` reads three things — the loop's halt record, the checkers' verdicts, and the scenario's
+verdict classification — and `M8`–`M13`, `M15` and `M16` patch exactly those. That is the oracle
+independence principle this project already enforces on its own oracles (§40.2: *no code is shared
+with `kv.ResolveLock` for a verdict to cancel out against*), pointed at the measuring instrument
+instead.
+
+**Each carries a written argument saying what a sound refutation would have to look like**, and they
+are not eight copies of one sentence. They fall into three shapes:
+
+| shape | classes | what a sound refutation would need |
+|---|---|---|
+| **an unbuilt but buildable instrument** | `M8`, `M9`, `M15` | all three suppress a floor whose only observable effect is the `Inconclusive` count — written by the mutated lines. **One census field would serve all three**: decided-and-total operations per run, recorded where the history is ASSEMBLED rather than where it is scored, with a criterion that no run banked a pass below the floor. Independent of all three mutations, and it does not exist |
+| **observable only under COMPOSITION** | `M10`, `M11` | neither is observable on a correct tree at any seed count: they change what happens when a violation is found, and on a correct tree none is. The sound instrument is composition — apply the patch together with a defect known to be caught, and require the composition still to be caught — which is what their covering tests do, deterministically, in milliseconds |
+| **unrefutable by measurement at all** | `M12`, `M13`, `M16` | see below; each for a different reason, and `M13` is the only one that is unrefutable *in principle* |
+
+**`M13` is the one with no measurable form.** It removes the plan reference from the TEXT of a
+violation dump: verdicts unchanged, census unchanged, detection unchanged. The defect is in the
+*reproduction information attached to a finding*, so it exists only when a finding exists and only in
+a string. No aggregate over any number of seeds can express *the dump names its seed*.
+
+**`M16` is exempt for a stronger reason than its own opt-out gave**, and the pass is what found it:
+`noticed()` **reimplements** the property the patch removes — it checks `r.Census.ElectionsWon == 0`
+itself — so the probe returns the same answer before and after, by construction. That splits the
+question in two, and the split is the useful part. **Reachability is independently establishable**
+(`SeedsWithNoLeader` is counted in `CensusOf`, which the patch does not touch). **Detection is not**,
+because the property is a statement about the verdict such a run banks.
+
+**And the column's defence is not the argument. It is a measurement, and it was taken:** all eight are
+**killed by their named covering tests, in about a second each** — `8 killed, 0 mismatched, 0 rotted`.
+
+> **The exempt classes are the best-covered classes in the tree, not the worst.** A deterministic kill
+> in one second is a stronger statement than a rate floor over thirty seeds. The problem was never
+> that they lacked coverage; it was that **nothing distinguished *exempt because covered better* from
+> *exempt because nobody looked*** — and both wrote the same sentence. The pass makes the distinction
+> structural, which is the whole of what it adds here.
+
+### 43.7 The demonstration: why a pass over framework patches would manufacture findings
+
+§42.3 held the pass back because *a pass that reports false refutations is worse than no pass*. That
+was an argument. Here it is as a measurement, run once and not expanded — one clean instance is what
+proves it.
+
+All eight framework classes put through the probe at 30 seeds, reading the two columns together:
+
+| class | probe says | system-side census |
+|---|---|---|
+| `M8`, `M9`, `M10`, `M11`, `M13`, `M15`, `M16` | detected **0 of 30** | **byte-identical** |
+| **`M12`** timeout scored as a violation | detected **27 of 30** | **byte-identical** |
+
+> **`M12` "detects" at ninety per cent while every field the system counted is unchanged.** The sweep
+> saw the checker's arithmetic, not the system. A pass without the scope rule would have reported that
+> as a refutation of `M12`'s exemption and been wrong — a manufactured finding, which is BUG-016's
+> standard.
+
+The other seven are the argument's other half: a framework mutation that does *not* manufacture
+violations moves nothing at all, so measurement there yields zero for reasons that have nothing to do
+with reachability. **Neither direction is evidence.** Detection up is the mutation scoring itself;
+detection flat is the mutation being invisible to the thing it broke.
+
+That is why the exemption is decided by the file list, and why the demonstration is a fixed
+`--demonstrate` flag rather than part of the lane: it exists to show the scope rule is necessary, and
+one instance shows it.
+
+### 43.8 The floor redirections, and why naming an instrument is checkable and a bare opt-out is not
+
+`M1`–`M4` carry the same `power:` line as the others and are not making the same kind of claim:
+
+> *"the toy's own flaw classes carry standing floors in `sim/hunt/floors.go`, measured and enforced
+> there since A0."*
+
+That is not *this class is out of the sweep's reach*. It is *this class is measured somewhere else*.
+And running the raft probe against a `sim/toy` mutation would have produced **zero detections for a
+reason that has nothing to do with the claim** — the raft sweep never runs the toy — which would have
+been a *confirmation* as worthless as a false refutation, and harder to notice because it points the
+right way.
+
+So the pass does the only sound thing: it follows the redirection. Each of the four names its floor
+(`power-refute-floor:`), the pass checks that the floor is in `floors.go`, and it **runs the lane those
+floors live in**. All four named, all four present, lane green.
+
+**The unnamed and missing arms are induced** (§43.2) because a redirection nobody can follow is an
+opt-out with extra words, and a redirection to a floor that no longer exists is worse — it reads as
+coverage.
+
+> **A redirection is checkable and a bare opt-out is not, and the difference is that a redirection
+> names the instrument. That is the shape every remaining exemption in this repository has now been
+> pushed to: not *nothing can measure this*, but *this is measured THERE, and here is the lane* — and
+> the lane is run.**
+
+`power-covered-by` generalises exactly this. `M1`–`M4` name a floor; `M8`–`M16` name a covering test.
+Both are the same claim — *a named instrument, not a sweep rate, covers this class* — and the pass
+verifies both by executing the instrument rather than by reading the sentence.
+
+### 43.9 The base rate, which is the number Ansh asked for
+
+*"Report how many of the seventeen were false, since `M56` was and the base rate matters."*
+
+**Both numbers, because the ruling asks for both.**
+
+**Of the seventeen: three are demonstrably wrong**, and all three are among the five that make a
+reachability claim measurement can judge. The other twelve are twelve *covered-by* claims, whose
+instruments were named and run.
+
+**And of the six reachability claims ever put to an instrument, four were wrong.**
+
+| class | put to an instrument | verdict |
+|---|---|---|
+| `M56` | at A6's close, §42.3 | **wrong** — 280 of 300, first at seed 0 |
+| `M30` | here | **wrong** — 1 of 300, a leader-completeness violation at seed 178 |
+| `M67` | §37.3, and **differently** here | **wrong** — 589 foreign-tag starts in 30 seeds |
+| `M47` | §42, and again here | right, and *upgraded* to proved |
+| `M53` | §42, and again here | right |
+| `M66` | §35.3, and again here | right |
+
+**Four of six, and they are wrong in three different ways** — which is the part worth more than the
+ratio, because it says the falseness is a category rather than a bug:
+
+- **`M56` was false when written.** It reasoned by analogy with `M53`, citing that class's measurement
+  instead of taking its own. Nothing drifted.
+- **`M30` went stale.** Its measurement was real when taken; A5 and A6 reshaped the mix underneath it.
+  A2's kill-time amendment: *a schedule mix is a claim about reachability.*
+- **`M67`'s numbers are all correct and its conclusion is not.** It bounded itself to the detector it
+  named, and a criterion it never considered catches the class in thirty seeds.
+
+**And the denominator is the finding more than the ratio is.** Before this pass existed, **one** of
+these claims had ever been measured. Four wrong out of six is not a precise estimate of anything; what
+it establishes is that *the column was never a set of verified claims, and nothing in the repository
+had ever treated it as a set of claims at all.*
+
+### 43.9a The pass re-run under the split labels, which is the check the split itself owes
+
+Changing a declaration format is a change to the thing the lane reads, so the lane was re-run over the
+rewritten tree and every verdict compared. **Nothing moved:**
+
+```
+   CLAIM-BROKEN M30-leader-counts-its-own-unsynced-append  0 of 30, and the census MOVED
+   confirmed    M47-superseded-split-applied-anyway        0 of 30, census byte-identical
+   confirmed    M53-empty-mark-releases-through            0 of 30, no new sweep criterion
+   confirmed    M66-commit-takes-any-lock                  0 of 30, census byte-identical
+   REFUTED?     M67-minting-drops-the-node-tag             sweep only, per-seed 0 of 30
+  COVERED-BY a floor ... the floor lane is GREEN, so the instrument named is one that ran.
+  COVERED-BY a test  ... 8 of 8 killed by the instrument each one names.
+   3 confirmed, 1 REFUTED  |  covered-by: 4 floors + 8 tests, instruments RUN
+   8 unmeasurable here and carrying the argument for why  |  2 failures
+```
+
+**And the split added something the old label could not report: `8 of 8 killed by the instrument each
+one names`.** Under `# power: n/a` that sentence was unwritable, because there was no field naming an
+instrument to run. The evidence for the covered-by half is now produced by the lane rather than
+asserted in prose.
+
+> **That is the general lesson about a label collapsing two meanings, demonstrated rather than argued.
+> Splitting it cost no verdict — every one reproduced — and bought a measurement that could not
+> previously be expressed. A label carrying two opposite claims cannot require evidence, because there
+> is no evidence that fits both; so it requires none, and the well-covered case and the unexamined one
+> arrive looking identical. Splitting is not tidying. It is what makes the evidence field possible.**
+
+### 43.10 What the pass does not do, stated before anybody quotes it
+
+#### The sizing rule, with the measurement behind it
+
+**A false REASON and a broken CLASS are found at different costs, and here the gap is an order of
+magnitude.** `M30`, in the lane's own output:
+
+| question | what answers it | cost |
+|---|---|---|
+| *is the stated reason still true?* | the census moved — `CLAIM-BROKEN` | **30 seeds** |
+| *is the class actually reachable?* | 1 detection, first at seed 178, a safety violation the clean tree does not have | **300 seeds** |
+
+> **A refutation pass sized for the cheap answer will report the cheap answer and stop.** Thirty seeds
+> said *the reason is false* and could not say more; the refutation needed ten times that. So the seed
+> count is not a budget knob — it selects which of two different questions the pass is asking, and a
+> pass that only ever asks the cheap one will accumulate classes whose reasons are known-broken and
+> whose reachability is unknown.
+
+The rule that follows, stated with its numbers so it survives rather than gets tuned:
+
+> **Size a refutation pass for the cheap question, run it everywhere, and treat every broken reason as
+> an obligation to take the expensive measurement for that class. 30 seeds finds the reason; 300 found
+> the class; the pass defaults to 30 and says so on every line it prints.**
+
+**And `M30` is the worked example of the limit, in the lane's own output.** At its default thirty
+seeds the pass reports `M30` as **CLAIM-BROKEN** — the census moved, so the stated reason is false —
+and it cannot say more than that. The **refutation** needed **300 seeds**: 1 detection, first at seed
+178, a safety violation the clean tree does not have. *A broken reason is cheap to find and a broken
+conclusion is not*, and the lane is sized for the first. That is why §43.12 item 1 recommends
+`power-detector: sweep` **at 300** for this class rather than leaving it at the pass's default.
+
+**Thirty seeds is calibrated for REFUTATION and not for CONFIRMATION.** The number comes from the one
+class known to have carried a false opt-out: `M56` is **28 of 30 under the shape its opt-out was
+written against** and 280 of 300 under current. A count that refutes the known-false case on nine
+seeds in ten is the right size for the question *is this claim false*. It is the wrong size for the
+question *is this claim true*, and the pass says so on every line it prints.
+
+**The census-identity arm is weaker than the declarations it checks, by construction.** `M47`'s claim
+was taken over 300 seeds and 76 census fields; `M66`'s over 40; `M30`'s was a trace-identity claim
+over 10,000. Confirming identity at 30 **re-asks** those claims; it does not restate them. The one
+place this is measurable is `M53`, whose census is **byte-identical at 30 seeds and drifts across 34
+fields at 300** — so a class can look unreached at this lane's count and be merely under-sampled.
+
+**A sweep-only refutation is labelled `REFUTED?` and carries its own instruction.** Several exit
+criteria are non-vacuity assertions — *no move ever completed*, *no prewrite met a live lock* — and at
+a reduced seed count those are marginal on the clean tree as well, so a mutation that only reshuffles
+the schedule can flip one without the class being reachable. Both grounds fail the lane, because an
+opt-out under suspicion is not a passing opt-out; what differs is what has to be done next.
+
+**And the pass cannot refute the eight exempt classes at any seed count.** That is the honest ceiling
+on it: it converts *nothing re-tests this* into *this is re-tested, or it is exempt for a reason
+written down and earned by the artefact*. It does not convert the second into the first.
+
+### 43.11 The sibling shape it does NOT find, and one it does
+
+The general form of `M56` is *a declaration that switches off its own instrument.* Every other skip in
+the lane scripts was checked against it and none is the same shape: `corpus-reproduces.sh` skips a
+bundle that **carries no mutant** and `mutant-covered.sh` skips a patch that is **addition-only** —
+both are facts about the artefact that the script determines for itself, and both are counted so an
+empty lane cannot pass. **A fact the checker computes is not a claim the artefact makes.**
+
+**There is one lesser instance, and it is reported rather than acted on.** Three classes pin
+themselves to an older shape — `M18` to `a1`, `M34` to `a2`, `M14` to `a3` — with
+`power-config:`. A pin is *not* an opt-out: the class is re-measured on every run and the lane can
+fail it. But what is re-measured is its detectability under a shape **no sweep runs**, and the answer
+to *is this class still reachable by the sweep this project actually executes* is not asked by
+anything. `M34`'s pin is documented and argued (`floors.go`: A3's shape drops it back to zero, so the
+floor is pinned to A2 where it stays reachable — measured, not assumed), and `M18`'s has pre-vote
+behind it. **The shape is honest in a way an opt-out is not — the report prints `(a1)` on the line —
+and it is still a claim about reachability that nothing measures under current.** Whether a pinned
+class should also carry a current-shape measurement, even one that reads zero, is a ruling and not a
+recommendation I am taking.
+
+### 43.12 What it leaves owed
+
+Four things, none of them taken on my own judgement:
+
+1. **The lane is RED on `M30` and `M67`, and red is the correct colour.** §31's precedent is explicit
+   about the direction: *both changes turn a red lane green, which is the one direction that needs the
+   measurement to land first rather than the argument.* The measurements have landed and are recorded
+   in the declarations; the dispositions they justify are Ansh's to accept. Both are recommended and
+   neither is taken:
+   - **`M30` → `power-detector: sweep` at 300 seeds**, on `M73`'s precedent. Not a rate floor: a
+     floor derived from a single detection is noise, which is `floors.go`'s own rule, and 1 of 300 is
+     a single detection. What is not in doubt is that the sweep sees it — the verdict is a safety
+     violation the clean tree does not have at the same 300 seeds.
+   - **`M67` → `power-detector: sweep`**, on the same precedent, with the seed count taken properly.
+     `ForeignTagStarts` reads 589 at thirty seeds, so the count that matters is how few seeds suffice,
+     not how many.
+2. **One census field would move three classes out of the exempt column** — decided-and-total
+   operations per run, recorded where the history is assembled. It adds a census field and an exit
+   criterion, which is not a change to make silently, and it would convert `M8`, `M9` and `M15` from
+   *exempt with an argument* into *measured*.
+3. **Whether a pinned class owes a current-shape number** (§43.11). A ruling, not a recommendation.
+4. **The pass cannot tell a hard-zero criterion from a non-vacuity one.** `ForeignTagStarts != 0` is
+   asserted at exactly zero across the signed 25,000-seed run; *no move ever completed* is marginal at
+   thirty seeds on the clean tree too. Both arrive as "a sweep criterion the baseline passes", so the
+   lane prints the weaker caution for both. Making them distinguishable means the criteria saying which
+   kind they are, which is a change to the exit-criteria list and therefore not one to make while
+   reporting on it.
+
+---
+
+## 44. A6's record, closed
+
+A6 was signed at `611d0b9` and this document kept going, because the sign-off ruled four items open
+and then the answers to those items produced more. This section closes the record: what the
+post-sign-off cycle produced, what colour the tree is, and where everything still owed now lives.
+
+### 44.0 The one result to carry out of this phase's close
+
+> **A first-tier safety defect was sitting behind a declaration that said it was unreachable by
+> construction, and nothing in this repository had ever asked that declaration a question.**
+
+`M30`: the leader counts toward the commit quorum a copy it has not written. Measured at 300 seeds
+against a clean tree at the same 300 — **1 detection, first at seed 178, and a leader-completeness
+violation**: an entry committed and applied, and a later leader without it. *Committed is forever*,
+broken.
+
+The exemption that hid it was not careless. It cited a real measurement — *trace-identical over 10k
+seeds* — which was true when it was taken and went stale when A5 and A6 reshaped the schedule mix. It
+was then **cited a second time**, at §42.1, as the reason not to re-measure the class. Two honest steps,
+and between them a safety defect went unasked-about for a phase and a half.
+
+Everything else in §43 — the split label, the named-detector field, the base rate, the scope rule — is
+machinery built so that the next one is asked.
+
+### 44.1 What the cycle produced
+
+**The four ruled items, all closed.** `make mutant-covered`'s rule fixed with a static proof rather
+than a run (§36.4, and the method generalised at §36.7); `M62`'s detector built, induced in
+milliseconds and measured at 18 of 200 (§40); every class reading zero under the broken probe
+re-measured, which found `M56` (§42); and RISK-1 named in CARRY-FORWARD.
+
+**And then the refutation pass, which was the fifth thing and the largest.** §43. It exists because
+`M56` established that an opt-out exempts itself from the only instrument that could refute it — and
+what it found was not primarily three wrong claims. It was that **one label was doing two opposite
+jobs**, so a class killed deterministically in one second and a class nobody had ever measured wrote
+the same sentence. The label is split, both halves carry required evidence, and both are checked.
+
+### 44.2 The two named shapes this phase leaves behind
+
+A6 opened with one recurring failure named and closes with two.
+
+| shape | entries | the rule it produces |
+|---|---|---|
+| **vacuous-green** (DESIGN-A1 §5c) | **24**, five of them from this phase's close | a mechanism that reports nothing is indistinguishable from a system that works, so every instrument owes a demonstration that it can speak |
+| **detector-not-the-class** (§43.4a) | **4** — `M62`, `M73`, `M47`, `M67` | a reachability number is a property of the detector that produced it, so a claim citing one must name its detector and argue no other detector sees the class more often |
+
+**And the register had drifted three entries behind its own count, which is a small instance of its own
+class.** §29.2, §37.2 and §35.1 each announced an entry — the twentieth, twenty-first and
+twenty-second — and the table in DESIGN-A1 §5c, whose stated purpose is *"so the count is checkable
+rather than rhetorical"*, stopped at nineteen. The count was rhetorical for three entries. Filled, then
+extended to 24.
+
+### 44.3 The colour of the tree, stated rather than implied
+
+**`make power-refute` is RED, on `M30` and `M67`.** That is the correct colour and it is the first
+thing this lane has ever said. §31's precedent governs what happens next: *turning a red lane green is
+the one direction that needs the measurement to land first rather than the argument.* Both
+measurements have landed and are recorded in the declarations themselves; both dispositions are
+recommended and neither is taken.
+
+`M30` is the one that matters. It mutates a durability gate — the leader counting toward the commit
+quorum a copy it has not written — and it was exempt on the sentence *"unreachable on this schedule mix
+by construction; a floor would be a floor on zero."* It is reachable at **1 seed in 300**, and the
+oracle that catches it is **leader completeness**: an entry committed and applied, and a later leader
+without it. *Committed is forever*, broken, behind an exemption.
+
+Everything else this phase touched is green: `power-decl` at 61 declarations and 0 inconsistent, the
+eight covered-by tests at 8 killed and 0 rotted, the toy floor lane, and the fast lanes in the hook.
+
+### 44.4 Where the rest lives
+
+Nothing is left implicit in this document. Every obligation A6 created and did not discharge is in
+**CARRY-FORWARD.md**, with the ruling that created it — the two red dispositions, the census field
+that would move three classes out of the unmeasurable column, the pinned-class question, the
+hard-zero-versus-non-vacuity gap, the symmetric-apply gap and what is left of it (`M64` alone), the
+three clock-dependent mechanisms not established as exercised, the transaction-identity gap, the
+move-racing-churn interleaving, and RISK-1, which nothing inside this repository can close.
+
+### 44.5 The sentence this phase is for, restated at its close
+
+A6's own summary said it about transactions. It reads differently now, and better, about the machinery
+that checks them:
+
+> **The most expensive defects in this project have all been things that went quiet while looking
+> green — and by the end of this phase, four of the five most recent were found by asking an
+> instrument to prove it could speak, rather than by watching it stay silent.**
+
+`M61` surfaced a hole a longer list could not close, so it got an invariant. `M62` was measured
+reachable and invisible, so it got a detector. `M56` was a claim nothing re-tested, so the claims got a
+lane. `M30` was a claim nobody had decided to re-test, so the *decisions* got a rule. Each one is the
+same move: **find the thing that is trusted because nothing checks it, and check it.**

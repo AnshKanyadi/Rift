@@ -2,7 +2,8 @@
 # covering-test: TestUnknownDominatedHistoryIsInconclusive
 # package: ./sim/
 # expect: killed
-# power: n/a -- as M8 -- a verdict-classification defect, deterministic covering test
+# power-covered-by: TestUnknownDominatedHistoryIsInconclusive -- as M8 -- a verdict-classification defect, deterministic covering test. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: as M8: the unknown-dominated floor has one observable effect, the Inconclusive count, and it is written by the lines this patch deletes. The same unbuilt instrument would serve -- decided and total per run in the census, recorded where the history is assembled -- and it is worth naming here rather than only at M8, because this is the rule that would have caught the codec off-by-one, where porcupine returned green over 40 operations no node ever answered.
 # mutates: the unknown-dominated floor is removed, so a history that mostly went unanswered banks a pass -- the shape the codec off-by-one had, where porcupine returned green over 40 operations no node ever answered
 --- a/sim/oracle.go
 +++ b/sim/oracle.go

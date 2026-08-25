@@ -2,7 +2,8 @@
 # covering-test: TestTimeoutIsInconclusiveNotPass
 # package: ./sim/checker/
 # expect: killed
-# power: n/a -- as M8 -- a framework defect, deterministic covering test
+# power-covered-by: TestTimeoutIsInconclusiveNotPass -- as M8 -- a framework defect, deterministic covering test. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
+# power-refutation: as M8, and the same one unbuilt census field would serve both. The patch changes only the Verdict field on a porcupine.Unknown return, so the system-side census is byte-identical by construction and the only movement is in Inconclusive and Pass, which the mutated line writes. A sound instrument is a count of checker returns that WERE porcupine.Unknown, emitted beside the mapping rather than by it, with a criterion that no such run banked a pass. Independent of this mutation, and unbuilt.
 # mutates: a checker timeout is scored as a pass rather than inconclusive
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go
