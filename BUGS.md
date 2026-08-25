@@ -77,7 +77,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 2 entries.
+Counts: 3 entries.
 
 ### HARNESS-001 — a mutation lane's scratch copy silently lost three files of the tree under test
 
@@ -143,3 +143,37 @@ lane exists to protect: a clean clone, offline, one script, red.
 first, so the lane is cold by construction rather than by habit. And `cpp-mutants` gives each
 direction of a mutant its own tree, because a control run and a covering run are independent
 experiments and one must not be able to feed the other.
+
+### HARNESS-003 — the ledger's promotion flag was never under test, and a mutant proved it
+
+| field | value |
+|---|---|
+| **Found by** | mutant `LEDGER-always-promoted`, which **survived** |
+| **Phase** | B1.3 |
+| **Reproduce** | apply `engine-cpp/mutants/LEDGER-always-promoted.patch` against the tree at `cf12938` and run `make cpp-test`: green |
+| **Invariant that caught it** | none — that is the entry. The mutant survived, and the survival is the finding |
+| **Mutant class** | `LEDGER-always-promoted`, added at B1.3 alongside the ledger it blinds |
+| **Fix commit** | this one |
+
+**Symptom.** `make cpp-mutants` reported `ALIVE  LEDGER-always-promoted: cpp-test stayed green`.
+
+**Root cause.** The lying-Sync test asserted on `LastPromisedBytes`, a helper that scans the ledger for
+entries with `promoted == true` and returns the last `durable_bytes_after`. Under a suppressed
+promotion `durable_bytes_after` is 0 whether or not the entry claims to have promoted, so the two
+fields agreed at zero and the flag itself was never read by any assertion. The ledger's whole job is to
+record what *happened* rather than what was *reported*, and the field carrying that distinction was
+unchecked.
+
+**Which of the three things a surviving mutant means.** A checker that cannot see it. Not a defence
+that was never there — the flag was set correctly — and not unreachable code, which is the only one of
+the three whose correct response is deletion. The response here is to strengthen the checker.
+
+**What this would have caused.** Nothing in production; the engine does not read the ledger. It would
+have cost the *oracle*: B1.9a's exactness assertions are required to derive their verdict from the
+ledger and from nothing else, and a ledger whose promotion column had silently become a copy of the
+Sync's return value is the engine's account of itself wearing harness clothing. It would have been
+discovered, at best, as an unexplained pass at B1.9b.
+
+**Fix.** The test now asserts on `promoted` directly, in both directions: a lying Sync's entry must
+read `promoted == false` with `injection == kSyncLoss`, and a clean Sync's must read `promoted == true`
+with the right byte count. A flag asserted in only one direction degenerates into a constant.

@@ -8,8 +8,11 @@
 # the check that catches it.
 #
 # THE CORRESPONDENCE: one public non-virtual wrapper, one private Do* pure
-# virtual, one CallSite enumerator. Not "the same number of each" -- the same
-# NAMES. A count equality can be satisfied by two unrelated drifts cancelling;
+# virtual, one CallSite enumerator, one entry in AllCallSites(). Four artifacts,
+# not three: the census iterates AllCallSites(), so a list that had drifted from
+# the enum would make the census report on a different set than exists -- which
+# is the failure the census is FOR, arriving inside the census itself. Not "the
+# same number of each" -- the same NAMES. A count equality can be satisfied by two unrelated drifts cancelling;
 # set equality cannot, and it costs nothing more to check.
 #
 # THE GRAMMAR IS STRICT AND THAT IS THE POINT. Every line inside the marked
@@ -32,8 +35,9 @@ set -eu
 dir=${1:-engine-cpp}
 env_h=$dir/src/env/env.h
 call_site_h=$dir/src/env/call_site.h
+call_site_cc=$dir/src/env/call_site.cc
 
-for f in "$env_h" "$call_site_h"; do
+for f in "$env_h" "$call_site_h" "$call_site_cc"; do
   if [ ! -f "$f" ]; then
     printf '\n  FAIL  missing %s\n\n' "$f"; exit 1
   fi
@@ -46,7 +50,8 @@ awk '
 function bad(msg) { printf("   BAD   %s:%d  %s\n", FILENAME, FNR, msg); errs++ }
 
 BEGIN { region = 0; access = ""; cls = ""; nbegin = 0; nend = 0; errs = 0
-        ncall = 0; nimpl = 0; nenum = 0; inenum = 0 }
+        ncall = 0; nimpl = 0; nenum = 0; inenum = 0
+        nlist = 0; inlist = 0; nlbegin = 0; nlend = 0 }
 
 # ------------------------------------------------------------ call_site.h
 FILENAME ~ /call_site\.h$/ {
@@ -64,6 +69,25 @@ FILENAME ~ /call_site\.h$/ {
     next
   }
   bad("unparsed line inside the CallSite enum: " $0)
+  next
+}
+
+# ------------------------------------------------------------ call_site.cc
+FILENAME ~ /call_site\.cc$/ {
+  if ($0 ~ /RIFT-CALL-SITE-LIST-BEGIN/) { inlist = 1; nlbegin++; next }
+  if ($0 ~ /RIFT-CALL-SITE-LIST-END/)   { inlist = 0; nlend++;   next }
+  if (!inlist) next
+  t = $0
+  sub(/\/\/.*/, "", t)
+  gsub(/[ \t]/, "", t)
+  if (t == "") next
+  if (t ~ /^CallSite::k[A-Za-z0-9_]+,$/) {
+    name = t; sub(/^CallSite::/, "", name); sub(/,$/, "", name)
+    if (name in listed) bad("duplicate entry in AllCallSites(): " name)
+    listed[name] = 1; nlist++
+    next
+  }
+  bad("unparsed line inside the AllCallSites() list: " $0)
   next
 }
 
@@ -158,13 +182,22 @@ END {
   for (n in enums) {
     if (!(n in calls)) { printf("   BAD   CallSite %s has no public wrapper\n", n); errs++ }
     if (!(n in impls)) { printf("   BAD   CallSite %s has no private Do* implementation\n", n); errs++ }
+    if (!(n in listed)) { printf("   BAD   CallSite %s is missing from AllCallSites(), so the census would never look for it\n", n); errs++ }
+  }
+  for (n in listed) {
+    if (!(n in enums)) { printf("   BAD   AllCallSites() lists %s, which is not a CallSite enumerator\n", n); errs++ }
+  }
+  if (nlbegin != 1 || nlend != 1) {
+    printf("   BAD   call_site.cc must contain exactly one RIFT-CALL-SITE-LIST-BEGIN and one -END (found %d and %d)\n", nlbegin, nlend)
+    errs++
   }
 
   printf("   public non-virtual wrappers : %d\n", ncall)
   printf("   private Do* pure virtuals   : %d\n", nimpl)
   printf("   CallSite enumerators        : %d\n", nenum)
-  if (ncall != nimpl || ncall != nenum) {
-    printf("   BAD   the three counts must be equal\n"); errs++
+  printf("   AllCallSites() entries      : %d\n", nlist)
+  if (ncall != nimpl || ncall != nenum || ncall != nlist) {
+    printf("   BAD   the four counts must be equal\n"); errs++
   }
 
   printf("  ----------------------------------------------------------\n")
@@ -176,6 +209,6 @@ END {
     printf("  nothing, and neither reports itself anywhere else.\n\n")
     exit 1
   }
-  printf("   ok  one wrapper, one Do*, one CallSite -- names match, not just counts\n\n")
+  printf("   ok  one wrapper, one Do*, one CallSite, one list entry -- names, not counts\n\n")
 }
-' "$env_h" "$call_site_h"
+' "$env_h" "$call_site_h" "$call_site_cc"
