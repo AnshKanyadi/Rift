@@ -17,10 +17,11 @@ CPP_BUILD_CI := engine-cpp/build-ci
 VENDOR_CHECK := ./scripts/cpp-vendor-check.sh
 NO_NETWORK   := ./scripts/cpp-no-network.sh
 CPP_MUTANTS  := ./scripts/cpp-mutants.sh
+CPP_SCAN     := ./scripts/cpp-scan.sh
 # The lane set `make cpp-ci` runs under network isolation. It grows as
 # lanes un-stub; every member must be runnable by hand, because nothing
 # runs it for us.
-CPP_LANES    := cpp-vendor-check cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan
+CPP_LANES    := cpp-vendor-check cpp-scan cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -129,6 +130,10 @@ cpp-mutants: ## Track B mutant catalogue: each patch must redden the lane it nam
 # engine-cpp/test/sanitizer_lane_test.cc; a lane that lost its -fsanitize flag
 # fails to build rather than passing quietly.
 
+.PHONY: cpp-scan
+cpp-scan: ## Env surface: one wrapper, one Do*, one CallSite -- names, not just counts
+	@$(CPP_SCAN)
+
 .PHONY: cpp-build
 cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
 	@# Not a member of CPP_LANES: cpp-test subsumes it. It exists so a mutant can
@@ -201,7 +206,7 @@ lanes: ## Show which lanes are real and which are still stubs
 	@echo "REAL : build test race vet fmt-check tidy-check determinism tooling-only"
 	@echo "       hatches blind"
 	@echo "       cpp-vendor-check cpp-vendor-build cpp-ci cpp-mutants"
-	@echo "       cpp-test cpp-asan cpp-ubsan cpp-tsan"
+	@echo "       cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-scan cpp-build"
 	@echo "STUB : smoke(A0.10) soak(A0.11) mutants(A0.12) bench(B5/I2)"
 	@echo "       killpoints(B4) differential(B4)"
 	@echo
