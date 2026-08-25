@@ -2380,6 +2380,21 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   exactness-(ii) failure, not a tidiness one.
 - **Mutants:** `BM7`, `BM9`.
 - **Depends on:** B1.5, B1.7b.
+- **Landed `4611e50`.** **Two divergences from the frozen shape recorded for the first time**, beyond
+  the two §7.1 already rules (`OnDurable` absent, `sync` flag absent):
+  - **Go's nil-versus-empty has no `Slice` equivalent**, and the frozen interface depends on it —
+    `InRange` treats a nil bound as unbounded, and *an empty key is a valid key* in this engine, so
+    `Slice()` cannot mean both. Bounds are a `Bound`, explicitly one or the other.
+    `DeleteRange(At(""), At(""))` deletes nothing; `DeleteRange(Unbounded, Unbounded)` is §8.2's
+    clear-everything case. Conflating them would have made the case A3 was ruled for unreachable.
+  - **`ApproximateDiskBytes` scans in B1.** The frozen comment says it answers from table metadata
+    rather than by scanning; B1 has no tables. Exact and O(n) until B2 gives it something to
+    approximate from — a performance property that will change, not a semantic one.
+- **§8.1 exercised by a real expansion, not a fixture.** An over-cap `DeleteRange` at a lowered cap is
+  refused and applies nothing, with the run mechanically marked non-default regime; and a 3000-key
+  expansion spanning blocks is torn mid-record, classified as a torn tail, and discarded **whole**. So
+  §5.4.2's multi-block rule is met by the operation that makes multi-fragment records routine rather
+  than only by hand-built bytes.
 - **Revert:** **Surface.** B1.9's sweep drives this API and has nothing to drive without it.
 - **Note:** "correct" for B4 means byte-identical to `engine/model`, so this step's real acceptance test
   is not its own suite but B4's differential rig. The suite here exists to make B4's failures debuggable,
