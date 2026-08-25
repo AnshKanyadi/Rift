@@ -2438,6 +2438,26 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   assertion of that second form**, replacing it with one against the harness's submission log and
   TestEnv's ledger per §7.3. B1.7b must therefore tag which of its assertions are which as it writes
   them; an untagged recovery assertion is treated as the second form.
+- **Landed `4786435`.** Three things beyond its written scope, each forced by a condition.
+  - **The choke point gained a second half.** §7.4's in-flight element — *"a `Sync` can complete on
+    the device with the kill preempting its return"* — cannot be expressed by an injector that runs
+    *before* the effect. `FaultController::AfterEffect` runs after the implementation and before its
+    Status reaches the caller, consumes no ordinal, and is not a kill point of its own: it is the
+    second half of one Env call, not a second call. Without it, condition 3's second element could
+    not be induced at all, only asserted.
+  - **Oracle independence is a lane rather than a promise.** Condition 1 says the oracle is
+    "compiled against a header that does not include the engine's internal state at all", which is a
+    statement about *includes* — so `cpp-scan` checks it, and `ORACLE-includes-engine` proves the
+    check fires. The mutant adds one include and breaks nothing; what it changes is that the next
+    edit *could* reach engine state, and ruling 4 would go back to being a thing somebody has to
+    remember while typing.
+  - **`DurableSeq()` is a promise too.** BM1 survived its first induction because the rig learned
+    watermarks only from `Sync`'s return, and a killed `Sync` returns nothing. The rig now records
+    every watermark the engine ever reports and holds it to the highest.
+- **Condition 3 is demonstrated, not assumed.** HARNESS-006 is what made it unreachable, so the fix
+  is not taken on trust: `BothElementsAreObservedAndBothRunsCountAsEvidence` asserts that the two
+  runs land on *different* elements **and** that neither is exactness-suspended, since a run that
+  cannot be banked cannot satisfy "observed across the sweep" however often it occurs.
 - **Revert:** **Surface.** B1.9b is defined in terms of it.
 
 ---
