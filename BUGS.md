@@ -592,7 +592,7 @@ where the thing it discriminates could actually differ — and it is cited rathe
 also the same family as GF-1, one level in: GF-1 is about a *lane* verifying an absence, this is about
 an *assertion* verifying a distinction. Filed once here; individual survivals are not entries.
 
-**B3.4 ADDS THREE, AND ONE OF THEM IS THE FIRST INSTANCE OF MEANING #3.**
+**B3.4 ADDS FOUR, AND ONE OF THEM IS THE FIRST INSTANCE OF MEANING #3.**
 
 `BM73` removed `L1FileFor`'s check that the file the binary search found actually *contains* the key,
 and **nothing failed** — a key in the gap between two files of the run makes the search return the
@@ -616,6 +616,20 @@ rather than re-aimed it.
 That is a sharper statement of meaning #1 and it points at the fix rather than the symptom: `BM79`'s
 test now holds forty snapshots so that a key HAS many surviving versions, which is a workload the
 suite had never run and which B3.6 is about.
+
+`BM82` is meaning #2 — **`BM55`'s question, asked again and answered the same way.** It removes
+`Sync`'s claim on the single-caller guard and leaves `SingleCaller` itself intact, and it survived a
+pair of tests that construct the guard **directly**:
+
+> **THOSE TESTS PROVE THE GUARD WORKS. THEY DO NOT PROVE THE GUARDED PATH USES IT.** Two different
+> claims, and the second is the one the enforcement rests on.
+
+The fix is a test that **re-enters `Sync` from the promotion hook** — which fires inside `Sync`, on
+the durable image changing — so the guard is claimed twice on **one thread**, deterministically. The
+alternative, racing two real `Sync`s, would induce it only *probably*, and this catalogue does not
+count a gate induced probably. The hook fires **once** on purpose: without that, a build with the
+claim removed would recurse until the stack gave out, and **a death test cannot tell a guard firing
+from a crash** — the mutant would have passed for the wrong reason.
 
 **AND THE TALLY'S OWN INSTRUMENT MISREAD ONE.** `BM78` was recorded as a survival on its first
 induction because the script looked for a failing test — and the kill is an **abort**, so the process
