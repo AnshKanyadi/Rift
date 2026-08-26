@@ -80,8 +80,14 @@ build_and_sweep() {  # build_and_sweep <tree> <regime> -> "points violations fir
       && cmake --build engine-cpp/build/test --target rift_sweep -j "${WORKERS:-8}" >/dev/null 2>&1 ) || {
     echo "BUILD_FAILED"; return 0; }
   sweep_out=$(mktemp)
-  with_timeout "$1/engine-cpp/build/test/rift_sweep" "$2" >"$sweep_out" 2>/dev/null
-  if [ $? -eq 124 ]; then rm -f "$sweep_out"; echo "TIMEOUT"; return 0; fi
+  # `|| rc=$?` AND NOT A BARE CALL. A PATCHED sweep exits NON-ZERO BY DESIGN --
+  # that is the detection this lane is here to count -- so under `set -e` a bare
+  # call kills the campaign at its first class, after the baselines have already
+  # printed and while the log still looks healthy. Third instance of this exact
+  # interaction in one remedy; see HARNESS-013.
+  sweep_rc=0
+  with_timeout "$1/engine-cpp/build/test/rift_sweep" "$2" >"$sweep_out" 2>/dev/null || sweep_rc=$?
+  if [ "$sweep_rc" -eq 124 ]; then rm -f "$sweep_out"; echo "TIMEOUT"; return 0; fi
   line=$(grep "^SWEEP regime=$2 " "$sweep_out" || true)
   rm -f "$sweep_out"
   [ -n "$line" ] || { echo "NO_OUTPUT"; return 0; }

@@ -529,13 +529,35 @@ ask what has to be true for it to run at all, and assert that too.
 
 ### The shape behind every mutant that has survived its first induction
 
-**THIS IS A STANDING PATTERN, NOT A LIST OF INCIDENTS.** Five have survived a first induction:
-`LEDGER-always-promoted`, `BM2-accept-torn-tail`, `BM7-drop-close-error`, `BM1-ack-before-sync`, and
-`BM52-current-parsed-leniently`. **All five are meaning #1** — a checker that cannot see it — and all
-five have **one shape**. Across ninety-eight classes and four phases, this shape accounts for **five
-of Track B's survivals and zero of anything else**: no survival has ever been meaning #2 (a defence
-that was never there) or meaning #3 (unreachable code). When a mutant here survives, this is the
-first hypothesis and so far it has been the only one.
+**THIS IS A STANDING PATTERN, NOT A LIST OF INCIDENTS — AND B2'S LAST RUN BROKE THE RUN OF ONE
+MEANING, WHICH IS BETTER THAN AN UNBROKEN ONE.** Six have survived a first induction:
+
+| class | meaning | shape |
+|---|---|---|
+| `LEDGER-always-promoted` | #1, a checker that cannot see it | the test never created the situation it was checking |
+| `BM2-accept-torn-tail` | #1 | " |
+| `BM7-drop-close-error` | #1 | " |
+| `BM1-ack-before-sync` | #1 | " |
+| `BM52-current-parsed-leniently` | #1 | " |
+| **`BM55-tables-oldest-first`** | **#2, a defence that was never there** | **the patch was aimed at a line a comment claimed was load-bearing and was not** |
+
+**Five of the six share one sentence.** The sixth is the first of a different kind in this track, and
+it matters that the tally now has two entries rather than one: a classification that only ever
+returns one answer is a classification nobody has tested. `BM55` is what shows the three meanings are
+doing work.
+
+`BM55`'s own story is short and is recorded at the code. It reversed the order sources are handed to
+`MergedIter`, and every test stayed green **correctly** — the merge orders by KEY, sequences are
+unique, so there are no ties for source order to break and the order it is given is irrelevant. The
+comment beside that line said otherwise, in words that are true of the *point-read* path a hundred
+lines below. **A comment asserting a load-bearing property for a line where it is not load-bearing is
+worse than no comment**: it is where the next reader looks for the invariant, and it sends them to a
+line nothing depends on. The patch is re-pointed at the walk that carries the property, and the
+comment is corrected, in the same diff.
+
+**All six are meaning #1 or #2. None has been meaning #3** — code that cannot be reached — which is
+the only one whose correct response is deletion, and the one a tired reader is most tempted to reach
+for.
 
 > **The test never created the situation it was checking.**
 
@@ -561,9 +583,16 @@ where the thing it discriminates could actually differ — and it is cited rathe
 also the same family as GF-1, one level in: GF-1 is about a *lane* verifying an absence, this is about
 an *assertion* verifying a distinction. Filed once here; individual survivals are not entries.
 
-**THE STANDING QUESTION, since the pattern is now five for five:** before declaring a mutant a
-harness weakness, ask *what must be true for this assertion to run at all*, and assert that too. In
-every one of the five that question was the whole of the fix.
+**THE STANDING QUESTIONS, now that the tally has two meanings in it.** A survival is a fork, not a
+verdict, and the two questions are different:
+
+1. *What must be true for this assertion to run at all?* — assert that too. In all five meaning-#1
+   survivals that question was the whole of the fix.
+2. *Is the line this patch is aimed at actually the line that carries the property?* — `BM55`'s
+   question, and the one nobody asks while a comment is answering it for them.
+
+Reach for meaning #3 last. Nothing in this catalogue has been unreachable code, and it is the only
+meaning whose correct response is to delete something.
 
 ### HARNESS-007 — `Slice` bound silently to temporary strings, and a test dangled
 
@@ -740,11 +769,24 @@ instead of spinning for eleven hours. And `cpp-mutants` and `cpp-campaign` grew 
 that kills the whole process tree and reports **TIMEOUT** as a distinct outcome, counted as broken,
 failing the lane.
 
-**A second defect inside the remedy, which is GF-1's habit and worth the line.** The first watchdog
-killed the hung lane correctly and then **died itself, printing nothing**: under `set -e`, a failing
-`wait` and a function returning 124 both exit the script before the reporting line runs. It took two
-rounds of induction to see, because the first round looked like "the lane stopped", which is what it
-was supposed to produce. **A watchdog that cannot report is the defect it was written to fix.**
+**THREE DEFECTS INSIDE THE REMEDY, ONE INTERACTION, ONE ENTRY.** Naming it once:
+
+> **AN EXPECTED NON-ZERO EXIT UNDER `set -e` KILLS THE SCRIPT THAT WAS SUPPOSED TO INTERPRET IT.**
+
+| # | where | what it did |
+|---|---|---|
+| 1 | `run_lane`'s `wait` | killed the hung lane correctly, then **died itself, printing nothing** |
+| 2 | `run_lane`'s two call sites | the function returned 124 and `; rc=$?` never ran |
+| 3 | `build_and_sweep`'s sweep call | **killed the campaign at its first class** |
+
+**The third is the worst, and for the reason the first two are not.** A patched sweep exits non-zero
+**by design** — that non-zero *is* the detection the campaign counts — so the failure lands at the
+first class **with both baselines already printed and the log reading healthy**. It is the same tell
+as the entry itself: a run that has stopped, wearing the appearance of one that has not.
+
+The first two took two rounds of induction to see, because round one looked like *"the lane stopped"*,
+which is what the watchdog was supposed to produce. **A watchdog that cannot report is the defect it
+was written to fix** — GF-1 recurring inside its own remedy, for the second time in this track.
 
 **The general form, and it is the sharpest one this project has produced about lanes rather than
 code:**
@@ -755,9 +797,48 @@ code:**
 > is about a checker that ran and could not conclude, and this is about a checker that never
 > finished. Both must be named, neither may be waited on, and neither is evidence.
 
+**THE SPECIFIC TELL, AND IT IS WHAT COST THE ELEVEN HOURS.** *A stalled log is indistinguishable from
+a slow one from outside.* Both show a last line and no error. So **progress must be read from
+something that ADVANCES — a counter, a timestamp, a CPU-time delta — and never from the absence of an
+error.** Every estimate given during this run was arithmetic over an appearance of progress, and the
+appearance was the whole of the evidence.
+
+**THE SHARPER OF THE TWO ENGINE-SIDE FIXES IS THE `RIFT_CHECK`, AND IT IS SHARPER FOR A REASON WORTH
+STATING SEPARATELY.** The loops carried comments reading *"strictly advances, so this loop
+terminates"* — and that invariant rested **entirely on the comparator being the order it claims to
+be**, which is exactly the thing the mutant changes.
+
+> **A TERMINATION ARGUMENT THAT ASSUMES THE THING BEING MUTATED IS NOT A TERMINATION ARGUMENT.**
+
+What replaces it is a progress property that does *not* depend on the comparator under test: the user
+key is compared **bytewise**, which is a fact about the merged order rather than about the tag half
+of it. So the assertion survives the comparator being wrong and can catch it being wrong — which a
+check written in terms of the comparator could not.
+
 **What it cost.** Eleven and a half hours of wall clock and one confidently wrong estimate given to
 Ansh. What it did not cost: any result. The 30 patches that completed before the hang all reported
 correctly, and the campaign that ran before it was green.
+
+---
+
+### The baseline gate's running tally — four defects, none of them what it was built to detect
+
+The mutant lane's baseline gate exists for one reason: **every lane a patch is declared against must
+pass on the UNPATCHED tree first**, because a red baseline makes every subsequent failure
+unattributable. It has now found **four defects, and not one of them was an unattributable kill.**
+
+| # | phase | what it caught |
+|---|---|---|
+| 1 | B1.0 | `HARNESS-001` — `tar --exclude` silently dropped three files from every scratch copy |
+| 2 | B1.9a | `HARNESS-007` — a `Slice` bound to a temporary string, caught by ASan in the baseline run |
+| 3 | B1.9a | the `-Werror` failures six direction controls separated from real kills |
+| 4 | B2.7 | `HARNESS-013`'s third `set -e` defect — `cpp-campaign` red on the unpatched tree |
+
+**The argument this is evidence for: GATES THAT CHECK PRECONDITIONS BEAT GATES THAT CHECK OUTCOMES.**
+A gate on the *outcome* can only find the failure it was written to look for. A gate on the
+*precondition* — "is this measurement even attributable?" — runs the whole machine in a known-good
+configuration on every invocation, and so finds whatever is wrong with the machine, including the
+things nobody thought to look for. Four for four, none of them the thing it was built to detect.
 
 ---
 

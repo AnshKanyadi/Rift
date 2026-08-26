@@ -163,3 +163,32 @@ into which specific test catches each class, and folding it in would mix a bookk
 phase whose evidence is otherwise self-contained.
 
 **Closing note (B3):** *not yet discharged.*
+
+---
+
+## CF-3 — the loop-termination properties must hold under compaction's merge
+
+| field | value |
+|---|---|
+| **Raised** | B2.7, 2026-08-25 |
+| **Raised by** | Ansh, on B2's close, from `HARNESS-013` |
+| **Discharged by** | **B3** |
+| **Check** | every loop in the compaction merge that terminates by "the cursor strictly moves" carries a `RIFT_CHECK` on that movement, not a comment |
+| **Compare against** | `IterImpl::AdvanceToVisible` and `RetreatToVisible`, which now assert it |
+
+**The obligation.** B2 has two loops whose termination rests on the comparator being the order it
+claims to be, and both now assert their own progress rather than commenting it — because *a
+termination argument that assumes the thing being mutated is not a termination argument*. **B3 is
+where iterators get their real workout**: compaction merges N sorted inputs and its inner loops have
+exactly this shape.
+
+**What must be true at B3's close.** Every such loop asserts the movement it depends on, using a
+property that does **not** depend on the comparator under test — as B2's do, by comparing user keys
+bytewise, which is a fact about the merged order rather than about the tag half of it.
+
+**The cost of leaving it.** `HARNESS-013` measured it: eleven and a half hours of a lane waiting on a
+spin, and a stalled log that read exactly like a slow one. The watchdog now bounds that cost, but a
+watchdog converts an infinite hang into a twenty-minute one — **it does not convert it into a
+diagnosis.** The assertion does.
+
+**Closing note (B3):** *not yet discharged.*
