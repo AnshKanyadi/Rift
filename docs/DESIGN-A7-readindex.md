@@ -637,6 +637,60 @@ compared nothing is this register's commonest entry.
 
 ---
 
+## 4a. The read index, as two claims rather than as implementation notes
+
+Both are claims this document is accountable for, stated where a reader looking for them will find
+them rather than distributed through the code that implements them.
+
+### CLAIM 1: read index costs no additional message
+
+> **In this implementation a heartbeat IS `MsgApp` with no entries, so the confirming round and the
+> replication round are the SAME round.** A leader is already sending appends; the read rides one it
+> was going to send. Several reads arriving together share it.
+
+The mechanism is the whole of the claim, and it is worth stating because the usual description of read
+index — *confirm leadership with a quorum, then read locally* — sounds like it adds a round trip. It
+adds none. What it costs is **latency**, not messages: a read is never faster than the heartbeat RTT,
+because it must wait for a round that is already in flight to come back.
+
+**BENCHMARKS.md states it in those terms, beside ruling 9's number.** A7's throughput win is on
+**one read in ten** (§4.2), so the honest framing is: read index is the CORRECTNESS mechanism
+CLAUDE.md's fourth headline claim names, delivered on the path where linearizable reads live, and its
+message cost is zero while its latency floor is one heartbeat.
+
+### CLAIM 2: `readFloor()` is `max(commitIndex, termStart)`, and it depends on the no-op
+
+> **A fresh leader never serves a read against an inherited commit index.**
+
+The figure-8 rule forbids committing earlier-term entries by counting, so a leader that has just won an
+election does not know its own commit index — it is whatever was inherited, and can be arbitrarily far
+behind the true committed prefix. Reading against it misses writes committed before this leader took
+office: a stale read produced by the mechanism whose entire job is preventing stale reads.
+
+`readFloor()` returns `max(commitIndex, termStart)`. When the term-start no-op has not yet committed,
+`termStart` is higher and the read is stamped there instead; the driver waits a little longer and the
+answer is never below the point at which this term's commit index becomes true.
+
+**The dependency is named as a premise, because it breaks silently:**
+
+> **P-TERMSTART. `becomeLeader` appends a no-op in the current term, and `termStart` is its index.**
+
+| premise | breaks when | what happens |
+|---|---|---|
+| **P-TERMSTART** | the term-start no-op is removed, or `becomeLeader` stops recording its index | `readFloor()` collapses to `commitIndex`, a fresh leader serves against an inherited value, and reads miss writes committed before it took office. **No error. The read succeeds and is wrong** |
+
+A7 §2's argument is why the no-op exists at all; this is the second thing resting on it, and the two
+are not the same claim. The no-op makes `commitIndex` become true; `readFloor` is what refuses to trust
+it until it has. Remove either and reads go stale — one loudly over time, one immediately and
+invisibly.
+
+**It is asserted rather than trusted**:
+`TestALeaderDoesNotServeAReadAgainstAnInheritedCommitIndex` requires every pending read's stamp to sit
+at or above `termStart` while the no-op is uncommitted, and it is induced by dropping `termStart` from
+the floor.
+
+---
+
 ## 5a. Ruling 3's oracle, specified before it is built
 
 Ruling 3 approved arrival-capture **with a condition**: *a read arriving at index `i` and confirmed
@@ -1083,6 +1137,31 @@ apply: to one's own instrument.
 
 **A green with no baseline is not a result** (§16.3b) is the same sentence one level in: an oracle that
 has never been shown silent has no baseline for its own firing.
+
+#### The two demonstrations, both from A7
+
+**One — it distinguished an unreached mutant from a broken oracle.** `M76` read `caught=0`. On its own
+that is a checker that does not work. With the second number it was not:
+
+```
+clean:  caught=0  compared=657  served=657
+M76:    caught=0  compared=657  served=657
+```
+
+**Identical in every figure**, which says the mutation changed nothing observable — UNREACHED, not
+undetected. That sent the investigation to dispatch instead of to the oracle, and dispatch led to the
+wire (§5c). Had the first number been read alone, the oracle would have been rewritten and the codec
+defect would still be there.
+
+**Two — it caught an oracle that fires and is wrong.** The differential passed the induced-failure rule
+on its first try: it fired, on a real mutant, with a real verdict. It was still comparing against
+`Index` instead of `AppliedAt` and **would have failed clean runs** (§5b). The induced-failure rule
+asks only *does it fire*. The second number asks *is it silent when it should be*, and only the second
+separates an oracle that works from one that merely speaks.
+
+> **The first demonstration is the one people will quote and the second is the one that matters.**
+> Distinguishing unreached from broken is a diagnostic convenience. Catching a checker that would fail
+> correct runs is the difference between a verification claim and a false one.
 
 ### 8.2 The standing set
 
