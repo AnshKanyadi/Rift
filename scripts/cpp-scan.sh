@@ -16,6 +16,7 @@
 #   4. CLAIMS.txt -- the sentences this lane is what makes true
 #   5. DECIDERS.txt -- every function that decides evidentiary status, asserted
 #      in BOTH directions
+#   6. FLOORS.txt -- every mutant class has a standing measurement (CF-2)
 #
 # EVERY OPT-OUT CARRIES A SPLIT LABEL, FROM THE START. An entry in
 # CPP-HATCHES.txt is either
@@ -458,6 +459,47 @@ else
       esac
     done
   done
+fi
+
+# ------------------------------------------------------------------ part 6
+#
+# CF-2, MADE A LANE RATHER THAN AN OBLIGATION. FLOORS.txt's own header says a
+# class missing from it is a class with NO STANDING MEASUREMENT, "which is how a
+# bug class drifts back into being uncatchable one flaw at a time" -- and 47 of
+# 98 were missing at B2's close.
+#
+# The distinction that makes this worth a lane: every one of those 47 carried a
+# covering LANE and died in the mutant catalogue. What none carried was a
+# covering ASSERTION. A class killed by a lane but named by nothing is a class
+# whose covering assertion can be DELETED WITH NO LANE GOING RED -- the mutant
+# still dies, on some other assertion in the same lane, and the class quietly
+# stops testing what it was written to test.
+printf '  [6/6] FLOORS.txt -- every mutant class has a standing measurement\n'
+printf '  ----------------------------------------------------------\n'
+if [ ! -f "$dir/FLOORS.txt" ]; then
+  note "missing $dir/FLOORS.txt"
+elif [ ! -d "$dir/mutants" ]; then
+  note "missing $dir/mutants"
+else
+  # TEMP FILES, NOT PROCESS SUBSTITUTION. `<(...)` is a bashism and this script
+  # runs under `sh`; the first version of this check died with a syntax error
+  # AFTER printing its own heading, which is the shape of a lane that looks
+  # like it ran.
+  listed_f=$(mktemp); present_f=$(mktemp)
+  grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$dir/FLOORS.txt" \
+    | awk -F'|' '{print $1}' | sed 's/ *$//' | sort -u > "$listed_f"
+  ls "$dir"/mutants/*.patch 2>/dev/null | xargs -n1 basename | sed 's/\.patch$//' \
+    | sort -u > "$present_f"
+  nclass=$(grep -c . "$present_f" || true)
+  missing=$(comm -23 "$present_f" "$listed_f")
+  nmissing=$(printf '%s\n' "$missing" | grep -c . || true)
+  rm -f "$listed_f" "$present_f"
+  printf '   classes        : %s\n' "$nclass"
+  if [ "$nmissing" -ne 0 ]; then
+    for m in $missing; do
+      note "$m has no entry in FLOORS.txt -- a covering lane is not a covering assertion"
+    done
+  fi
 fi
 
 printf '  ----------------------------------------------------------\n'

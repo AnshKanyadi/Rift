@@ -162,7 +162,27 @@ was written to test.
 into which specific test catches each class, and folding it in would mix a bookkeeping sweep with a
 phase whose evidence is otherwise self-contained.
 
-**Closing note (B3):** *not yet discharged.*
+**Closing note (B3.1), 2026-08-25 — DISCHARGED, AND CONVERTED INTO A LANE.**
+
+All **47** classes now carry a `covered-by:` naming the specific assertion. The check prints **0**,
+and it is no longer a check somebody has to remember to run: **`cpp-scan` part 6 fails when any class
+in `engine-cpp/mutants/` has no entry in `FLOORS.txt`.** Induced by removing one entry; restored.
+
+**The labels were DETERMINED, not inferred**, which is what made this research rather than
+transcription: each patch was applied, the tree built, and the failing assertion read. Inferring the
+label from what a patch says it *blinds* would have produced plausible entries that name the wrong
+test — and a wrong `covered-by` is worse than none, because it is the one place a future reader
+checks before deleting an assertion.
+
+**Three classes have no failing test at all**, and finding that out is the reason the run was worth
+doing: `BM16-mutex-across-env`, `BM9-apply-does-io` and `REGISTRY-lying-sync-not-suspending` are
+killed by an **abort** — the mutex-depth guard and the suspension assertion — so the suite reports
+**no failing test** while the process dies mid-run. Their entries say so. Without the `RIFT PARTIAL
+RUN` marker landed hours earlier, those three would have been recorded as **surviving**.
+
+**One entry moved rather than being retired**: `ORACLE-includes-engine` was written against the old
+part 2b, which B3-Q1 **replaced** — so it now names the ARTIFACTS allow-list. A mutant retired with
+its check is a class that stops being watched.
 
 ---
 
@@ -191,4 +211,24 @@ spin, and a stalled log that read exactly like a slow one. The watchdog now boun
 watchdog converts an infinite hang into a twenty-minute one — **it does not convert it into a
 diagnosis.** The assertion does.
 
-**Closing note (B3):** *not yet discharged.*
+**Closing note (B3.1), 2026-08-25 — DISCHARGED, AND CONVERTED INTO A LANE.**
+
+All **47** classes now carry a `covered-by:` naming the specific assertion. The check prints **0**,
+and it is no longer a check somebody has to remember to run: **`cpp-scan` part 6 fails when any class
+in `engine-cpp/mutants/` has no entry in `FLOORS.txt`.** Induced by removing one entry; restored.
+
+**The labels were DETERMINED, not inferred**, which is what made this research rather than
+transcription: each patch was applied, the tree built, and the failing assertion read. Inferring the
+label from what a patch says it *blinds* would have produced plausible entries that name the wrong
+test — and a wrong `covered-by` is worse than none, because it is the one place a future reader
+checks before deleting an assertion.
+
+**Three classes have no failing test at all**, and finding that out is the reason the run was worth
+doing: `BM16-mutex-across-env`, `BM9-apply-does-io` and `REGISTRY-lying-sync-not-suspending` are
+killed by an **abort** — the mutex-depth guard and the suspension assertion — so the suite reports
+**no failing test** while the process dies mid-run. Their entries say so. Without the `RIFT PARTIAL
+RUN` marker landed hours earlier, those three would have been recorded as **surviving**.
+
+**One entry moved rather than being retired**: `ORACLE-includes-engine` was written against the old
+part 2b, which B3-Q1 **replaced** — so it now names the ARTIFACTS allow-list. A mutant retired with
+its check is a class that stops being watched.
