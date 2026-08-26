@@ -520,6 +520,45 @@ tombstone reachable only through a table whose bounds do not admit it is a tombs
 consult**, which resurrects everything it was supposed to mask. This is B3-D1 clause 2 showing up in
 the FORMAT: input selection is a correctness concern, so the bounds that drive it are too.
 
+### 6.1a — THE BOUNDS RULE, DEVIATED FROM AND STRENGTHENED (B3.5b)
+
+**§6.1's last refusal cannot be implemented as a refusal, and the test that induced it is what
+showed that.** The rule reads: *a tombstone the table's own bounds do not admit is one no compaction
+will read, which resurrects everything it was supposed to mask.* Correct, and load-bearing — it is
+clause 2 of the drop claim showing up in the format.
+
+**But `ValidateTable` DERIVES those bounds from the file.** So whatever it derives is admissible by
+definition, and a refusal there can only fire when the classifier disagrees with itself. The first
+implementation refused on data-only bounds — and immediately refused **every table the writer
+produces**, because the writer widens its recorded bounds to admit its own tombstones and the
+classifier did not. *A writer and a classifier disagreeing about the same fact is the exact failure
+the observer-before-observed ordering exists to catch, and it caught it here in one test.*
+
+> **THE REQUIREMENT IS ABOUT WHAT THE MANIFEST RECORDS, NOT ABOUT WHAT THE FILE CONTAINS.**
+
+So it is enforced where it can be:
+
+1. **`ValidateTable` derives `smallest`/`largest` INCLUDING the tombstones' bounds.**
+2. **`VerifyTables` already refuses any Open where the manifest disagrees with that derivation** —
+   D4 §5.1 point 2, unchanged and now doing this job too.
+
+**Which is strictly stronger than the refusal §6.1 asked for.** A refusal catches a bad *file*; this
+catches a bad *manifest entry*, which is the artifact compaction actually reads. There is no way to
+record bounds that fail to admit a tombstone, because the number is not the manifest's to choose.
+
+**The end bound is exclusive and is included anyway.** Over-covering costs a file that did not need
+reading; under-covering resurrects data. The directions are not symmetric, so the safe one is taken.
+
+**One consequence, named now and settled at B3.5e.** A tombstone's exclusive end widens `largest`,
+so two adjacent L1 files could appear to overlap and `VerifyL1IsARun` would refuse the Open. It
+cannot happen yet — L1 tombstones arrive only when compaction emits them — and the fix that belongs
+with them is **splitting a tombstone at the output-file boundary**, which is where it lands.
+
+**`TableFault::kTombstoneOutsideTheTableBounds` was removed rather than left unreachable**, on the
+same rule that deleted `BM73`: a fault nothing can produce is a fault nobody can induce.
+
+---
+
 **What it changes elsewhere:**
 
 - **`Apply` stops expanding**, so `DeleteRange` becomes `O(1)` in the range — which retires B2-D7's

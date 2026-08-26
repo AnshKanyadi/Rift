@@ -1158,6 +1158,51 @@ only the loud one is self-announcing.
 
 ---
 
+### GF-17 — a reserved field sized by guess postpones the version bump by one; it does not avoid it
+
+**Raised by** the SSTable footer's `reserved:[8]u8`, spent at B3.5b.
+
+B2 left eight bytes in the footer with an explicit rationale: *"eight bytes now are free, a format
+version bump at B3 is not."* B3 needed to name a range-tombstone block. **A `BlockHandle` is twelve
+bytes** — `offset:u64` plus `size:u32` — so the natural shape did not fit the reserve at all.
+
+**It fit only because the size turned out to be derivable.** The range block is written **last**,
+immediately before the footer, so `range_size = file_size - kFooterBytes - range_offset`; only the
+offset is stored, and eight bytes hold it. Had the block needed to sit anywhere else — or had the
+extension been a second handle, a checksum, or anything with an independent length — **the reserve
+would have bought nothing and B2's deferred version bump would have come due anyway.**
+
+> **A RESERVED FIELD SIZED BY GUESS IS A BET THAT THE NEXT EXTENSION FITS. THIS ONE PAID OFF ONCE, ON
+> A TECHNICALITY, AND THE NEXT EXTENSION PAYS FULL PRICE.**
+
+**And there is a second cost B2 did not price.** The reserve had *two* properties, asserted together
+in one test, and **only one of them can survive the reserve being spent**:
+
+| property | what it was for | after B3.5b |
+|---|---|---|
+| **written zero** | an old file is recognisable | **still true**, and load-bearing for a new reason: a B2-era table decodes as `range_offset == 0`, meaning "no range block" |
+| **not read** | a file from a *future* build still validates here | **gone, necessarily** — the reader now reads those bytes, so a file that put something else there is REFUSED |
+
+> **SPENDING A RESERVE IS EXACTLY THE ACT THAT ENDS THE FORWARD COMPATIBILITY IT WAS ALSO
+> PROVIDING.** A reserve is only forward-compatible while it is *readable and ignored*.
+
+**The honest conclusion, stated so nobody repeats the reasoning at B4:** the reserve **did not avoid
+the version bump — it postponed it by one**, and it spent the format's forward compatibility to do
+so. Reserving sixteen bytes at B4 "because this worked" would be repeating a bet that happened to
+land, not applying a lesson.
+
+**What to do instead, when it next comes up.** Decide whether the format needs *extensibility* or
+*version negotiation*. A reserve gives neither reliably; a length-prefixed footer with a declared
+field count gives both, at the cost of the fixed-width property the footer was built around —
+*"the one thing a classifier can read without trusting anything else in the file."* That is a real
+trade and it should be made deliberately rather than inherited from a byte count somebody guessed.
+
+**`BM33` survives the change and keeps its job**, re-aimed: it now blinds the range offset rather
+than the reserve's zeroing, and the test it dies to was rewritten to state the new pair of
+properties instead of being loosened to accommodate them.
+
+---
+
 ### GF-16 — a mutant that survives because its precondition is unreachable is a claim about a workload
 
 **Raised by three survivals in one step**, B3.4, and it is a sharper statement of the survival tally's
