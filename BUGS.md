@@ -555,9 +555,18 @@ worse than no comment**: it is where the next reader looks for the invariant, an
 line nothing depends on. The patch is re-pointed at the walk that carries the property, and the
 comment is corrected, in the same diff.
 
-**All six are meaning #1 or #2. None has been meaning #3** — code that cannot be reached — which is
-the only one whose correct response is deletion, and the one a tired reader is most tempted to reach
-for.
+**All six are meaning #1 or #2. MEANING #3 HAS NEVER OCCURRED IN TRACK B**, and that is worth stating
+precisely rather than as reassurance, because it is the only meaning whose correct response is to
+**delete** something.
+
+> If meaning #3 never occurs, either **the code has no dead paths**, or **the classification cannot
+> see them**. We do not currently know which.
+
+Nothing here distinguishes those two, and no lane is pointed at the distinction. A coverage
+instrument would be — B4's differential rig is the phase where one becomes affordable — and until
+then the honest statement is that meaning #3 is a category with no observations, not a category shown
+to be empty. **A tired reader reaching for it is reaching for the one answer this catalogue has never
+had evidence for.**
 
 > **The test never created the situation it was checking.**
 
@@ -839,6 +848,45 @@ A gate on the *outcome* can only find the failure it was written to look for. A 
 *precondition* — "is this measurement even attributable?" — runs the whole machine in a known-good
 configuration on every invocation, and so finds whatever is wrong with the machine, including the
 things nobody thought to look for. Four for four, none of them the thing it was built to detect.
+
+---
+
+### GF-7 — a misplaced invariant: a comment asserting a load-bearing property for a line that does not carry it
+
+**Raised by** `BM55-tables-oldest-first`, B2's last catalogue run. The phase's best finding, and it is
+not the vacuous-green class and not one of the three survival meanings as previously stated.
+
+> **A COMMENT THAT ASSERTS A LOAD-BEARING PROPERTY FOR A LINE WHERE IT IS NOT LOAD-BEARING IS WORSE
+> THAN NO COMMENT.** It is where someone looks for the invariant, and it sends them somewhere nothing
+> depends on it.
+
+**The instance.** `Version::Build`'s table loop carried *"NEWEST FIRST. Order is not cosmetic: a
+deletion in a newer table must hide a value in an older one, so the first source holding a user key
+wins."* Every word of that is true — **of `VersionGet`'s point-read walk, a hundred lines below.**
+Where it stood it was false: `MergedIter` orders by KEY, sequences are unique, so there are no ties
+for source order to break and the order it is handed is irrelevant.
+
+**How it was found, and it could not have been found by reading.** A mutant was aimed at that line
+*because the comment said so*. It survived — correctly — and the survival is the only thing that
+distinguished "this line carries the property" from "a comment near this line says it does". **A
+misplaced invariant is invisible to review by construction: the reviewer's question is whether the
+comment is true, and it is.**
+
+**The family, and this is why it is a named shape rather than an incident.** It is the same failure as
+Track A's `power-config a3` and the A6 banner — **a name describing something other than what it is
+attached to** — with one difference that makes it more dangerous: those are *labels*, and this is a
+**correctness claim**. A wrong label misdirects; a wrong correctness claim gets *relied on*. The next
+person to touch `Version::Build` would have preserved an order they did not need and, finding the
+same words there, would have had no reason to look for the walk that actually needs it.
+
+**The fix, and where the induction has to land.** Re-point the comment at the line that carries the
+property, and **re-point the mutant there too** — a general form whose remedy is not itself induced is
+a general form nobody has tested. `BM55` now reverses `VersionGet`'s walk, where the first table
+holding the user key wins and the walk stops.
+
+**The standing question it adds.** When a mutant survives, before reaching for any of the three
+meanings: *is the line this patch is aimed at actually the line that carries the property, or is a
+comment answering that question for me?*
 
 ---
 
