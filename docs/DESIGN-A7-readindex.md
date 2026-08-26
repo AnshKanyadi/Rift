@@ -961,6 +961,65 @@ class** until the shape has been varied.
 
 ---
 
+## 5e. What a read gets for being a log entry — the enumeration **[EXIT CRITERION]**
+
+**Ansh, on BUG-026:** *"At D-A7-5 I ruled that reads leaving the log was A7's governing constraint,
+and we guarded the read mark because BUG-022 depended on reads being log entries. The ownership check
+is a different member of that same class and nobody enumerated the class. One member cost 526 seeds;
+I want the list rather than the next member."*
+
+So this is the list. Every check that runs on a plain read **because the read is an entry in the log**,
+and for each: does read index **preserve** it, **replace** it, or **drop** it.
+
+**The marks are evidenced, not asserted.** *Preserved* means a test shows the check still runs under
+read index. *Replaced* means the replacement is named and induced. *Dropped* means the consequence is
+stated and either accepted with a reason or fixed. An enumeration whose entries are unevidenced is a
+list, not a finding.
+
+| # | what the entry buys | read index | evidence |
+|---|---|---|---|
+| 1 | **extent ownership** — apply asks `desc.Contains`; outside it, `rerouteAt` | **was DROPPED → now REPLACED** | BUG-026. `serveReadyReads` checks the extent at answer time and reroutes. Induced by `M78`; caught by `read-index-answers-match-the-log` HALF THREE, itself induced in `TestReadIndexAgreementSpeaks` |
+| 2 | **the read's timestamp is log-ordered** — the leader stamps the entry, entries apply in order, so a read's stamp is above every earlier write's | **was DROPPED → now REPLACED** | BUG-028. A plain read names no timestamp: `kv.ReadLatest`. Induced by `M79`; caught by the same oracle once its model read *latest* for an off-log answer |
+| 3 | **the answer matches a proposal by identity, never by position** (BUG-004) | **REPLACED** | `raft.ReadIndex` refuses an empty context precisely so arrival order cannot become an identity; `TestReadIndexRefusesAnEmptyContext` |
+| 4 | **staged writes are flushed before a get is answered** — a read at a position sees that position's state | **PRESERVED** | `serveReadyReads` runs after the apply block's own `flushApply`, so no batch is outstanding when it reads. `TestOneApplyPath` pins the single apply path this rests on |
+| 5 | **the GC-mark refusal** — a read below the mark is refused, not answered with an older state | **REPLACED, and deliberately narrower** | A plain read names no timestamp, so there is nothing for the mark to be below; `ReadLatest` does not consult it. The mark still refuses every *snapshot* read, which is what it exists for |
+| 6 | **the read mark** — BUG-022's third first-committer-wins guard, staged as an applied effect | **NOT APPLICABLE, and this is the one D-A7-5 already guarded** | Read marks are staged only in `kv/txn.go`: a plain read stages none. A read carrying a timestamp keeps its log entry, so nothing that stages a mark reaches this path. `M71` re-pointed is this boundary negated |
+| 7 | **total order against concurrent writes** — the entry sits at a definite position | **REPLACED** | The confirmed index plus `applied >= index`. Both halves are asserted by the oracle; `M76` removes the second and is killed |
+| 8 | **leadership** — only a leader may propose | **REPLACED** | The confirming quorum, and for a follower the leader's index. `D-A7-1`; a read recorded under a term this node has left is not confirmed (`TestAReadIsNotConfirmedByAStaleTerm`) |
+| 9 | **the descriptor epoch at arrival** | **PRESERVED — shared** | Both paths enter through `Node.onClient`, which refuses a stale descriptor before either branch. `StaleEpochRefusals` is nonzero on every sweep |
+| 10 | **durability of the answer across a crash** | **NOT APPLICABLE** | A read mutates nothing. The messages that *carry* a read index do attest to a term, which is BUG-027 |
+
+### 5e.1 What the enumeration cost and what it returned
+
+Entry 1 was the defect that prompted it: 526 seeds, found by porcupine. **Entry 2 was found by
+writing entry 2** — listing the property and asking whether read index kept it. It had been live
+since `90a4844`, it is invisible to porcupine in a quiet history, and it was masked in the full sweep
+by entry 1's much higher rate. No further sweep found it and no code review did.
+
+> **A class is cheaper to enumerate than to meet one member at a time.** The first member costs a
+> 25,000-seed run; the second costs a table row.
+
+### 5e.2 The shape the two dropped entries share
+
+Both are checks the replicated path gets **for free from the apply loop**, and both were dropped by
+the same structural fact — *read index has no entry, so it reaches no apply, so it reaches no check.*
+Entry 2 is the sharper of the two because the implementation did not merely omit the property, it
+**kept the form and lost the content**: `answerAt`'s comment says a replicated read is answered *"at
+its own timestamp… not at the newest version"*, which is right there because the entry's timestamp is
+log-ordered. `serveReadyReads` copied "answered at a timestamp" and inherited none of what made it
+safe.
+
+> **Copying the shape of a guarantee is how you lose it quietly.** The code looked like the code that
+> was correct.
+
+### 5e.3 The standing obligation this creates
+
+Any future path that answers a client without going through the log — and D-A7-4 keeps both paths for
+exactly this reason — **restates this table before it ships**. The table is the deliverable, not the
+two fixes.
+
+---
+
 ## 6. What A7 does not do
 
 - **Leader leases** — STRETCH, Amendment A6, and §3's D-A7-1B says why reconsidering them here would
@@ -1186,6 +1245,14 @@ separates an oracle that works from one that merely speaks.
 6. **§4's fact count and §4.1's assumption audit both reported at close.** Ten facts named before the
    code, reported before-and-after with exclusions stated; six assumptions re-asked against the code
    that landed. **They fail differently and that is why there are two** — ruling 10.
+7. **§5e's enumeration, with every entry evidenced.** Added by Ansh on BUG-026: *"The ownership check
+   is a different member of that same class and nobody enumerated the class… One member cost 526
+   seeds; I want the list rather than the next member."* Every check a plain read gets **because it is
+   a log entry**, marked preserved / replaced / dropped — where *preserved* means a test shows the
+   check still runs, *replaced* means the replacement is named and induced, and *dropped* means the
+   consequence is stated and either accepted with a reason or fixed. **An enumeration whose entries
+   are unevidenced is a list, not a finding.** It has already returned BUG-028, which no sweep and no
+   review found.
 
 ### 8.3 Seed count and sequencing
 

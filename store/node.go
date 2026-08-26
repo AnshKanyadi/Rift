@@ -314,6 +314,11 @@ type Replica struct {
 	readSeq      uint64
 	pendingReads []pendingRead
 
+	// readsOutOfExtent counts read-index reads rerouted at ANSWER time because
+	// this range's extent no longer covered the key. BUG-026's fix, with its own
+	// number so the fix can be seen to have run.
+	readsOutOfExtent int
+
 	// outOfExtent counts committed commands refused at apply for naming a key
 	// outside this range's extent at that log position (BUG-014).
 	outOfExtent int
@@ -389,7 +394,13 @@ type pendingRead struct {
 	ctx     []byte
 	histIdx int
 	key     string
-	at      hlc.Timestamp
+
+	// anyReplica is what the CLIENT asked for, kept so a reroute reissues the
+	// same question. Dropping it would silently turn a follower read into a
+	// broadcast read -- the same silent conversion `rerouteAt` refuses for a
+	// remembered timestamp, for the same reason: the retry must be the request,
+	// not a request.
+	anyReplica bool
 
 	// index is the confirmed read index, set when the ReadState arrives. Zero
 	// means the confirming quorum has not answered yet.
@@ -537,7 +548,7 @@ func (n *Replica) onClient(req Request) {
 			return
 		}
 		n.pendingReads = append(n.pendingReads, pendingRead{
-			ctx: ctx, histIdx: req.HistIdx, key: req.Key, at: at,
+			ctx: ctx, histIdx: req.HistIdx, key: req.Key, anyReplica: req.AnyReplica,
 			viaFollower: n.raft.Role() != raft.RoleLeader,
 		})
 		return
@@ -609,6 +620,27 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			// that would reconcile them.
 			n.ingest(vs, mark)
 			n.desc = desc
+			// # The state machine has reached the snapshot's index, and
+			// # `applied` is the only thing that says so
+			//
+			// `n.applied` was written in exactly ONE place -- the committed-entry
+			// branch -- so installing a snapshot moved the state machine forward
+			// and left this number behind. raft's own `appliedIdx` IS advanced on
+			// install, so the two were a shadowed fact updated on one path and
+			// not the other, which is the same family as the census counter that
+			// was incremented in a caller and in the function it was extracted
+			// into.
+			//
+			// It reads LOW, and low is not harmless here. `serveReadyReads` waits
+			// on it, so reads that the snapshot already answers wait for an entry
+			// that may never arrive on a quiet range; and the ledger records it
+			// as `AppliedAt`, so the differential oracle replays the log to a
+			// position BELOW the node's real state and accuses a correct answer
+			// of being stale. Seed 36 is that false accusation.
+			if meta.Index > n.applied {
+				n.applied = meta.Index
+				n.raft.AckApplied(n.applied)
+			}
 			n.snapshotsApplied++
 			n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
 				Index: meta.Index, Term: meta.Term, Digest: digest(rd.Snapshot.Data),
@@ -894,7 +926,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 		// 5. A7. Confirmed read indexes arrive here, and reads whose index this
 		//    replica has now applied are answered from local state.
 		n.takeReadStates(rd.ReadStates)
-		n.serveReadyReads(at)
+		n.serveReadyReads(at, s)
 	}
 }
 
@@ -926,11 +958,29 @@ func (n *Replica) takeReadStates(states []raft.ReadState) {
 // same shape as every other unanswered request here and for the same reason: a
 // client that gets no answer knows nothing, which is honest, and a client that
 // gets a stale answer has been lied to.
-func (n *Replica) serveReadyReads(at clock.Instant) {
+func (n *Replica) serveReadyReads(at clock.Instant, s sim.Scheduler) {
 	kept := n.pendingReads[:0]
 	for _, q := range n.pendingReads {
 		if q.index == 0 || n.applied < q.index {
 			kept = append(kept, q)
+			continue
+		}
+		// # The extent, re-checked HERE, which is BUG-026
+		//
+		// Arrival routed this request to the replica whose extent covered the
+		// key AT ARRIVAL (store/machine.go onClient). Between then and now this
+		// range can have applied a split, moved the key to the right-hand range
+		// and dropped it locally -- and answering from that state reports the
+		// absence of a RANGE as the absence of a VALUE.
+		//
+		// The replicated path never had this hole and never needed this line,
+		// because a read is an ENTRY there: it applies at a position, the apply
+		// loop asks `n.desc.Contains` like it does for every other command, and
+		// an entry outside the extent goes to `rerouteAt`. Read index has no
+		// entry, so it reaches no apply, so it reached no check. That is the
+		// general shape and DESIGN-A7 §5e enumerates the rest of it.
+		if !n.desc.Contains([]byte(q.key)) {
+			n.rerouteReadAt(q, at, s)
 			continue
 		}
 		n.readsServed++
@@ -938,15 +988,35 @@ func (n *Replica) serveReadyReads(at clock.Instant) {
 			n.followerReads++
 		}
 		val := ""
-		v, ok, err := n.mvcc.ReadAt([]byte(q.key), q.at)
+		// # The LATEST version, not a version at a clock reading -- BUG-028
+		//
+		// A plain read has no timestamp to protect. That sentence is D-A7-5's
+		// own, and it is the argument that let this read leave the log; the
+		// implementation then gave it a timestamp anyway -- this replica's HLC,
+		// read when the request arrived -- and `ReadAt` returns the newest
+		// version AT OR BEFORE it. Under skew inside maxOffset a follower's
+		// clock sits below the leader's, so a write stamped from the leader's
+		// clock is invisible to a read stamped from the follower's, however far
+		// past the confirmed index that follower has applied.
+		//
+		// Read index's whole claim is that it is correct WITHOUT trusting
+		// clocks. Answering at a clock reading put the clock back in.
+		v, ok, err := n.mvcc.ReadLatest([]byte(q.key))
 		// Recorded for `read-index-answers-match-the-log`, with OffLog set and
 		// Index the CONFIRMED read index rather than an entry's position --
 		// there is no entry. That oracle is the only instrument that can catch a
 		// stale read no client observed (DESIGN-A7 §5, ruling 5), and it can
 		// only see answers that were recorded, so this line is the whole of its
 		// input.
+		//
+		// `At` is the UNSET timestamp on purpose: this answer names no
+		// timestamp, and recording a clock reading beside it would invite the
+		// oracle to compare against a version window the read never asked for.
+		// raftcheck.ValueAtIndex reads the unset timestamp as "the latest
+		// version", which is the question this path actually asks.
 		n.cfg.Ledger.RecordRead(provenance.Witness(raftcheck.ReadRecord{
-			Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: q.index, Key: q.key, At: q.at,
+			Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: q.index, Key: q.key,
+			At:    hlc.Timestamp{},
 			Value: string(v), Found: ok && err == nil, Refused: err != nil, When: at,
 			OffLog: true, AppliedAt: n.applied,
 		}))
@@ -1174,6 +1244,35 @@ func (n *Replica) rerouteAt(e raft.Entry, op, key, value string, at clock.Instan
 	}
 	n.inflight = kept
 }
+
+// rerouteReadAt sends a read-index read back to whichever range owns its key
+// now, instead of answering it from a range that does not.
+//
+// It mirrors `rerouteAt` exactly, including the part that matters most: the
+// operation is NOT ended in the history. Nothing told the client anything, so
+// the history must not record that it did. Ending it OK with an empty value is
+// precisely BUG-026 -- a claim that the key is absent -- and ending it as an
+// error would be a different false claim, that the client was told.
+//
+// The reissued request carries no Range or Epoch, which means "unrouted": the
+// machine then routes it by extent, the way a client with a refreshed
+// descriptor would. `AnyReplica` survives, so a follower read stays a follower
+// read.
+func (n *Replica) rerouteReadAt(q pendingRead, at clock.Instant, s sim.Scheduler) {
+	n.readsOutOfExtent++
+	s.At(at+staleRetryDelay, sim.KindClient, sim.NodeID(n.cfg.Ordinal),
+		Request{Op: "get", Key: q.key, HistIdx: q.histIdx, AnyReplica: q.anyReplica})
+}
+
+// ReadsOutOfExtent is how many read-index reads this replica declined to answer
+// because its extent no longer covered the key, and rerouted instead.
+//
+// It is a SEPARATE counter from OutOfExtentRefusals rather than folded into it,
+// because the two mechanisms are different and each has to be able to read zero
+// on its own. A zero here across a sweep with splits means the arrival-to-answer
+// window never opened, and the fix for BUG-026 is then untested by that sweep --
+// which is the one thing a shared counter would have hidden.
+func (n *Replica) ReadsOutOfExtent() int { return n.readsOutOfExtent }
 
 // OutOfExtentRefusals is how many committed commands this replica refused to
 // apply for naming a key its extent no longer covers.
@@ -1559,6 +1658,11 @@ func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, vs []kv.Record, mark hlc
 	}
 	n.raft = r
 	n.ingest(vs, mark)
+	// A range that starts FROM a snapshot has a state machine at that snapshot's
+	// index, and nothing else will say so: no committed batch covers it.
+	if meta.Index > n.applied {
+		n.applied = meta.Index
+	}
 	n.durSnap = meta
 	n.jitter()
 }
@@ -1895,6 +1999,13 @@ func (n *Replica) restartFrom(stR provenance.Reported[recovered]) {
 	// leader confirms it -- which is the "snapshot plus tail" half of the
 	// equivalence this phase has to prove.
 	n.ingest(st.versions, st.mark)
+	// Recovery puts the state machine back at the stored snapshot's index. The
+	// log tail above it comes back through Ready.Committed and advances this
+	// again; without this line the window between them reports a state machine
+	// further back than it is.
+	if st.snap.Index > n.applied {
+		n.applied = st.snap.Index
+	}
 
 	// # The extent is applied state, and it is recovered only from an index
 	//

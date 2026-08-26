@@ -71,6 +71,23 @@ func TestPowerProbe(t *testing.T) {
 		opt = hunt.A4Options()
 	case "a5":
 		opt = hunt.A5Options()
+	case "a7-nosplit":
+		// # A7's shape with splitting off, and it is a SHAPE rather than a hack
+		//
+		// §5d: a detection floor is a property of the class AND the shape,
+		// jointly, and a floor recorded without its shape is not a measurement.
+		// Three classes found in one session measured DEAD under `current` and
+		// are demonstrably alive here -- BUG-028 and BUG-032 were both first
+		// observed on this shape, at seeds 22 and 36.
+		//
+		// Splitting is what hides them, and the mechanism is not mysterious: a
+		// split-born range seeds its clock from the entry that created it
+		// (BUG-023's fix) and holds fewer versions per key, so the two defects
+		// that need a wide clock spread or a deep version chain get neither.
+		// **That is a claim about which defects A7's sweep can find**, which is
+		// exactly what floors.go's rule says a schedule mix is.
+		opt = hunt.A7Options()
+		opt.SplitThreshold = 0
 	}
 
 	// # POWER_UNTHROTTLED, and the figure it exists to produce

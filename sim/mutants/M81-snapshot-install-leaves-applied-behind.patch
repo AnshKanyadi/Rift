@@ -1,0 +1,23 @@
+# id: M81-snapshot-install-leaves-applied-behind
+# covering-test: TestRaftExitCriteria
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 600
+# power-floor: 1
+# power-ceiling: 100
+# power-config: a7-nosplit
+# power-measured: 1 of 600, first at seed 36, under a7-nosplit -- and 0 of 800 under CURRENT. THE SHAPE IS PART OF THE FLOOR (DESIGN-A7 section 5d): splitting hides this class, because a split-born range seeds its clock from the entry that created it and holds fewer versions per key, so the deep version chain this defect needs never forms. Seed 36 is the seed the real defect was first observed on. A floor of 1 in 600 is fragile and is stated as such rather than rounded up into confidence
+# mutates: installing a snapshot no longer advances this replica's `applied`, so the state machine moves forward and the number that says where it is does not. raft's own appliedIdx IS advanced on install, so this restores a shadowed fact maintained on one path and not the other -- the same family as a census counter incremented both in a caller and in the function extracted out of it, except that this one reads LOW. Low is not harmless: serveReadyReads waits on it, so a read the snapshot already covers waits for a committed entry that may never arrive on a quiet range; and the ledger records it as AppliedAt, so read-index-answers-match-the-log replays the committed log to a position BELOW the node's real state and reports a correct answer as stale. It is killed by that oracle -- as a FALSE ACCUSATION of a correct answer, which is the shape this class always takes and the reason it went three phases unnoticed: nothing in the tree compared a node's claimed position against its actual state, and the oracle that could compare them derived both sides from the same understated number until BUG-028's fix made the model read the latest version instead
+--- a/store/node.go
++++ b/store/node.go
+@@ -637,10 +637,6 @@
+ 			// as `AppliedAt`, so the differential oracle replays the log to a
+ 			// position BELOW the node's real state and accuses a correct answer
+ 			// of being stale. Seed 36 is that false accusation.
+-			if meta.Index > n.applied {
+-				n.applied = meta.Index
+-				n.raft.AckApplied(n.applied)
+-			}
+ 			n.snapshotsApplied++
+ 			n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
+ 				Index: meta.Index, Term: meta.Term, Digest: digest(rd.Snapshot.Data),

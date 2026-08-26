@@ -157,6 +157,29 @@ func TestAFollowerAsksTheLeaderRatherThanConfirmingItself(t *testing.T) {
 	if err := r.ReadIndex([]byte("f")); err != nil {
 		t.Fatalf("read index: %v", err)
 	}
+
+	// # The forward is WITHHELD until this follower's term is durable (BUG-027)
+	//
+	// The MsgApp above bumped this node from term 0 to term 1, so the hard state
+	// is dirty. The forward carries `Term: r.term`, which is a claim about that
+	// term, and a claim about a term that is not on disk is the term-amnesia
+	// case the gate enumeration names.
+	//
+	// **This assertion is the shape of the defect.** The version of this test
+	// that shipped with A7 drained Ready() here and required the forward to be
+	// present -- so it did not merely fail to catch BUG-027, it PINNED the
+	// ungated behaviour, and adding the gate turned it red. A test that asserts
+	// a message goes out immediately is a test that will resist any gate ever
+	// being added to it.
+	rd0 := r.Ready()
+	for _, m := range rd0.Messages {
+		if m.Type == MsgReadIndex {
+			t.Fatalf("a follower forwarded a read advertising term %d before its own term was "+
+				"durable; a crash here forgets a term this node has already spoken in", m.Term)
+		}
+	}
+	r.AckPersisted(rd0.Mark)
+
 	var asked bool
 	for _, m := range r.Ready().Messages {
 		if m.Type == MsgReadIndex && m.To == 1 {
@@ -164,7 +187,8 @@ func TestAFollowerAsksTheLeaderRatherThanConfirmingItself(t *testing.T) {
 		}
 	}
 	if !asked {
-		t.Error("a follower asked to serve a read did not forward to the leader")
+		t.Error("a follower asked to serve a read did not forward to the leader once its term " +
+			"was durable; the gate must withhold, not drop")
 	}
 	if err := r.Step(Message{Type: MsgReadIndexResp, From: 1, To: 2, Term: 1,
 		ReadCtx: []byte("f"), ReadIndex: 7}); err != nil {

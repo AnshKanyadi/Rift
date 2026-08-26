@@ -261,7 +261,7 @@ smoke: ## $(SMOKE_SEEDS)-seed simulator smoke: the correct toy, all checkers on
 	$(GO) run ./cmd/simctl hunt --from 0 --to $(SMOKE_SEEDS) --workers $(WORKERS)
 
 .PHONY: exit-run
-exit-run: ## The A6 exit run: $(EXIT_SEEDS) seeds across $(EXIT_SHARDS) contiguous shards, aggregated
+exit-run: ## The exit run (shape read from the options it sweeps): $(EXIT_SEEDS) seeds across $(EXIT_SHARDS) contiguous shards, aggregated
 	sh scripts/exit-run.sh $(EXIT_SEEDS) $(EXIT_SHARDS) $(EXIT_OUT)
 	RAFT_SHARD_DIR=$(EXIT_OUT) RAFT_TOTAL=$(EXIT_SEEDS) \
 		$(GO) test -count=1 -run TestRaftExitAggregate -v ./sim/hunt/

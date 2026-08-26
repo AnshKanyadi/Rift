@@ -1074,6 +1074,13 @@ type RaftResult struct {
 	NoOpReachedArm int
 	NoOpAnswered   int
 
+	// ReadsOutOfExtent is how many read-index reads were declined at ANSWER
+	// time because the range's extent no longer covered the key, and rerouted.
+	// BUG-026's fix, with its own number: a sweep reading ZERO has not opened
+	// the arrival-to-answer window the fix exists for, and a green over that is
+	// this register's commonest entry.
+	ReadsOutOfExtent int
+
 	// ReadsServed counts reads answered by read index rather than by the log.
 	ReadsServed int
 
@@ -1684,6 +1691,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.NoOpAnswered += d.NoOpAnswered()
 		res.ReadsServed += d.ReadsServed()
 		res.FollowerReads += d.FollowerReads()
+		res.ReadsOutOfExtent += d.ReadsOutOfExtent()
 		res.GCProposed += d.GCProposed()
 		res.GCApplied += d.GCApplied()
 		res.VersionsCollected += d.VersionsCollected()
@@ -1812,6 +1820,7 @@ type RaftCensus struct {
 	NoOpAnswered        int
 	ReadsServed         int
 	FollowerReads       int
+	ReadsOutOfExtent    int
 	ReadAgreeCompared   int
 	ReadIndexRuns       int
 	MovesOrdered        int
@@ -1881,20 +1890,59 @@ func SweepRaft(from, to uint64) (RaftCensus, error) {
 // SweepRaftWith sweeps a seed range under explicit options, for the lanes that
 // vary the build: the unthrottled collector and the overlapped drivers.
 func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
+	return SweepRaftWithProgress(from, to, opt, nil)
+}
+
+// SweepRaftWithProgress is the sweep with a per-seed progress hook.
+//
+// # Why the hook is synchronous, and why that is not a style preference
+//
+// A shard writes its census on completion and nothing before it, so for six and
+// a half hours a running shard and a hung one look identical from outside -- and
+// a shard that DIES is exactly the case the missing line cannot distinguish from
+// one that is merely slow.
+//
+// The hook is called from this loop, which is the only place that knows how far
+// it has got. It is NOT a goroutine and NOT a ticker: this loop drives the
+// deterministic simulator, and a second thread of control anywhere near it
+// trades an observability gap for a determinism risk, which is a bad trade in
+// this repository specifically. A synchronous call on a loop the caller already
+// owns adds no scheduling and cannot affect a trace.
+//
+// It is called AFTER each seed completes, with the count completed, so the
+// number it reports is a number of finished seeds rather than a number of
+// started ones. `nil` is the default and costs a nil check per seed.
+func SweepRaftWithProgress(from, to uint64, opt RaftOptions,
+	onSeed func(seed uint64, done, total int)) (RaftCensus, error) {
 	var c RaftCensus
+	total := int(to - from)
 	for seed := from; seed < to; seed++ {
 		p, err := MaterializeRaftWith(seed, opt)
 		if err != nil {
 			return c, err
 		}
 		r, err := RunRaftWith(p, opt, nil)
-		c.Seeds++
 		if err != nil {
+			// # The ONLY hand-written Seeds increment, and it is on this path
+			//
+			// CensusOf sets Seeds = 1 and is the census of one seed. A seed that
+			// errored never reaches it, so the attempt is counted here instead.
+			//
+			// It used to be counted here AND there: `c.Seeds++` sat above this
+			// branch while CensusOf also set it, so every shard reported exactly
+			// twice the seeds it ran. That doubling halved the printed s/seed
+			// and halved three per-seed rate checks, and it was introduced by
+			// extracting CensusOf and leaving the increment behind in the caller
+			// it was extracted from.
+			c.Seeds++
 			c.Errors++
 			return c, fmt.Errorf("seed %d: %w", seed, err)
 		}
 
 		c = AddCensus(c, CensusOf(seed, r))
+		if onSeed != nil {
+			onSeed(seed, int(seed-from)+1, total)
+		}
 	}
 	return c, nil
 }
@@ -1932,6 +1980,7 @@ func CensusOf(seed uint64, r RaftResult) RaftCensus {
 	c.NoOpAnswered += r.NoOpAnswered
 	c.ReadsServed += r.ReadsServed
 	c.FollowerReads += r.FollowerReads
+	c.ReadsOutOfExtent += r.ReadsOutOfExtent
 	c.ReadAgreeCompared += r.ReadAgreeCompared
 	c.ReadIndexRuns += r.ReadIndexRuns
 	c.MovesOrdered += r.MovesOrdered
@@ -2079,6 +2128,7 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.NoOpAnswered, b.NoOpAnswered},
 		{&out.ReadsServed, b.ReadsServed},
 		{&out.FollowerReads, b.FollowerReads},
+		{&out.ReadsOutOfExtent, b.ReadsOutOfExtent},
 		{&out.ReadAgreeCompared, b.ReadAgreeCompared},
 		{&out.ReadIndexRuns, b.ReadIndexRuns},
 		{&out.MovesOrdered, b.MovesOrdered}, {&out.MovesCompleted, b.MovesCompleted},
@@ -2132,23 +2182,46 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 // comparing against the final state would pass a read that missed a write and
 // fail one that correctly did not see a later one.
 func valueAtIndex(l *raftcheck.Ledger) raftcheck.ValueAtIndex {
-	return func(rangeID uint64, upto raft.Index, key string, at hlc.Timestamp) (string, bool, bool) {
+	return func(rangeID uint64, upto raft.Index, key string, at hlc.Timestamp) (string, bool, bool, bool) {
 		for _, rl := range l.Ranges() {
 			if rl.ID() != rangeID || rl.Base() == nil {
 				continue
 			}
-			committed := rl.Committed()
-			prefix := make([]raft.Entry, 0, len(committed))
-			for _, e := range committed {
-				if e.Index > upto {
-					break
-				}
-				prefix = append(prefix, e)
+			// # The prefix comes from CommittedPrefix, and the hand-rolled one
+			// # it replaces was silently truncating
+			//
+			// `rl.Committed()` is in ARRIVAL order across nodes, not index
+			// order -- RecordApplied appends whatever a node applied when it
+			// applied it. The loop that used to be here walked that slice and
+			// `break`ed at the first entry above `upto`, so on any run where a
+			// node applied out of arrival order the replay lost every entry
+			// after that point and the model answered from a prefix that was
+			// not the prefix.
+			//
+			// It was invisible for the whole phase because both sides of the
+			// comparison read at the same recorded timestamp, so a truncated
+			// replay usually still matched. Correcting the model to read the
+			// LATEST version (BUG-028) made it speak, and it accused a correct
+			// answer on seed 36 -- which is how the truncation was found.
+			//
+			// CommittedPrefix already existed, exported, index-ordered and
+			// deduped, and it reports NOT-OK when the ledger has not witnessed
+			// every entry rather than guessing at the gap. `ok=false` here
+			// means the oracle abstains, which is BUG-016's standard: an
+			// instrument with no expectation concludes nothing rather than
+			// accusing a correct run.
+			prefix, complete := rl.CommittedPrefix(upto)
+			if !complete {
+				return "", false, false, false
 			}
 			desc, _, recs, ok := store.ReplayMachine(rl.Base(), prefix)
 			if !ok {
-				return "", false, false
+				return "", false, false, false
 			}
+			// Ownership at the replayed position, derived from the descriptor
+			// the SAME replay produced. Taking it from the live replica would
+			// be asking the system under test whether it behaved.
+			owned := desc.Contains([]byte(key))
 			// The visible version at `at`: the highest committed data version at
 			// or below it. Derived from the replayed records rather than asked
 			// of any store, which is the independence the oracle rests on.
@@ -2165,15 +2238,18 @@ func valueAtIndex(l *raftcheck.Ledger) raftcheck.ValueAtIndex {
 				if !ok || string(k) != key {
 					continue
 				}
-				if at.Less(vAt) {
+				// An unset `at` is "the latest version" -- the question a
+				// plain read asks. A set one is the newest at or below it,
+				// which is what a read naming a timestamp asks.
+				if at.IsSet() && at.Less(vAt) {
 					continue
 				}
 				if !found || bestAt.Less(vAt) {
 					bestAt, bestVal, found = vAt, string(r.Value), true
 				}
 			}
-			return bestVal, found, true
+			return bestVal, found, owned, true
 		}
-		return "", false, false
+		return "", false, false, false
 	}
 }

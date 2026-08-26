@@ -167,6 +167,58 @@ func (s *Store) ReadAt(key []byte, ts hlc.Timestamp) ([]byte, bool, error) {
 	return append([]byte(nil), it.Value()...), true, it.Error()
 }
 
+// ReadLatest returns the newest version of a key, with no timestamp bound.
+//
+// # Why a plain read must not name a timestamp at all
+//
+// This exists because BUG-028 was the second member of a class, and the first
+// member is the reason read index was allowed to leave the log in the first
+// place. D-A7-5's ruling rests on one sentence:
+//
+//	a PLAIN read has no timestamp to protect. It is a linearizable read of the
+//	latest value, it participates in no transaction, and no prewrite's
+//	correctness depends on whether it happened.
+//
+// The implementation then gave it a timestamp anyway -- the serving replica's
+// own HLC, read when the request arrived -- and `ReadAt` is documented to return
+// *the newest version at or before ts*. Under skew inside maxOffset a follower's
+// clock sits below the leader's, so a write the leader stamped above that
+// follower's clock is invisible to a read the follower answers, however far past
+// the confirmed index that follower has applied. The read waited correctly and
+// then asked the wrong question.
+//
+// So a plain read asks for the latest version and nothing else. The freshness
+// guarantee comes from the read index -- applied >= confirmed index means every
+// write committed at or below that position is in this state machine -- and a
+// clock reading cannot strengthen that and can only weaken it.
+//
+// # And it does not consult the mark, deliberately
+//
+// The mark refuses reads at a timestamp GC has passed, because the versions that
+// were visible there are gone and any answer would be a state that never
+// existed. A read of the LATEST version names no timestamp, so there is nothing
+// for the mark to be below: whatever the newest version is, it is the current
+// value, and GC never collects it. A refusal here would be refusing a read of
+// the present because the past was collected.
+func (s *Store) ReadLatest(key []byte) ([]byte, bool, error) {
+	s.reads++
+	prefix := KeyPrefix(s.ns, key)
+	it := s.db.NewIter(engine.IterOptions{Lower: prefix, Upper: prefixEnd(prefix)})
+	defer func() { _ = it.Close() }()
+
+	// Versions sort newest-first within a key, so the first record in the key's
+	// own range IS the newest version. This is the same ordering ReadAt relies
+	// on, entered at the top instead of at a seek target.
+	if !it.SeekGE(prefix) {
+		return nil, false, it.Error()
+	}
+	gotKey, _, ok := DecodeKey(s.ns, it.Key())
+	if !ok || string(gotKey) != string(key) {
+		return nil, false, it.Error()
+	}
+	return append([]byte(nil), it.Value()...), true, it.Error()
+}
+
 // AdvanceGCInto stages a garbage-collection pass into a batch: every version
 // strictly below `to` for keys in [start, end) is removed, and the mark moves.
 //

@@ -1705,3 +1705,341 @@ second arrived in a different codec six phases later.
 reported perfect health: leader reads served normally, no error counters moving, no message losses
 recorded. A client library with a timeout would see follower reads as universally slow and route
 around them, and the feature would be quietly dead in a system whose own tests said it worked.
+
+### BUG-026 — a read was answered by a range that no longer held the key
+
+| | |
+|---|---|
+| **Symptom** | A client wrote a key, was acknowledged, read it back a second later and was told the key was absent. 526 of 25,000 seeds (2.10%) in A7's exit run. |
+| **Found by** | per-key linearizability, in A7's 25,000-seed exit run — every one of the eight shards. First at seed 30. |
+| **Reproduce (seed)** | `30` under A7's shape; `k06`, in 5 s. Disappears with `SplitThreshold = 0` at unchanged read volume (5 of 5 seeds → 0 of 5), which is the isolation. |
+| **Invariant that caught it** | Linearizability of single-key reads and writes — and, after the oracle was given the half it was missing, `read-index-answers-match-the-log`. |
+| **Mutant class** | `M78-read-answered-outside-its-extent`, added with the fix. |
+
+**The defect.** `Node.onClient` routes a request to the replica whose extent covers the key **at
+arrival**. A read-index read is then queued and answered later. Between those two moments the range
+can apply a split, hand the key to the right-hand range and drop it locally — and
+`serveReadyReads` answered from that state anyway, because it never asked whether the range still
+owned the key.
+
+```
+put v5   call=533720516   ret=546804263    ok
+get      call=1501478943  ret=1509850844   ok  value=""      <- a second after the ack
+```
+
+> **The answer describes the absence of a RANGE and was delivered to the client as the absence of a
+> VALUE.**
+
+**Why the replicated path never had this hole.** Because a read is an **entry** there. It applies at
+a log position, the apply loop asks `n.desc.Contains` exactly as it does for every other command, and
+an entry outside the extent goes to `rerouteAt` — which pointedly does **not** end the operation in
+the history, because nothing told the client anything. Read index has no entry, so it reaches no
+apply, so it reached no check.
+
+**The oracle was right and silent, and that is the entry that pairs with §5b.** A7's differential,
+`read-index-answers-match-the-log`, replays the range's committed log to the position the node
+reached and compares. Range 1's log at that position genuinely no longer holds `k06` — the split
+entry removed it. **So the live answer and the replay agreed, both saying "not found", and the only
+instrument that can catch a stale read no client observed was silent while a client was being told a
+key it had just written was gone.**
+
+§5b's entry is an oracle that was *wrong* and a mutant that found it. This one is an oracle that was
+*right about the property it checked* and silent about the property that was violated — and §4.1
+states it exactly:
+
+> **Naming every fact you take is not the same as naming every fact you need.**
+
+Ownership was a fact `serveReadyReads` needed, did not take, and no instrument was ever asked for.
+Together the two entries are the honest account of what an oracle is.
+
+**The fix is two parts, and the narrow one is the smaller.** Narrow: `serveReadyReads` consults the
+extent at answer time and reroutes rather than answering, never ending the operation OK — matching
+`rerouteAt` exactly, including a separate counter (`ReadsOutOfExtent`) so the fix can be seen to have
+run rather than assumed to have. Broad: **DESIGN-A7 §5e enumerates every check that currently runs
+because a read is a log entry**, and marks each preserved, replaced or dropped with evidence. That
+enumeration is an A7 exit criterion, and it immediately produced BUG-028.
+
+**What it would have caused in production.** Every range split would silently manufacture a window in
+which reads of moved keys returned "key not found" to clients that had just written them. It scales
+with split rate, so it gets worse exactly as a cluster grows, and it is invisible to every health
+metric: the read succeeded, quickly, with a well-formed answer.
+
+### BUG-027 — the read-index wire advertised a term that was not on disk
+
+| | |
+|---|---|
+| **Symptom** | A follower forwarded a read, or a leader answered one, carrying a term that had not been persisted. 118 of 25,000 seeds (0.47%). |
+| **Found by** | `persist-before-reply`, unaided — an A1 oracle catching an A7 wire. |
+| **Reproduce (seed)** | `99`, `155`, `375` under A7's shape (3 in 640). Requires follower reads: with `FollowerReadPerMille = 0` no `MsgReadIndex`/`MsgReadIndexResp` is ever sent. |
+| **Invariant that caught it** | Persist before reply — term, vote and log durable before replying to any RPC. |
+| **Mutant class** | `M80-a-new-message-type-joins-the-allow-list`, added with the fix. |
+
+**The defect.** `MsgReadIndex` and `MsgReadIndexResp` were emitted through `r.send`, whose own doc
+comment reads *"releases a message that attests to no persistent state"*. Both carry `Term: r.term`.
+
+**It was described in advance, in the exact terms it occurred in.** One screen below the call site,
+`sendGatedOn`'s comment:
+
+> *The TERM's mark is added here rather than at each call site, because **every message that leaves
+> this node carries r.term and therefore makes the same claim about it**. A call site that forgot
+> would be a gate missing from one message type, which is precisely how the first fix for BUG-017
+> covered two of the three paths that emit an append response.*
+
+> **A comment that predicts a defect and does not prevent it is a comment doing the wrong job.**
+
+**And the enumeration argued itself into it.** The normative gate table's stanza for this message
+said, in full: *"gated on: a leadership-confirming quorum, **not** durability — without it: nothing.
+Read index attests to a commit index, which is already durable by the time it is committed."* Every
+word of that is true **about the payload**, and the message carries a second attestation on the same
+wire. The argument covered one and not the other. That is BUG-017's first fix, one phase later, in
+prose instead of in code.
+
+**The fix is three parts.**
+
+1. Both sites take `sendGated`, with `// GATE:` comments.
+2. **`send` refuses by default.** It now accepts only the three types with a written non-gate
+   argument (`MsgPreVote`, `MsgPreVoteResp`, `MsgTimeoutNow`) and panics on anything else, naming the
+   remedy. The default is inverted: **a new message type is gated unless somebody enumerates it,
+   rather than ungated unless somebody remembers.** The test is by TYPE rather than by term value,
+   which is exact — a value test would false-accuse `MsgPreVoteResp`, which echoes the *requester's*
+   proposed term and can legitimately equal this node's own.
+3. `tools/gatepin` gains **the direction that was missing**. It walked `// GATE:` comments and
+   required each to be discharged by a withholding send — keyed on the comment, so a gate that is
+   *enumerated* and has no comment anywhere is invisible to it. That is precisely what
+   `MsgReadIndexResp` was: in the pinned set, with a plain `r.send`, and no test connecting those two
+   facts. Now the enumeration is walked too, and the pair is the invariant: **the set of documented
+   gates and the set of marked gated sends are the same set.** Induced by removing a marker.
+
+**`MsgTimeoutNow`: gated by consequence, not by luck.** The other two ungated term-bearing sites were
+triaged rather than assumed. Both are reachable only from `RoleLeader` with a different voter as
+target (`TransferLeadership` panics on self); becoming leader of a multi-voter configuration in term
+T requires `MsgVote` for T, and that send is gated on T's durability — so T is durable before the
+node is a leader, hence before either site. The single-voter case reaches neither. **The argument
+holds and was written down nowhere**, and the paragraph that *was* written down argues about what the
+order means, which is not what the oracle checks. An unwritten premise is how the second occurrence
+of a class gets scheduled.
+
+**A test was pinning the defect in place.** `TestAFollowerAsksTheLeaderRatherThanConfirmingItself`
+drained `Ready()` immediately after `ReadIndex` and required the forward to be present, so adding the
+gate turned it **red**. It did not merely fail to catch BUG-027:
+
+> **A test that asserts a message goes out immediately is a test that will resist any gate ever being
+> added to it.**
+
+It now asserts both halves — withheld before `AckPersisted`, released after.
+
+**What it would have caused in production.** A follower crashes after forwarding a read advertising
+term T, restarts having forgotten T, and re-participates in a term it has already spoken in. It is
+the canonical term-amnesia case, on a wire added by a *read* path — the one place nobody expects to
+find a durability claim.
+
+### BUG-028 — a plain read was answered at a clock reading, and missed a write it had already applied
+
+| | |
+|---|---|
+| **Symptom** | A replica that had applied *past* the confirmed read index answered "not found" for a key its own committed log held. |
+| **Found by** | **the §5e enumeration** — not by a sweep, not by a code review. Listing the checks a read gets for being a log entry produced "the read's timestamp is log-ordered" as the second entry, and asking whether read index preserved it answered no. |
+| **Reproduce (seed)** | `22` with `SplitThreshold = 0` and follower reads on; `k06`. Measured 1 in 400 seeds with splits off, where BUG-026 does not mask it. |
+| **Invariant that caught it** | `read-index-answers-match-the-log`, once its model was corrected to read the **latest** version for an off-log answer. |
+| **Mutant class** | `M79-read-index-answers-at-a-clock-reading`, added with the fix. |
+
+**The defect.** `serveReadyReads` answered with `n.mvcc.ReadAt(key, q.at)`, where `q.at` was
+`n.hlc.Now()` taken on the serving replica **when the request arrived**. `ReadAt` is documented to
+return *the newest version at or before ts*. Under skew inside `maxOffset` a follower's clock sits
+below the leader's, so a write the leader stamped from its own clock is **invisible** to a read the
+follower stamps from its own — however far past the confirmed index that follower has applied.
+
+```
+range 1: node 2 answered a read of "k06" at 1600000004930000000.770 OFF THE LOG with ""
+(found=false), having applied to index 185 -- but that range's committed log at index 185
+holds "v9" (found=true)
+```
+
+The read waited correctly and then asked the wrong question.
+
+**The argument that let the read leave the log is the argument it violated.** D-A7-5 rules that read
+index may serve a plain read and nothing else, and the whole ruling rests on one sentence:
+
+> *a **plain** read has no timestamp to protect. It is a linearizable read of the latest value, it
+> participates in no transaction, and no prewrite's correctness depends on whether it happened.*
+
+**The implementation then gave it a timestamp anyway.** And read index's entire claim — the reason
+CLAUDE.md cuts leader leases and keeps this — is that it is *correct without trusting clocks*.
+Answering at a clock reading put the clock back in, in the one mechanism chosen for not needing one.
+
+**The fix.** `kv.Store.ReadLatest`: the newest version, no timestamp bound, and deliberately no GC
+mark check — the mark refuses reads at a timestamp GC has passed, and a read of the latest version
+names no timestamp for the mark to be below. The ledger records `At` as the **unset** timestamp for
+off-log answers, and `raftcheck.ValueAtIndex` reads unset as "the latest version", so the model asks
+the question the path actually asks.
+
+**Correcting the oracle is what made it visible.** The model previously read at `r.At` — the same
+clock reading the node used — so both sides were wrong in the same way and agreed. That is BUG-026's
+blindness in a second dimension, and it is why the enumeration is an exit criterion rather than a
+document.
+
+**What it would have caused in production.** Every follower read is a coin-flip against clock skew: a
+key written on a node whose clock runs fast reads as absent from a node whose clock runs slow, for as
+long as the offset lasts. It is worst exactly where follower reads are most wanted — a large cluster,
+spread out, with real offsets — and it produces *stale* answers rather than errors, so nothing
+retries.
+
+### BUG-029 — (harness) the seed count read double, and the wrong number agreed with what we already believed
+
+| | |
+|---|---|
+| **Symptom** | Every shard of A7's 25,000-seed exit run reported 6,250 seeds for a 3,125-seed range, and `TestRaftExitAggregate` refused to aggregate the run after 6h35m. |
+| **Found by** | reading the shard censuses. The aggregate's own coverage guard fired correctly; nothing had asked the same question at a scale anybody runs before launching. |
+| **Reproduce** | `TestASweepCountsEachSeedOnce` — two real seeds, ten seconds. Reads 4. |
+| **Invariant that caught it** | the exit aggregate's coverage assertion (contiguous, non-overlapping, exactly N). |
+| **Mutant class** | the test above *is* the induction; re-adding the increment turns it red. |
+
+**The defect.** `SweepRaftWith` did `c.Seeds++` and then folded in `CensusOf`, which sets
+`c.Seeds = 1`. Introduced at `d8589a9` by extracting `CensusOf` and **leaving the increment behind in
+the caller it was extracted from** — a known refactoring hazard whose tell is that two counting paths
+existed and only one was updated. `TestPowerProbe`, which the extraction was *for*, calls `CensusOf`
+correctly and was never affected.
+
+**A6 is untouched, and the way that was established is the part worth keeping.** A6's signed exit run
+is at `611d0b9`, seventeen hours before `d8589a9`. But the argument does not rest on dates: A6
+reported pass 24903 + violation 0 + inconclusive 97 = **25,000 exactly**, and its aggregate
+**passed** — running the same guard that refused A7's.
+
+> **When asking whether a past result carries a defect, prefer a mechanism that would have caught it
+> over a date.**
+
+**The corroboration, which is the finding.** `shard_test.go`'s header quoted "A6's 3.75 s/seed". That
+was A6's *planning* figure; A6's own exit run measured **8.4 s/seed** and said so in its commit
+message. The stale number survived in the comment anyway — and then A7's shards printed **3.75
+s/seed**, because a doubled denominator halved a true 7.5.
+
+> **A corrupted value that contradicts expectation gets questioned. One that confirms a stale
+> expectation is invisible. The most dangerous form of a wrong number is one that agrees with what
+> you were already going to believe.**
+
+Had the doubling produced 12.7 or 2.1 it would have been challenged on sight. It produced the number
+already written in the file that everyone read first.
+
+**Corollary, and it is actionable rather than rueful:** *a planning figure left in a comment becomes
+the expectation a real measurement is checked against, so it should be deleted the day the first real
+rate is taken.* Both stale figures are now gone from `shard_test.go` and `exit-run.sh`, and every
+number that replaced them says which run measured it.
+
+**Three checkers were reading a halved rate, and the direction matters.** None flipped on this run's
+values — but a checker weakened is a checker weakened whether or not it mattered on the day, so each
+site now says so:
+
+| site | true | reported | direction |
+|---|---|---|---|
+| inconclusive per-mille, floor 30 | **5.88** | 2.94 | halved |
+| seeds-with-contention, floor 10% | **99.96%** | 49.98% | halved |
+| seeds-with-no-leader, **ceiling 20%** | 0% | 0% | **halved, i.e. easier to pass** |
+
+The no-leader **ceiling** is the one to name: a halved value against a maximum **hides a failure**
+rather than inventing one, which is the direction that does not announce itself.
+
+### BUG-030 — (harness) a running script was edited, and a run's exit status stopped describing the run
+
+| | |
+|---|---|
+| **Symptom** | A7's exit run logged `all shards finished`, then `line 75: im/hunt/: No such file or directory`, then `line 78: syntax error near unexpected token 'done'`, and `make` returned 2. |
+| **Found by** | reading the run's log against the commits made during it. |
+| **Reproduce** | induced: a padded script rewritten **in place** (same inode) one second into a run. Top-level form dies `syntax error near unexpected token 'do'`, EXIT=2. `perl -i` renames and does **not** reproduce it. |
+| **Invariant that caught it** | none; this is the eighth instance of the observability family. |
+
+**The defect.** POSIX `sh` reads a script **incrementally, by byte offset, while it runs**. `b5eba7e`
+edited `scripts/exit-run.sh` forty minutes into the run to fix a banner. Six and a half hours later
+the shell returned from `wait`, resumed reading at its saved offset — now pointing into the middle of
+a file that had grown — executed a fragment of the loop body as a command (creating a spurious
+`shard-008.log`, with `i` at 8), hit a bare `done`, and exited 2.
+
+**The shards were unharmed**: already-forked children with their own binaries, their JSONs complete
+and their ranges intact. That is what makes this the sharpest form of the family:
+
+> **The run's own exit status stopped describing the run.** `EXIT=2` was evidence about the shell,
+> not about the sweep, and nothing said so.
+
+**The fix is two halves and the second is not decoration.** The body is now a `main()` function, so
+`sh` parses it in full before executing anything. **Measured**: with the wrapper and a bare
+`main "$@"`, the body ran correctly *and the shell then died 127 on the shifted tail*. Only
+`main "$@"; exit $?` closes it — the wrapper protects the run, the explicit exit protects the status.
+Separately, `wait` is now per-pid with the statuses counted, because a bare `wait` returns 0 whatever
+the children did, which is the same family again.
+
+"Do not touch the tree mid-run" remains the rule. This is what makes breaking it survivable.
+
+### BUG-031 — (harness) two standing lanes were red on the tree, and the handoff reported neither
+
+| | |
+|---|---|
+| **Symptom** | `make hatches` and `make corpus` — both CI lanes on every push, and `corpus` is A7 exit criterion §8.2.3 — were failing at `faad5a2`, before any work in this session. |
+| **Found by** | running them. Confirmed pre-existing by stashing every local change and re-running. |
+
+**The determinism lane.** `store/codec_readindex_test.go` — BUG-025's own fix — imports `os` to read
+`codec.go`'s source text. `store/` is core scope, where that is a violation. **The precedent was
+already written down in this repo**, in `tools/gatepin`'s header, explaining why the durability-gate
+pin lives under `tools/` and not in `raft/`: *"it reads the source text… Reading a file to check a
+contract is tooling, and tooling lives here."* The structural half moved to `tools/codecpin`; the
+semantic half, which needs no source text, stayed. **Not hatched** — a hatch is a per-line escape for
+code that must live where it is, not a way to legalise a misplaced file.
+
+**The corpus lane.** Every stored bundle diverges from its recorded trace, recorded at
+`c39a53adfb8c` — the commit immediately before A7's term-start no-op. The no-op moved every trace, as
+DESIGN-A7 §7 said it would; BUG-022's and BUG-024's bundles were re-pinned during the phase and the
+other twenty-two were not. `make corpus` has therefore been red since `965ec87`, A7's first commit.
+Regenerated here with `simctl replay --rerecord`, which keeps each plan and re-records this commit's
+observation — and then `make corpus-reproduces` is **read rather than assumed**, because they are
+different questions and A5 paid to learn it.
+
+**The finding is not either lane.** It is that a phase handoff written at the context limit reported
+`corpus-reproduces` (18 ok, 4 skip, 2 WEAK) in detail and did not report that `corpus` itself was
+red, and did not report the determinism lane at all.
+
+> **A lane's state is only carried forward if somebody runs it. A handoff that lists what a lane
+> found last time is not a statement about the lane's state now**, and the two read identically on
+> the page.
+
+### BUG-032 — a snapshot moved the state machine forward and left `applied` behind
+
+| | |
+|---|---|
+| **Symptom** | A replica answered a read with the correct, latest value while reporting a state-machine position several hundred entries below where it actually was. |
+| **Found by** | `read-index-answers-match-the-log` **false-accusing a correct answer** — seed 36 under A7's shape with splits off. Porcupine was green on that seed, and it was right. |
+| **Reproduce (seed)** | `36`, `SplitThreshold = 0`, key `k02`: node 2 answers `"v52"` (the latest write, and linearizable) while reporting `AppliedAt=512`, a position at which the log holds `"v73"`. |
+| **Invariant that caught it** | none — this is the *instrument* being wrong about the system, which is BUG-016's standard in the other direction. |
+| **Mutant class** | `M81-snapshot-install-leaves-applied-behind`. |
+
+**The defect.** `n.applied` was written in exactly **one** place: the committed-entry branch of the
+apply loop. Installing a snapshot ingests the whole state machine at the snapshot's index and never
+touched it. `raft`'s own `appliedIdx` **is** advanced on install (`raft.go:1198`, `:1588`), so the two
+were a shadowed fact updated on one path and not the other.
+
+> **The same family as BUG-029: one fact, two places that maintain it, one of them updated.** There
+> the count read high; here it reads low.
+
+**Low is not harmless, and it is not only a reporting problem.**
+
+- `serveReadyReads` waits on `n.applied`. A read whose confirmed index the *snapshot already covers*
+  waits for a committed entry instead — and on a quiet range that entry may never arrive, so the read
+  is never answered. An unanswered read is not a safety violation in this system, which is exactly
+  why nothing found this for three phases.
+- The ledger records it as `AppliedAt`, so the differential oracle replays the committed log to a
+  position **below** the node's real state and reports a correct answer as stale.
+
+**Three paths, not one.** The snapshot install during drain; a range that *starts* from a snapshot;
+and restart recovery from a stored snapshot. All three put the state machine at an index no committed
+batch covers, and all three now say so.
+
+**What it took to see it.** Nothing in the tree compared a node's claimed position against its actual
+state — and the oracle that could, could not, because both sides of its comparison were derived from
+the same understated number until BUG-028's fix made the model read the *latest* version instead.
+Correcting one instrument is what let the next defect speak.
+
+> **A false accusation is evidence too.** The oracle accused a correct answer, and the reason it was
+> wrong was a real defect in the system it was measuring. Chasing the accusation down rather than
+> tuning the oracle is the whole of the difference.
+
+**What it would have caused in production.** After any snapshot install — which is every replica that
+falls behind, every new replica added by a rebalance, and every restart — read-index reads against
+that replica stall until the next write commits. On a read-heavy range that has gone quiet, they
+stall indefinitely, and the replica reports itself healthy throughout.

@@ -495,6 +495,23 @@ func exitCriteriaFailures(c hunt.RaftCensus) []string {
 			"Every staleness assertion about the read-index path is then green over a path " +
 			"nothing took, which is this register's commonest entry (DESIGN-A7 section 8.2)")
 	}
+	// BUG-026's fix, with the number that says it ran.
+	//
+	// The window is arrival-to-answer: a read routed to the range that owned its
+	// key, then answered after that range split the key away. A sweep with
+	// splits in which this never fires has not opened the window, so every
+	// assertion about the fix is green over a path nothing took -- and the fix's
+	// own defect, BUG-026, was invisible for exactly as long as nothing counted
+	// this. Measured on the clean tree: 9 across 240 seeds, about one seed in
+	// twenty-seven, so an aggregate of 25,000 that reads zero has not got quiet,
+	// it has got broken.
+	if c.ReadIndexRuns > 0 && c.SplitsApplied > 0 && c.ReadsOutOfExtent == 0 {
+		add("splits were applied and read index ran, and not one read-index read was ever " +
+			"declined for naming a key its range had split away. That window is BUG-026's, " +
+			"it opens on about one seed in twenty-seven, and a sweep this size that never " +
+			"opened it is not exercising the fix -- it is reporting green over the path the " +
+			"defect lived on")
+	}
 	if c.NoOpsApplied == 0 {
 		add("no term-start no-op was ever applied across the whole sweep. A7 appends " +
 			"one per election, so a sweep with elections and no no-ops means the entry " +

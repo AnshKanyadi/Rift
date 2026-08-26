@@ -2255,7 +2255,17 @@ func (o *ResolutionAuthority) Check() *sim.Violation {
 // So the expectation comes from replaying the committed log, which is the same
 // independent execution snapshot equivalence uses, and the two answers are
 // compared.
-type ValueAtIndex func(rangeID uint64, upto raft.Index, key string, at hlc.Timestamp) (value string, found, ok bool)
+// The `at` argument is the timestamp the read named, and **the unset timestamp
+// means "the latest version"** -- which is what a plain read asks for and what
+// BUG-028 established a plain read must ask for. A plain read has no timestamp
+// to protect, so the model must not invent one for it either.
+//
+// `owned` reports whether the range still covered `key` at `upto`. It is
+// separate from `found` because they are different facts and BUG-026 is the
+// distance between them: a range that has split the key away answers "not
+// found", and "this range does not hold the key" is not a claim about the
+// key's value.
+type ValueAtIndex func(rangeID uint64, upto raft.Index, key string, at hlc.Timestamp) (value string, found, owned, ok bool)
 
 // ReadIndexAgreement: every read answered off the log matches what that range's
 // committed log produces at the index the read was confirmed at.
@@ -2307,6 +2317,17 @@ func (o *ReadIndexAgreement) Interested(sim.Kind) bool { return false }
 // OnStep is never called: see Interested.
 func (o *ReadIndexAgreement) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
 
+// latestForPlainRead is the timestamp the MODEL reads at, and for an off-log
+// answer it is deliberately the unset one.
+//
+// A read served by read index is a PLAIN read by construction: D-A7-5 rules that
+// a read carrying a timestamp keeps its log entry, so nothing with a timestamp
+// to protect ever reaches this path. Its freshness comes from the confirmed
+// index, not from a clock, and asking the model for "the newest version at or
+// before some clock reading" would reproduce BUG-028 inside the instrument that
+// exists to catch it.
+func latestForPlainRead(ReadRecord) hlc.Timestamp { return hlc.Timestamp{} }
+
 // Check compares every off-log answer against the log it claimed to reflect.
 func (o *ReadIndexAgreement) Check() *sim.Violation {
 	for _, r := range o.l.Reads() {
@@ -2336,7 +2357,22 @@ func (o *ReadIndexAgreement) Check() *sim.Violation {
 		// legitimately return a newer version, and demanding equality at Index
 		// would report that as a violation -- a false accusation of correct
 		// behaviour, which is BUG-016's standard.
-		want, found, ok := o.valueAt(r.Range, r.AppliedAt, r.Key, r.At)
+		// # HALF THREE: the range still owned the key at that position.
+		//
+		// This half is BUG-026, and the reason it is a half rather than a line
+		// inside half two is that half two CANNOT SEE IT. A read queued on a
+		// range that then splits the key away is answered from a state machine
+		// whose log genuinely no longer holds the key -- so the live answer and
+		// the replay agree, both saying "not found", and an oracle that compares
+		// them is silent while a client is told a key it had just written is
+		// absent.
+		//
+		// The oracle was right about the property it checked and silent about
+		// the property that was violated. §4.1's rule states it exactly: naming
+		// every fact you take is not the same as naming every fact you need.
+		// Ownership was a fact `serveReadyReads` needed, did not take, and no
+		// instrument was asked for.
+		want, found, owned, ok := o.valueAt(r.Range, r.AppliedAt, r.Key, latestForPlainRead(r))
 		if !ok {
 			// The ledger did not witness a committed prefix for this range, so
 			// there is nothing to compare against. Reporting a violation here
@@ -2345,6 +2381,16 @@ func (o *ReadIndexAgreement) Check() *sim.Violation {
 			continue
 		}
 		o.compared++
+		if !owned {
+			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+				"range %d: node %d answered a read of %q OFF THE LOG having applied to index %d, "+
+					"but that range's extent no longer covered %q at that position -- the key had "+
+					"moved to another range. The answer describes the absence of a RANGE and was "+
+					"delivered to the client as the absence of a VALUE. The replicated path cannot "+
+					"do this: a read is an entry, and an entry applied outside the extent is "+
+					"rerouted rather than answered",
+				r.Range, r.Node, r.Key, r.AppliedAt, r.Key)}
+		}
 		if found != r.Found || (found && want != r.Value) {
 			return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
 				"range %d: node %d answered a read of %q at %s OFF THE LOG with %q (found=%v), "+

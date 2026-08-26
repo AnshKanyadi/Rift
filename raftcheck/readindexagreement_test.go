@@ -14,15 +14,17 @@ import (
 // SWEEP is the thing whose reach is uncertain, so establishing that the oracle
 // can speak must not wait on one.
 func TestReadIndexAgreementSpeaks(t *testing.T) {
-	// The model: at index 10, key "k" held "v2".
-	model := func(_ uint64, upto raft.Index, key string, _ hlc.Timestamp) (string, bool, bool) {
+	// The model: at index 10, key "k" held "v2". Range 1 owns "k"; range 9 has
+	// split it away and owns nothing.
+	model := func(rng uint64, upto raft.Index, key string, _ hlc.Timestamp) (string, bool, bool, bool) {
+		owned := rng != 9
 		if key != "k" {
-			return "", false, true
+			return "", false, owned, true
 		}
 		if upto >= 10 {
-			return "v2", true, true
+			return "v2", true, owned, true
 		}
-		return "v1", true, true
+		return "v1", true, owned, true
 	}
 
 	for _, c := range []struct {
@@ -50,6 +52,20 @@ func TestReadIndexAgreementSpeaks(t *testing.T) {
 			ReadRecord{Range: 1, Key: "k", Index: 10, AppliedAt: 10, Value: "v1", Found: true, OffLog: false}, false},
 		{"a REFUSED off-log read is an outcome, not an answer",
 			ReadRecord{Range: 1, Key: "k", Index: 10, AppliedAt: 10, Refused: true, OffLog: true}, false},
+		// HALF THREE, BUG-026. The range answered a key its extent no longer
+		// covered. Note what makes this the half that had to be added: the
+		// answer is "not found", the replayed log at that position ALSO holds
+		// nothing for the key, and half two therefore agrees with it. Only
+		// ownership separates "the value is absent" from "this range is not the
+		// one to ask".
+		{"answered from a range whose extent no longer covered the key",
+			ReadRecord{Range: 9, Key: "k", Index: 10, AppliedAt: 10, Value: "", Found: false, OffLog: true}, true},
+		// And it is a violation even when the answer happens to be RIGHT. The
+		// range does not hold the key; that it guessed the value is not a
+		// defence, and a rule that let a lucky answer through would be silent on
+		// every unlucky one for the same reason.
+		{"answered the correct value from a range that no longer owned the key",
+			ReadRecord{Range: 9, Key: "k", Index: 10, AppliedAt: 10, Value: "v2", Found: true, OffLog: true}, true},
 	} {
 		l := NewLedger(1)
 		l.RecordRead(provenance.Witness(c.rec))
@@ -75,8 +91,8 @@ func TestReadIndexAgreementIsSilentWithoutAModel(t *testing.T) {
 // TestReadIndexAgreementCountsWhatItCompared is the non-vacuity witness. A green
 // over zero comparisons is this register's commonest entry.
 func TestReadIndexAgreementCountsWhatItCompared(t *testing.T) {
-	model := func(uint64, raft.Index, string, hlc.Timestamp) (string, bool, bool) {
-		return "v", true, true
+	model := func(uint64, raft.Index, string, hlc.Timestamp) (string, bool, bool, bool) {
+		return "v", true, true, true
 	}
 	l := NewLedger(1)
 	o := NewReadIndexAgreement(l, model)

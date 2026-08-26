@@ -450,6 +450,14 @@ func (m *Node) FollowerReads() int {
 	return m.sum(func(r *Replica) int { return r.FollowerReads() })
 }
 
+// ReadsOutOfExtent is how many read-index reads this node's replicas declined to
+// answer because their extent no longer covered the key, and rerouted instead.
+// BUG-026's fix, counted separately from OutOfExtentRefusals so each mechanism
+// can read zero on its own.
+func (m *Node) ReadsOutOfExtent() int {
+	return m.sum(func(r *Replica) int { return r.ReadsOutOfExtent() })
+}
+
 // NoOpsApplied, NoOpReachedArm and NoOpAnswered aggregate D-A7-6's two
 // propositions across this node's replicas. The first is the NON-VACUITY count
 // -- one term-start no-op per election, so a sweep reading zero has exercised

@@ -32,6 +32,7 @@ func TestDurabilityGateSetIsPinned(t *testing.T) {
 		"MsgVoteResp (reject) and any response emitted after a term bump",
 		"MsgAppResp following InstallSnapshot",
 		"MsgHeartbeatResp",
+		"MsgReadIndex (A7)",
 		"MsgReadIndexResp (A7)",
 	}
 
@@ -117,6 +118,76 @@ func TestEveryGateHasACallSite(t *testing.T) {
 		}
 	}
 	t.Logf("%d gated call sites, each discharged by a withholding send", n)
+}
+
+// TestEveryEnumeratedGateIsMarkedAtItsCallSite is the OTHER direction, and it is
+// the one that was missing when BUG-027 happened.
+//
+// TestEveryGateHasACallSite walks the `// GATE:` comments and requires each to
+// be discharged by a withholding send. That check is keyed on the COMMENT, so a
+// gate listed in the enumeration with no comment anywhere is invisible to it --
+// which is exactly what MsgReadIndexResp was. It was in the pinned set, its
+// stanza said "gated on: a leadership-confirming quorum, *not* durability", its
+// call site used a plain `r.send`, and no test in the tree connected those three
+// facts.
+//
+// So this walks the ENUMERATION and requires each entry to have a marked call
+// site. Two tests, opposite directions, and the pair is the invariant: the set
+// of documented gates and the set of marked gated sends are the same set.
+func TestEveryEnumeratedGateIsMarkedAtItsCallSite(t *testing.T) {
+	src, err := os.ReadFile("../../raft/raft.go")
+	if err != nil {
+		t.Fatalf("reading raft.go: %v", err)
+	}
+	text := string(src)
+
+	// The types that actually have a marked, withholding call site: for each
+	// GATE comment, the Type: field of the message literal that follows it.
+	gatedType := regexp.MustCompile(`(?s)// GATE:.*?r\.sendGated(?:On)?\(Message\{\s*(?:[^}]*?)Type: (Msg\w+)`)
+	marked := map[string]bool{}
+	for _, m := range gatedType.FindAllStringSubmatch(text, -1) {
+		marked[m[1]] = true
+	}
+	if len(marked) == 0 {
+		t.Fatal("no GATE comment is followed by a typed withholding send; this test is not " +
+			"reading the file it thinks it is")
+	}
+
+	// A stanza title is "MsgFoo (something)" or just "MsgFoo"; the gate is about
+	// the type, and several stanzas can share one.
+	title := regexp.MustCompile(`(?m)^[ 	]*//	(Msg\w+)[^
+]*
+[ 	]*//	  gated on: `)
+	block := docBlock(t, text)
+
+	// Exemptions are BY NAME and carry a reason, the way every other exemption
+	// in this repo does.
+	noSuchType := map[string]string{
+		"MsgHeartbeatResp": "heartbeats are MsgApp with no entries in this implementation, so " +
+			"there is no MsgHeartbeatResp literal to mark; the gate is discharged at the MsgApp " +
+			"and MsgAppResp sites and the stanza says so",
+	}
+
+	seen := map[string]bool{}
+	for _, m := range title.FindAllStringSubmatch(block, -1) {
+		typ := m[1]
+		if seen[typ] {
+			continue
+		}
+		seen[typ] = true
+		if _, exempt := noSuchType[typ]; exempt {
+			continue
+		}
+		if !marked[typ] {
+			t.Errorf("%s is enumerated as a durability gate and has no marked call site: no "+
+				"`// GATE:` comment in raft.go is followed by a withholding send of that type.\n"+
+				"  A gate that is documented and not applied is the shape of BUG-027: the "+
+				"enumeration said the message was gated, the call site used a plain r.send(), "+
+				"and the test that walks GATE comments could not see a gate that had none.", typ)
+		}
+	}
+	t.Logf("%d enumerated gate types, %d with marked call sites, %d exempt by name",
+		len(seen), len(marked), len(noSuchType))
 }
 
 func docBlock(t *testing.T, src string) string {

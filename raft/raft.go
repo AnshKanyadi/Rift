@@ -735,11 +735,26 @@ type Ready struct {
 	//	  without it: Same term-amnesia case as above. (Heartbeats are MsgApp
 	//	  with no entries in this implementation; the gate applies identically.)
 	//
+	//	MsgReadIndex (A7)
+	//	  gated on: HardState.Term durable
+	//	  without it: A follower forwarding a read request advertises its own
+	//	  term. Forgetting that term after advertising it is the same
+	//	  term-amnesia case as any other response after a term bump.
+	//
 	//	MsgReadIndexResp (A7)
-	//	  gated on: leadership-confirming quorum, *not* durability
-	//	  without it: nothing. Read index attests to a commit index, which is
-	//	  already durable by the time it is committed. Documented so nobody
-	//	  adds a spurious gate and pays latency for nothing.
+	//	  gated on: HardState.Term durable
+	//	  without it: BUG-027. The stanza that stood here said "gated on: a
+	//	  leadership-confirming quorum, *not* durability -- without it,
+	//	  nothing," and it reasoned about the PAYLOAD: a read index attests to a
+	//	  commit index, which is already durable by the time it is committed.
+	//	  That is true and it is not the whole message. The reply also carries
+	//	  `Term: r.term`, which is a second attestation on the same wire, and
+	//	  the argument covered one and not the other -- the same shape as
+	//	  BUG-017's first fix, which covered two of the three paths that emit an
+	//	  append response.
+	//
+	//	  The quorum is still what makes the INDEX safe. It was never what makes
+	//	  the TERM safe, and nothing was.
 	//
 	// **MsgPreVoteResp is deliberately NOT gated, and that is a correctness
 	// argument, not an oversight.** Pre-vote by construction mutates no
@@ -760,6 +775,27 @@ type Ready struct {
 	// transfer that does not happen is the safe direction: the old leader keeps
 	// leading until its own election timeout, which is the state the cluster was
 	// already in. Nothing about the order is a promise about persistent state.
+	//
+	// BUG-027 required that argument to be checked rather than trusted, because
+	// the message does carry `Term: r.term` and the persist-before-reply oracle
+	// holds every type but the two pre-vote types to `Term <= durableTerm`. It
+	// survives, and the reason is NOT the paragraph above -- that paragraph is
+	// about what the order MEANS, and the oracle does not read meaning:
+	//
+	//	Both call sites are reachable only from RoleLeader with a different
+	//	voter as target (`TransferLeadership` panics on self). Becoming leader
+	//	of a multi-voter configuration in term T requires MsgVote for T to have
+	//	been sent, and that send is gated on T's durability. So T is durable
+	//	before the node is a leader, hence before either site. The
+	//	single-voter case reaches neither: `forceCampaign` at quorum 1 sends no
+	//	vote, and with one voter every transfer target is either self or not a
+	//	voter.
+	//
+	// So it is gated by consequence rather than by luck -- but that consequence
+	// was nowhere written, and an unwritten premise is how the second occurrence
+	// of a class gets scheduled. It is written here now, and `send` refuses by
+	// default (below) so the next message type is gated unless somebody
+	// enumerates it.
 	//
 	// The two non-gates are listed apart from the enumeration on purpose.
 	// tools/gatepin pins the gate SET, and folding a non-gate into it as
@@ -1748,7 +1784,9 @@ func (r *Raft) ReadIndex(ctx []byte) error {
 		if r.leader == 0 {
 			return ErrNotLeader
 		}
-		r.send(Message{Type: MsgReadIndex, From: r.id, To: r.leader, Term: r.term,
+		// GATE: the forward advertises this follower's term, so it is a
+		// response-after-a-term-bump in all but name (BUG-027).
+		r.sendGated(Message{Type: MsgReadIndex, From: r.id, To: r.leader, Term: r.term,
 			ReadCtx: append([]byte(nil), ctx...)})
 		return nil
 	default:
@@ -1815,7 +1853,9 @@ func (r *Raft) maybeConfirmReads() {
 			r.readyReads = append(r.readyReads, ReadState{Index: q.index, Ctx: q.ctx})
 			continue
 		}
-		r.send(Message{Type: MsgReadIndexResp, From: r.id, To: q.from, Term: r.term,
+		// GATE: the quorum makes the INDEX safe and never made the TERM safe.
+		// The reply carries both (BUG-027).
+		r.sendGated(Message{Type: MsgReadIndexResp, From: r.id, To: q.from, Term: r.term,
 			ReadCtx: q.ctx, ReadIndex: q.index})
 	}
 	r.pendingReads = kept
@@ -2684,7 +2724,43 @@ func (r *Raft) AssertQuiescent() error {
 // --- helpers -----------------------------------------------------------------
 
 // send releases a message that attests to no persistent state.
-func (r *Raft) send(m Message) { r.msgs = append(r.msgs, m) }
+//
+// # It refuses by default, and that is BUG-027's actual fix
+//
+// The narrow fix for BUG-027 is two call sites moving to `sendGated`. That fix
+// is worth less than this one, because the defect was DESCRIBED IN ADVANCE, in
+// the exact terms it occurred in, by the comment on `sendGatedOn` one screen
+// down:
+//
+//	The TERM's mark is added here rather than at each call site, because every
+//	message that leaves this node carries r.term and therefore makes the same
+//	claim about it. A call site that forgot would be a gate missing from one
+//	message type, which is precisely how the first fix for BUG-017 covered two
+//	of the three paths that emit an append response.
+//
+// A comment that predicts a defect and does not prevent it is a comment doing
+// the wrong job. So the default is inverted: a new message type is GATED unless
+// somebody puts it on this list, rather than ungated unless somebody remembers.
+// The list is by TYPE rather than by term value, which is exact -- a value test
+// would false-accuse MsgPreVoteResp, which echoes the REQUESTER's proposed term
+// and can legitimately equal this node's own.
+//
+// The three entries are the three stated non-gates, each with its argument on
+// Ready.Messages above, and this switch and that enumeration are pinned against
+// each other by tools/gatepin.
+func (r *Raft) send(m Message) {
+	switch m.Type {
+	case MsgPreVote, MsgPreVoteResp, MsgTimeoutNow:
+	default:
+		panic(fmt.Sprintf("raft: node %d released a %s through send(), which withholds nothing. "+
+			"Every message that leaves this node carries r.term and makes a claim about it; only "+
+			"the three types with a written non-gate argument may make that claim before the term "+
+			"is durable. Use sendGated, or add this type to Ready.Messages' enumeration and to "+
+			"this switch -- in that order, because the argument is the part that matters",
+			r.id, m.Type))
+	}
+	r.msgs = append(r.msgs, m)
+}
 
 // sendGated withholds a message until the currently-pending persistent state is
 // durable. If nothing is pending it is released immediately, which is not a

@@ -1,0 +1,21 @@
+# id: M78-read-answered-outside-its-extent
+# covering-test: TestRaftExitCriteria
+# package: ./sim/hunt/
+# expect: killed
+# power-seeds: 200
+# power-floor: 4
+# power-ceiling: 120
+# power-measured: 8 of 200, first at seed 30, under CURRENT (A7's shape), clean tree at 0 of 200 and the mutation VERIFIED PRESENT before the sweep. Caught by read-index-answers-match-the-log's ownership half. The rate matches BUG-026's own field rate closely -- 526 of 25,000 seeds, 2.10% -- which is the corroboration a floor taken from a single instrument does not otherwise get
+# mutates: the extent check at the ANSWER site is removed, so a read-index read queued on a range that has since split the key away is answered from that range's state instead of being rerouted. This is BUG-026 exactly, and it is the first member of the read-is-a-log-entry class to be planted: the replicated path gets this check for free because a read is an ENTRY there -- it applies at a position, the apply loop asks desc.Contains like it does for every other command, and an entry outside the extent goes to rerouteAt. Read index has no entry, reaches no apply, and so reached no check. The answer it produces is 'not found', which is the absence of a RANGE delivered to a client as the absence of a VALUE. Note what makes this class hard to instrument: the range's own committed log at that position genuinely no longer holds the key, so the live answer and a replay of the log AGREE, and an oracle that compares them is silent. It is killed by read-index-answers-match-the-log only because that oracle was given a third half -- ownership -- which is a fact serveReadyReads needed and did not take
+--- a/store/node.go
++++ b/store/node.go
+@@ -958,10 +958,6 @@
+ 		// entry, so it reaches no apply, so it reached no check. That is the
+ 		// general shape and DESIGN-A7 §5e enumerates the rest of it.
+-		if !n.desc.Contains([]byte(q.key)) {
+-			n.rerouteReadAt(q, at, s)
+-			continue
+-		}
+ 		n.readsServed++
+ 		if q.viaFollower {
+ 			n.followerReads++

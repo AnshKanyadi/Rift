@@ -2,6 +2,7 @@ package hunt_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,10 +36,24 @@ import (
 //
 // # Why this also makes it finishable
 //
-// 25,000 seeds at A6's 3.75 s/seed is about 26 CPU-hours in one process. Split
-// across N processes it is the same 26 CPU-hours and roughly 26/N wall-clock
-// hours, which is the difference between a run that completes and a run that is
-// always still going.
+// A6's exit run MEASURED 8.4 s/seed and about 58 CPU-hours (commit cb4937d);
+// A7's shape measured 7.5 s/seed across eight shards. Split across N processes
+// it is the same CPU-hours and roughly 1/N of the wall clock, which is the
+// difference between a run that completes and a run that is always still going.
+//
+// # The number that used to be here was a PLANNING figure, and that is a hazard
+//
+// This comment read "25,000 seeds at A6's 3.75 s/seed". 3.75 was what A6's exit
+// run was planned against; the run itself measured 8.4 and said so in its own
+// commit message. The stale figure survived here anyway -- and then A7's shards
+// printed 3.75 s/seed, because a doubled seed count halved a true 7.5.
+//
+// A wrong number that contradicts expectation gets questioned. One that CONFIRMS
+// a stale expectation is invisible, so the most dangerous form of a wrong number
+// is one that agrees with what you were already going to believe. A planning
+// figure left in a comment becomes the expectation a real measurement is checked
+// against, so it should have been deleted the day the first real rate was taken.
+// Every number above is measured, and each says which run measured it.
 
 // shardEnv reads a shard's range and output path.
 func shardEnv(t *testing.T) (from, to uint64, out string) {
@@ -89,8 +104,31 @@ type ShardCensus struct {
 func TestRaftExitShard(t *testing.T) {
 	from, to, out := shardEnv(t)
 
+	// # The progress line, written from the sweep's own loop
+	//
+	// A shard writes its census on completion and nothing before it, so a
+	// running shard and a hung one looked identical for six and a half hours --
+	// and a shard that DIED was indistinguishable from one still going, which is
+	// the case that actually cost this project an afternoon.
+	//
+	// The write happens HERE rather than in hunt/ so the sweep package stays free
+	// of I/O, and it is driven by a synchronous callback rather than by a ticker
+	// or a goroutine: that loop is the deterministic simulator's own, and a
+	// second thread of control near it trades an observability gap for a
+	// determinism risk.
+	progress := out + ".progress"
+	_ = os.Remove(progress)
 	start := time.Now()
-	c, err := hunt.SweepRaft(from, to)
+	c, err := hunt.SweepRaftWithProgress(from, to, hunt.CurrentOptions(),
+		func(seed uint64, done, total int) {
+			el := time.Since(start)
+			line := fmt.Sprintf("shard [%d,%d) %s: seed %d of %d done, %s elapsed, %.2f s/seed\n",
+				from, to, hunt.CurrentShapeName(), done, total,
+				el.Round(time.Second), el.Seconds()/float64(done))
+			// Best effort on purpose: a progress line that cannot be written
+			// must never take down the run it is reporting on.
+			_ = os.WriteFile(progress, []byte(line), 0o644)
+		})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("shard [%d,%d): %v", from, to, err)

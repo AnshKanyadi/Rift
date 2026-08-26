@@ -9,7 +9,7 @@
 --- a/store/node.go
 +++ b/store/node.go
 @@ -906,7 +906,7 @@
- func (n *Replica) serveReadyReads(at clock.Instant) {
+ func (n *Replica) serveReadyReads(at clock.Instant, s sim.Scheduler) {
  	kept := n.pendingReads[:0]
  	for _, q := range n.pendingReads {
 -		if q.index == 0 || n.applied < q.index {
