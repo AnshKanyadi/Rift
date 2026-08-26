@@ -597,3 +597,41 @@ into the first.
 sim's transport reorders, duplicates and drops but never corrupts bytes, so an undecodable snapshot
 can only be a harness or codec defect. A real transport can deliver a corrupt frame. Changing it
 before a real transport exists would be guessing at the right behaviour.
+
+---
+
+## M34's disposition and BUG-009's re-pin are ONE piece of work
+
+**Owed out of A7, 2026-08-26. Track A does not exit while `make corpus-reproduces` is red — Ansh,
+holding this open explicitly.**
+
+Two items have been tracked separately and they are the same search:
+
+- **`M34-append-from-zero-over-a-snapshot` has no measured disposition.** Its floor is unmet by two
+  independent instruments — 0 of 3,000 in the gating lane, 0 of 6,000 in BUG-009's re-pin search —
+  and its measurement under A7's shape was launched during the exit run and deliberately killed for
+  competing with it. The standing rule binds the result: *an exclusion from a measurement pass may
+  cite a measurement or an argument about reachability, **never** the excluded class's own
+  declaration.*
+- **`seeds/BUG-009` is STALE**: it now replays **identically** with `M34` applied, so the bundle no
+  longer carries its finding. It was WEAK before this session and the re-record at `6c43023` moved it
+  the last step.
+
+**They are one job because the class BUG-009 tests with is the class whose floor is unmet.** A seed at
+which `M34` makes a difference is simultaneously (a) BUG-009's new pin and (b) the first evidence
+`M34` has produced in two instruments' worth of searching. Finding one settles both; finding none
+settles neither, because — Ansh's standing instruction — **a search that finds nothing is not a
+verdict that there is nothing.**
+
+`seeds/BUG-015` needs the same treatment under `M46-split-inherits-the-appended-configuration`, and it
+has no second question riding on it.
+
+**The precedent for how this is done is BUG-024, this phase**: a sharded search found a reproducing
+seed at 1 in 8,400, the bundle was re-pinned 10303 → 5042 **in the commit that found it**, and
+`corpus-reproduces` confirmed the new pin exercises its defect rather than being assumed to.
+
+**And §5e.2b now adds a step before any opt-out.** A zero from a mutant can mean the claim is aimed at
+the wrong point rather than at the wrong line — M79 and M80 both read zero on their first attempt for
+that reason. So before `M34`'s two zeros are read as reach, its **aim** is varied: it is an
+`append-from-zero-over-a-snapshot` class, and the questions are which role appends, and at which point
+relative to the install.

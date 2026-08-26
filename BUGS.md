@@ -1857,6 +1857,26 @@ holds "v9" (found=true)
 
 The read waited correctly and then asked the wrong question.
 
+> **Copying the shape of a guarantee is how you lose it quietly.**
+>
+> `answerAt`'s comment says a replicated read is answered *"at its own timestamp… not at the newest
+> version"*, and every word of it is true — **because the entry's timestamp is log-ordered**, stamped
+> by the leader at propose and applied in log order, so it sits above every earlier write's. It is a
+> guarantee with a reason. `serveReadyReads` copied *answered-at-a-timestamp* and inherited none of
+> the reason.
+
+**And the irony is sharper than a copied comment.** Read index exists in this project *because it is
+correct without trusting clocks* — that is the sentence CLAUDE.md uses to cut leader leases to
+STRETCH and keep this. The implementation then answered at a clock reading. **The mechanism whose
+entire purpose is to remove the clock dependency reintroduced it**, in the one line where nobody was
+looking for a clock.
+
+**Neither site was wrong on its own, which is why no review would have found it.** `answerAt` is
+correct and its comment is correct. `serveReadyReads` reads a plausible timestamp from a legitimate
+clock and hands it to a documented API that does exactly what it says. The defect is the *relation*
+between them — a property that lived in one site's context and was dropped by the other's — and a
+relation is not visible from either end. It took a table with a row for the property.
+
 **The argument that let the read leave the log is the argument it violated.** D-A7-5 rules that read
 index may serve a plain read and nothing else, and the whole ruling rests on one sentence:
 
@@ -1999,6 +2019,16 @@ red, and did not report the determinism lane at all.
 > found last time is not a statement about the lane's state now**, and the two read identically on
 > the page.
 
+**This is the ninth instance of the observability family**, and the more embarrassing half is that the
+handoff **had a section for exactly this**. §5.4 is headed *"`corpus-reproduces` — state it, do not
+assume it"*, it prints last run's numbers, and it says in bold that the verdict is *"read rather than
+assumed"*. The instruction was written, correctly, about the lane next door — and the lane it was
+written about was reported while the two beside it were not run at all.
+
+> **A rule written about one instance does not generalise itself to its siblings.** The section that
+> says "state it, do not assume it" was itself a statement about one lane, assumed to be the only one
+> that needed it.
+
 ### BUG-032 — a snapshot moved the state machine forward and left `applied` behind
 
 | | |
@@ -2035,11 +2065,57 @@ state — and the oracle that could, could not, because both sides of its compar
 the same understated number until BUG-028's fix made the model read the *latest* version instead.
 Correcting one instrument is what let the next defect speak.
 
-> **A false accusation is evidence too.** The oracle accused a correct answer, and the reason it was
-> wrong was a real defect in the system it was measuring. Chasing the accusation down rather than
-> tuning the oracle is the whole of the difference.
+> **A FALSE ACCUSATION IS A FINDING UNTIL PROVEN OTHERWISE.**
+>
+> The oracle accused a correct answer, and the reason it was wrong was a real defect in the system it
+> was measuring.
+
+**The alternative disposition is the one to name, because it is the natural one.** Seeing an oracle
+report a violation on a run porcupine calls clean, the obvious move is *the instrument is wrong,
+correct the instrument*. That move was available, it was cheap, and it would have worked: the
+accusation would have gone away. It would also have left `n.applied` lagging behind every snapshot
+install, reads stalling on quiet ranges after every rebalance and every restart, and the only
+instrument that could see it permanently taught not to look.
+
+**One fact in two places with one of them maintained** is the class, and it is the class BUG-029 is in
+too — there the count read high, here it reads low. What made this one *visible* is that the second
+place was **right**: `raft`'s own `appliedIdx` is advanced on install, so the disagreement existed and
+something could disagree with. A shadowed fact where both copies are wrong together produces no
+symptom at all, which is BUG-026's blindness in a different dimension.
 
 **What it would have caused in production.** After any snapshot install — which is every replica that
 falls behind, every new replica added by a rebalance, and every restart — read-index reads against
 that replica stall until the next write commits. On a read-heavy range that has gone quiet, they
 stall indefinitely, and the replica reports itself healthy throughout.
+
+### BUG-033 — (harness) a killed measurement left a mutant applied, and every number after it read plausible
+
+| | |
+|---|---|
+| **Symptom** | A mutant class measured **28 of 600, first at seed 30**. The true figure for that class, measured alone, is **0 of 400**. Nothing in the output looked wrong. |
+| **Found by** | checking the tree, not the log — `grep` for the fixed line after the run, because the previous invocation had been killed by a timeout. |
+| **Invariant that caught it** | none. This is the provenance family arriving **inside the instrument that measures provenance**. |
+
+**The defect.** A measurement driver applies a mutant patch, sweeps, and reverts. A foreground
+invocation was killed by a timeout mid-sweep, and the version in use had no trap, so **M78 stayed
+applied**. The next invocation's `patch --forward` reported *"Ignoring previously applied patch"* and
+returned non-zero; `set -eu` aborted that measurement silently, the loop moved on, and the following
+three classes were measured **against two mutations at once**.
+
+> **A measurement that ran against the wrong tree does not fail. It reports.** 28 of 600 with a first
+> detection at seed 30 is a perfectly ordinary-looking floor, and it would have been written into a
+> patch header and defended.
+
+**What made it findable** was the same rule this phase already had for runs — *"started" is read from
+the process, never from the launch* — applied one level down: **the tree state is read from the tree,
+never from the fact that a revert was supposed to have happened.**
+
+**The fix.** The driver snapshots `git diff` before applying, and after reverting compares them; a
+mismatch prints `TREE DID NOT RESTORE -- every later measurement is suspect` and exits non-zero. It
+also refuses to measure at all if the patch does not apply cleanly, rather than falling through. The
+trap covers `EXIT INT TERM`, so a kill reverts.
+
+**Why it belongs in BUGS.md rather than in a commit message.** Because the four floors this session
+declares are the first numbers in the project taken by a driver that can prove which tree produced
+them, and the three that were nearly declared without that proof are the argument for it. A floor is
+a claim about the harness; a floor taken against an unknown tree is a claim about nothing.

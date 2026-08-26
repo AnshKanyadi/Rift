@@ -25,6 +25,29 @@ import (
 //
 // So the set is pinned here. A new gate fails this test until it is added to the
 // list below, which is the moment somebody has to justify it.
+// # RULINGS ON THIS SET
+//
+// A gate set changed without a ruling written beside it is the drift this pin
+// was built to prevent, so the rulings live in the file that enforces them.
+//
+//	**2026-08-26, Ansh, ratifying MsgReadIndex as a durability gate (6 -> 7).**
+//	"MsgReadIndex joining the durability-gated set: ratified. BUG-027 is the
+//	justification and flagging it as a gate-set change rather than burying it is
+//	why gatepin exists."
+//
+//	BUG-027: both read-index message types went out through `send()`, which
+//	"releases a message that attests to no persistent state", each carrying
+//	`Term: r.term`. 118 of 25,000 seeds, caught by persist-before-reply -- an A1
+//	oracle catching an A7 wire. The stanza that stood for MsgReadIndexResp
+//	reasoned about the PAYLOAD ("a read index attests to a commit index, which is
+//	already durable") and was true about it, and the message carried a second
+//	attestation the argument never reached.
+//
+//	The set grew by one because the REQUEST is a separate gate with a separate
+//	failure: a follower forwarding a read advertises its own term, inside the
+//	window between its term bump and that term reaching disk. The response is
+//	sent by a leader, whose term is necessarily durable, and it is gated anyway
+//	-- belt-and-braces, and stated as such rather than left to look load-bearing.
 func TestDurabilityGateSetIsPinned(t *testing.T) {
 	want := []string{
 		"MsgAppResp (accept)",
