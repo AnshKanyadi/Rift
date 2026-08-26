@@ -1,6 +1,6 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: REVISION 6. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+**Status: REVISION 7. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
 B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
@@ -163,7 +163,36 @@ A state comparison is a comparison over **survivors**. The claim is about **drop
 Cited rather than described, because the pair *is* the argument for why B2's state comparisons cannot
 do this job, and a paragraph restating it would be the weaker copy.
 
-**The third direction is B3.1's answer to the aliasing condition** — see §2.2b.
+### 2.1a B3-D2c — `survived ⊆ submitted`, a decision in its own right
+
+**Stated as a decision and not as a consequence of the audit, because a future reader will otherwise
+take it for defensive clutter.** It never fires in normal operation, and nothing else in the tree
+asks its question — which is exactly the combination that gets deleted in a tidy-up.
+
+> **THE ENGINE MAY NOT HOLD A VERSION NOBODY WROTE.**
+
+**Why it had no checker until the aliasing condition forced the question.** The other two directions
+looked complementary and are not:
+
+```
+kept    >= required     nothing a reader can reach was dropped
+dropped <= permitted    no tombstone was dropped over what it masked
+```
+
+**Both ask whether something is MISSING.** A reader that reports a record the bytes do not contain
+makes a real drop look survived — the **false-pass** direction — and neither of them can see it.
+Their agreement was not corroboration; **it was the shape of the hole.** Recorded as `GF-10`:
+
+> **A set of assertions all pointed the same way has a blind spot the same size as its agreement, and
+> asking what a checker CANNOT SEE is a different question from asking whether it works.**
+
+**What it now stands between.** `survived ⊆ submitted` is the only thing between a fabricating reader
+and a green drop verdict — which is what makes B3-Q1's shared parser acceptable at all. It is
+therefore load-bearing for every drop verdict in the phase, and `FLOORS.txt` names the tests that
+hold it up.
+
+**It also catches an engine that invents data**, which is a different failure with the same
+signature, and one nothing else in the tree would notice.
 
 This is §7.6's harness-side adjudication applied to a new question, and both directions are needed
 for the reason §7.6 gives: an engine that drops nothing is as wrong as one that drops too much — it
@@ -530,6 +559,7 @@ A6's STRETCH line needs revisiting.
 |---|---|---|
 | **B3-D1** | the drop claim | stated before the policy; `keep(k)` over the live-observable sequence set `S`, plus the tombstone rule that constrains input selection |
 | **B3-D2** | how it is checked | harness computes the permitted drop set and holds the engine to it, **both directions**, plus a vacuous-compaction guard |
+| **B3-D2c** | `survived ⊆ submitted` | a decision, not defensive clutter: the only thing between a fabricating reader and a green drop verdict, and the direction two assertions pointed the same way could not see (GF-10) |
 | **B3-D2b** | `required`'s source | the harness's submission log, never the engine's files. Permission to read the artifact is not permission to derive the expectation from it |
 | **B3-D2a** | the artifact/belief boundary | mechanical: `ARTIFACTS.txt`, `ORACLES.txt`, and the mark — *an artifact header declares nothing taking an `Env*` and nothing taking a snapshot*. Splits `manifest_format.h` out of `manifest.h` |
 | **B3-D3** | compaction policy | **two levels**, L0 + L1; (a) rejected for making the measurement meaningless, (c) deferred as A6's STRETCH with a numeric threshold to reopen |

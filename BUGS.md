@@ -152,7 +152,7 @@ they are fenced off because they are not engine bugs:
 - they **do** count as evidence that the induced-failure discipline works, which is the only reason
   either of these was visible at all.
 
-Counts: 13 entries.
+Counts: 14 entries.
 
 ### The two general forms these entries taught
 
@@ -886,6 +886,81 @@ A gate on the *outcome* can only find the failure it was written to look for. A 
 *precondition* — "is this measurement even attributable?" — runs the whole machine in a known-good
 configuration on every invocation, and so finds whatever is wrong with the machine, including the
 things nobody thought to look for. Four for four, none of them the thing it was built to detect.
+
+---
+
+### The standing rule: a signal read without its provenance
+
+**Six instances now, and they are listed rather than counted so the number is checkable.** Each is a
+signal that was read as if it meant one thing while its provenance made it mean another — and in
+every case the misreading was *indistinguishable from the correct reading* without going and looking
+at where the number came from.
+
+| # | instance | the signal | what its provenance made it mean |
+|---|---|---|---|
+| 1 | `HARNESS-010` | BM2 detected at 0 per mille | not "the defect is unreachable" but "the snapshot was hiding the damage" |
+| 2 | `HARNESS-012` | the last `Sync`'s `promoted` flag | not "the group is durable" but "some file's sync promoted, and until B2 there was only one file" |
+| 3 | `HARNESS-013` | a log whose last line is not an error | not "still working" but *a stalled log is indistinguishable from a slow one* |
+| 4 | `HARNESS-014` | a cross-check reporting no violations | not "nothing violates this" but "I compared nothing" |
+| 5 | `GF-6` | a detection rate that fell | not "power was lost" but "the denominator grew into territory where the class is undetectable" |
+| 6 | **the truncated suite, B3.1** | **no `DropCheck` test failing under either reader mutant** | not "the checker cannot see fabrication" but **"an earlier `RIFT_CHECK` killed the process before those tests ran"** |
+
+**The sixth nearly produced the opposite ruling.** The aliasing condition would have been reported as
+**unacceptable** — requiring the rig to grow its own parser — on a zero that was an artifact. The
+form it takes is the same as the third:
+
+> **A TEST BINARY THAT ABORTS REPORTS FEWER FAILURES THAN EXIST, AND FEWER FAILURES REPORTED IS
+> INDISTINGUISHABLE FROM FEWER FAILURES EXISTING.**
+
+**The mechanical answer, and it is cheap: PUT THE PROVENANCE IN THE SIGNAL.** `RIFT_CHECK`'s failure
+path now prints
+
+```
+*** RIFT PARTIAL RUN: aborted here, so any count above this line is a LOWER BOUND
+    and any absence is unproven ***
+```
+
+so a count grepped out of that output **carries the fact that it is partial**. Induced against
+`BM35`, which aborts. The same principle covers instance 3 — read progress from something that
+*advances* — and instance 4, where the lane now prints `parses N artifact(s)` rather than nothing.
+
+**The rule.** *Before reporting what a number means, establish that the run which produced it
+completed, that the comparison it summarises actually compared something, and that its denominator is
+the one the previous measurement used.* Three different questions, one shape: **a signal is not
+evidence until its provenance is.**
+
+---
+
+### GF-10 — a set of assertions all pointed the same way has a blind spot the size of its agreement
+
+**Raised by** B3.1's aliasing condition, and it is a **decision** that came out of it rather than an
+audit finding — see `B3-D2c`.
+
+The drop adjudicator had two directions, and they looked complementary:
+
+```
+kept      >= required     nothing a reader can reach was dropped
+dropped   <= permitted    no tombstone was dropped over what it masked
+```
+
+**Both ask whether something is MISSING.** So neither could see a reader that reports a record the
+bytes do not contain — which makes a real drop look survived, and produces a **false pass**. The
+agreement between them was not corroboration; **it was the shape of the hole.**
+
+> **A SET OF ASSERTIONS ALL POINTED THE SAME WAY HAS A BLIND SPOT THE SAME SIZE AS ITS AGREEMENT.**
+>
+> **Asking what a checker CANNOT SEE is a different question from asking whether it works** — and the
+> second question is the one that gets asked, because it is the one a green lane answers.
+
+The third direction, `survived ⊆ submitted`, is what closed it, and it is stated as its own decision
+rather than as defensive clutter precisely because a future reader will otherwise remove it: it never
+fires in normal operation, and *nothing else in the tree asks its question*.
+
+**How to ask the harder question.** Enumerate what each assertion *rules out* and look for the
+direction none of them names. Here: "missing" was ruled out twice and "present but never written" was
+ruled out zero times. It is the same move `HARNESS-006`'s audit made across the evidentiary deciders
+— enumerate the population, then check each member in both directions — applied to assertions rather
+than to functions.
 
 ---
 
