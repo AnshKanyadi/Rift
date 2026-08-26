@@ -1199,6 +1199,44 @@ only the loud one is self-announcing.
 
 ---
 
+### GF-18 — a shim that makes a case unnecessary makes the gap it hides invisible
+
+**Raised by** `B3-Q4`: the frozen `Engine` interface required a range deletion the frozen
+range-tombstone format could not express, and **nothing noticed for a phase and a half.**
+
+`[A3]` put `DeleteRange` in the interface for the clear-everything case. B2 implemented it as **one
+point delete per live key**, which resolved `Bound::Unbounded()` against the *live set* before
+anything was written — so **no format ever had to represent `[start, ∞)`**. When `[A3]` required the
+expansion retired at B3, the gap it had been standing over became load-bearing in a single step.
+
+> **AN EXPANSION OR A SHIM THAT MAKES A CASE UNNECESSARY ALSO MAKES THE GAP IT HIDES INVISIBLE. SO
+> RETIRING A SHIM IS THE MOMENT TO RE-CHECK EVERY CONTRACT THE SHIM WAS STANDING BETWEEN.**
+
+**Why the verification did not catch it, and this is the transferable part.** §6.1 specified the
+format from the **block's** point of view and induced every refusal against hand-built bytes. That
+exercise is thorough and it **never touches `Bound`, because the classifier never sees one.** Two
+frozen artifacts, each internally consistent, each induced against its own rules — and **never
+checked against each other.**
+
+**It is `GF-15` between two frozen artifacts rather than inside one**, with one difference worth
+stating: `GF-15`'s instance had a rule *granting permission* another contract did not grant. Here
+**neither contract was wrong.** They were **unjoined** — and an unjoined pair produces no
+contradiction to find until something asks both at once.
+
+**What makes it findable.** The shim is the signal. A shim exists because some case was awkward; the
+awkwardness is where two contracts meet; and the shim is what keeps them from having to agree. So the
+question at retirement time is: *what did this let us avoid deciding?*
+
+**Recorded as a second sweep condition on `CF-4`** — not only the frozen interface as a whole, but
+**every place B2 or B3 removed an expansion.**
+
+**And `CF-4` paid before it came due.** The sweep it schedules for B4 produced its first instance at
+B3.5, where it cost a **design decision** instead of a differential failure against `engine/model`
+with a corpus of tables already written to the wrong format. That is an argument for doing the sweep
+rather than for deferring it.
+
+---
+
 ### GF-17 — a reserved field sized by guess postpones the version bump by one; it does not avoid it
 
 **Raised by** the SSTable footer's `reserved:[8]u8`, spent at B3.5b.
@@ -1319,6 +1357,13 @@ disjointness.
 
 > **THE QUESTION IS ASKED ONCE ACROSS THE FROZEN INTERFACE AS A WHOLE, AT B4** — not per-decision,
 > where it has already been asked and answered locally. `CARRY-FORWARD.md` CF-4 carries it.
+
+**AND IT HAS A SECOND INSTANCE ALREADY, BETWEEN TWO FROZEN ARTIFACTS RATHER THAN INSIDE ONE.**
+`B3-Q4`: the frozen `Engine` interface requires `DeleteRange(Unbounded, Unbounded)`; the
+range-tombstone format frozen at B3.2 cannot express an unbounded end. **The difference from the
+first instance is the useful one** — there, a rule granted permission another contract did not grant.
+Here **neither contract was wrong; they were unjoined**, and an unjoined pair produces no
+contradiction to find until something asks both at once. See `GF-18` for what made it findable.
 
 ---
 

@@ -310,3 +310,28 @@ reading it.
 **The cost of leaving it.** `BM77` is the shape: **the mutant is the faithful implementation of the
 rule it is derived from.** Nothing in a careful reading of that rule flags it, and no reviewer
 checking the rule's own statement would object.
+
+---
+
+**SECOND SWEEP CONDITION, ADDED 2026-08-26 AFTER `B3-Q4`: EVERY PLACE B2 OR B3 REMOVED AN EXPANSION.**
+
+`GF-18`: *a shim that makes a case unnecessary makes the gap it hides invisible.* B2's
+iterate-and-point-delete resolved `Bound::Unbounded()` against the live set, so no format ever had to
+represent `[start, ∞)` — and the range-tombstone format frozen at B3.2 could not. Two frozen
+artifacts, each internally consistent, never checked against each other. **Neither was wrong; they
+were unjoined.**
+
+So the B4 pass has two questions, not one:
+
+1. *(GF-15)* of every fact one rule **derives**, which other rule **depends** on it?
+2. *(GF-18)* of every **expansion or shim removed** at B2 or B3, what did it let us avoid deciding —
+   and do the contracts it stood between agree now that it is gone?
+
+**Known members of (2) so far:** `DeleteRange`'s expansion (retired at B3.5, and it produced
+`B3-Q4`); `Apply`'s expansion and `table.h`'s whole-file residency (both retired at B3.5c–d, and
+both stood between the Env-call contract and the read path); B2's `DeleteRange` implemented
+internally as iterate-and-point-delete per `[A3]`, replaced at B3.
+
+**CF-4 PAID BEFORE IT CAME DUE.** The first instance of (2) arrived at B3.5, where it cost a design
+decision rather than a differential failure against `engine/model` with tables already written to the
+wrong format. That is an argument for doing this sweep, not for deferring it.
