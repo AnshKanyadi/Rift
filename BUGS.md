@@ -741,6 +741,44 @@ asks exactly that, scoped, filtered, and monotone.
 
 ---
 
+### HARNESS-014 — a registry cross-check that matched nothing, and would have passed forever
+
+| field | value |
+|---|---|
+| **Found by** | `make cpp-scan`, on the first run of the rule it was part of |
+| **Phase** | B3.0a, found the day it was written |
+| **Reproduce** | before the fix: mark a file `RIFT_ORACLE`, leave it out of `ORACLES.txt`, and the scan says nothing |
+| **Invariant that caught it** | the rule's own both-ways check, which fired on the OTHER direction and exposed this one |
+| **Mutant class** | the four inductions in `B3.0a`'s commit, each observed and restored |
+| **Fix commit** | `3e6d2c0` |
+
+**Symptom.** `ARTIFACTS.txt` and `ORACLES.txt` were built, the registry cross-check was written, and
+it **matched nothing** — every lookup fell through to the "not registered" branch. Two defects, and
+only the first is interesting.
+
+**Root cause 1, and it is a VACUOUS CHECK rather than a script bug.** The registry lists were built
+with `grep | awk` and matched with `case " $list " in *" $item "*`. The lists are **newline**
+separated and the pattern needs **spaces**, so no item ever matched. Had the check been written in
+the direction that passes on no match, **it would have passed forever, on every tree, reporting a
+boundary it was never testing.** It failed loudly here only because this particular direction reports
+on *absence* of a match — an accident of which way round it was written, not a property of the check.
+
+That is `GF-1`'s family at the level of a registry: *a check that cannot distinguish "nothing
+violates this" from "I compared nothing" is not a check.* The remedy is the same one `GF-1` names —
+run it where the thing could be present, and assert that it saw something. `cpp-scan` now prints
+`parses 10 artifact(s)`, which is a count, and **a count nobody asserts is decoration**: it is
+asserted by the four inductions.
+
+**Root cause 2, recorded because it is cheap to record and expensive to re-find.** The new code used
+a variable named `found`, which is part 3's `mktemp` path. Clobbering it made two *unrelated*
+registry entries report as stale. **The lane doing to itself exactly what it does to the tree**, on
+its first run.
+
+**What it cost.** Nothing, because the rule was induced in four directions before being trusted —
+which is the only reason either defect surfaced on day one rather than at the gate.
+
+---
+
 ### HARNESS-013 — the mutant lane waited eleven and a half hours for a lane that was never going to report
 
 | field | value |
@@ -848,6 +886,40 @@ A gate on the *outcome* can only find the failure it was written to look for. A 
 *precondition* — "is this measurement even attributable?" — runs the whole machine in a known-good
 configuration on every invocation, and so finds whatever is wrong with the machine, including the
 things nobody thought to look for. Four for four, none of them the thing it was built to detect.
+
+---
+
+### GF-8 — when a rule distinguishes two kinds of dependency, find the SIGNATURE that separates them, not the sentence
+
+**Raised by** B3-D2a, correcting the oracle-independence rule at `B3-Q1`.
+
+The rule to be enforced was *an oracle may parse the engine's artifacts and may not consult its
+beliefs*. That sentence is correct and it is **a discipline**, and this catalogue records five
+disciplines that failed. What replaced it is two greps:
+
+> **AN ARTIFACT HEADER DECLARES NOTHING TAKING AN `Env*` AND NOTHING TAKING A SNAPSHOT.**
+
+`Env*` means *it went and looked*, which is an act with an opinion about what the current state is. A
+snapshot parameter means *it decided what a caller should be allowed to see*, which is the engine's
+visibility rule. A header with neither is bytes in, structure out.
+
+**The general form.** When a rule separates two kinds of dependency — permitted and forbidden,
+parsing and consulting, reading and asking — **the enforceable version is a property of the
+DECLARATION, not a description of the intent.** Look for the signature that differs. If no signature
+differs, the two kinds are not actually distinct and the rule is describing a preference.
+
+**Corroboration, and it is the stronger half.** The rule was written to draw a boundary and it
+**found unnecessary coupling instead**: `sst/table.h` fails both marks, and it turned out the drop
+checker never needed it — `table_format.h` enumerates every entry in a table, and enumerating is the
+whole job. `sst/manifest.h` failed the `Env*` mark and split, which was a correction rather than a
+concession.
+
+> **A RULE THAT FINDS UNNECESSARY COUPLING IS DOING MORE THAN ENFORCING A BOUNDARY.** The signature
+> test asks "does this dependency have the shape of a judgement", and a dependency that cannot answer
+> is usually one that did not need to exist.
+
+**The counterpart obligation, and it is the one a future reader will get wrong.** See `HARNESS-014`:
+permission to *read* an artifact is not permission to *derive the expectation* from it.
 
 ---
 

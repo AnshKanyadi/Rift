@@ -1,6 +1,6 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: REVISION 2. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+**Status: REVISION 3. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
 B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
@@ -197,34 +197,46 @@ watch**. Ansh's three conditions:
 **(i) Name the failure.** A reader defect that makes surviving bytes look absent, or absent bytes look
 present, corrupts the `survived` set the whole verdict rests on.
 
-**(ii) Land a mutant that plants the shared blind spot, and see what kills it.** *If nothing kills it,
-the aliasing is not acceptable and we need an independent parser.* Two mutants, because **the two
-directions are not equally dangerous and I want the measurement to say so rather than assume it**:
+**(ii) Land a mutant that plants the shared blind spot, and see what kills it — AMENDED 2026-08-25.**
 
-| mutant | what it does | my prediction, to be tested rather than trusted |
+The condition originally named *a reader change that hides a live record*. **That is the wrong
+direction and the amendment is Ansh's:** hiding a record makes `survived` lose something `required`
+still demands, so the verdict is a **FALSE VIOLATION** — loud and self-announcing. The direction that
+produces a **FALSE PASS** is a reader that reports a record the bytes do not contain, because that
+makes a real drop look survived.
+
+> **THE MUTANT TO PLANT IS THE ONE THAT FABRICATES A RECORD. If nothing kills it, the aliasing is
+> unacceptable and the rig gets its own parser.**
+
+| mutant | what it does | why it is landed |
 |---|---|---|
-| `READER-hides-a-live-record` | `ParseBlock` silently skips an entry | should be **loud**: `survived` loses a record the harness's model requires, so the verdict is a FALSE VIOLATION. Also killed by the classifier's entry-count assertion and by every flush read |
-| `READER-shows-a-dropped-record` | `ParseBlock` reports an entry the bytes do not contain | **the dangerous direction**: a wrong drop looks like a keep, and the verdict is a FALSE PASS. This is the one that decides whether (a) is acceptable |
-
-**The direction that matters is the second, and it is not the one the condition named** — which is
-the point of landing both rather than one. If `READER-shows-a-dropped-record` survives, the aliasing
-is unacceptable and the rig gets its own parser.
+| **`READER-shows-a-dropped-record`** | `ParseBlock` reports an entry the bytes do not contain | **THE DECIDING ONE.** A wrong drop looks like a keep; the verdict is a false pass |
+| `READER-hides-a-live-record` | `ParseBlock` silently skips an entry | the loud direction. **Landed anyway, and both numbers reported**: its kill is cheap, and *its absence would itself be a finding* |
 
 **(iii) The split label.** `FLOORS.txt` records the drop checker as **`covered-by:` whatever kills
 those mutants — not by its own assertions**, because an instrument that certifies itself certifies
 nothing. Whatever kills them is **load-bearing for every drop verdict in the phase** and is named as
 such in the entry.
 
-### 2.2c The one place the aliasing would be total, and the design that avoids it
+### 2.2c THE LOAD-BEARING DECISION, and it is as important as the two marks
 
-The blind spot is bounded **only because `required` never comes from the engine's files.**
+> **`required` COMES FROM THE HARNESS'S SUBMISSION LOG AND NEVER FROM READING THE ENGINE'S FILES**,
+> because computing it from the engine's own artifacts would hide a record from **both sides of the
+> comparison** and make the aliasing **total rather than one-sided**.
+>
+> **That is ruling 4 applied to a checker that is permitted to parse: PERMISSION TO READ THE ARTIFACT
+> IS NOT PERMISSION TO DERIVE THE EXPECTATION FROM IT.**
 
-If the checker computed *what was there before compaction* by reading the input files, then a parser
-that hides a record would hide it from **both** sides — `required` and `survived` — and the drop
-would be invisible with no assertion able to see it. **`required` comes from the harness's submission
-log**, which is a record of what was *submitted*, not of what the engine wrote. That single choice is
-what keeps the aliasing to one side of the comparison, and it is why it is stated as a decision here
-rather than left as an implementation detail.
+Stated this prominently on Ansh's instruction, and for his reason: **a future reader who has
+internalised the two marks will be tempted to source `required` the same way.** The marks say what an
+oracle may *touch*; this says what it may *conclude from*. They are different questions and only the
+first is mechanical.
+
+Concretely: if the checker computed *what was there before compaction* by reading the input files,
+then a parser that fabricates or hides a record would do so on both sides — `required` and
+`survived` — and the drop would be invisible with no assertion able to see it. Sourcing `required`
+from what the harness **submitted** is what keeps the aliasing to one side, and it is why
+`READER-shows-a-dropped-record` is expected to be catchable at all.
 
 ### 2.3 Both directions, and the mutant for each
 
@@ -451,6 +463,7 @@ A6's STRETCH line needs revisiting.
 |---|---|---|
 | **B3-D1** | the drop claim | stated before the policy; `keep(k)` over the live-observable sequence set `S`, plus the tombstone rule that constrains input selection |
 | **B3-D2** | how it is checked | harness computes the permitted drop set and holds the engine to it, **both directions**, plus a vacuous-compaction guard |
+| **B3-D2b** | `required`'s source | the harness's submission log, never the engine's files. Permission to read the artifact is not permission to derive the expectation from it |
 | **B3-D2a** | the artifact/belief boundary | mechanical: `ARTIFACTS.txt`, `ORACLES.txt`, and the mark — *an artifact header declares nothing taking an `Env*` and nothing taking a snapshot*. Splits `manifest_format.h` out of `manifest.h` |
 | **B3-D3** | compaction policy | **two levels**, L0 + L1; (a) rejected for making the measurement meaningless, (c) deferred as A6's STRETCH with a numeric threshold to reopen |
 | **B3-D4** | read path | `ConcatenatingIter` for L1 so the merge's `k` stays small |
