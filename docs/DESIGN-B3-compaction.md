@@ -1,6 +1,6 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: REVISION 3. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+**Status: REVISION 4. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
 B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
@@ -67,11 +67,28 @@ For a user key `k` with versions `v₁ > v₂ > … > vₙ` ordered by sequence 
 
 — at most `|S|` entries, and the only ones any reader can ever return.
 
+> **CORRECTED IN REVISION 4, BY BUILDING THE ADJUDICATOR BEFORE THE POLICY.** `keep(k)` as first
+> written **over-requires**: it demands the newest version at every observable sequence survive, full
+> stop. When that version is a **DELETION**, the answer at that sequence is `kNotFound`, and dropping
+> the deletion **preserves the answer exactly** so long as nothing older survives to be uncovered.
+>
+> **THE REQUIREMENT IS ON THE ANSWER, NOT ON A PARTICULAR ENTRY.** A claim that forbade dropping a
+> tombstone with nothing left to mask would forbid the one drop that makes compaction terminate in
+> space — an adjudicator built to the uncorrected claim would have refused correct compactions, and
+> it would have looked like the engine's fault.
+>
+> This is the observer-before-the-observed rule paying immediately: the claim was wrong, and writing
+> the thing that enforces it is what showed that, before a policy existed to be blamed.
+
 **A compaction may drop an entry `e` for key `k` if and only if BOTH hold:**
 
-1. **`e ∉ keep(k)`** — no observable sequence resolves to it; and
-2. **if `e` is a deletion**, no file *outside the compaction's inputs* contains a version of `k` with
-   a smaller sequence.
+1. **`e ∉ keep(k)`**, where **`keep(k)` contains only VALUES** — for each `s ∈ S`, the newest version
+   of `k` with `seq ≤ s`, *if that version is a value*. A deletion is never required; and
+2. **if `e` is a deletion**, no version of `k` with a smaller sequence survives anywhere. Dropping a
+   tombstone is permitted exactly when everything it masked is dropped with it.
+
+Clause 2 subsumes what a per-input rule would say and is checkable from the durable image alone,
+which is what lets the adjudicator judge without knowing which files a compaction chose.
 
 Clause 2 is the tombstone rule, and it is the one that turns **input selection into a correctness
 concern rather than a performance one**. A deletion dropped while an older value survives in a file
