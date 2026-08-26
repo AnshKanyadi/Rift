@@ -1,6 +1,6 @@
 {
   "seed": 103,
-  "commit": "c39a53adfb8cabd791e62366714738edf5468450",
+  "commit": "0d10fd7c0b02d2a6dd72c2edd18bb289fd11d7c9",
   "workload": "toy",
   "scenario": {
     "flaw": "dirty-read",
