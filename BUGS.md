@@ -1204,6 +1204,24 @@ whole working tree.
 > against HEAD to describe an edit. In every case the wider effect was invisible at the call site and
 > surfaced as something else — a vanished file, a rotten patch, a rotten patch again.
 
+**A FOURTH, AT B3.5c, AND IT IS THE SAME FAMILY WITH THE DUPLICATION ON THE OTHER SIDE.** The
+torn-record test runs one workload **twice** — a probe to find the sync ordinal, then the killed run
+that tears at it. Converting the test from a `DeleteRange` expansion to a large batch, I changed the
+**probe's** workload and left the killed run issuing the old one. The recorded ordinal then named a
+different Env call, and the kill never fired.
+
+> **TWO COPIES OF A WORKLOAD THAT MUST MATCH BYTE FOR BYTE IS THAT BUG WAITING.** Written once now,
+> as `FillBigBatch`, with the reason at the definition rather than at the call sites.
+
+**AND IT FAILED LOUDLY BY LUCK, AGAIN.** The divergence happened to make the kill not fire at all, so
+the test failed on `expected kKilled, got ok`. **A divergence that still produced a kill — at a
+different ordinal, tearing a different record — would have passed**, and the test would have gone on
+reporting that a multi-block record is discarded whole while tearing something else entirely. That is
+the second time in this step that a defect announced itself only because the corruption happened to
+land somewhere validated (see `HARNESS-017`).
+
+---
+
 The generator now diffs **file against file**, with the reason at the top of it.
 
 Recorded because the second and third cost only regenerated patches **only because the lane already
@@ -1233,6 +1251,80 @@ only the loud one is self-announcing.
 
 > **A REGISTRY CROSS-CHECK HAS TWO FAILURE MODES AND ONLY ONE OF THEM TELLS YOU.** Both directions
 > get induced, or the quiet one is what you have.
+
+---
+
+### GF-21 — replacing a mechanism under a threshold: assert the replacement at the SAME threshold
+
+**Raised by** `AnOverCapExpansionIsRefusedAndAppliesNothing` → `AClearEverythingIsOneSmallRecordWhateverTheDatabaseHolds`, B3.5c.
+
+The old test filled 3000 keys, issued a clear-everything, and asserted the resulting **expansion** was
+refused for exceeding the record cap — **at a deliberately lowered cap** (`max_record_bytes = 20000`),
+because a tripwire nobody has watched fire is decoration.
+
+B3.5 retired the expansion, so the test's subject no longer exists. **The question is what replaces
+it**, and the weak answers are available and tempting: delete it; or assert the clear-everything now
+succeeds, at the default cap, where it would succeed for reasons having nothing to do with the change.
+
+> **KEEP THE THRESHOLD. CHANGE THE ASSERTION.** The replacement runs the **same workload** at the
+> **same lowered cap under which the old mechanism was refused**, and asserts the new one fits. Then
+> passing is a statement **about the change** and not about a cap that got roomier.
+
+**Why it matters that the number is the old one.** At the default cap the new test would pass on a
+build where the expansion was still happening — 3000 point deletes fit under 4 MiB. The lowered cap
+is what makes the two mechanisms **distinguishable by the same measurement**, which is §22.6c's
+discriminator rule applied to a replacement rather than to a parse.
+
+> **THE TEMPLATE, WHENEVER A MECHANISM IS REPLACED UNDER A THRESHOLD: run the old workload at the old
+> threshold, and assert the new outcome.** A replacement measured against a different bar is a
+> replacement nobody has compared.
+
+**And the assertion is a bound, not an equality.** `EXPECT_LT(grew, 200)` — the record's exact size is
+a fact about the encoding that will change; that it is *nothing like 3000 point deletes* is the claim.
+A floor with margin, for `FLOORS.txt`'s stated reason: an exact assertion fails on any benign change
+and a lane that cries wolf is a lane people delete.
+
+---
+
+### GF-20 — correctness resting on an argument whose premise moves is a scheduled defect
+
+**Raised by** §8.1's expansion, retired at B3.5c.
+
+B2 recorded a `DeleteRange`'s **expansion** in the WAL rather than the range itself, and the reason
+was exact:
+
+> *"If the WAL recorded the raw DeleteRange, recovery would have to expand it again — **against a
+> state recovery is still in the middle of rebuilding**. The expansion is a function of the state at
+> the time it runs, so replay-time expansion is correct only if that state provably equals the state
+> at original Apply time. It probably does today, for a reason that depends on the WAL's start point
+> coinciding exactly with the flush boundary — **a property B2 is about to start changing.**"*
+
+**THAT REASONING WAS CORRECT AND ITS CONCLUSION EXPIRED.** The expansion was never wrong. It was
+correct **under a premise**, and B3.5 dissolved the premise: a range tombstone means the same thing
+wherever it is replayed — it hides every version below its own sequence, and nothing about the
+surrounding state enters into it. Recovery **inserts** it and computes nothing.
+
+> **CORRECTNESS RESTING ON AN ARGUMENT WHOSE PREMISE MOVES IS A SCHEDULED DEFECT. THE FIX IS TO
+> REMOVE THE PREMISE, NOT TO DEFEND IT BETTER.**
+
+The tell is already in B2's own words — *"a property B2 is about to start changing"*. A comment that
+names the thing that will invalidate it has done the hard part; what it has not done is fix it.
+
+**Defending it better is the tempting alternative and it is a treadmill.** The available moves were:
+prove the flush boundary coincidence holds, or assert it, or narrow recovery so the coincidence is
+forced. Each buys correctness *for now*, adds a constraint to every later change, and leaves the
+argument standing. **Removing the premise ends it.**
+
+**It is `GF-18`'s question answered in the affirmative.** *What did this shim let us avoid deciding?*
+The expansion let B2 avoid deciding what a range deletion means as a durable, replayable fact — and
+answering that question is what made the premise unnecessary. `GF-18` says a retired shim is the
+moment to re-check the contracts it stood between; this says **the moving premise is the marker for
+which shim to retire first.**
+
+**Two instances now, both at B3.5.** The other is `DBImpl`'s own note on `DeleteRange`'s expansion —
+*"THAT IS CORRECTNESS BY ARGUMENT, AND THE ARGUMENT HAS A MOVING PREMISE"* — and the snapshot
+registry (`B3.4`), which replaced *"a snapshot pins its stores, and residency makes that safe"* with a
+registry, on exactly this reasoning before the form had a name.
 
 ---
 
