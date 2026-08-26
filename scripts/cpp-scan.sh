@@ -265,8 +265,12 @@ if [ -f "$ARTIFACTS" ] && [ -f "$ORACLES" ]; then
     if [ ! -f "$dir/$f" ]; then
       note "ORACLES.txt names $f, which does not exist"; oracle_bad=$((oracle_bad + 1)); continue
     fi
-    if ! grep -q 'RIFT_ORACLE' "$dir/$f"; then
-      note "$f is registered in ORACLES.txt and carries no RIFT_ORACLE marker"
+    # THE MARKER IS A DECLARATION, NOT AN OCCURRENCE: it is the file's FIRST
+    # LINE. A loose substring match read `rig/image_fixture.h` -- whose header
+    # says it carries no RIFT_ORACLE marker -- as carrying one. A file has to be
+    # able to say what it is not.
+    if ! head -1 "$dir/$f" | grep -q '^// RIFT_ORACLE'; then
+      note "$f is registered in ORACLES.txt and does not declare RIFT_ORACLE on its first line"
       oracle_bad=$((oracle_bad + 1))
     fi
     for inc in $(sed 's://.*::' "$dir/$f" | sed -n 's/^#include "\([^"]*\)".*/\1/p'); do
@@ -285,7 +289,7 @@ if [ -f "$ARTIFACTS" ] && [ -f "$ORACLES" ]; then
 
   # (3) AND THE OTHER WAY: a marked file that is not registered.
   for f in $(find "$dir/rig" -name '*.h' -o -name '*.cc'); do
-    grep -q 'RIFT_ORACLE' "$f" || continue
+    head -1 "$f" | grep -q '^// RIFT_ORACLE' || continue
     rel=${f#"$dir/"}
     case " $oracle_files " in
       *" $rel "*) ;;

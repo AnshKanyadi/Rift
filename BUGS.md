@@ -966,6 +966,29 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-015 — the registry cross-check matched a file that says it is NOT an oracle
+
+**Symptom.** `rig/image_fixture.h` — a constructor, not a judge — was reported as `carries RIFT_ORACLE
+and is not in ORACLES.txt`. Its header line reads: *"it CONSTRUCTS; it never judges, so it carries no
+RIFT_ORACLE marker."* The check was a substring `grep`, so **a file could not say what it is not.**
+
+**Root cause.** The marker was treated as an *occurrence of a token* rather than as **a declaration**.
+Every real oracle already declares it identically: `// RIFT_ORACLE` as the file's **first line**.
+
+**Fix.** Both directions of the cross-check now read `head -1 | grep '^// RIFT_ORACLE'`. Induced in
+all three directions before it counted: an unregistered file declaring it (BAD), a registered file
+losing it (BAD), and a prose mention below line 1 (clean — `image_fixture.h` itself, live in the
+tree, is the standing witness).
+
+**The pair with HARNESS-014 is the point.** That one **matched nothing** and would have passed
+forever; this one **matched too much** and failed loudly. Same instrument, opposite failures, and
+only the loud one is self-announcing.
+
+> **A REGISTRY CROSS-CHECK HAS TWO FAILURE MODES AND ONLY ONE OF THEM TELLS YOU.** Both directions
+> get induced, or the quiet one is what you have.
+
+---
+
 ### GF-14 — a complementarity claim is asserted in both directions or it is folklore
 
 **Raised by** `IsTheMergeOfItsInputs` and `AdjudicateDrops`, B3.4.
