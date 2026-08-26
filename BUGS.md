@@ -966,6 +966,64 @@ evidence until its provenance is.**
 
 ---
 
+### GF-14 — a complementarity claim is asserted in both directions or it is folklore
+
+**Raised by** `IsTheMergeOfItsInputs` and `AdjudicateDrops`, B3.4.
+
+Two instruments are said to be complementary: one sees order and values, the other sees drops in any
+durable image. **Stating that is not asserting it.** The test that carries the claim asserts *both*
+halves against **one state**:
+
+```
+RefusesAnOutputWhoseValuesAreShiftedByOne
+    the merge adjudicator  REFUSES  the shifted output
+    the drop adjudicator   PASSES   the same state
+```
+
+**The first half alone is not the claim.** One instrument refusing says nothing about whether the
+other was needed; only the second half — *this state gets past the other one* — makes "we need both"
+a statement with a failing case.
+
+> **A COMPLEMENTARITY CLAIM IS ASSERTED IN BOTH DIRECTIONS OR IT IS FOLKLORE.**
+
+**What it protects against is silent degradation.** The day someone widens the drop adjudicator to
+look at values — a reasonable change, and an improvement in isolation — the pair stops being
+complementary and *nothing notices*, because a one-directional test still passes. With the second
+half, that change fails a test whose message says exactly what to reconsider. **The claim gets
+revisited rather than repeated.**
+
+**This is Track A's bidirectional-gap discipline applied to two CHECKERS rather than to a gap.** The
+same move: do not assert only that the thing fires, assert also that it was needed — and here
+"needed" means *the other instrument does not cover this*.
+
+---
+
+### Fixture defects: one shape, twice, and the class made unreachable
+
+Two fixtures produced verdicts that looked like checker bugs. **Both times the checker was right.**
+
+| where | what the fixture omitted | what the checker correctly reported |
+|---|---|---|
+| B3.0, the drop adjudicator | a **directory sync** after writing the table — so its NAME was never durable | the image did not contain the table, so every version was **dropped** |
+| B3.4, the merge adjudicator | **the manifest** naming the table — so it was an orphan | a table nothing refers to holds nothing, so every version was **dropped** |
+
+> **A FIXTURE THAT DOES NOT DESCRIBE WHAT ITS AUTHOR MEANT PRODUCES A CORRECT VERDICT ABOUT THE WRONG
+> THING, AND IT PRESENTS AS A CHECKER BUG** — which is the expensive way to find out, because the
+> debugging starts in the wrong component.
+
+**What the two omissions share is the useful part.** Neither was a typo. Each left out something
+**the engine's own invariants require**: a durable table has a durable name; a live table is named by
+the manifest. A fixture assembling an image by hand must reproduce every one of those invariants from
+memory, and *will not*.
+
+**So the class is made unreachable rather than remembered.** `rig/image_fixture.h` builds images
+**through the engine's own construction path** — write, sync, **sync the directory**, open, validate,
+name in the manifest — and both tests now go through it. There is one place that knows the whole
+sequence, and a fixture cannot forget half of it. It was cheap: one file, and it removed a duplicated
+key encoder on the way.
+
+---
+
 ### GF-13 — a bound derived from another instrument's measurement cannot be raised
 
 **Raised by** B3.4's merge, and it is a stronger property than the condition that asked for it.
