@@ -504,6 +504,35 @@ else
       note "$m has no entry in FLOORS.txt -- a covering lane is not a covering assertion"
     done
   fi
+
+  # EVERY ROW IS SEVEN FIELDS, AND THIS IS A DELIMITER RULE RATHER THAN A TIDY
+  # ONE. The file is pipe-delimited with NO ESCAPE, and the campaign parses it
+  # POSITIONALLY. A row that names a C++ guard verbatim can contain the `or`
+  # operator, which is this delimiter DOUBLED: it splits one field into three,
+  # shifts every column right, and the row still looks like a row.
+  #
+  # B3.5b wrote such a row. The campaign caught it -- but only because the
+  # displaced value landed in `regime`, which is validated against a known set.
+  # Two columns further along it would have parsed, and `covered-by:` would have
+  # silently named the wrong assertion in the one file a reader trusts before
+  # deleting one.
+  #
+  # So the shape is checked rather than the luck relied on.
+  #
+  # THE BOUND IS AN UPPER ONE, AND THE FILE'S OWN HEADER IS WHY. Trailing
+  # columns may be omitted -- "an absent column means default" -- so 5, 6 and 7
+  # fields are all legal rows and the check would be WRONG to demand exactly
+  # seven. Nothing legitimate can produce MORE than seven, and more is exactly
+  # what a doubled delimiter produces. Induced against a row carrying
+  # `RIFT_CHECK(a == 0 || b == 1)`, which is nine.
+  badfields=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$dir/FLOORS.txt" \
+    | awk -F'|' 'NF > 7 {print $1 " (" NF " fields, at most 7)"}')
+  if [ -n "$badfields" ]; then
+    printf '%s\n' "$badfields" | while IFS= read -r row; do
+      printf '   %-14s :    BAD   %s\n' "floors row" "$row"
+    done
+    errs=$((errs + 1))
+  fi
 fi
 
 printf '  ----------------------------------------------------------\n'

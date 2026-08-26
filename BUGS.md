@@ -1081,6 +1081,47 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-017 — a delimiter with no escape, caught by luck in the one column that is validated
+
+**Symptom.** The mutant campaign refused its own baseline with
+`BAD BM85-range-block-is-not-last: unknown regime "determined at B3.5b by induction"` — a complaint
+about the wrong column entirely.
+
+**Root cause.** `FLOORS.txt` is pipe-delimited with **no escape**, and the campaign parses it
+**positionally**. The row named the guard it dies to by quoting the C++ verbatim:
+
+```
+killed-by-guard: ... RIFT_CHECK(range_offset == 0 || offset_ == range_end)
+```
+
+**The `or` operator is the column delimiter, doubled.** One field became three, every column shifted
+right by two, and the row still looked like a row — same shape, same leading class name, plausible
+text in every position.
+
+**WHY IT WAS CAUGHT, AND IT IS NOT A REASON TO RELAX.** The displaced value landed in `regime`, which
+is validated against a known set (`default` / `flush`). Two columns further along and it would have
+**parsed cleanly**:
+
+> **A DELIMITER WITH NO ESCAPE IS CAUGHT BY LUCK IN ANY COLUMN THAT IS NOT VALIDATED.** In this file
+> the unvalidated columns include `covered-by:` — the one field a reader consults before deleting an
+> assertion, and the field `GF-7` already established is worse wrong than absent.
+
+**Fix, and the bound is an UPPER one.** `cpp-scan` part 6 now refuses any row with **more than seven
+fields**. Not *exactly* seven: the file's own header says trailing columns may be omitted — *"an
+absent column means default"* — and 5, 6 and 7 field rows all exist and are legal. **Demanding
+exactly seven would have been a checker that refuses the normal case in the name of the abnormal
+one**, which is the inversion §5.4 rejected candidate (a) for. Nothing legitimate produces more than
+seven; a doubled delimiter produces nine.
+
+Induced both ways against a row carrying `RIFT_CHECK(a == 0 || b == 1)`, and every one of the 123
+existing rows audited.
+
+**The general shape, and it is not about pipes.** A positional format with no escape puts the burden
+on every future writer to know which characters are structural — and the writers here are humans
+recording a finding, at the moment they are thinking about the finding rather than about the file.
+
+---
+
 ### HARNESS-016 — a helper's side effect wider than its purpose, three times in one step
 
 **Symptom.** A compaction test read the manifest to count tables per level, and the engine's next
