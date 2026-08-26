@@ -2018,6 +2018,10 @@ red, and did not report the determinism lane at all.
 > **A lane's state is only carried forward if somebody runs it. A handoff that lists what a lane
 > found last time is not a statement about the lane's state now**, and the two read identically on
 > the page.
+>
+> And the general form, which is the part that travels:
+>
+> **A rule written about one instance does not generalise itself to its siblings.**
 
 **This is the ninth instance of the observability family**, and the more embarrassing half is that the
 handoff **had a section for exactly this**. §5.4 is headed *"`corpus-reproduces` — state it, do not

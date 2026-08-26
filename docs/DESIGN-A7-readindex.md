@@ -1012,32 +1012,48 @@ safe.
 > **Copying the shape of a guarantee is how you lose it quietly.** The code looked like the code that
 > was correct.
 
-### 5e.2b A zero from a mutant is a claim about aim, not only about reach
+### 5e.2b Four axes, one question: is this mutant aimed where the defect lives?
 
-Two of the four classes this session declares measured **zero** on their first attempt, and neither
-zero was about the harness:
+Two of the four classes this phase declares measured **zero** on their first attempt, and neither zero
+was about the harness's reach:
 
-| class | first attempt | true figure | what the zero meant |
+| class | first attempt | true figure | the claim was aimed at the wrong… |
 |---|---|---|---|
-| `M80` | response side only, **0 of 400** | 3 of 400 with the request side | aimed at the wrong **role** — the response is sent by a leader, whose term is already durable |
-| `M79` | clock read at answer time, **0 of 600** | 74 of 600 at arrival time | aimed at the wrong **point in the timeline** — by answer time the replica has absorbed the leader's clock |
+| `M80` | response side only, **0 of 400** | 3 of 400 with the request side | **role** — the response is sent by a leader, whose term is already durable |
+| `M79` | clock read at answer time, **0 of 600** | 74 of 600 at arrival time | **point in time** — by answer time the replica has absorbed the leader's clock |
 
 > **A mutant is a claim about where a defect lives, and a zero can mean the claim is aimed at the
 > wrong point rather than at the wrong line.**
 
-`make mutant-covered` asks exactly this question along the **code-position** axis: does the covering
-test execute the line the patch changes, or go around it? These are the same question along two axes
-no lane asks — **role** and **time** — and both were exposed only by a second attempt at the same
-class, which is not a procedure anybody runs by default.
+**This is not a new question, and the oldest instance of it is not in this track.**
 
-The practical consequence is narrow and worth stating: **a zero is not an opt-out until the aim has
-been varied**, in the same way §5d says a floor is not a measurement until the shape has been named.
-An unmet floor already had to survive a change of shape before it could become an exemption; it now
-has to survive a change of aim as well.
+**`BM55-tables-oldest-first` is Track B's** — B2's version-set work, cited here across the track
+boundary and not owned by this document. Its own record states it as *"the patch was aimed at a line a
+comment claimed was load-bearing and was not"*, and the question it left behind is: **is the line this
+patch is aimed at actually the line that carries the property?** The comment asserted a correctness
+guarantee for a line that turned out to be a cost guard.
 
-*(Ansh cited this as "BM55's question with time as the axis". I could not find `BM55` anywhere in the
-tree — the nearest match is `M55`, which is a GC class, and the code-position instrument is
-`make mutant-covered`. Cited as the latter rather than guessing at the former; the pointer is owed.)*
+So there are four axes and they are siblings rather than one thing:
+
+| axis | the question | who asks it |
+|---|---|---|
+| **line** | is the line this patch changes the line that carries the property? | `BM55` — **Track B**, by hand, after a surviving mutant |
+| **code position** | does the covering test *execute* the line the patch changes, or go around it? | `make mutant-covered`, mechanically, every push |
+| **role** | is the defect reachable on the actor this patch modifies? | nothing — `M80` found it by a second attempt |
+| **time** | is the defect reachable at the moment in the run this patch modifies? | nothing — `M79` found it by a second attempt |
+
+> **Four axes, one question — *is this mutant aimed where the defect lives* — and no single lane asks
+> more than one of them.**
+
+`make mutant-covered` is the only one mechanised, and it covers the axis that is easiest to mechanise
+because coverage data already answers it. The other three are answered, when they are answered at all,
+by somebody being unconvinced by a zero and attacking the same class from a different direction. That
+happened twice this phase and once in Track B, which is three occurrences and not a coincidence.
+
+**The rule this yields is narrow and it binds now:** *a zero is not an opt-out until the aim has been
+varied*, in the same way §5d says *a floor is not a measurement until the shape has been named*. An
+unmet floor already had to survive a change of shape before becoming an exemption; it now has to
+survive a change of aim, and the four axes above are the checklist.
 
 ### 5e.3 The standing obligation this creates
 
