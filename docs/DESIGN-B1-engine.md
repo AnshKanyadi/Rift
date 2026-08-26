@@ -1833,6 +1833,18 @@ padding, and any float that reached a serialization path. It is also why MSan st
 
 ### 10.3 The harness-power floor, as a forward binding on B1.9b
 
+> **THIS SECTION'S JUSTIFICATION, IN ONE LINE, MEASURED AT B2.7 RATHER THAN ARGUED.**
+>
+> **`FLOOR-continuation-removed`: `cpp-sweep` GREEN while `cpp-campaign` is RED.**
+>
+> **The lane whose job is finding defects is perfectly healthy, and its power has collapsed.**
+>
+> That is the whole of why a floor is not a gate. The sweep still visits every kill point, still
+> reports every pass, still observes both elements of the recovery set — and `BM2` has gone from 34
+> detections to zero. Nothing goes red except the lane that measures POWER, which is the only lane
+> that can. Induced at B2.7 and killed by `cpp-campaign` with `cpp-sweep` holding green as its
+> control, which is the pair rather than either half.
+
 **Owed by §12.3 item 2(ii), done here.** Track A built this after discovering a harness defect that
 quietly cut detection to a sixth with every lane green; Ansh approved Track B mirroring the actual
 construct rather than inventing a parallel one, so what follows is `sim/hunt/floors.go`'s shape with

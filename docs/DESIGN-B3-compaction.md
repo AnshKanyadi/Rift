@@ -1,6 +1,7 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: PROPOSED. No B3 code exists. This document stops for Ansh's decision.**
+**Status: REVISION 2. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
 versions. Real range tombstones land here, replacing B2's iterate-and-point-delete `DeleteRange`, and
@@ -129,27 +130,101 @@ The rig already records every submission (`SubmissionLog`). B3 adds:
 Before a compaction the harness computes `keep(k)` for every `k`; after it, it computes what actually
 survived, and asserts both inclusions.
 
-### 2.2 The hard part: reading what survived without using the path under test
+### 2.2 Reading what survived without using the path under test — RULED
 
 "What survived" is a fact about **bytes in SSTables**, not about what `Get` returns — reading through
 the API would filter by snapshot and hide exactly the failure this check exists for.
 
-So something must parse SSTables. That collides with §7.4 condition 1, enforced by `cpp-scan` part
-2b: **`rig/exactness_oracle.{h,cc}` includes nothing from `src/`**, because *an oracle that
-interrogates the engine believes the lie*.
+So something must parse SSTables, which appeared to collide with §7.4 condition 1: *an oracle that
+interrogates the engine believes the lie*, enforced by `cpp-scan` part 2b as **`exactness_oracle.*`
+includes nothing from `src/`**.
 
-Three ways out, and this is **B3-Q1** below because the choice is not mine:
+> **RULED, 2026-08-25.** *Oracle independence has never been about which code the checker links
+> against. It is about whose account the verdict rests on. The lie is a CLAIM — what the engine says
+> it holds, what it says is durable, what `Get` chooses to return. **Bytes on disk are not a claim.**
+> They are the artifact the engine produced, and reading them with the engine's own reader is closer
+> to a hex dump than to an interview, provided the reader answers only what is there.*
+>
+> *The rule as stated in `cpp-scan` is too coarse and is CORRECTED rather than excepted, because an
+> exception here would be the thing this project has refused everywhere else:*
+>
+> > **AN ORACLE MAY PARSE THE ENGINE'S ARTIFACTS, AND MAY NOT CONSULT THE ENGINE'S BELIEFS.**
+> > **Parsing shares a format; consulting shares a judgement.**
+>
+> *Then make the boundary MECHANICAL, because "may read bytes, may not ask beliefs" is a discipline
+> and this project has watched five disciplines fail.*
 
-| | approach | cost |
+### 2.2a The boundary, made mechanical — B3-D2a
+
+A sentence is not a boundary. Three mechanisms, mirroring the `DECIDERS.txt` pattern, which is the
+one construct in this tree that has already survived a phase:
+
+**1. `engine-cpp/ARTIFACTS.txt` — the allow-list of headers an oracle may parse**, each with a
+one-line justification of why it only decodes. An oracle's `src/` includes must all be listed.
+
+**2. The mechanical mark of judgement, and it is the whole of the corrected rule:**
+
+> **AN ARTIFACT HEADER DECLARES NOTHING THAT TAKES AN `Env*` AND NOTHING THAT TAKES A SNAPSHOT.**
+
+Those two are exactly where decoding becomes judging. `Env*` means *it went and looked*, which is an
+act with an opinion about what the current state is. A snapshot parameter means *it decided what a
+caller should be allowed to see*, which is the engine's rule about visibility — the single rule this
+checker exists to audit. A header with neither is bytes in, structure out.
+
+**3. `engine-cpp/ORACLES.txt` plus a `RIFT_ORACLE` marker**, cross-checked both ways, so a new
+verdict-producing file cannot land outside the rule by simply not being named in it.
+
+**What the rule immediately costs, and the cost is a correction rather than a concession.** Two of
+B2's headers are *mixed* and fail the mark, which is the rule doing its job on the first day:
+
+| header | why it fails | what B3.0 does |
 |---|---|---|
-| (a) | the drop checker uses the engine's `Table` reader | a parser bug aliases with a compaction bug. But the parser is **not the thing under test** here — the policy is — and the parser has its own induced classifier from B2.0 |
-| (b) | the rig gets its **own** SSTable parser | a second implementation of a frozen format, which is the differential principle and is exactly what B4 does against `engine/model`. Real cost: two parsers to keep in step, and the second is unexercised except here |
-| (c) | defer the whole check to B4's differential rig | honest, and it means **B3 ships a compaction policy with no direct check on its drop set** — the thing this section argues is unobservable by other means |
+| `sst/table.h` | `Table::Open(Env*, …)` and `Table::Get(…, snapshot, …)` | nothing — the checker does not need it. `table_format.h`'s `ParseBlock`, `DecodeFooter` and `DecodeHandle` enumerate every entry in a table, and enumerating is the whole job |
+| `sst/manifest.h` | `Manifest::Open(Env*, …)` | **split**: the pure codec — `EditKind`, `TableMeta`, `ManifestEdit`, `ManifestState`, `EncodeEdit`, `DecodeEdit`, the path helpers — moves to `sst/manifest_format.h`, mirroring `table_format.h` beside `table.h`. The `Manifest` class keeps `manifest.h` |
 
-My recommendation is **(a) with the scoping stated at the code and in `CLAIMS.txt`**: the checker
-lives outside `exactness_oracle.{h,cc}` in its own rig file with its own independence rule — *it may
-read the engine's bytes, it may not ask the engine what it believes* — and the aliasing risk is named
-rather than left implicit. (b) is what B4 buys anyway; paying for it twice is the wrong order.
+**And the checker never opens a file.** It is handed a `DurableImage` — the harness's own
+path-to-bytes map, which `TestEnv` already produces and which no engine code touches — and parses it
+with pure decoders. **No `Env`, no engine object, no beliefs, and no I/O.** That also makes it
+drivable from hand-built bytes with no engine in the tree at all, which is B2-D6's ordering for the
+third time.
+
+### 2.2b The aliasing, named — and the three conditions on it
+
+**THE COST IS REAL AND IT IS NAMED HERE RATHER THAN LEFT IMPLICIT.** The checker and the engine share
+a parser, so a parser defect is a blind spot they share **at exactly the place the checker exists to
+watch**. Ansh's three conditions:
+
+**(i) Name the failure.** A reader defect that makes surviving bytes look absent, or absent bytes look
+present, corrupts the `survived` set the whole verdict rests on.
+
+**(ii) Land a mutant that plants the shared blind spot, and see what kills it.** *If nothing kills it,
+the aliasing is not acceptable and we need an independent parser.* Two mutants, because **the two
+directions are not equally dangerous and I want the measurement to say so rather than assume it**:
+
+| mutant | what it does | my prediction, to be tested rather than trusted |
+|---|---|---|
+| `READER-hides-a-live-record` | `ParseBlock` silently skips an entry | should be **loud**: `survived` loses a record the harness's model requires, so the verdict is a FALSE VIOLATION. Also killed by the classifier's entry-count assertion and by every flush read |
+| `READER-shows-a-dropped-record` | `ParseBlock` reports an entry the bytes do not contain | **the dangerous direction**: a wrong drop looks like a keep, and the verdict is a FALSE PASS. This is the one that decides whether (a) is acceptable |
+
+**The direction that matters is the second, and it is not the one the condition named** — which is
+the point of landing both rather than one. If `READER-shows-a-dropped-record` survives, the aliasing
+is unacceptable and the rig gets its own parser.
+
+**(iii) The split label.** `FLOORS.txt` records the drop checker as **`covered-by:` whatever kills
+those mutants — not by its own assertions**, because an instrument that certifies itself certifies
+nothing. Whatever kills them is **load-bearing for every drop verdict in the phase** and is named as
+such in the entry.
+
+### 2.2c The one place the aliasing would be total, and the design that avoids it
+
+The blind spot is bounded **only because `required` never comes from the engine's files.**
+
+If the checker computed *what was there before compaction* by reading the input files, then a parser
+that hides a record would hide it from **both** sides — `required` and `survived` — and the drop
+would be invisible with no assertion able to see it. **`required` comes from the harness's submission
+log**, which is a record of what was *submitted*, not of what the engine wrote. That single choice is
+what keeps the aliasing to one side of the comparison, and it is why it is stated as a decision here
+rather than left as an implementation detail.
 
 ### 2.3 Both directions, and the mutant for each
 
@@ -344,18 +419,25 @@ class column must print nothing.
 
 ## 11. Open questions for Ansh
 
-**B3-Q1 — how does the drop checker read what survived?** §2.2. (a) the engine's `Table` reader, with
-the aliasing risk named and the checker held to *may read bytes, may not ask beliefs*; (b) a second
-parser in the rig; (c) defer to B4 and ship B3 with no direct drop check. I recommend **(a)**, and the
-question is whether the oracle-independence rule bends that far or whether the answer is (b).
+**B3-Q1 — RULED.** (a), *with the rule sharpened rather than bent*: an oracle may parse the engine's
+artifacts and may not consult its beliefs, made mechanical by §2.2a and conditioned by §2.2b. The
+correction lands in `cpp-scan` as a rule, not an exception.
 
-**B3-Q2 — does `S` include sequences a snapshot COULD be taken at, or only live ones?** §1.1 says live
+**B3-Q2 — NOT RULED; PROCEEDING ON MY READING AND FLAGGING IT.** The implementation instruction did
+not address this one, so B3 proceeds on the reading below and it is called out here rather than
+treated as settled. If the reading is wrong, §1.2's claim is wrong and the phase is wrong with it.
+
+**Does `S` include sequences a snapshot COULD be taken at, or only live ones?** §1.1 says live
 ones, which is what makes dropping possible at all. The stricter reading — never drop anything a
 future snapshot might want — permits no compaction whatsoever, so this is really a question about
 whether the frozen `Snapshot` contract promises anything about sequences no snapshot holds. I read it
 as no. Worth one sentence from you, because §1.2's whole claim rests on it.
 
-**B3-Q3 — is the two-level structure enough for the exit criterion's numbers to mean anything?** The
+**B3-Q3 — RATIFIED by the implementation instruction** (*"policy chosen by measurement per Amendment
+A6 with multi-level leveled recorded as an upgrade path"*), which is this reading. Retained for the
+record.
+
+**Is the two-level structure enough for the exit criterion's numbers to mean anything?** The
 criterion is *measured and recorded*, not *good*. I read it as: the numbers must be real, honestly
 obtained and reproducible, and (b)'s write amplification being worse than (c)'s is a recorded fact
 rather than a failure. If you read it as requiring the numbers to be *competitive*, that is (c) and
@@ -369,6 +451,7 @@ A6's STRETCH line needs revisiting.
 |---|---|---|
 | **B3-D1** | the drop claim | stated before the policy; `keep(k)` over the live-observable sequence set `S`, plus the tombstone rule that constrains input selection |
 | **B3-D2** | how it is checked | harness computes the permitted drop set and holds the engine to it, **both directions**, plus a vacuous-compaction guard |
+| **B3-D2a** | the artifact/belief boundary | mechanical: `ARTIFACTS.txt`, `ORACLES.txt`, and the mark — *an artifact header declares nothing taking an `Env*` and nothing taking a snapshot*. Splits `manifest_format.h` out of `manifest.h` |
 | **B3-D3** | compaction policy | **two levels**, L0 + L1; (a) rejected for making the measurement meaningless, (c) deferred as A6's STRETCH with a numeric threshold to reopen |
 | **B3-D4** | read path | `ConcatenatingIter` for L1 so the merge's `k` stays small |
 | **B3-D5** | snapshots | refcount + a sequence floor read once at compaction start |
@@ -379,8 +462,8 @@ A6's STRETCH line needs revisiting.
 
 | id | question | my reading |
 |---|---|---|
-| **B3-Q1** | how the drop checker reads surviving bytes | (a), engine reader, scoping stated |
-| **B3-Q2** | does `S` mean live snapshots only | yes, or no compaction is possible |
-| **B3-Q3** | must the amplification numbers be competitive or merely real | real |
+| **B3-Q1** | how the drop checker reads surviving bytes | **RULED**: (a), with the rule corrected to *parse artifacts, never consult beliefs*, made mechanical and conditioned on two aliasing mutants |
+| **B3-Q2** | does `S` mean live snapshots only | **NOT RULED.** Proceeding on *yes*; flagged in §11 |
+| **B3-Q3** | must the amplification numbers be competitive or merely real | **RATIFIED**: real |
 
 **Nothing in B3 is written until this is ruled on.**
