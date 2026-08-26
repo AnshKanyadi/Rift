@@ -128,8 +128,41 @@ freely: *the drop rule constrains the input set*, and §3 is written knowing tha
   `S`, so it cannot reach anything the floor already permitted dropping. Safe.
 
 **The floor only ever moves up.** So a floor read once at compaction start is conservative, and no
-lock is held across the compaction. Stated here because the alternative — re-reading it — would be
-both slower and wrong-looking-correct.
+lock is held across the compaction.
+
+**B3-Q2 RULED (2026-08-26): `S` IS THE LIVE SNAPSHOTS.** A retired snapshot has no reader that can
+observe the version it pinned, so keeping that version required would make compaction **unable to
+reclaim space nothing can see** — which is `keep(k)`'s over-requirement arriving a second time from a
+different direction. Asserted in both directions at the engine and at the model
+(`Compaction.AReleasedSnapshotStopsRequiringItsVersion`, `...TheModelDropsAReleasedSnapshotFromS`).
+
+**THE SECOND ARGUMENT ABOVE RESTS ON A FACT ABOUT THE INPUTS, AND A FACT IS ASSERTABLE.** "A snapshot
+created takes the current sequence, which is `≥` every sequence already in `S`" is only half of what
+is needed. The half that matters is:
+
+> **EVERY SEQUENCE THE INPUTS HOLD IS AT OR BELOW THE VISIBLE SEQUENCE ALREADY IN `S`** — written
+> `pin_seq ≤ max(S)`, and asserted in `DoCompact`.
+
+Given it, for any later `s`, `keep(k)` at `s` is *the newest version of k in the inputs*, which the
+visible sequence **already required** — so a snapshot taken mid-compaction requires nothing new. It is
+true today because tables hold only flushed data while `seq_` runs ahead of them, and it would stop
+being true the day a compaction took the immutable memtable as an input. **That is a change someone
+will propose, which is exactly why it is a `RIFT_CHECK` and not a paragraph.**
+
+**AND THE MUTANT ANSWERED A QUESTION RATHER THAN FINDING A BUG.** `BM84` planted the shape a future
+optimization will produce — *read `S` as late as possible so it is as small as possible so more can
+be dropped* — and it **survived, correctly.** Both directions of `S` movement are safe, so the
+**timing of the read does not carry the correctness**; `pin_seq ≤ max(S)` does.
+
+The mutant was **deleted rather than kept as a class that can never fail**, and the answer lives at
+the call site and here instead. `S` is still read once at the start, because *once-at-the-start* is
+the property that survives if the inputs ever stop being frozen at selection time.
+
+**`BM83` is the class that did fire**, and it is aimed at the ruling's dangerous misreading: *"live
+snapshots only"* read as *"live snapshots **alone**"*. With no snapshot held — the ordinary case —
+`S` would be empty, nothing would be observable, and **every version of every key would become
+droppable**: a database that is structurally perfect and empty. It is killed by the non-empty guard
+in `DoCompact`, not by a test, and carries `killed-by-guard:` for it.
 
 ### 1.4 Why a surviving-state check cannot see a wrong drop
 

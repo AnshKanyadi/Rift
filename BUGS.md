@@ -675,6 +675,17 @@ That is a sharper statement of meaning #1 and it points at the fix rather than t
 test now holds forty snapshots so that a key HAS many surviving versions, which is a workload the
 suite had never run and which B3.6 is about.
 
+**`BM84` IS MEANING #3's SECOND INSTANCE, AND IT ANSWERED A QUESTION RATHER THAN FINDING A BUG.**
+Ansh asked for the shape a future optimization will produce to be planted deliberately: *read `S` as
+late as possible so it is as small as possible so more can be dropped.* It was planted, and it
+**survived — correctly.** Both directions of `S` movement are safe (a release only over-keeps; an
+acquisition lands above every sequence the inputs hold), so **the timing of the read does not carry
+the correctness.** `pin_seq ≤ max(S)` does, and that is now a `RIFT_CHECK`.
+
+> **A MUTANT PLANTED TO ANSWER A QUESTION IS WORTH PLANTING EVEN WHEN IT SURVIVES — BUT IT IS NOT
+> WORTH KEEPING AS A CLASS THAT CAN NEVER FAIL.** Deleted, with the answer moved to the call site and
+> to `DESIGN-B3` §1.3, which is where the next person to propose the optimization will look.
+
 `BM82` is meaning #2 — **`BM55`'s question, asked again and answered the same way.** It removes
 `Sync`'s claim on the single-caller guard and leaves `SingleCaller` itself intact, and it survived a
 pair of tests that construct the guard **directly**:
