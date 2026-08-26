@@ -170,6 +170,18 @@ while IFS= read -r line; do
         printf '   exempt   %-30s covered-by %s\n' "$cls" "$inst"
       fi
       continue ;;
+    killed-by-guard:*)
+      # A DIFFERENT INSTRUMENT, SO A DIFFERENT LABEL. These die when a guard
+      # ABORTS the process, so the test suite reports NO FAILING TEST -- which
+      # reads as a survival unless the reader knows. "No failing test" and
+      # "killed by a guard" are opposite conclusions from identical output.
+      inst=$(printf '%s' "$rate" | sed 's/^killed-by-guard: *//')
+      if [ -z "$inst" ]; then
+        printf '   BAD      %s: killed-by-guard names no guard\n' "$cls"; fails=$((fails + 1))
+      else
+        printf '   exempt   %-30s ABORTED BY %s\n' "$cls" "$inst"
+      fi
+      continue ;;
   esac
 
   work="$scratch/$cls"

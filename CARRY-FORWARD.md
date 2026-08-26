@@ -174,11 +174,21 @@ label from what a patch says it *blinds* would have produced plausible entries t
 test — and a wrong `covered-by` is worse than none, because it is the one place a future reader
 checks before deleting an assertion.
 
-**Three classes have no failing test at all**, and finding that out is the reason the run was worth
-doing: `BM16-mutex-across-env`, `BM9-apply-does-io` and `REGISTRY-lying-sync-not-suspending` are
-killed by an **abort** — the mutex-depth guard and the suspension assertion — so the suite reports
-**no failing test** while the process dies mid-run. Their entries say so. Without the `RIFT PARTIAL
-RUN` marker landed hours earlier, those three would have been recorded as **surviving**.
+**THREE CLASSES HAVE NO FAILING TEST AT ALL, AND THEY CARRY A DIFFERENT LABEL FOR IT.**
+`BM16-mutex-across-env`, `BM9-apply-does-io` and `REGISTRY-lying-sync-not-suspending` are killed by a
+**guard firing** rather than by an assertion failing — the mutex-depth guard and the
+exactness-suspension assertion — so the suite reports **no failing test** while the process dies
+mid-run.
+
+> **"No failing test" and "killed by a guard" are OPPOSITE CONCLUSIONS FROM IDENTICAL OUTPUT.**
+
+Read as the first, all three are **survivals** — three false findings, in the one file whose entries
+a reader trusts before deleting an assertion. So the distinction is a **label**, not a sentence in a
+reasoning column: `killed-by-guard: <guard>` rather than `covered-by: <test>`, and `cpp-campaign`
+parses both and prints them differently.
+
+They were read correctly only because `RIFT_CHECK` prints a partial-run marker — **landed hours
+earlier, for exactly this shape, and it paid for itself the same day.**
 
 **One entry moved rather than being retired**: `ORACLE-includes-engine` was written against the old
 part 2b, which B3-Q1 **replaced** — so it now names the ARTIFACTS allow-list. A mutant retired with
@@ -223,11 +233,21 @@ label from what a patch says it *blinds* would have produced plausible entries t
 test — and a wrong `covered-by` is worse than none, because it is the one place a future reader
 checks before deleting an assertion.
 
-**Three classes have no failing test at all**, and finding that out is the reason the run was worth
-doing: `BM16-mutex-across-env`, `BM9-apply-does-io` and `REGISTRY-lying-sync-not-suspending` are
-killed by an **abort** — the mutex-depth guard and the suspension assertion — so the suite reports
-**no failing test** while the process dies mid-run. Their entries say so. Without the `RIFT PARTIAL
-RUN` marker landed hours earlier, those three would have been recorded as **surviving**.
+**THREE CLASSES HAVE NO FAILING TEST AT ALL, AND THEY CARRY A DIFFERENT LABEL FOR IT.**
+`BM16-mutex-across-env`, `BM9-apply-does-io` and `REGISTRY-lying-sync-not-suspending` are killed by a
+**guard firing** rather than by an assertion failing — the mutex-depth guard and the
+exactness-suspension assertion — so the suite reports **no failing test** while the process dies
+mid-run.
+
+> **"No failing test" and "killed by a guard" are OPPOSITE CONCLUSIONS FROM IDENTICAL OUTPUT.**
+
+Read as the first, all three are **survivals** — three false findings, in the one file whose entries
+a reader trusts before deleting an assertion. So the distinction is a **label**, not a sentence in a
+reasoning column: `killed-by-guard: <guard>` rather than `covered-by: <test>`, and `cpp-campaign`
+parses both and prints them differently.
+
+They were read correctly only because `RIFT_CHECK` prints a partial-run marker — **landed hours
+earlier, for exactly this shape, and it paid for itself the same day.**
 
 **One entry moved rather than being retired**: `ORACLE-includes-engine` was written against the old
 part 2b, which B3-Q1 **replaced** — so it now names the ARTIFACTS allow-list. A mutant retired with

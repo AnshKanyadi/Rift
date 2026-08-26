@@ -889,6 +889,29 @@ things nobody thought to look for. Four for four, none of them the thing it was 
 
 ---
 
+### A category worth watching: shell-dialect assumptions, not logic errors
+
+Both defects in CF-2's own execution were **assumptions about which shell was running**, not mistakes
+in reasoning:
+
+| where | the assumption | what it produced |
+|---|---|---|
+| the labelling script, invoked from **zsh** | that `sh label.sh $IDS` word-splits an unquoted parameter — **zsh does not** | all 28 names arrived as ONE argument; the loop ended after a single `ROT` line, and *"1 of 28 done"* read as slow progress |
+| `cpp-scan` part 6, running under **`sh`** | that `<(...)` is available — it is a **bashism** | the check printed its own heading and then died with a syntax error: **a lane that looks like it ran** |
+
+**This is a category now, because the lanes are written in three dialects.** The `Makefile`'s recipes
+and every `scripts/*.sh` run under POSIX `sh`; the shell these are authored and tried out in is
+`zsh`; and `awk` is a fourth language inside `cpp-scan-rules.awk`. **A construct that works when
+tried interactively may not run in a lane, and the reverse.**
+
+Neither of these was caught by thinking harder. The first was caught by noticing the process did not
+exist; the second by the lane failing loudly *after* its heading. **The cheap defence is the one
+already in place — `sh -n` on every lane script before running it — and it catches the second class
+and not the first**, because `$IDS` is syntactically fine and semantically empty. For the first class
+the defence is the standing provenance rule: *read progress from something that advances.*
+
+---
+
 ### The standing rule: a signal read without its provenance
 
 **Six instances now, and they are listed rather than counted so the number is checkable.** Each is a
@@ -904,6 +927,8 @@ at where the number came from.
 | 4 | `HARNESS-014` | a cross-check reporting no violations | not "nothing violates this" but "I compared nothing" |
 | 5 | `GF-6` | a detection rate that fell | not "power was lost" but "the denominator grew into territory where the class is undetectable" |
 | 6 | **the truncated suite, B3.1** | **no `DropCheck` test failing under either reader mutant** | not "the checker cannot see fabrication" but **"an earlier `RIFT_CHECK` killed the process before those tests ran"** |
+| 7 | the labelling run, B3.1 | *1 of 28 done* | not "slow" but **"dead after one, and a rate computed from it claimed 396 minutes for a run already over"** — the THIRD rate computed over an appearance |
+| 8 | `ORACLE-includes-engine`'s label | a scan reporting **NONE** | not "the rule no longer catches it" but **"my `grep` pattern did not match the line the rule printed"** — the rule catches it, and a mutant whose target moves is **re-pointed, not deleted** |
 
 **The sixth nearly produced the opposite ruling.** The aliasing condition would have been reported as
 **unacceptable** — requiring the rig to grow its own parser — on a zero that was an artifact. The
@@ -1059,6 +1084,23 @@ holding the user key wins and the walk stops.
 **The standing question it adds.** When a mutant survives, before reaching for any of the three
 meanings: *is the line this patch is aimed at actually the line that carries the property, or is a
 comment answering that question for me?*
+
+---
+
+**THE SAME SHAPE IN THE LABEL FILE, and it is where it does the most damage.** `FLOORS.txt`'s
+`covered-by:` is a claim that a named assertion catches a named class. CF-2 landed 47 of them, and
+**every one was DETERMINED — the patch applied, the tree built, the failing assertion read — never
+INFERRED from what the patch says it blinds.**
+
+Inferring would have been faster and would have produced entries that are *plausible and wrong*: the
+`blinds` line describes the defect, not the assertion that notices it, and the two coincide often
+enough to make the guess feel safe. Three of the 47 have **no failing test at all**.
+
+> **A WRONG `covered-by` IS WORSE THAN NONE, because it is consulted precisely when someone is about
+> to delete something.** That is GF-7 arriving in the label file rather than in a comment: a claim
+> attached to the wrong thing, in the one place a reader trusts before removing an assertion.
+
+**The rule: a label that names an instrument is determined by induction, or it is not written.**
 
 ---
 
