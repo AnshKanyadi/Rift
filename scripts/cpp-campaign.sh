@@ -170,6 +170,19 @@ while IFS= read -r line; do
         printf '   exempt   %-30s covered-by %s\n' "$cls" "$inst"
       fi
       continue ;;
+    covers-correctness:*)
+      # A CORRECTNESS INSTRUMENT, NOT A PROGRESS ASSERTION. GF-12: a loop with a
+      # proven progress quantity can advance monotonically into a wrong answer,
+      # so the thing that catches a wrong TRAVERSAL is a different instrument
+      # from the thing that proves the loop stops. Labelled apart so a green
+      # progress assertion is never read as evidence about traversal.
+      inst=$(printf '%s' "$rate" | sed 's/^covers-correctness: *//')
+      if [ -z "$inst" ]; then
+        printf '   BAD      %s: covers-correctness names no instrument\n' "$cls"; fails=$((fails + 1))
+      else
+        printf '   exempt   %-30s CORRECTNESS %s\n' "$cls" "$inst"
+      fi
+      continue ;;
     killed-by-guard:*)
       # A DIFFERENT INSTRUMENT, SO A DIFFERENT LABEL. These die when a guard
       # ABORTS the process, so the test suite reports NO FAILING TEST -- which

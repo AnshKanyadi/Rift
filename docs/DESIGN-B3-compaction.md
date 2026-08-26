@@ -1,6 +1,6 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: REVISION 8. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+**Status: REVISION 9. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
 B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
@@ -510,6 +510,71 @@ cursor advancing.
 Every such loop in the phase gets its assertion in the diff that adds it. Where progress cannot be
 stated as "a key strictly advances", it is stated as a **bounded work counter** — and a counter is
 the honest form when the loop's progress genuinely is not monotone in the key.
+
+---
+
+## 7.1 B3-D7a — the compaction merge: its progress quantity and its correctness instrument, NAMED BEFORE THE LOOP
+
+**Ansh's condition, answered before the loop is written**, because a loop whose only progress measure
+is the thing under test is a loop whose termination cannot be checked — and finding that out while
+designing it is worth more than finding it from a lane that hangs.
+
+### The progress quantity, and why no cursor will do
+
+Every loop CF-3 has met so far advances **one cursor**. The compaction merge does not: a single
+iteration may **emit an entry, or drop one, or consume a range tombstone, or advance a source that
+produces nothing at all** — so "the output key strictly advances" is false for a correct merge, and
+"the input cursor strictly advances" is false whenever a version is dropped without being emitted.
+
+> **THE HONEST QUANTITY IS `inputs_consumed` — a COUNT OF INPUT ENTRIES TAKEN FROM THE MERGE, which
+> increases by exactly one per iteration and never decreases.**
+
+Every iteration takes exactly one entry from the merged input and then decides what to do with it.
+That is true whether the entry is emitted, dropped, or absorbed into a range tombstone's shadow.
+
+### What bounds it, and why a correct compaction cannot reach the bound
+
+**A bound a correct run can hit is a bound that will be raised** — so the bound is not a tuning
+number, it is a fact about the inputs:
+
+> **`inputs_consumed ≤ Σ entries(f) for f in the compaction's input files`**, a quantity **counted
+> from the inputs before the merge starts**, using `ValidateTable`'s entry count — which is already
+> computed when each table is opened and validated.
+
+A correct compaction consumes each input entry **exactly once**, so it terminates at exactly the
+bound and can never exceed it. Reaching the bound is not a failure; **exceeding it is**, and it can
+only mean a source was rewound or an entry counted twice — the two ways a merge loops forever.
+
+This is a **derived** bound, not a chosen one. There is no number to raise: raising it would require
+claiming a table holds more entries than the classifier says it holds.
+
+### The correctness instrument, named separately because GF-12 says it must be
+
+The progress assertion bounds termination and says **nothing** about whether the output is right.
+Two different questions, two different instruments:
+
+| question | instrument |
+|---|---|
+| does the merge stop? | `inputs_consumed` against the derived bound, asserted in the loop |
+| **is what may be dropped, dropped?** | **the drop adjudicator** — `AdjudicateDrops`, already built at B3.0, three directions |
+| **do the survivors come out in the right ORDER with the right VALUES?** | **`CompactionOutput.IsTheMergeOfItsInputs`** — see below |
+
+**The third row is the gap Ansh named, and nothing existing covers it.** The drop adjudicator works
+over **sets** of `(user_key, seq)` — it is blind to ordering entirely, and blind to values. A merge
+that emitted every required entry, in reverse order, with every value shifted by one position, would
+satisfy all three of its directions.
+
+> **`CompactionOutput.IsTheMergeOfItsInputs`**: the harness independently merges the input tables'
+> entries — a plain sorted merge of what `ValidateTable` enumerated, with no drop rules applied —
+> filters that sequence by the drop claim, and asserts the compaction's output is **exactly that
+> sequence, in order, with matching values.**
+
+It is a **stronger** check than the adjudicator and does not replace it: it can only run where the
+harness knows both input and output files, which is a compaction in isolation. The adjudicator runs
+against **any durable image**, including one produced by a crash mid-compaction, and that is where it
+earns its place.
+
+Both are written **before the merge**, per the ordering that has now paid four times.
 
 ---
 

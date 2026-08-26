@@ -966,6 +966,42 @@ evidence until its provenance is.**
 
 ---
 
+### GF-12 — a termination assertion is not a correctness assertion
+
+**Raised by** B3.3's CF-3 mutants, and it is the danger *inside* a rule that is working.
+
+CF-3 requires every loop to assert the movement it terminates on, over a quantity it does not derive
+from the thing it might be wrong about. `ConcatIter` does that, and the assertions hold. **Two of its
+three mutants pass every one of them:**
+
+| mutant | what it breaks | what the progress assertion does |
+|---|---|---|
+| `BM68-concat-seek-wrong-half` | the binary search takes the **wrong half** | **holds throughout.** `hi - lo` shrinks whichever direction is taken, so the loop terminates cleanly with its interval invariant intact — **and lands on the wrong file** |
+| `BM69-concat-next-skips-a-file` | `Next` advances **two** files | **holds throughout.** `file_` strictly increases, so the walk terminates — **having silently dropped a whole table's contents** |
+
+> **A LOOP WITH A PROVEN PROGRESS QUANTITY CAN ADVANCE MONOTONICALLY INTO A WRONG ANSWER.**
+
+**THE DANGER IS NOT THAT CF-3 FAILS. IT IS THAT CF-3 SUCCEEDING FEELS LIKE COVERAGE IT DOES NOT
+PROVIDE.** A reader who sees `RIFT_CHECK(hi - lo < before)` beside a search, and knows the phase made
+a point of loop assertions, has every reason to think the loop is checked. It is — for termination,
+and for nothing else. In `BM67`'s terms: **a checked-looking loop that returns wrong answers.**
+
+**What actually covers the traversal, named so nobody reads the wrong green as evidence:**
+
+| instrument | what it covers |
+|---|---|
+| `ConcatIter.EverySeekTargetLandsWhereALinearScanWould` | **the seek sweep** — every probe in and around the run compared against what a linear scan returns. A search wrong for one input class is wrong invisibly, because every other input still works |
+| `ConcatIter.WalksTheWholeRunInOrder` and `.WalksBackwardsToTheSameSequence` | **the traversal** — and the pair matters, because forward and backward cross the same file boundaries in opposite orders |
+
+`FLOORS.txt` labels these **`covers: correctness`** rather than leaving them as bare `covered-by:`
+entries, so the distinction survives being read by someone in a hurry.
+
+**The rule.** Every loop gets **two** instruments, and they answer different questions: *does it
+stop*, and *does it stop in the right place*. CF-3 is the first. It was never the second, and the
+phase that treats it as both ships `BM68`.
+
+---
+
 ### BM67 — the phase's exemplar of a defect NO GENERAL CHECKER FINDS
 
 **One character.** `<` becomes `<=` in `RangeTombstone::Covers`, and the range stops being half-open.
@@ -993,6 +1029,33 @@ could establish a convention by accident**.
 > checker for "the engine is consistently wrong about a boundary" — consistency is exactly what a
 > differential or equivalence check confirms. **The only defence is to fix the convention in a
 > fixture before there is an implementation to read it off.**
+
+---
+
+### An empty condition is evidence only when the question was asked mechanically
+
+CF-3 carries a condition: *if a loop cannot state a progress quantity independent of what it might be
+wrong about, that is a finding to report before it is a loop to write.* At B3.3 it **came back
+empty** — every loop the step adds has an independent quantity.
+
+**An empty result is worth exactly as much as the procedure that produced it.** What makes this one
+evidence rather than a shrug is that the question was asked **before the code existed**, in a table
+with one row per loop and an explicit independence column:
+
+```
+loop            might be wrong about        progress quantity     independent?
+Next / Prev     which table holds the key   file_ (an index)      YES
+Seek            CompareInternalKey          hi - lo               YES  <- see below
+```
+
+Had it been asked by reading the finished code and nodding, "nothing to report" would have meant
+"nothing noticed". **The table is what makes it the first rather than the second**, and it also
+produced the phase's forward flag: B3.4's merge both advances a cursor *and* drops entries, so it has
+no single cursor as a progress quantity, and its honest answer may be a bounded work count.
+
+**The general shape: a check that returns "nothing" is only as good as the enumeration behind it.**
+It is the same argument `HARNESS-006`'s audit made — enumerate the population first, then check each
+member — applied to a question rather than to a set of functions.
 
 ---
 
