@@ -941,6 +941,54 @@ future snapshot might want — permits no compaction whatsoever, so this is real
 whether the frozen `Snapshot` contract promises anything about sequences no snapshot holds. I read it
 as no. Worth one sentence from you, because §1.2's whole claim rests on it.
 
+**B3-Q4 — BLOCKING, AND IT IS A CONTRADICTION WITH A FROZEN INTERFACE. Raised at B3.5c,
+2026-08-26.** Work on B3.5c is stopped pending a ruling.
+
+**The frozen `Engine` interface requires a range deletion the frozen range-tombstone format cannot
+express.**
+
+| what | where | says |
+|---|---|---|
+| `DeleteRange(Bound, Bound)` | A0.5's frozen interface, `db.h` divergence 3 | either bound may be **UNBOUNDED**, and `DeleteRange(Unbounded, Unbounded)` is §8.2's clear-everything case — *"the clear half of snapshot application's clear-then-ingest, the case Amendment A3 was ruled for"* |
+| the range-tombstone block | §6.1, frozen at B3.2, every refusal induced | `start_len:u32 \|\| start \|\| end_len:u32 \|\| end \|\| tag:u64`, and the classifier **refuses `end ≤ start` bytewise** |
+
+> **THERE IS NO BYTE STRING GREATER THAN EVERY BYTE STRING, SO `[start, ∞)` HAS NO REPRESENTATION IN
+> THE BLOCK — AND `(−∞, ∞)` IS EXACTLY THE CASE `[A3]` PUT `DeleteRange` IN THE INTERFACE FOR.**
+
+**Only the END is affected.** An unbounded *start* is expressible as `""`: the empty user key is the
+minimum, so `["", end)` and `[unbounded, end)` cover the same set. The problem is one-sided.
+
+**Why B2 did not have it, and why that is the interesting part.** B2's `DeleteRange` expanded to one
+point delete per live key, so "unbounded" never needed an encoding — **the expansion was hiding the
+gap**, and `[A3]` requires the expansion retired at B3. The two halves are each internally consistent
+and were never checked against each other: §6.1 specified the format from the *block's* point of
+view and induced every refusal against hand-built bytes, an exercise that never touches `Bound`
+because the classifier never sees one. **That is `GF-15` again — a rule derived from one contract is
+not permission under the others — arriving between the frozen `Engine` interface and a format frozen
+inside this phase, which is precisely what `CF-4` exists to sweep for at B4.**
+
+**Candidates.**
+
+**(a) A flag bit in the tag.** The tag's low byte is the `ValueType` and has spare bits; one could
+mean *end is unbounded*. **Rejected as a recommendation:** §6.1 says a range tombstone is *"a version
+like any other, ordered against point versions by the same comparator"*, and a tag that is no longer
+a plain internal-key tag gives that up for a bit of space.
+
+**(b) A sentinel `end_len`.** `end_len == 0xFFFFFFFF` means unbounded above, and `end` then occupies
+zero bytes. `end > start` stays a rule about *finite* ends; one refusal is added — a sentinel
+`end_len` with a non-empty `end`. Self-describing in the bytes, no change to the tag's meaning, and
+every existing refusal keeps its force.
+
+**(c) Keep the expansion for unbounded-end ranges only.** No format change, and it reintroduces
+`O(live keys)` **exactly at the clear-everything case** — the one `[A3]` named as the reason
+`DeleteRange` is in the interface at all. Strictly worse than (b) at the only place it matters.
+
+**(d) Change the frozen interface to require a finite end.** Not mine to propose as a fix: it breaks
+`[A3]`'s stated rationale, and A0.5's freeze is the thing both tracks build against.
+
+**Recommendation: (b).** Smallest change that leaves every induced refusal meaningful, keeps the tag
+a tag, and puts the unboundedness in the bytes rather than in a convention a reader has to know.
+
 **B3-Q3 — RATIFIED by the implementation instruction** (*"policy chosen by measurement per Amendment
 A6 with multi-level leveled recorded as an upgrade path"*), which is this reading. Retained for the
 record.
