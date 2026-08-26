@@ -904,11 +904,21 @@ and every `scripts/*.sh` run under POSIX `sh`; the shell these are authored and 
 `zsh`; and `awk` is a fourth language inside `cpp-scan-rules.awk`. **A construct that works when
 tried interactively may not run in a lane, and the reverse.**
 
-Neither of these was caught by thinking harder. The first was caught by noticing the process did not
-exist; the second by the lane failing loudly *after* its heading. **The cheap defence is the one
-already in place — `sh -n` on every lane script before running it — and it catches the second class
-and not the first**, because `$IDS` is syntactically fine and semantically empty. For the first class
-the defence is the standing provenance rule: *read progress from something that advances.*
+**WHICH MECHANISM CATCHES WHICH, RECORDED EXPLICITLY, BECAUSE A LINTER THAT CATCHES ONE OF TWO
+DIALECT FAILURES WILL BE TRUSTED FOR BOTH:**
+
+| defect | `sh -n` | the provenance rule | why |
+|---|---|---|---|
+| `<(...)` under `sh` | **CATCHES** | — | it is a **syntax** error; the parser refuses it without running anything |
+| `$IDS` unsplit in zsh | **CANNOT** | **CATCHES** | `sh label.sh $IDS` is **syntactically perfect**. It is semantically empty, and no parser can know that the caller meant 28 arguments |
+
+**So `sh -n` is a defence against exactly one of these two, and the temptation is to treat a green
+`sh -n` as covering "shell problems".** It does not cover the class where a construct is valid in
+both dialects and *means* something different in each — which is the more dangerous class, because it
+produces a running program that does the wrong thing rather than one that refuses to start.
+
+For that class the defence is the standing provenance rule: **read progress from something that
+advances.** The process not existing is what said "1 of 28" was not slowness.
 
 ---
 
@@ -953,6 +963,70 @@ so a count grepped out of that output **carries the fact that it is partial**. I
 completed, that the comparison it summarises actually compared something, and that its denominator is
 the one the previous measurement used.* Three different questions, one shape: **a signal is not
 evidence until its provenance is.**
+
+---
+
+### BM67 — the phase's exemplar of a defect NO GENERAL CHECKER FINDS
+
+**One character.** `<` becomes `<=` in `RangeTombstone::Covers`, and the range stops being half-open.
+
+Closed and half-open **agree on every key except one**: the range's end. A tombstone for `[b, d)`
+that has become `[b, d]` deletes `d` — one key more than the caller asked for, **forever, and
+silently**, because nothing anywhere reports a key that was deleted slightly too eagerly.
+
+**GO THROUGH THE ORACLES THIS PROJECT HAS BUILT AND NONE OF THEM SEES IT:**
+
+| checker | why it is blind to this |
+|---|---|
+| the **drop adjudicator** | asks *what may be dropped* against the harness's version model. It is about DROPS, not about **bound arithmetic** — the tombstone is legitimately present and its sequence is legitimately required |
+| **recovery equivalence** | compares WAL-only recovery against WAL-plus-tables. **Both sides use the same `Covers`**, so both delete `d` and the two agree perfectly |
+| the **kill-point sweep** | injects crashes and torn syncs. **Nothing crashes.** Every kill point recovers to a promised watermark, because the watermark is right and only the CONTENT is one key short |
+| **`ValidateTable`** | judges bytes against a format. The bytes are perfectly legal — this is a defect in what they MEAN, not in what they are |
+| **the differential rig at B4** | *would* catch it, against `engine/model` — which is a phase away, and by then the convention would have been established by the code rather than chosen |
+
+**What catches it is `RangeTombstone.TheBoundsAreHalfOpen`** — a fixture that probes `a`, `b`, `c`,
+`d`, `e` around a `[b, d)` tombstone and asserts each answer individually, written **before any code
+could establish a convention by accident**.
+
+> **THIS IS B3.2's ORDERING ARGUMENT STATED AS A CONSEQUENCE RATHER THAN A PRINCIPLE.** A classifier
+> written after a writer inherits the writer's convention and asserts it back. There is no general
+> checker for "the engine is consistently wrong about a boundary" — consistency is exactly what a
+> differential or equivalence check confirms. **The only defence is to fix the convention in a
+> fixture before there is an implementation to read it off.**
+
+---
+
+### GF-11 — a rule stated in one place invites transfer to an adjacent place where it is false
+
+**Raised by** the range-tombstone bounds, B3.2.
+
+`table_check.h` refuses **a key too short to carry a tag**, and it is right: point entries are
+internal keys. A range tombstone's bounds are **user keys** — the tag is a separate field — so the
+**empty user key is a valid bound**, meaning "from the beginning".
+
+Both rules are correct. **The danger is not either rule; it is the transfer.** A reader who has
+internalised the first arrives at the second and applies it, because the two structures sit in the
+same format, are decoded by the same block decoder, and are described in adjacent sections.
+
+> **A FORMAT DECISION THAT CONTRADICTS A NEARBY ONE IS DOCUMENTED AT THE CONTRADICTION, NOT ONLY AT
+> ITS OWN SITE.**
+
+So `range_tombstone.h` does not merely say *bounds are user keys*. It says:
+
+> *"THE BOUNDS ARE USER KEYS AND NOT INTERNAL KEYS, so the empty user key is a valid bound and there
+> is no minimum length. This is the OPPOSITE of the point entry rule — which refuses a key too short
+> to carry a tag — and it is stated here because a reader who has internalised that rule will assume
+> it carries over. The tag is a separate field precisely so the bounds do not have to."*
+
+**The last clause is what stops the transfer**, and it is the part a shorter comment would drop: it
+does not just deny the other rule, it says *why the design is different*, which is the only form a
+reader can check. `RangeTombstone.TheEmptyUserKeyIsAValidBound` asserts it, so the sentence has a
+failing case.
+
+**The relationship to GF-7.** GF-7 is a claim attached to the wrong line. This is a claim attached to
+the right line **that a reader will carry to the wrong one** — the same damage by a different route,
+and the remedy is different too: GF-7's is to move the comment, this one's is to write the
+contradiction down where it can be met.
 
 ---
 
