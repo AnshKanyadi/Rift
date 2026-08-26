@@ -1,5 +1,10 @@
 #!/usr/bin/env sh
-# The A6 exit run, split into contiguous non-overlapping seed ranges.
+# The exit run, split into contiguous non-overlapping seed ranges.
+#
+# The phase is NOT written here. It is read from the options the sweep actually
+# sweeps, because a banner beside a shape drifts from it -- this file printed
+# "A6 exit run" over a sweep of A7's shape, which is the third instance of a
+# label that stopped describing its subject (sim/hunt: ShapeNameOf).
 #
 # # Why splitting is legitimate, and what it is not allowed to do
 #
@@ -45,7 +50,9 @@ fi
 mkdir -p "$OUT"
 rm -f "$OUT"/shard-*.json "$OUT"/shard-*.log
 
-printf '\n  A6 exit run: %d seeds across %d shards at %s\n' "$TOTAL" "$SHARDS" "$COMMIT"
+SHAPE=$(${GO:-go} run ./cmd/shapename 2>/dev/null || echo "shape unknown")
+printf '\n  exit run: %d seeds across %d shards at %s\n' "$TOTAL" "$SHARDS" "$COMMIT"
+printf '  shape: %s\n' "$SHAPE"
 printf '  ----------------------------------------------------------------\n'
 
 # Contiguous by construction: each shard starts where the last ended, and the

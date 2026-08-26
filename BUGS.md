@@ -1591,7 +1591,21 @@ under the widened definition, and fails there anyway. BUG-021 contributed nothin
 | **Phase** | A6 |
 | **Reproduce (test)** | `go test ./sim/hunt -run TestBUG024` |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M73-a-read-answer-lands-in-any-incarnation.patch && go run ./cmd/simctl replay --bundle seeds/BUG-024` |
-| **Reproduce (seed)** | seed **10303**: the audit at `1600000005203989560.0` sums to **+10** |
+
+**RE-PINNED at A7: seed 10303 → seed 5042.** The term-start no-op moved every trace and seed 10303
+stopped carrying this finding — the corpus lane reported it **STALE**: *replays identically with the
+mutant applied*, the mutation changing nothing on that schedule.
+
+**The search that found the new pin is the disposition's evidence.** 600 seeds under `current` found
+nothing, and the honest reading was *not found at this budget* rather than *unreachable* — `M73`'s own
+declaration is per-seed **0 of 200**, sweep-detected, so a per-seed search was looking for something
+its own numbers call rare. Sharded over seeds 600–9000: **1 of 8,400, at seed 5042.** The rate is
+roughly one in eight thousand, which is why six hundred seeds saw nothing.
+
+*The bundle was never retired on the null.* Ansh, on the standing rule: a null at an underpowered
+budget is not a measurement, and retiring a bundle on one would be the mistake this cycle exists to
+avoid.
+| **Reproduce (seed)** | **seed 5042** (re-pinned at A7; originally seed 10303 — see below) |
 | **First violating step** | the read answer that arrived after the restart, carrying the abandoned snapshot's timestamp; the guard now counts it as `StaleIncarnation`, and seed 10303 produces exactly **one** |
 | **Invariant that caught it** | bank conservation over client-observed history |
 | **Mutant class** | none existed — added `M73-a-read-answer-lands-in-any-incarnation`, in the same commit as this entry. **It measured `0 of 200` and took an opt-out saying an honest floor would need a 24-hour sweep. That was the broken probe**: the class's detector is an aggregate assertion, not a per-seed verdict, and the fixed probe finds it at 60 seeds — `StaleIncarnation` goes 9–15 per fifty seeds to a flat zero, on the criterion *no read answer from a pre-restart incarnation was ever rejected* (DESIGN-A6 §42) |

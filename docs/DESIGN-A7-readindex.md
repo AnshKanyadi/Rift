@@ -851,6 +851,62 @@ was read carefully each time.
 
 ---
 
+## 5d. A detection floor is a property of the class AND the shape, jointly
+
+The phase's most useful methodological result, and it is a general statement rather than a story about
+two mutants.
+
+**The measurement.** `M71` and `M72` are BUG-022's two halves, each floored at 1 detection in 200
+seeds.
+
+| shape | measured | the lane's verdict |
+|---|---|---|
+| **A6** | **0 of 200** | `DROPPED` and `SLOWED` — the floor breached and no first detection at all |
+| **A7** | **22 of 600, first at seed 30** | comfortably inside the old window |
+
+Between those two rows, **both classes were killed by hand at seed 266** — on the re-pinned BUG-022
+bundle, within the hour, by conservation failure. Neither was dead at any point.
+
+> **A detection floor is not a property of a class. It is a property of the class and the SHAPE,
+> jointly.** The same class measures dead under one shape and healthy under another, and a floor
+> recorded without its shape is not a measurement — it is a number that was true of a sweep nobody
+> can now identify.
+
+### 5d.1 The ceiling is what surfaced it
+
+A count-only lane reads a rate. `M71`'s rate under A6 was **zero**, and a rate of zero is
+indistinguishable from a class that has stopped existing — which is exactly the conclusion a reader
+reaches, and the conclusion that leads to an opt-out.
+
+**The ceiling asked a different question**: *where is the FIRST detection?* Under A6 the answer was
+`-1` — nowhere in 200 seeds — while the true first detection sat at 266 under one shape and 30 under
+another. A rate cannot express "the class moved"; a first-detecting seed can.
+
+> **Two live classes were one step from being opted out**, and the step was reasonable: a floor of 1
+> in 200 measuring 0 of 200 twice over is ordinarily how you learn a class is unreachable. **That is
+> the `M56` shape arriving through a floor rather than through a sentence** — a claim of
+> unreachability, supported by a real number, and false.
+
+This is the ceiling's **first independent catch**. A2's amendment added it after `M19`'s kill-time
+regression was found by accident; here it caught one on its own, before anything was written down
+about the class.
+
+### 5d.2 What was done about it
+
+Both re-declared from the current measurement, with their shape stated: `power-seeds: 600`,
+`power-floor: 11`, `power-ceiling: 120` — half the measured rate and four times the first detecting
+seed, the margins `M62` carries. **All 65 declarations now carry the shape their numbers came from**,
+which is the fix for `power-config: a3`'s drift applied one level in: not just naming the shape a
+number was taken under, but refusing a number that does not.
+
+**And it changed how a later disposition was taken.** `M34`'s floor is unmet by two independent
+instruments — 0 of 3000 in the gating lane, 0 of 6000 in BUG-009's re-pin search — which before this
+result would have been enough to correct its declaration. It is instead being measured under A7's
+shape first, on exactly the reasoning above: **an unmet floor is not evidence of an unreachable
+class** until the shape has been varied.
+
+---
+
 ## 6. What A7 does not do
 
 - **Leader leases** — STRETCH, Amendment A6, and §3's D-A7-1B says why reconsidering them here would

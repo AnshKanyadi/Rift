@@ -2,10 +2,10 @@
 # covering-test: TestBUG022
 # package: ./sim/hunt/
 # expect: killed
-# power-seeds: 200
-# power-floor: 1
-# power-ceiling: 200
-# power-measured: 1 of 200, first at seed 148, under current at BUG-022's fix. FRAGILE and floored at detected-at-all: the defect is a lost update between two transactions with a read in between, and the bank notices only when the two happen to touch one key inside the window. The ceiling is the sweep's own end rather than a widened number, because widening it past the range that was measured would be declaring a value nobody measured
+# power-seeds: 600
+# power-floor: 11
+# power-ceiling: 120
+# power-measured: 22 of 600, first at seed 30, under CURRENT -- which at A7 means read index ON and a third of plain reads addressed to one replica. RE-DERIVED at A7 and the reason is a finding rather than a refresh. Under A6's shape this class measured 0 OF 200 against a declared floor of 1, which the gating lane reported as DROPPED and SLOWED -- and it was neither dead nor unreachable: it was killed at seed 266 within the hour, by hand, on the re-pinned BUG-022 bundle. The class was alive and the WINDOW was wrong, which is A2's kill-time regression exactly: the rate held and the first detecting seed had moved past the declared ceiling. That is the CEILING's first independent catch -- without it a live class reads as unreachable and is a short step from being opted out, which is the M56 shape arriving through a floor instead of through a sentence. A7's shape then moves it back inside the window (first at 30), so the numbers here are stated WITH their shape: a floor without its shape is DESIGN-A5 section 11b's power-config drift again. Floored at half the measured rate and ceilinged at four times the first detecting seed, the margins M62 carries
 # mutates: BUG-022's RECORDING half. A snapshot read no longer stages the key's read mark, so PrewriteInto's third guard has nothing to consult and reads silently as "nobody has looked". The guard is still there and still correct; it is simply never true. This is the half that looks complete from the guard's side, which is why it gets its own mutant
 --- a/store/replay.go
 +++ b/store/replay.go

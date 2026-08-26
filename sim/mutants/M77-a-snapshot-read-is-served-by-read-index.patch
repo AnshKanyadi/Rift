@@ -4,7 +4,7 @@
 # expect: killed
 # power-seeds: 30
 # power-detector: sweep
-# power-measured: PENDING -- measured against A7's shape in the exit run
+# power-measured: 1 of 30, first at seed 16, under CURRENT (A7's shape), mutation verified present. This is D-A7-5's BOUNDARY planted as a defect per ruling 11 -- a timestamped read served by read index, staging no read mark -- so the boundary between the two read paths is something the suite kills rather than something a comment remembers. As with M76, an earlier ERROR from the gating lane was the lane copying a tree being edited rather than anything about this class
 # mutates: D-A7-5's BOUNDARY, planted as a defect. A read naming a timestamp is served by read index instead of by a log entry, so it stages no read mark. Ansh, ruling 11: 'the mutant is the design decision itself planted as a defect -- a snapshot read served by read index. That makes the boundary between the two read paths something the suite kills rather than something the code remembers.' The failure is BUG-022 returning as a design consequence rather than as a patch: PrewriteInto's third first-committer-wins guard consults a record that does not exist, reads it as 'nobody has looked', and a commit lands below an answer the database already gave. Silent -- no error, no divergence, no structural invariant violated: a well-formed database with money missing from it, on a schedule with no faults in it. It is killed by the bank's CONSERVATION check rather than by any structural oracle, which is what BUG-022 actually looked like
 --- a/store/node.go
 +++ b/store/node.go

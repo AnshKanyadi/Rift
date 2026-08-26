@@ -72,6 +72,37 @@ For a mutation search, "demonstrated" is one comparison — does the file the pa
 differ. That check is now in the search scripts and in `power-refute`, `power-mutants` and
 `mutant-covered` (DESIGN-A6 §43.14, §43.14b, §43.14c).
 
+### The five instances, and what each one's number looked like
+
+The rule generalises past nulls, and the register of instances is the argument for it. Every one is a
+number, or a state, quoted from a source whose provenance had not been checked:
+
+| # | what was believed | what was true | how it surfaced |
+|---|---|---|---|
+| 1 | `M73` measured 0 of 600 with the mutation applied | `sh` does not expand a glob in a redirection, so `patch` got **zero bytes** and the sweep measured CLEAN code | a sibling in the same loop printed a visible patch failure |
+| 2 | `M76` caught 0 of **12** | the format string said 12; the run was **20** seeds | the seed bound in the file disagreed with the printed denominator |
+| 3 | a "clean tree" baseline at 40 seeds | `cd` persisted, so the baseline ran **inside the mutated tree** | the two logs were byte-identical |
+| 4 | `M76`/`M77` are unmeasurable — `ERROR`, no output | `copy_tree` tars the LIVE tree and it was being edited; both build fine on a stable one | they applied and built when retried |
+| 5 | **the exit run had been running for two hours** | `exit-run.sh` had **refused at launch** — dirty tree — and nothing had run | the process list was checked, on a direct question |
+
+**Instance 5 is the one that changes the rule**, for two reasons:
+
+1. **The lane refused for exactly the reason that had just been written into the power lanes** — *an
+   exit run at an uncommitted tree names a commit that does not contain what ran.* The rule already
+   existed where it was needed and was already enforced. **The gap was not checking the refusal.**
+2. **The failure mode was two hours of believing a measurement was in flight.** Nothing was wrong with
+   the tree, the lane, or the rule. What was wrong was a report of *started* derived from having typed
+   the launch.
+
+> **"Started" is read from the process, never from the launch.** A backgrounded command that refuses
+> immediately is indistinguishable, from the launcher's side, from one that ran all night.
+
+Applied: any report of a long-running job's status quotes `pgrep`/the log, and `exit-run.sh` now prints
+the shape it swept — derived via `cmd/shapename` from the options struct rather than written beside it,
+because that banner said "A6 exit run" over A7's sweep. **Third instance of a label that stopped
+describing its subject**, after `power-config: a3` and the single-label opt-out, and each was cosmetic
+on the day it was written. `TestTheShapeNameTracksTheShape` asserts the derivation and is induced.
+
 ### The standing rule: the frozen interface opens ONCE, and this is the change it opens for
 
 *Ansh, ruling D-A7-6:* **the frozen interface opens once, for `raft.Configuration()` taking an index,

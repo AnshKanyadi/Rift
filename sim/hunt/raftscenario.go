@@ -149,6 +149,41 @@ func A2Options() RaftOptions {
 // this lane exists to catch in the system under test.
 func CurrentOptions() RaftOptions { return A7Options() }
 
+// CurrentShapeName is what CurrentOptions currently IS, derived from the options
+// rather than written beside them.
+//
+// # Why this is a function and not a string somebody maintains
+//
+// Third instance of a label that stopped describing its subject: `power-config:
+// a3` meant "what the sweep runs" while pinned to a shape the sweep had left;
+// one `power: n/a` label carried two opposite claims; and `exit-run.sh` printed
+// "A6 exit run" over a sweep of A7's shape. Each was cosmetic on the day it was
+// written, which is the argument that was made about `a3`.
+//
+// Three instances is a pattern, so the name is COMPUTED. A banner that reads the
+// options struct it swept cannot disagree with it.
+func CurrentShapeName() string { return ShapeNameOf(CurrentOptions()) }
+
+// ShapeNameOf names any options struct, so the naming rule is one place and a
+// test can check it moves.
+func ShapeNameOf(o RaftOptions) string {
+	switch {
+	case o.ReadIndex:
+		return "A7 (read index, follower reads)"
+	case o.Transfers2PC > 0:
+		return "A6 (percolator transactions)"
+	case o.GCRetention > 0:
+		return "A5 (MVCC, HLC)"
+	case o.SplitThreshold > 0:
+		return "A4 (multi-raft)"
+	case o.ConfChanges > 0:
+		return "A3 (membership)"
+	case o.SnapshotThreshold > 0:
+		return "A2 (snapshots)"
+	}
+	return "A1 (single-group raft)"
+}
+
 // A3Options adds membership churn: a four-node cluster with one learner, and
 // enough scheduled changes that the cycle runs several times per seed.
 func A3Options() RaftOptions {
