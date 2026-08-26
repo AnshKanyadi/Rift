@@ -966,6 +966,41 @@ evidence until its provenance is.**
 
 ---
 
+### GF-13 — a bound derived from another instrument's measurement cannot be raised
+
+**Raised by** B3.4's merge, and it is a stronger property than the condition that asked for it.
+
+Every loop needs a progress quantity and every unbounded quantity needs a bound. **The usual bound is
+a CHOSEN number** — a timeout, a retry count, a maximum iteration — and a chosen number has one
+predictable life: it is hit under some workload nobody anticipated, and it is **raised**. Not because
+anyone is careless, but because the alternative is refusing a correct run, and a limit that refuses
+correct runs loses that argument every time.
+
+**The merge's bound is not chosen. It is DERIVED:**
+
+> **`inputs_consumed ≤ Σ entries(f)` over the compaction's input files, counted by `ValidateTable`
+> before the merge starts.**
+
+A correct compaction consumes each input entry **exactly once**, so it terminates *at* the bound.
+**Hitting it exactly is correct; exceeding it is the only failure** — and exceeding it can only mean
+a source was rewound or an entry counted twice, which are the two ways a merge loops forever.
+
+> **A BOUND DERIVED FROM ANOTHER INSTRUMENT'S MEASUREMENT CANNOT BE RAISED WITHOUT CONTRADICTING THAT
+> INSTRUMENT, SO THE PRESSURE THAT NORMALLY ERODES A LIMIT HAS NOWHERE TO GO.**
+
+To raise this one you must claim a table holds more entries than the classifier says it holds — and
+the classifier's count is itself asserted (`SstClassifier.AcceptsACanonicalTable`). There is no
+number in the source to edit. **That is a difference in KIND, not in degree**: a chosen bound is a
+judgement that can be revised, and a derived bound is a consequence that can only be revised by
+falsifying something else.
+
+**Where to look for the pattern.** Prefer a bound that is *already being measured for another
+reason*. `kMaxRecordBytes` and `kWalBufferBytes` are chosen and carry their derivations in prose
+precisely because nothing measures them; this one needed no prose, because `ValidateTable` was
+already counting.
+
+---
+
 ### GF-12 — a termination assertion is not a correctness assertion
 
 **Raised by** B3.3's CF-3 mutants, and it is the danger *inside* a rule that is working.
@@ -996,9 +1031,39 @@ and for nothing else. In `BM67`'s terms: **a checked-looking loop that returns w
 `FLOORS.txt` labels these **`covers: correctness`** rather than leaving them as bare `covered-by:`
 entries, so the distinction survives being read by someone in a hurry.
 
-**The rule.** Every loop gets **two** instruments, and they answer different questions: *does it
-stop*, and *does it stop in the right place*. CF-3 is the first. It was never the second, and the
-phase that treats it as both ships `BM68`.
+**THE SAME SHAPE ONE LEVEL UP: THE DROP ADJUDICATOR.** It is correct about what it checks and
+**silent about what a reader assumes it covers.** It works over **sets** of `(user_key, seq)` — so it
+is blind to ordering entirely, and blind to values.
+
+> **A merge that emitted every required entry, in REVERSE ORDER, with EVERY VALUE SHIFTED BY ONE
+> POSITION, would satisfy all three of its directions.**
+
+That example is stated concretely on purpose: it is specific enough that nobody can talk themselves
+out of it, which an abstract "it does not check ordering" would not be. `CompactionOutput.IsTheMergeOfItsInputs`
+is what closes it — the harness merges the inputs itself, filters by the drop claim, and asserts the
+output is **exactly that sequence, in order, with matching values.**
+
+**The two are COMPLEMENTARY, NOT REDUNDANT, and the distinction is written down because someone will
+later notice they overlap and propose deleting one:**
+
+| instrument | runs where | sees |
+|---|---|---|
+| `IsTheMergeOfItsInputs` | **only** where the harness knows both the input and the output files — a compaction in isolation | order, values, and drops |
+| `AdjudicateDrops` | **any durable image**, including one produced by a crash MID-COMPACTION | drops only |
+
+Delete the second and every crash schedule loses its drop verdict. Delete the first and a merge can
+reverse its output undetected.
+
+---
+
+**THE STANDING REQUIREMENT, and it is not a B3 rule:**
+
+> **EVERY LOOP THIS ENGINE ADDS GETS TWO INSTRUMENTS, ANSWERING DIFFERENT QUESTIONS: *does it stop*,
+> and *does it stop in the right place*.**
+
+CF-3 is the first. **It was never the second**, and the phase that treats it as both ships `BM68`.
+`FLOORS.txt` keeps them apart mechanically — `covered-by:` against `covers-correctness:` — so the
+distinction survives a hurried reading rather than depending on one.
 
 ---
 
