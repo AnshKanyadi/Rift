@@ -1,6 +1,6 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: REVISION 7. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+**Status: REVISION 8. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
 B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
@@ -441,6 +441,51 @@ read must scan backwards to discover a range that covers it — which is the wro
 read and gets worse with range length. (a) costs a new block and a new classifier rule; B2.0's
 classifier already has the shape to extend, and the `DELETE_RANGE` op kind has been reserved in the
 WAL since B1 for exactly this.
+
+### 6.1 The frozen surface, and WHAT THE CLASSIFIER REFUSES — written before the writer exists
+
+**This is a SPECIFICATION, not a description.** Fourth use of B2-D6's ordering, and the first time it
+judges a format **that does not exist yet**: there is no writer, no encoder and no compaction, so the
+classifier **cannot be written to agree with an implementation** — there is nothing to agree with.
+Every rule below is a decision about what the format *means*, and the writer will be checked against
+rules that were fixed before it was designed.
+
+```
+range-tombstone block = tombstones || restart_array || restart_count:u32 || crc32c:u32
+tombstone             = start_len:u32 || start_user_key || end_len:u32 || end_user_key || tag:u64
+```
+
+The block reuses the data block's framing exactly — same restart array, same trailer, same `crc32c`
+— so `ParseBlock` decodes it and **there is one block decoder in the engine rather than two that can
+drift.** §7.5's one mechanism, two users, for the third time.
+
+The `tag` is a full internal-key tag, not a bare sequence: **a range tombstone is a version like any
+other**, it is ordered against point versions by the same comparator, and its `ValueType` is the
+reserved `kDeleteRange` that has sat in the WAL's `OpKind` since B1 for this.
+
+**Bounds are `[start, end)`**, half-open, agreeing with `engine.InRange` by construction — the same
+choice `Bound` made at B1 and for the same reason: two range conventions in one engine is a bug
+waiting for a boundary key.
+
+**WHAT THE CLASSIFIER REFUSES.** Each row is a shape a fixture builds by hand, and each is a
+statement about the format rather than about any writer:
+
+| refused | why it is a rule and not a preference |
+|---|---|
+| `end ≤ start` bytewise | An empty or inverted range covers nothing and no writer can mean it. Accepting it makes "covers nothing" and "covers everything before start" indistinguishable at the reader |
+| tombstones not strictly ascending by `start` | The block is binary-searched to find the tombstones covering a key. An unsorted block does not fail — **it returns the wrong answer**, which is a resurrected key or a wrongly hidden one |
+| two tombstones with the same `start` and the same `tag` | Two versions the merge order cannot distinguish, exactly as for point entries |
+| a `tag` whose `ValueType` is not `kDeleteRange` | A point version in the range block is a version the point path will never see, so it is data that exists and is unreachable |
+| a `start` or `end` shorter than… | **nothing** — range bounds are USER keys, not internal keys, and the empty user key is a valid key. The tag is separate. Stated because the point-entry rule is the opposite and a reader will assume it carries over |
+| a range block whose declared length disagrees with its block | The filter's rule, one block over: a truncated block must announce itself rather than read as a smaller one |
+| a table whose footer names a range block that overlaps the index or the filter | Every handle is range-checked before it is followed, as in B2.0 |
+
+**AND ONE REFUSAL THAT IS NOT ABOUT THE BLOCK.** A table's range tombstones must not cover a key
+range disjoint from the table's own `[smallest, largest]` bounds by more than the tombstone's own
+extent — because the manifest records those bounds, and a compaction chooses inputs by them. **A
+tombstone reachable only through a table whose bounds do not admit it is a tombstone no read will
+consult**, which resurrects everything it was supposed to mask. This is B3-D1 clause 2 showing up in
+the FORMAT: input selection is a correctness concern, so the bounds that drive it are too.
 
 **What it changes elsewhere:**
 
