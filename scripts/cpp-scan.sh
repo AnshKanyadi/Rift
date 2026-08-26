@@ -10,7 +10,8 @@
 # FOUR PARTS, each able to fail on its own:
 #
 #   1. the Env surface correspondence            scripts/cpp-scan-surface.sh
-#   2. the A5 rules and the PosixEnv thinness rules
+#   2. the A5 rules, the PosixEnv thinness rules, and (2b) the ARTIFACT/BELIEF
+#      boundary: what an oracle may parse and what it may never consult
 #   3. CPP-HATCHES.txt reconciled against what part 2 actually found
 #   4. CLAIMS.txt -- the sentences this lane is what makes true
 #   5. DECIDERS.txt -- every function that decides evidentiary status, asserted
@@ -201,29 +202,102 @@ printf '   violations     : %s (each must be in the registry below)\n' "$nviol"
 
 # ------------------------------------------------------------- part 2b
 #
-# ORACLE INDEPENDENCE, MADE CHECKABLE.
+# ORACLE INDEPENDENCE, MADE CHECKABLE -- AND CORRECTED AT B3.
 #
-# Section 7.4 condition 1: the oracle is "compiled against a header that does
-# not include the engine's internal state at all; its only engine-facing inputs
-# are the iterator it compares and the Sync return it holds the engine to."
-# That is a statement about includes, so a lane can check it -- and ruling 4's
-# sentence, AN ORACLE THAT INTERROGATES THE ENGINE BELIEVES THE LIE, stops being
-# a thing anyone has to remember while editing.
+# The rule used to be "rig/exactness_oracle.{h,cc} includes nothing from src/".
+# That was too coarse in a way B3 could not work around: the drop checker has to
+# read the BYTES an SSTable holds, because reading through Get would filter by
+# snapshot and hide the one failure it exists to find.
+#
+# RULED 2026-08-25, and corrected rather than excepted:
+#
+#   AN ORACLE MAY PARSE THE ENGINE'S ARTIFACTS, AND MAY NOT CONSULT THE ENGINE'S
+#   BELIEFS. Parsing shares a format; consulting shares a judgement.
+#
+# Bytes on disk are not a claim. What the engine SAYS is a claim, and ruling 4's
+# sentence -- AN ORACLE THAT INTERROGATES THE ENGINE BELIEVES THE LIE -- is about
+# claims. Made mechanical here by one mark on the artifact side:
+#
+#   AN ARTIFACT HEADER DECLARES NOTHING TAKING AN `Env*` AND NOTHING TAKING A
+#   SNAPSHOT.
+#
+# Three checks, each able to fail on its own.
 printf '   oracle         : '
 oracle_bad=0
-for f in "$dir/rig/exactness_oracle.h" "$dir/rig/exactness_oracle.cc"; do
-  [ -f "$f" ] || { note "missing $f"; continue; }
-  for inc in $(sed 's://.*::' "$f" | sed -n 's/^#include "\([^"]*\)".*/\1/p'); do
-    if find "$dir/src" -name "$inc" | grep -q .; then
-      note "$f includes $inc, which is engine state -- the oracle must ask the engine nothing"
+ARTIFACTS=$dir/ARTIFACTS.txt
+ORACLES=$dir/ORACLES.txt
+
+if [ ! -f "$ARTIFACTS" ]; then note "missing $ARTIFACTS"; oracle_bad=$((oracle_bad + 1)); fi
+if [ ! -f "$ORACLES" ]; then note "missing $ORACLES"; oracle_bad=$((oracle_bad + 1)); fi
+
+if [ -f "$ARTIFACTS" ] && [ -f "$ORACLES" ]; then
+  allowed=$(grep -vE '^\s*#|^\s*$' "$ARTIFACTS" | awk -F'|' '{print $1}' | sed 's/ *$//' | tr '\n' ' ')
+  oracle_files=$(grep -vE '^\s*#|^\s*$' "$ORACLES" | awk -F'|' '{print $1}' | sed 's/ *$//' | tr '\n' ' ')
+
+  # (1) EVERY ARTIFACT EXISTS, IS JUSTIFIED, AND CARRIES NEITHER MARK.
+  while IFS= read -r line; do
+    case $line in ''|\#*) continue ;; esac
+    hdr=$(printf '%s' "$line" | awk -F'|' '{print $1}' | sed 's/ *$//')
+    why=$(printf '%s' "$line" | awk -F'|' '{print $2}' | sed 's/^ *//; s/ *$//')
+    [ -n "$hdr" ] || continue
+    if [ -z "$why" ]; then
+      note "ARTIFACTS.txt: $hdr is listed with no justification"; oracle_bad=$((oracle_bad + 1)); continue
+    fi
+    if [ ! -f "$dir/src/$hdr" ]; then
+      note "ARTIFACTS.txt names $hdr, which does not exist"; oracle_bad=$((oracle_bad + 1)); continue
+    fi
+    # Comments stripped first: the mark is about DECLARATIONS, and every one of
+    # these files explains in prose why it has neither.
+    decls=$(sed 's://.*::' "$dir/src/$hdr")
+    if printf '%s\n' "$decls" | grep -qE 'Env[[:space:]]*\*'; then
+      note "$hdr is an ARTIFACT and declares something taking an Env* -- it went and looked, which is an opinion"
       oracle_bad=$((oracle_bad + 1))
     fi
+    if printf '%s\n' "$decls" | grep -qi 'snapshot'; then
+      note "$hdr is an ARTIFACT and mentions a snapshot -- deciding what a caller may see is the judgement an oracle may not share"
+      oracle_bad=$((oracle_bad + 1))
+    fi
+  done < "$ARTIFACTS"
+
+  # (2) EVERY ORACLE'S src/ INCLUDES ARE ALLOW-LISTED.
+  for f in $oracle_files; do
+    if [ ! -f "$dir/$f" ]; then
+      note "ORACLES.txt names $f, which does not exist"; oracle_bad=$((oracle_bad + 1)); continue
+    fi
+    if ! grep -q 'RIFT_ORACLE' "$dir/$f"; then
+      note "$f is registered in ORACLES.txt and carries no RIFT_ORACLE marker"
+      oracle_bad=$((oracle_bad + 1))
+    fi
+    for inc in $(sed 's://.*::' "$dir/$f" | sed -n 's/^#include "\([^"]*\)".*/\1/p'); do
+      # NOT `found`: that name is part 3's temp file, and clobbering it made two
+      # unrelated registry entries report as stale. Caught by this lane on its
+      # first run, which is the lane doing to itself what it does to the tree.
+      art_hit=$(cd "$dir/src" && find . -name "$inc" | sed 's|^\./||' | head -1)
+      [ -n "$art_hit" ] || continue      # not from src/ at all
+      case " $allowed " in
+        *" $art_hit "*) ;;
+        *) note "$f includes $art_hit, which is not in ARTIFACTS.txt -- an oracle may parse artifacts and may not consult beliefs"
+           oracle_bad=$((oracle_bad + 1)) ;;
+      esac
+    done
   done
-done
+
+  # (3) AND THE OTHER WAY: a marked file that is not registered.
+  for f in $(find "$dir/rig" -name '*.h' -o -name '*.cc'); do
+    grep -q 'RIFT_ORACLE' "$f" || continue
+    rel=${f#"$dir/"}
+    case " $oracle_files " in
+      *" $rel "*) ;;
+      *) note "$rel carries RIFT_ORACLE and is not in ORACLES.txt"; oracle_bad=$((oracle_bad + 1)) ;;
+    esac
+  done
+fi
+
 if [ "$oracle_bad" -eq 0 ]; then
-  printf 'includes nothing from src/\n'
+  printf 'parses %s artifact(s), consults no beliefs\n' \
+         "$(grep -vcE '^\s*#|^\s*$' "$ARTIFACTS" 2>/dev/null || echo 0)"
 else
-  printf '%d engine include(s)\n' "$oracle_bad"
+  printf '%d problem(s)\n' "$oracle_bad"
 fi
 
 # ------------------------------------------------------------------ part 3
