@@ -520,6 +520,56 @@ tombstone reachable only through a table whose bounds do not admit it is a tombs
 consult**, which resurrects everything it was supposed to mask. This is B3-D1 clause 2 showing up in
 the FORMAT: input selection is a correctness concern, so the bounds that drive it are too.
 
+### 6.1b — B3-Q4: THE UNBOUNDED END, AND THE SHIM THAT WAS HIDING THE GAP
+
+**THE FINDING IS BIGGER THAN THE FIX, so it leads.**
+
+`[A3]` put `DeleteRange` in the frozen interface for the clear-everything case, and B2 implemented it
+as **one point delete per live key**. That expansion is why unboundedness never needed an encoding:
+`Bound::Unbounded()` was resolved against the *live set* before anything was written, so no format
+ever had to represent `[start, ∞)`.
+
+> **AN EXPANSION OR A SHIM THAT MAKES A CASE UNNECESSARY ALSO MAKES THE GAP IT HIDES INVISIBLE.**
+> §6.1 specified this format from the **block's** point of view and induced every refusal against
+> hand-built bytes — an exercise that never touches `Bound`, because the classifier never sees one.
+> Two frozen artifacts, each internally consistent, **never checked against each other.**
+
+**Neither contract was wrong. They were UNJOINED** — which is `GF-15` between two frozen artifacts
+rather than inside one, and it is the second thing `CF-4` now sweeps for: not only the frozen
+interface as a whole, but **every place B2 or B3 removed an expansion.**
+
+**`CF-4` paid before it came due.** The sweep it schedules for B4 produced its first instance at
+B3.5, and it cost a design decision instead of a differential failure against `engine/model`. That is
+an argument for doing the sweep, not for deferring it.
+
+**The fix, and why (b).** `end_len == kUnboundedEndLen` (`0xFFFFFFFF`) means no upper bound and the
+record carries **no end bytes**. Only the END needed it: an unbounded *start* is `""`, since the empty
+user key is the minimum and `["", end)` covers the same set.
+
+The rejected candidate is the one worth keeping. **A flag bit in the tag** was available and cheaper
+in bytes, and §6.1 says a range tombstone is *"a version like any other, ordered against point
+versions by the same comparator"* —
+
+> **A PROPERTY THAT HOLDS FOR EVERY ENTRY IS WORTH MORE THAN A BYTE.** A tag that stops being a plain
+> internal-key tag surrenders that property everywhere, in exchange for one bit here.
+
+**What the table records, and what it cannot.** An unbounded tombstone widens `smallest` and **cannot
+widen `largest`** — there is no finite key to widen it to. `TableCheck::unbounded_end` carries the
+fact instead: the table's range is `[smallest, ∞)`. Input selection must read the flag, not only the
+bounds; a reader consulting the bounds alone would under-select and let clause 2 drop a deletion
+whose masked value survives above. **Over-approximating the range costs a read; under-approximating
+resurrects data**, so the flag is deliberately coarse.
+
+**And it does not need a manifest field.** The fact is derived from the table's own bytes by the
+classifier, and every live table is already open — so input selection asks the `Table`, not the
+manifest, and D4 §5.1 point 2's "the manifest is never the sole authority for any number in it" holds
+without a new number in it.
+
+**At B3.5e, splitting keeps L1 a run.** An unbounded tombstone is split at each output-file boundary
+and only the **last** output keeps the unbounded piece — which has no successor to overlap.
+
+---
+
 ### 6.1a — THE BOUNDS RULE, DEVIATED FROM AND STRENGTHENED (B3.5b)
 
 **§6.1's last refusal cannot be implemented as a refusal, and the test that induced it is what
@@ -941,8 +991,12 @@ future snapshot might want — permits no compaction whatsoever, so this is real
 whether the frozen `Snapshot` contract promises anything about sequences no snapshot holds. I read it
 as no. Worth one sentence from you, because §1.2's whole claim rests on it.
 
-**B3-Q4 — BLOCKING, AND IT IS A CONTRADICTION WITH A FROZEN INTERFACE. Raised at B3.5c,
-2026-08-26.** Work on B3.5c is stopped pending a ruling.
+**B3-Q4 — RULED (b), 2026-08-26: the sentinel `end_len == 0xFFFFFFFF`, unboundedness in the bytes
+rather than in a convention.** Landed at B3.5b with three conditions, all met — its own induced
+refusal (a record claiming the sentinel while carrying end bytes), `end > start` restated at the code
+as a rule about **finite** ends so the sentinel reads as a different case and not an exception, and
+fixtures for the unbounded form specifically, because every existing refusal was induced against
+finite ends and this is a shape they have never seen. Retained below as raised.
 
 **The frozen `Engine` interface requires a range deletion the frozen range-tombstone format cannot
 express.**
