@@ -1081,6 +1081,43 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-018 — a temporary bound to a `const std::string&`, and every Slice into it dangling
+
+**Symptom.** A fixture asserted a tombstone's start was `"m"`. It read back `"e"`, and the block's
+`ok()` assertion had already **passed** — the parse succeeded, the counts were right, and one field
+held a byte from somewhere else.
+
+**Root cause.** The test called `Check(UnboundedBlock("m", DelTag(9)), &t)`. `UnboundedBlock` returns
+a `std::string` **by value**; `Check` takes `const std::string&`. The temporary lives to the end of
+the full expression and then dies — and `RangeTombstone::start` is a **`Slice` into that block**. Every
+field of every parsed tombstone pointed into freed memory by the time the assertions ran.
+
+**What it establishes about `HARNESS-007`'s fix, and this is the entry.** B1 deleted
+`Slice(std::string&&)` so a `Slice` could not bind directly to a temporary. That closes **direct**
+binding and **cannot close binding through a parameter**: the temporary here never touches a `Slice`
+constructor at all — it binds to a `const std::string&`, which is legal, ordinary, and exactly what
+every by-const-reference API in the codebase accepts.
+
+> **THE DELETED CONSTRUCTOR NARROWS THE CLASS; IT DOES NOT ELIMINATE IT.** The residual is: a
+> temporary bound to a reference parameter, from which a `Slice` is later derived. No overload
+> resolution sees that, because by then the temporary is a named reference like any other.
+
+Stated the way §3.2.1 states the NVI choke point's residual — *"the claim is therefore 'bypassing
+requires defeating two independent checks in one diff', not 'bypassing is impossible', and the second
+sentence would be false."* The claim here is **"a `Slice` cannot bind directly to a temporary"**, not
+**"a `Slice` cannot outlive its bytes"**, and the second sentence would be false.
+
+**What covers the residual, honestly.** Nothing mechanical. ASan catches it *when the freed byte
+differs* — it did not fail here, because the read landed in a still-mapped allocation. What caught it
+was **an assertion on the parsed content rather than on the verdict**: the test checked what the
+tombstone *said*, not merely that parsing succeeded. That is the standing habit worth having, and it
+is the same habit `GF-2` demands of two-field assertions.
+
+**Fix.** The three new fixtures bind their block to a local, with the reason written at the first one
+so the next person copying the pattern copies the binding too.
+
+---
+
 ### HARNESS-017 — a delimiter with no escape, caught by luck in the one column that is validated
 
 **Symptom.** The mutant campaign refused its own baseline with
@@ -1196,6 +1233,45 @@ only the loud one is self-announcing.
 
 > **A REGISTRY CROSS-CHECK HAS TWO FAILURE MODES AND ONLY ONE OF THEM TELLS YOU.** Both directions
 > get induced, or the quiet one is what you have.
+
+---
+
+### GF-19 — a name that describes one end of a structure will be read as describing the structure
+
+**Raised by** `BM90-unbounded-covers-everything`, B3.5b.
+
+**"Unbounded" is one word and a range has two ends.** `RangeTombstone::end_unbounded` says the *end*
+has no bound; the misreading takes it to mean the *range* has none —
+
+```cpp
+if (end_unbounded) return true;   // BM90
+```
+
+— and that deletes **everything below the start**, which is data no `DeleteRange` ever named. Not a
+typo. A one-line simplification that reads correctly aloud.
+
+> **A NAME THAT DESCRIBES ONE END OF A STRUCTURE WILL BE READ AS DESCRIBING THE STRUCTURE.**
+
+**It is `GF-7`'s family, in an identifier rather than in a comment.** `GF-7` is a *comment* asserting
+a load-bearing property for a line that does not carry it; this is **a word attached to the wrong
+scope** — true of the field it names, false of the object the reader applies it to. Both are invisible
+to review for the same reason: **the words are true somewhere.**
+
+**THE TELL, AND IT GENERALISES PAST NAMES.** The wrong reading passes every test that checks a key
+*inside* the range. Both readings agree there, and agreement inside the bounds is exactly where a
+careless test looks.
+
+> **HALF A RANGE TEST IS NOT A RANGE TEST. ANY TEST OF A BOUNDED STRUCTURE ASSERTS OUTSIDE BOTH
+> BOUNDS, NOT INSIDE.**
+
+Which is why `AnUnboundedEndCoversEverythingAboveItsStartAndNothingBelow` asserts `"a"` and `"l"`
+**below** the start, `"m"` **at** it — the inclusive edge — and `"zzzzzz"` far above. The inside is
+the one place that proves nothing.
+
+**The rule is not new to this repo and that is the argument for naming it.** B2's half-open bound was
+asserted at both ends for the same reason (*"a fixture checking only the inside passes with either
+convention"*), and `RangeModel.TheEndBoundIsExclusiveAndTheStartBoundIsNot` exists because of it.
+`GF-19` is that habit stated once instead of rediscovered per boundary.
 
 ---
 

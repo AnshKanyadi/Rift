@@ -324,14 +324,27 @@ were unjoined.**
 So the B4 pass has two questions, not one:
 
 1. *(GF-15)* of every fact one rule **derives**, which other rule **depends** on it?
-2. *(GF-18)* of every **expansion or shim removed** at B2 or B3, what did it let us avoid deciding —
-   and do the contracts it stood between agree now that it is gone?
+2. *(GF-18)* **of each retired shim, asked as the sweep step and not as a note beside it:**
+
+   > **WHAT DID THIS LET US AVOID DECIDING?**
+
+   and then: do the contracts it stood between agree now that it is gone? The question is the work.
+   A shim exists because some case was awkward; the awkwardness is where two contracts meet; the shim
+   is what kept them from having to agree. Listing the shims is not the sweep — **asking that
+   question of each one is.**
 
 **Known members of (2) so far:** `DeleteRange`'s expansion (retired at B3.5, and it produced
 `B3-Q4`); `Apply`'s expansion and `table.h`'s whole-file residency (both retired at B3.5c–d, and
 both stood between the Env-call contract and the read path); B2's `DeleteRange` implemented
 internally as iterate-and-point-delete per `[A3]`, replaced at B3.
 
-**CF-4 PAID BEFORE IT CAME DUE.** The first instance of (2) arrived at B3.5, where it cost a design
-decision rather than a differential failure against `engine/model` with tables already written to the
-wrong format. That is an argument for doing this sweep, not for deferring it.
+**CF-4 PAID BEFORE IT CAME DUE, AND THE COUNTERFACTUAL IS WHAT MAKES THAT MEASURABLE.**
+
+| when it was found | what it cost |
+|---|---|
+| **B3.5, by asking the question at retirement** | one design decision (`B3-Q4`), four mutants, and an afternoon |
+| **B4, by the differential rig** *(the counterfactual)* | `engine/model` disagrees on a clear-everything workload. The format is already frozen and **already has tables written to it** — every corpus table, every sweep image, every fixture. The fix is a format change plus a rewrite of everything written to the old one, and it lands in the phase whose job is proving the two engines agree |
+
+**Early payment is measurable only against the alternative**, which is why the second row is written
+down rather than left as "it would have been worse". One instance is not a trend; it is one data
+point, and it is recorded as one.
