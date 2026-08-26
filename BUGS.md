@@ -889,6 +889,31 @@ things nobody thought to look for. Four for four, none of them the thing it was 
 
 ---
 
+### GF-9 — a correctness claim written before its checker is a hypothesis, and building the checker is how it gets tested
+
+**Twice observed, both in Track B, and both times the correction was in the CLAIM rather than in the
+code.**
+
+| phase | the claim | what building its checker found |
+|---|---|---|
+| B2.0 | *entries in a block are strictly ascending* | ascending **by `memcmp`** is wrong: internal keys sort user-key-ascending, tag-DESCENDING, and the fixtures that could show it did not exist because they used keys with no tag |
+| B3.0 | *`keep(k)` is the newest version at each observable sequence* | it **over-requires**: a deletion's answer is `kNotFound`, which dropping the deletion preserves exactly, and the stricter form forbids the one drop that makes compaction terminate in space |
+
+**What makes this different from the ordering rule it comes from.** *The observer lands before the
+observed* is usually argued as protection against a checker written to agree with the thing it
+checks. That is real, and it is not what happened either time. **Both times the CLAIM was wrong, and
+writing the enforcement is what tested it** — because a claim in prose has no failing case, and a
+checker has to be handed inputs.
+
+**The consequence worth recording, and it is `HARNESS-006`'s shape.** A checker built to an
+over-strict claim **refuses correct behaviour**, and it presents as *a bug in the component being
+checked*. `HARNESS-006` cost its debugging to the wrong component because it was found late. Both of
+these were found **before the component existed to be blamed** — B2's before any writer, B3's before
+any compaction — which is the same ordering rule buying something other than what it is usually sold
+for.
+
+---
+
 ### GF-8 — when a rule distinguishes two kinds of dependency, find the SIGNATURE that separates them, not the sentence
 
 **Raised by** B3-D2a, correcting the oracle-independence rule at `B3-Q1`.

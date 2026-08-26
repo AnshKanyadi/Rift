@@ -1,6 +1,6 @@
 # DESIGN-B3 — compaction, iterators, and the first thing this engine deletes
 
-**Status: REVISION 4. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
+**Status: REVISION 6. B3-Q1 RULED 2026-08-25; B3-Q3 ratified by the implementation instruction;
 B3-Q2 proceeding on my stated reading and flagged as such in §11.**
 
 Phase B3 per CLAUDE.md: *leveled compaction with scoring; merged iterators; engine snapshots pinning
@@ -67,18 +67,41 @@ For a user key `k` with versions `v₁ > v₂ > … > vₙ` ordered by sequence 
 
 — at most `|S|` entries, and the only ones any reader can ever return.
 
-> **CORRECTED IN REVISION 4, BY BUILDING THE ADJUDICATOR BEFORE THE POLICY.** `keep(k)` as first
-> written **over-requires**: it demands the newest version at every observable sequence survive, full
-> stop. When that version is a **DELETION**, the answer at that sequence is `kNotFound`, and dropping
-> the deletion **preserves the answer exactly** so long as nothing older survives to be uncovered.
->
-> **THE REQUIREMENT IS ON THE ANSWER, NOT ON A PARTICULAR ENTRY.** A claim that forbade dropping a
-> tombstone with nothing left to mask would forbid the one drop that makes compaction terminate in
-> space — an adjudicator built to the uncorrected claim would have refused correct compactions, and
-> it would have looked like the engine's fault.
->
-> This is the observer-before-the-observed rule paying immediately: the claim was wrong, and writing
-> the thing that enforces it is what showed that, before a policy existed to be blamed.
+### 1.2a THE PHASE'S FIRST RESULT: the claim was wrong, and its own checker found it
+
+**`keep(k)` as first written over-requires.** It demanded that the newest version at every observable
+sequence survive, full stop. When that version is a **DELETION**, the answer at that sequence is
+`kNotFound` — and **dropping the deletion preserves that answer exactly**, so long as nothing older
+survives to be uncovered.
+
+> **THE REQUIREMENT IS ON THE ANSWER AT EACH OBSERVABLE SEQUENCE, NOT ON ANY PARTICULAR ENTRY
+> SURVIVING.**
+
+**Why the stricter form is WRONG and not merely over-cautious, and this is the sentence a future
+reader needs.** A tombstone whose masked versions have all been dropped has no work left to do. Under
+the stricter claim it may never be dropped — so **every deletion the database has ever taken accretes
+forever**, and the space a compaction can reclaim is bounded below by the tombstone count.
+**COMPACTION STOPS TERMINATING IN SPACE.** A key written and deleted a million times would keep a
+million tombstones under a claim whose whole purpose is to permit reclaiming them. That is not
+caution; it is a claim that forbids the one drop the phase exists to make.
+
+**THE CONSEQUENCE, WHICH IS THE PART WORTH RECORDING.** An adjudicator built to the uncorrected claim
+would have **refused correct compactions** — and it would have presented as **a bug in the engine**.
+That is `HARNESS-006`'s shape exactly: *a checker wrong in the direction that sends debugging to the
+wrong component.* The difference is where it was caught.
+
+> **THIS TIME IT WAS CAUGHT BEFORE THE COMPONENT EXISTED TO BE BLAMED.**
+
+**The general form, and it is now twice observed:**
+
+> **A CORRECTNESS CLAIM WRITTEN BEFORE ITS CHECKER IS A HYPOTHESIS. BUILDING THE CHECKER IS HOW IT
+> GETS TESTED.**
+
+Two phases now in which the observer corrected the observed **before the observed existed** — B2's
+classifier finding that internal keys do not sort by `memcmp`, and B3's adjudicator finding that
+`keep(k)` over-requires — and **both times the correction was in the CLAIM rather than in the code.**
+That is what the observer-before-the-observed rule buys, and it is not the thing the rule is usually
+argued for.
 
 **A compaction may drop an entry `e` for key `k` if and only if BOTH hold:**
 
@@ -126,7 +149,21 @@ respects `keep(k)` for `s = current` and violates it for every snapshot passes a
 A state comparison is a comparison over **survivors**. The claim is about **drops**. So:
 
 > **THE ORACLE COMPUTES THE PERMITTED DROP SET ITSELF, FROM ITS OWN RECORD, AND HOLDS THE ENGINE TO
-> IT — in both directions.** `dropped ⊆ permitted` **and** `kept ⊇ required`.
+> IT — in THREE directions.** `kept ⊇ required`, `dropped ⊆ permitted`, and
+> **`survived ⊆ submitted`** — the engine may not hold a version the harness never wrote.
+
+**THE DECISION IS DEMONSTRATED RATHER THAN ARGUED, and the demonstration is a test pair:**
+
+> `DropCheck.ASnapshotMakesAnOlderVersionRequired` and
+> `DropCheck.WithoutASnapshotTheSameDropIsPermitted`.
+>
+> **The images are BYTE-IDENTICAL. The state read at the current sequence is IDENTICAL. Only the
+> snapshot set differs — and one is a violation while the other is correct.**
+
+Cited rather than described, because the pair *is* the argument for why B2's state comparisons cannot
+do this job, and a paragraph restating it would be the weaker copy.
+
+**The third direction is B3.1's answer to the aliasing condition** — see §2.2b.
 
 This is §7.6's harness-side adjudication applied to a new question, and both directions are needed
 for the reason §7.6 gives: an engine that drops nothing is as wrong as one that drops too much — it
@@ -225,10 +262,23 @@ makes a real drop look survived.
 > **THE MUTANT TO PLANT IS THE ONE THAT FABRICATES A RECORD. If nothing kills it, the aliasing is
 > unacceptable and the rig gets its own parser.**
 
-| mutant | what it does | why it is landed |
+| mutant | what it does | measured at B3.1 |
 |---|---|---|
-| **`READER-shows-a-dropped-record`** | `ParseBlock` reports an entry the bytes do not contain | **THE DECIDING ONE.** A wrong drop looks like a keep; the verdict is a false pass |
-| `READER-hides-a-live-record` | `ParseBlock` silently skips an entry | the loud direction. **Landed anyway, and both numbers reported**: its kill is cheap, and *its absence would itself be a finding* |
+| **`READER-shows-a-dropped-record`** | `ParseBlock` reports an entry the bytes do not contain | **KILLED.** 4 of 9 `DropCheck` tests, and 12 of the flush suite |
+| `READER-hides-a-live-record` | `ParseBlock` silently skips an entry | **KILLED.** 6 of 9 `DropCheck` tests, and 12 of the flush suite |
+
+**DISCHARGED, AND THE RESULT IS BETTER THAN "SOMETHING KILLED IT".** Both directions die **on the
+drop checker's own assertions**, not on a distant count somewhere downstream — so the instrument that
+makes the shared parser acceptable is *the checker itself*, which is the only answer that does not
+put a third party in the trust chain.
+
+That is not luck. **The third direction — `survived ⊆ submitted` — was added for exactly this**, once
+working through the condition showed that directions one and two both ask whether something is
+MISSING and neither can see a record that should not be there. The condition did what conditions are
+for: it changed the design rather than merely auditing it.
+
+**`FLOORS.txt` records the split labels**, per condition (iii): the named tests are load-bearing for
+every drop verdict in the phase.
 
 **(iii) The split label.** `FLOORS.txt` records the drop checker as **`covered-by:` whatever kills
 those mutants — not by its own assertions**, because an instrument that certifies itself certifies
