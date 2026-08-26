@@ -274,3 +274,39 @@ the wrong file — the third demonstration in this engine, after `BM68` and `BM6
 Every loop added by B3.3b and B3.4 carries both instruments, and `FLOORS.txt` distinguishes them by
 label: `covers-correctness:` for what catches a wrong traversal, `covered-by:` for everything else.
 
+
+---
+
+## CF-4 — ask GF-15's question once across the frozen interface, at B4
+
+| field | value |
+|---|---|
+| **Raised** | B3.4, 2026-08-26 |
+| **Raised by** | Ansh, ratifying B3.4, on `GF-15` |
+| **Discharged by** | **B4** |
+| **Check** | one pass over the frozen `Engine` surface asking, of every fact one rule DERIVES, which other rule DEPENDS on that fact |
+| **Compare against** | `B3-D7b`, the instance that raised it |
+
+**The obligation.** `GF-15` says *a rule derived from one contract is not permission under the
+others*. B3.4 found one instance the hard way: `B3-D1` permits dropping the highest-sequenced entry,
+and `D7`'s forward binding makes that entry **the only proof of the durable floor** — the manifest
+may not record a durable sequence, so `Open` must re-derive the floor from table bytes. Dropping it
+preserves every answer and breaks a promise.
+
+> **A CROSS-CONTRACT INTERACTION IS INVISIBLE IN EITHER CONTRACT'S OWN STATEMENT.** That is what
+> makes it general, and what makes it undiscoverable by reading one document carefully.
+
+**Why once, and why at B4.** Asked per-decision it has already been asked — each decision reasons
+about its own contract, which is exactly the reading that misses this. It needs a pass over the
+**whole surface at once**, and B4 is the first point where the whole surface exists and is being
+exercised against `engine/model`, so a derived fact two rules disagree about has somewhere to show up.
+
+**Where to look, from B3's map.** Every place a fact is re-derived rather than recorded: the
+manifest's per-table numbers re-derived from table bytes at `Open`; the durable floor from
+`largest_seq`; recovery's skip point from that same maximum; `bottom_most` from range disjointness;
+`S` from the snapshot registry. Each is a rule producing a fact, and each has at least one other rule
+reading it.
+
+**The cost of leaving it.** `BM77` is the shape: **the mutant is the faithful implementation of the
+rule it is derived from.** Nothing in a careful reading of that rule flags it, and no reviewer
+checking the rule's own statement would object.

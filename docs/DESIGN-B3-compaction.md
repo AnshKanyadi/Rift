@@ -653,7 +653,13 @@ selection**, where getting it wrong resurrects deleted data — and `BM80` is th
 
 ---
 
-## 7.5 WHAT IS NOT YET VERIFIED, STATED RATHER THAN IMPLIED
+## 7.5 THE SCOPE OF THE CURRENT GREEN — a statement, not a to-do
+
+**READ THIS AS A BOUNDARY ON WHAT THE LANES CURRENTLY ESTABLISH, NOT AS AN ITEM TO BE TICKED OFF.**
+It is the sentence that keeps `cpp-sweep` green from being quoted as something it does not say. It
+**stays true until B3.7 changes the sweep**, and at that point it is *rewritten to describe the new
+boundary* — never deleted because someone got to it. Every phase has a boundary like this; most
+projects leave it unwritten, and that is exactly how a green lane becomes a claim nobody checked.
 
 **The compaction install ordering is ARGUED and NOT YET SWEPT.** Every step of it mirrors B2-D5 and
 each window is reasoned through in `db.cc` — a crash before the manifest group leaves the outputs as
@@ -673,6 +679,9 @@ count, and the kill-point count is the **denominator of every rate in `FLOORS.tx
 for that once — the manifest raised the count from 175 to 300 and *every* rate fell while not one
 detection count did. So the sweep is extended in the step that **re-measures the floors in the same
 diff**, not in a step that would leave the file describing a denominator that no longer exists.
+
+**What replaces this section at B3.7** is the same kind of sentence with different content: what the
+extended sweep reaches, and what it still does not. The section does not empty out.
 
 ---
 

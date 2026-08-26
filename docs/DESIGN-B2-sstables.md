@@ -1,8 +1,19 @@
 # DESIGN-B2: SSTables, the bloom filter, and the manifest
 
-**Status:** **REVISION 2 — APPROVED 2026-08-25.** All nine decisions ratified as reasoned; the three
-open questions ruled and folded in below. Implementation proceeds under the exit criteria plus these
-answers.
+**Status:** **REVISION 2 — APPROVED 2026-08-25. SIGNED 2026-08-25. AMENDED 2026-08-26.** All nine
+decisions ratified as reasoned; the three open questions ruled and folded in below.
+
+> **AMENDMENT, 2026-08-26 — `BUG-003`, present since B2.5, found at B3.4, harmless until B3.4.**
+> `DBImpl::Flush`'s early return on `imm_ != nullptr` reads as a serialiser and is not: `imm_` is
+> assigned several steps after the first `AppendGroup`, so two concurrent `Sync` callers both pass
+> it. It was undamaging while the manifest had **one** appender, which was true for the whole of B2.
+> B3.4's compaction is the second appender. Fixed at B3.4 by enforcing `Sync`'s single-caller
+> precondition (`SingleCaller`), not by adding a lock — see `BUGS.md` BUG-003 for why the wider fix
+> was refused.
+>
+> **This amends what B2 VERIFIED, not whether B2 was signed.** A sign-off is a claim about what was
+> checked; the defect was unreachable under B2's shape and no B2 lane could have found it. Second
+> time a phase record has been amended by a later phase, and the mechanism was the same both times.
 **Phase:** B2 (Track B). **Author:** Claude (Session B). **Decider:** Ansh.
 **Depends on:** B1, signed 2026-08-25. **Blocks:** B3, B4, B5.
 **Carries:** `CARRY-FORWARD.md` CF-1, which comes due in this phase.

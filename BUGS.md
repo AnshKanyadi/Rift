@@ -249,6 +249,64 @@ it demands is to ask, of every assertion, "what value would this read if the
 thing I am checking were broken?" — and if the answer is "the same one", the
 assertion is decoration no matter how specific it looks.
 
+### BUG-003 — a guard that reads as a serialiser and never serialised anything
+
+| field | value |
+|---|---|
+| **Found by** | inspection, while adding compaction's manifest append at B3.4 |
+| **Phase** | **present since B2.5; found at B3.4; harmless until B3.4** |
+| **Reproduce** | not reproducible by a lane: it needs two concurrent `DB::Sync` callers, which the contract forbids and no in-tree caller does. See *Why nothing caught it* |
+| **Invariant that caught it** | none — that is the entry. It was found by asking what else appends to the manifest |
+| **Mutant class** | **BM82-sync-precondition-unguarded**, added in the same PR as the fix |
+| **Fix commit** | this one |
+
+**Symptom.** None, in any run that has ever been made. A second concurrent `Sync` would append
+manifest records **inside another append's group**, producing a manifest whose group terminator
+counts do not match the records that precede them — refused at the next `Open` as corruption, with
+the durable data intact and unreachable.
+
+**Root cause.** `DBImpl::Flush` opens with
+
+```cpp
+if (closed_ || imm_ != nullptr) return Status::Ok();
+```
+
+which reads as *"one flush at a time"* and is not. **`imm_` is assigned several steps later**, after
+the file-number reservation, the new WAL's creation, and the **first `AppendGroup`**. Two callers
+arriving together both observe `imm_ == nullptr`, both pass, and both append. The guard makes a flush
+a no-op while one is **pending**; it has never made two flushes mutually exclusive.
+
+**Why nothing caught it, and this is the honest part.** Until B3.4 the manifest had exactly **one**
+appender, so two concurrent flushes could at worst duplicate work. The defect needed a **second
+appender** to become damaging, and compaction is the first one. The TSan lane could not have found it
+either: its authored pattern is one writer and one syncer, and the header says why — *"not more,
+because more would be a claim the contract does not make."*
+
+**What this would have caused in production.** A corrupt manifest after two concurrent `Sync` calls,
+which the frozen contract does not permit — so: nothing, for a conforming caller. For a
+**non-conforming** one, an engine that refuses to open and loses nothing, which is the good failure
+mode and is still a failure nobody would have diagnosed from the message.
+
+**Fix, and why not the wider one.** Not a lock, and not a third TSan pattern. Both would have
+answered a question the contract does not ask, and a lock would have **converted a precondition into
+a supported mode** — the shape where an engine grows a guarantee nobody decided to make. The
+precondition is enforced instead: `SingleCaller` in `DB::Sync`, so a second concurrent caller aborts
+at the call rather than leaving a manifest for the next `Open` to refuse. The flush guard keeps its
+early return and its comment now states what it does.
+
+**B2'S SIGN-OFF IS AMENDED IN PLACE, NOT REOPENED.** `docs/DESIGN-B2-sstables.md` carries a note
+naming this entry. The reason is a distinction worth keeping:
+
+> **A PHASE'S SIGN-OFF IS A CLAIM ABOUT WHAT WAS VERIFIED, NOT A CLAIM THAT THE CODE WAS CORRECT.**
+
+**The second time a phase's record has been amended by a later phase, and the mechanism was the same
+both times: a defect unreachable under the earlier phase's shape.** Track A amended A4 and A5 for
+`BUG-023`. Neither amendment says the earlier verification was wrong; both say the earlier phase
+could not have reached the defect, and name the later shape that did. An amendment that reads as an
+accusation would make the next one less likely to be written.
+
+---
+
 ### HARNESS-001 — a mutation lane's scratch copy silently lost three files of the tree under test
 
 | field | value |
@@ -1012,7 +1070,7 @@ evidence until its provenance is.**
 
 ---
 
-### HARNESS-016 — a test observed the engine through a path that ROTATES, and destroyed what it observed
+### HARNESS-016 — a helper's side effect wider than its purpose, three times in one step
 
 **Symptom.** A compaction test read the manifest to count tables per level, and the engine's next
 manifest append failed: `kIoError: appending to a vanished file: db/MANIFEST-000001`.
@@ -1046,9 +1104,23 @@ moved and the mutation did not."** The lane was right, and it named the situatio
 > both, the wider effect was invisible at the call site and showed up as something else entirely — a
 > vanished file, a rotten patch.
 
-Recorded because the second one cost only a regenerated patch **only because the lane already had a
-`ROT` outcome to report it as**. Without that, it would have presented as a mutant that mysteriously
-stopped applying.
+**A THIRD INSTANCE, IN THE REMEDY FOR THE SECOND.** The patch generator built its diff with
+`git diff`, which compares against **HEAD** — so on a dirty tree it silently bundled every unrelated
+edit into the mutation. Two patches were written that way and **both carried six hunks instead of
+one**; both came back `ROT`. The generator's job is to describe one mutation, and its scope was the
+whole working tree.
+
+> **A HELPER'S SIDE EFFECT MUST BE NO WIDER THAN ITS PURPOSE.** Three instances in one step: one
+> *observed* through a path that rotates, one *reverted* a directory to undo a patch, one *diffed*
+> against HEAD to describe an edit. In every case the wider effect was invisible at the call site and
+> surfaced as something else — a vanished file, a rotten patch, a rotten patch again.
+
+The generator now diffs **file against file**, with the reason at the top of it.
+
+Recorded because the second and third cost only regenerated patches **only because the lane already
+had a `ROT` outcome to report them as** — *"the code moved and the mutation did not"*, which is
+exactly what happened. Without that outcome they would have presented as mutants that mysteriously
+stopped applying, and the debugging would have started in the patches.
 
 ---
 
@@ -1072,6 +1144,41 @@ only the loud one is self-announcing.
 
 > **A REGISTRY CROSS-CHECK HAS TWO FAILURE MODES AND ONLY ONE OF THEM TELLS YOU.** Both directions
 > get induced, or the quiet one is what you have.
+
+---
+
+### GF-16 — a mutant that survives because its precondition is unreachable is a claim about a workload
+
+**Raised by three survivals in one step**, B3.4, and it is a sharper statement of the survival tally's
+meaning #1 rather than a new meaning.
+
+| mutant | the situation it breaks | why the suite never created it |
+|---|---|---|
+| `BM76` tombstone dropped over a snapshot | a tombstone the snapshot floor must keep | the fixture put the tombstone at the **top sequence**, where the watermark pin keeps it for an unrelated reason — so the test watched the pin and called it the drop rule |
+| `BM79` roller rolls inside a user key | a key whose versions span a file roll | with **no live snapshot** the drop rule leaves one version per key, so no key is ever large enough to span one |
+| `BM82` `Sync` no longer claims the guard | the guarded path being entered twice | the tests constructed the guard **directly**, so the path was never entered at all |
+
+> **A MUTANT THAT SURVIVES BECAUSE ITS PRECONDITION IS UNREACHABLE IS NOT A WEAK MUTANT. IT IS A
+> CLAIM ABOUT A WORKLOAD THE SUITE NEVER RAN — SO THE DISPOSITION IS TO REACH THE WORKLOAD, NOT TO
+> RELABEL THE MUTANT.**
+
+**All three were reached, and none was relabelled.** `BM76` got a fixture where the tombstone is not
+the highest sequence, judged by `AdjudicateDrops` rather than by a count that is unremarkable either
+way. `BM79` got **forty held snapshots**, so that a key genuinely has many surviving versions — a
+workload this engine had never run, and the one `B3.6` is about. `BM82` got a **re-entrant `Sync`**
+through the promotion hook.
+
+**Why relabelling is the tempting wrong answer.** Every one of the three had a defensible-sounding
+label available — *"covered by the pin"*, *"unreachable under the default policy"*, *"covered by the
+guard's own tests"* — and each would have been **true and useless**: it names a reason the class is
+not detected instead of an assertion that detects it. `GF-7`'s rule in the label file says a
+`covered-by:` is determined by induction or not written, and a label invented to explain a survival
+is exactly the inferred kind.
+
+**What it cost, and why that is the argument.** Reaching the third workload found nothing wrong with
+the engine — but reaching the first two required a fixture and a snapshot workload the suite did not
+have, and **`B3.6`'s whole subject is the workload `BM79` forced into existence.** A relabelled
+`BM79` would have deferred that discovery to the step that assumed it already worked.
 
 ---
 
@@ -1104,6 +1211,17 @@ reading a claim that is locally airtight.
 **`BM77` plants it, and the mutant IS the faithful implementation of `B3-D1`.** Not a typo, not a
 weakened check — what a careful reader of the claim would write. That is precisely the blind spot the
 suite exists for, and it is why the mutant's header says so.
+
+**RULED THE PHASE'S MOST TRANSFERABLE FINDING, AND IT CARRIES AN OBLIGATION.** A cross-contract
+interaction is invisible in **either contract's own statement** — that is what makes it general, and
+what makes it undiscoverable by reading one document carefully. It generalises to **every place this
+engine derives a fact from one rule while another rule depends on that fact**, and this engine does
+that in more than one place: the manifest's numbers are re-derived from table bytes, the durable
+floor from `largest_seq`, the recovery skip point from the same maximum, `bottom_most` from range
+disjointness.
+
+> **THE QUESTION IS ASKED ONCE ACROSS THE FROZEN INTERFACE AS A WHOLE, AT B4** — not per-decision,
+> where it has already been asked and answered locally. `CARRY-FORWARD.md` CF-4 carries it.
 
 ---
 
@@ -1502,6 +1620,35 @@ enough to make the guess feel safe. Three of the 47 have **no failing test at al
 > attached to the wrong thing, in the one place a reader trusts before removing an assertion.
 
 **The rule: a label that names an instrument is determined by induction, or it is not written.**
+
+---
+
+**BM82 IS THE SAME QUESTION, ASKED OF A GUARD RATHER THAN A COMMENT.** `SingleCaller` enforces
+`Sync`'s single-caller precondition, and two tests constructed it **directly** — claim it twice, it
+aborts; claim it sequentially, it does not. Both pass. `BM82` removes `Sync`'s *claim* on the guard,
+leaves the guard itself intact, and **survived them both.**
+
+> **A TEST CONSTRUCTING A MECHANISM DIRECTLY TESTS THE MECHANISM AND NOT ITS WIRING. THEY PROVE THE
+> GUARD WORKS. NOTHING PROVES THE PATH USES IT.**
+
+Two claims that read as one, and the enforcement rests entirely on the second.
+
+**This is the planted-violation-versus-fixture distinction this project has held since A0**, arriving
+in C++ **against a guard rather than against an analyzer**. There, the rule was that a determinism
+check must be proven by planting a violation *in code the check actually scans*, never by feeding the
+checker a hand-built fixture that exercises its parser. Here the "fixture" is a directly constructed
+`SingleCaller`: it exercises the mechanism's own logic and says nothing about whether the production
+path is wired to it. **Same distinction, different decade of the stack.**
+
+**The induction is deterministic and that was the second decision.** The guard is claimed twice on
+**one thread**, by re-entering `Sync` from the promotion hook — which fires inside `Sync`, when the
+durable image changes. Racing two real `Sync`s would have induced it *probably*.
+
+> **THIS CATALOGUE DOES NOT COUNT A GATE INDUCED PROBABLY.**
+
+The hook fires **once**, deliberately: without that, a build with the claim removed would recurse
+until the stack gave out, and **a death test cannot tell a guard firing from a crash** — the mutant
+would have passed for the wrong reason, which is `GF-1`'s shape hiding inside the remedy.
 
 ---
 
