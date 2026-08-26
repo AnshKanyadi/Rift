@@ -578,6 +578,137 @@ Both are written **before the merge**, per the ordering that has now paid four t
 
 ---
 
+## 7.2 B3-D7b — the watermark pin: an obligation the drop claim does not state
+
+**Found before the loop ran, by asking what else a compaction touches.** The drop claim and the
+durability promise are about different things, and only one of them is written down in §1.2:
+
+> **THE DROP CLAIM IS ABOUT THE ANSWER A READER GETS. THE WATERMARK IS A PROMISE ABOUT A SEQUENCE.**
+> A compaction can preserve every answer exactly and still destroy the engine's only proof of a
+> promise it has already made.
+
+**The mechanism, concretely.** `DB::Open` recomputes the durable floor as the **maximum `largest_seq`
+over the live tables**, and `largest_seq` is re-derived from each table's own bytes. It has to be:
+D7's forward binding says *the manifest may never record a durable sequence*, so there is nowhere
+else for that number to come from. Now suppose the highest-sequenced entry in the database is a
+**tombstone with nothing left to mask** — precisely what §1.2a established a compaction *may* drop.
+Dropping it lowers the maximum, and after a restart `DurableSeq` reports a **smaller** number than it
+reported before. The frozen contract says monotone non-decreasing.
+
+**The fix, and its price.** Exactly one entry at the inputs' highest sequence is kept when the rules
+would have dropped them all. It is **over-keeping**, which the claim explicitly permits — *may drop*,
+never *must* — and it costs at most one entry per compaction.
+
+**`BM77` is the mutant, and what makes it worth planting is that THE MUTANT IS THE CORRECT
+IMPLEMENTATION OF THE DROP CLAIM.** It is not a typo or a weakened check; it is what a careful reader
+of §1.2 would write. That is the shape of blind spot the mutant suite exists for.
+
+---
+
+## 7.3 B3-D3a — the output is a RUN, not a file
+
+**Discovered while implementing (b) and reported rather than absorbed.** A compaction that writes one
+output file makes L1 a single file, and then:
+
+> **EVERY COMPACTION REWRITES THE WHOLE DATABASE — WHICH IS CANDIDATE (a), WEARING (b)'s NAME.**
+
+§3 rejected (a) *not for being slow but for making the measurement meaningless*. So a one-file L1
+would have made §8's write-amplification number a fact about the workload's size, and the phase's
+recorded number would have been the number of the policy the phase rejected.
+
+**The size cap is derived, not chosen.** An output file is capped at the **flush threshold**
+(`caps.flush_bytes`), so an L1 file is the same order as the L0 file that produced it. That ties it
+to a number that already has a derivation rather than inventing a second one, and it **moves with the
+caps** — the crash sweep, which sets the flush threshold low so that flushes are reachable in a short
+run, gets a multi-file L1 for free instead of needing a second knob.
+
+**One rule on the roll: a sink may roll ONLY at a user key boundary.** Two files of one run that
+share a user key are not a run; `L1FileFor` would find one of them and the other's versions would be
+unreachable — a deletion that stops hiding a value. `BM79` plants the size-only roll, which is the
+obvious implementation.
+
+---
+
+## 7.4 What the induction found, and the two mutants that survived first
+
+**`BM73` was deleted rather than re-aimed, and that is GF-7 for the second time.** It removed
+`L1FileFor`'s check that the file found by the binary search actually *contains* the key. **Nothing
+failed** — a key falling in the gap between two files of the run makes the search return the next
+file along, whose `Get` cannot find the key either, so the answer is identical and only a filter
+probe is wasted. The line is a **cost guard, not a correctness one**, and the comment now says so.
+
+The property *"a range test decides containment"* **is** load-bearing — in the compaction's **input
+selection**, where getting it wrong resurrects deleted data — and `BM80` is the mutant that says so.
+*The mutant went where the property lives instead of where it merely appears.*
+
+**`BM76` and `BM79` survived their first induction, and both for reasons worth keeping:**
+
+| mutant | why it survived | what the fixture was actually watching |
+|---|---|---|
+| `BM76` | the tombstone sat at the **top sequence**, where §7.2's pin keeps it for an unrelated reason | the watermark pin, called the drop rule |
+| `BM79` | with no live snapshots the drop rule leaves **one version per key**, so no key is ever large enough to span a roll | a situation that could not occur |
+
+> **A MUTANT THAT SURVIVES BECAUSE ITS PRECONDITION IS UNREACHABLE IS NOT A WEAK MUTANT; IT IS A
+> WORKLOAD THE SUITE NEVER RAN.** `BM79`'s test now holds forty snapshots to make the situation exist.
+
+---
+
+## 7.5 WHAT IS NOT YET VERIFIED, STATED RATHER THAN IMPLIED
+
+**The compaction install ordering is ARGUED and NOT YET SWEPT.** Every step of it mirrors B2-D5 and
+each window is reasoned through in `db.cc` — a crash before the manifest group leaves the outputs as
+unnamed `.sst` files, a crash after it leaves the *inputs* unnamed, and `Open` removes orphans by the
+same rule in both cases. **None of that has been killed at a kill point.**
+
+**The existing sweep does not reach compaction, and the reason is arithmetic:** the `flush` regime's
+workload crosses the flush threshold **once**, so `|L0| = 1` and the trigger is 4. Every Env call the
+compaction makes is therefore invisible to the lane today.
+
+> **A GREEN SWEEP OVER A PATH IT NEVER ENTERS IS A SIGNAL WITHOUT PROVENANCE**, which is the standing
+> rule this repo already has eight instances of. It is written here so that "the sweep is green" is
+> never read as "compaction is crash-consistent" in the interval before B3.7.
+
+**Why extending it is B3.7's step and not this one.** Adding flushes changes the workload's kill-point
+count, and the kill-point count is the **denominator of every rate in `FLOORS.txt`**. B2 already paid
+for that once — the manifest raised the count from 175 to 300 and *every* rate fell while not one
+detection count did. So the sweep is extended in the step that **re-measures the floors in the same
+diff**, not in a step that would leave the file describing a denominator that no longer exists.
+
+---
+
+## 7.6 A DEFECT IN SIGNED WORK, REPORTED RATHER THAN ABSORBED
+
+**`Flush`'s early return on `imm_ != nullptr` does not serialise flushes.** `imm_` is set several
+steps *after* the first `AppendGroup`, so two concurrent `Sync` calls both pass the guard. It is B2
+code, and it has always looked like a serialiser without being one.
+
+**It was harmless until B3.4 and is not any more.** Until this step the manifest had **one** appender.
+Compaction is the second, and `Manifest::AppendGroup` takes no lock — so two maintenance paths
+appending at once would interleave records inside one another's groups and write a manifest no reader
+can replay.
+
+**WHAT WAS NOT DONE, AND WHY.** Not a lock, and not a third TSan pattern. The contract is
+single-caller and says so twice — `db.h`'s *"B5's poller owns this"*, and the TSan harness in the
+strongest form available:
+
+> *"One writer and one syncer, matching the shape the frozen interface forces... **Not more, because
+> more would be a claim the contract does not make.**"*
+
+Adding a lock and a pattern for two Syncs would test behaviour the contract does not promise and
+would quietly convert a precondition into a supported mode. **So the precondition is enforced instead
+of widened**: `SingleCaller` in `DB::Sync`, and a second concurrent caller aborts at the mistake
+rather than leaving a corrupt manifest for the next Open to refuse.
+
+**Induced in both directions** (GF-14) — `SyncPrecondition.ASecondConcurrentClaimAborts` and
+`...SequentialClaimsAreFine` — deterministically, by claiming the guard twice rather than by racing
+two real `Sync`s, which would induce it only *probably*. `BM82` is the class.
+
+**What is left for Ansh:** whether B2's misleading guard also earns its own `BUGS.md` entry, given it
+was signed with the defect latent and harmless. The guard's comment now says what it is (*a flush is
+a no-op while one is pending*) rather than what it looked like.
+
+---
+
 ## 8. B3-D8 — what "space and read amplification measured and recorded" means
 
 The exit criterion names two numbers. Stated here so the measurement is designed rather than
@@ -596,6 +727,81 @@ without a drop-set comparison, and it is cheap.
 
 ---
 
+### 8.1 THE MEASUREMENT DESIGN, WRITTEN BEFORE ANY CANDIDATE RUNS
+
+Ansh's condition, and it is the whole reason this subsection exists ahead of the numbers:
+
+> **A6 says the simplest correct policy wins v1 and the measurement chooses it — WHICH MEANS THE
+> MEASUREMENT MUST BE CAPABLE OF RETURNING "THE SIMPLE ONE IS ADEQUATE."** That outcome is designed
+> in and stated in advance, so it cannot be reached by accident and cannot be avoided by sizing the
+> benchmark until it discriminates.
+
+#### The thresholds, as numbers, with their derivations
+
+`F` is the flush threshold (4 MiB, `caps.h`), `K` the L0 compaction trigger (4, `db.cc`), `D` the
+live data size.
+
+**Write amplification.** Each compaction ingests `K·F` bytes of L0 and rewrites every L1 file its
+inputs overlap. **Under uniform-random keys every L1 file overlaps**, so a compaction rewrites all of
+L1 — about `D` bytes — for every `K·F` bytes ingested. Adding the WAL copy and the flush copy:
+
+```
+    WA  ≈  1 (WAL) + 1 (flush) + D / (K·F)
+```
+
+§3 already fixed the reopening threshold at **WA > 10×**. Solving:
+
+```
+    D / (K·F) > 8      ⇒      D > 8 × 16 MiB  =  128 MiB
+```
+
+> **THE NUMBER: (b) IS ADEQUATE UP TO ABOUT 128 MiB OF LIVE DATA PER ENGINE, AND CROSSES 10× ABOVE
+> IT.** Stated now, in advance, with the arithmetic visible so it can be attacked.
+
+**Read amplification.** The structural bound is `|L0| + 1`, and `|L0| ≤ K` at steady state, so
+`≤ 5`. The measured number should be **below** it, because the bloom filter is what makes an absent
+key cost a probe rather than a block read. The threshold is not the structural bound but whether the
+structure holds:
+
+> **IF THE STEADY-STATE L0 FILE COUNT EXCEEDS `K` AT ANY POINT UNDER SUSTAINED WRITES, COMPACTION IS
+> NOT KEEPING UP** and read amplification is above its bound for a reason no bloom filter fixes.
+
+**Space amplification.** One copy in L1 plus L0's overlap, so the bound is `1 + K·F/D`, which is
+**≤ 2× for any `D ≥ K·F`** — 16 MiB. Above 2× at a data size past that means the drop rules are not
+reclaiming, which is §2.3's vacuous case showing up as a ratio.
+
+#### The workload that would make (b) inadequate, named in advance
+
+Sustained writes against a live set **substantially larger than 128 MiB per engine**, with keys
+spread widely enough that every compaction overlaps most of L1. Narrow the key spread and (b) gets
+better, not worse: input selection reads only the overlapping part of the run, which is the whole of
+what (b) buys over (a) (§7.3, and `Compact.ASecondCompactionRewritesOnlyTheOverlappingPartOfTheRun`
+is the assertion that it is real).
+
+#### What is run
+
+Three data sizes **spanning the predicted crossing point** — below it, at it, above it — because a
+single point cannot distinguish "the model is right" from "the number happened to land there". The
+deliverable is the **curve and the crossing point**, not one figure. Each run records WA, RA and SA
+by the definitions in the table above, at fixed `F` and `K`, on the fillrandom workload B5 defines.
+
+#### THE PRE-DECLARED HONEST OUTCOME
+
+**Whether Rift produces the inadequate workload is not yet a fact.** It depends on A4's range-split
+threshold and on how many ranges a store hosts — neither decided — and on I2's benchmark
+configuration, which is a choice rather than a measurement.
+
+> **IF I2 RUNS BELOW THE CROSSING POINT, THE MEASUREMENT CANNOT DISCRIMINATE, AND (b) WINS ON A6's
+> RULE RATHER THAN ON A BENCHMARK.** That is a legitimate result and it is recorded as one: *"the
+> question is not decidable on the evidence at v1's scale; the crossing point is 128 MiB and the
+> measured curve is consistent with the model."*
+
+It is stated here, before the first run, for the reason Ansh gave: **a benchmark sized until it
+discriminates is not evidence, it is a decision already made.** The crossing point is fixed now, so
+the only honest ways to reach "(c) is needed" are to measure past it or to show the arithmetic wrong.
+
+---
+
 ## 9. B3-D9 — the landing sequence
 
 The two ordering invariants hold unchanged: **the observer lands before the observed**, and **a gate
@@ -608,6 +814,9 @@ lands only once its failure has been induced and observed**.
 | **B3.2** | the range-tombstone block format + classifier rules, from fixture bytes | B2-D6's ordering, third time |
 | **B3.3** | the two-level structure, `ConcatenatingIter`, the read path | needed before anything can compact into it |
 | **B3.4** | compaction: input selection, the merge, the drop rules | the drop adjudicator from B3.0 judges it |
+| *B3.3b, folded in* | `level` in the manifest, the L1 run check at Open, the two-level read path | needed before anything could compact into L1 |
+| *B3-D3a, folded in* | the output run, capped at the flush threshold | without it §8 would measure the policy §3 rejected |
+| *B3-D7b, folded in* | the watermark pin, and the snapshot registry the drop rule needs | both are correctness the step cannot be right without |
 | **B3.5** | range tombstones end to end; `Apply` stops expanding; `table.h`'s residency retired | needs both |
 | **B3.6** | snapshots across compaction; version lifetime; file deletion after the last reference | needs compaction |
 | **B3.7** | the sweep extended over compaction; amplification measured and recorded; floors re-measured | power is measured last, once the shape stops moving |
@@ -677,7 +886,11 @@ A6's STRETCH line needs revisiting.
 | **B3-D5** | snapshots | refcount + a sequence floor read once at compaction start |
 | **B3-D6** | range tombstones | a dedicated block per SSTable; retires `Apply`'s expansion and `table.h`'s residency |
 | **B3-D7** | iterators | CF-3 applied to every loop the phase adds; bounded work counters where progress is not monotone in the key |
+| **B3-D7a** | the merge's two instruments | `inputs_consumed` against a **derived** bound for termination; `AdjudicateMerge` and `AdjudicateDrops` for correctness. Named before the loop |
+| **B3-D7b** | the watermark pin | one entry at the inputs' highest sequence is kept whatever the drop claim permits: the claim is about the ANSWER, the watermark is a PROMISE ABOUT A SEQUENCE (GF-15) |
+| **B3-D3a** | the output is a run | output files capped at the flush threshold. One output file would be candidate (a) wearing (b)'s name, and would have made §8's number a fact about the workload's size |
 | **B3-D8** | measurement | space, read **and** write amplification; a space-amplification ceiling is the vacuous-compaction guard |
+| **B3-D8a** | the adequacy threshold | **stated before any candidate runs**: (b) crosses 10× write amplification at about **128 MiB** of live data. If v1 runs below it the question is **not decidable on evidence** and (b) wins on A6's rule — declared in advance so it cannot be reached by accident |
 | **B3-D9** | landing sequence | observer first, CF-2 second, format third, structure, compaction, tombstones, snapshots, power |
 
 | id | question | my reading |

@@ -252,3 +252,25 @@ earlier, for exactly this shape, and it paid for itself the same day.**
 **One entry moved rather than being retired**: `ORACLE-includes-engine` was written against the old
 part 2b, which B3-Q1 **replaced** — so it now names the ARTIFACTS allow-list. A mutant retired with
 its check is a class that stops being watched.
+
+**CLOSING NOTE (B3.4), 2026-08-25 — THE MERGE ITSELF, WHICH IS WHAT CF-3 WAS ACTUALLY RAISED FOR.**
+
+The compaction merge is the loop this obligation was aimed at, and it is the first one where **no
+cursor would do**: an iteration may emit an entry, drop one, or skip one, so *"the output key strictly
+advances"* is false for a **correct** merge and *"an input cursor strictly advances"* is false
+whenever a version is dropped.
+
+> **THE HONEST QUANTITY IS `inputs_consumed`**, which rises by exactly one per iteration whatever the
+> iteration decides, **bounded by the sum of the input tables' entry counts as `ValidateTable`
+> counted them** — a bound that cannot be raised without contradicting the classifier (GF-13).
+
+**Both halves were induced.** `BM78` makes the merge fail to advance past a dropped entry; without
+the bound it hangs, with it the process stops at the mistake. `BM81` takes the wrong half of the L1
+binary search: **the progress assertion stays true**, the loop terminates cleanly, and it lands on
+the wrong file — the third demonstration in this engine, after `BM68` and `BM69`, that
+
+> **A TERMINATION ASSERTION IS NOT A CORRECTNESS ASSERTION.**
+
+Every loop added by B3.3b and B3.4 carries both instruments, and `FLOORS.txt` distinguishes them by
+label: `covers-correctness:` for what catches a wrong traversal, `covered-by:` for everything else.
+

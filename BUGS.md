@@ -592,6 +592,38 @@ where the thing it discriminates could actually differ — and it is cited rathe
 also the same family as GF-1, one level in: GF-1 is about a *lane* verifying an absence, this is about
 an *assertion* verifying a distinction. Filed once here; individual survivals are not entries.
 
+**B3.4 ADDS THREE, AND ONE OF THEM IS THE FIRST INSTANCE OF MEANING #3.**
+
+`BM73` removed `L1FileFor`'s check that the file the binary search found actually *contains* the key,
+and **nothing failed** — a key in the gap between two files of the run makes the search return the
+next file along, whose `Get` cannot find it either, so the answer is identical and only a filter probe
+is wasted. **The line is a cost guard, not a correctness one.** That is `BM55`'s question answered the
+other way: the property *"a range test decides containment"* IS load-bearing, in the compaction's
+**input selection**, where getting it wrong resurrects deleted data — so `BM80` was written there and
+`BM73` was **deleted**. GF-7, second instance, and the first time this catalogue has deleted a mutant
+rather than re-aimed it.
+
+`BM76` and `BM79` are meaning #1 again, and `BM79` is a **sub-form worth naming**:
+
+| mutant | why it survived | what the fixture was really watching |
+|---|---|---|
+| `BM76` | the tombstone sat at the **top sequence**, kept by the watermark pin for an unrelated reason | the pin, called the drop rule |
+| `BM79` | with no live snapshot the drop rule leaves **one version per key**, so no key can span a file roll | a situation that could not occur |
+
+> **A MUTANT THAT SURVIVES BECAUSE ITS PRECONDITION IS UNREACHABLE IS NOT A WEAK MUTANT; IT IS A
+> WORKLOAD THE SUITE NEVER RAN.**
+
+That is a sharper statement of meaning #1 and it points at the fix rather than the symptom: `BM79`'s
+test now holds forty snapshots so that a key HAS many surviving versions, which is a workload the
+suite had never run and which B3.6 is about.
+
+**AND THE TALLY'S OWN INSTRUMENT MISREAD ONE.** `BM78` was recorded as a survival on its first
+induction because the script looked for a failing test — and the kill is an **abort**, so the process
+died before the summary printed. `FLOORS.txt`'s header already warns of exactly this, and the
+`RIFT PARTIAL RUN` marker was already in the output being read. **The remedy existed and was not
+looked for**, which is the standing provenance rule one level up: a signal read without asking what
+its absence would look like.
+
 **THE STANDING QUESTIONS, now that the tally has two meanings in it.** A survival is a fork, not a
 verdict, and the two questions are different:
 
@@ -966,6 +998,46 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-016 — a test observed the engine through a path that ROTATES, and destroyed what it observed
+
+**Symptom.** A compaction test read the manifest to count tables per level, and the engine's next
+manifest append failed: `kIoError: appending to a vanished file: db/MANIFEST-000001`.
+
+**Root cause.** The helper called `sst::Manifest::Open`. That is not a reader — **every Open rotates**:
+it replays, writes a NEW manifest, installs a new `CURRENT`, and **deletes the one it replaced**. The
+test destroyed the live manifest underneath a running engine.
+
+**The point is that this was already written down, in the other direction.** `manifest_format.h`
+exists because `manifest.h` failed B3-D2a's artifact mark on `Manifest::Open(Env*, ...)` — *"opening a
+manifest is AN ACT WITH AN OPINION about what the current state is, and it verifies, rotates and
+installs."* The rule was applied to oracles and not generalised.
+
+> **THE ARTIFACT/BELIEF SPLIT IS USUALLY ARGUED AS A RULE ABOUT WHAT A VERDICT MAY REST ON. IT IS
+> ALSO A RULE ABOUT WHAT AN OBSERVATION MAY COST.** A path with an opinion has side effects, and a
+> test that observes through one is running the engine, not watching it.
+
+**Fix.** `rig/manifest_image.h` — a pure replay of manifest bytes, no Env, no rotation, no install.
+The oracle's private copy was folded into it, so there is one parse rather than two, and the test now
+reads `CURRENT` and the image it names.
+
+**A SECOND INSTANCE, THE SAME HOUR, IN A THROWAWAY SCRIPT.** The helper that applies one mutant,
+reads the failing assertion and reverts undid the patch with `git checkout -- engine-cpp/src` — which
+reverts **everything uncommitted under that path**, not the patch it applied. It silently discarded an
+unrelated comment written minutes earlier. The comment's absence then shifted the context lines of a
+mutant patch generated against it, and the next lane run reported that patch as **`ROT` — "the code
+moved and the mutation did not."** The lane was right, and it named the situation exactly.
+
+> **A HELPER'S SIDE EFFECT MUST BE NO WIDER THAN ITS PURPOSE.** Both instances are the same shape:
+> one observed through a path that rotates, one reverted through a path that reverts a directory. In
+> both, the wider effect was invisible at the call site and showed up as something else entirely — a
+> vanished file, a rotten patch.
+
+Recorded because the second one cost only a regenerated patch **only because the lane already had a
+`ROT` outcome to report it as**. Without that, it would have presented as a mutant that mysteriously
+stopped applying.
+
+---
+
 ### HARNESS-015 — the registry cross-check matched a file that says it is NOT an oracle
 
 **Symptom.** `rig/image_fixture.h` — a constructor, not a judge — was reported as `carries RIFT_ORACLE
@@ -986,6 +1058,38 @@ only the loud one is self-announcing.
 
 > **A REGISTRY CROSS-CHECK HAS TWO FAILURE MODES AND ONLY ONE OF THEM TELLS YOU.** Both directions
 > get induced, or the quiet one is what you have.
+
+---
+
+### GF-15 — a rule derived from one contract is not permission under the others
+
+**Raised by the watermark pin, B3.4.** `B3-D1` says a compaction **may** drop an entry that no reader
+can observe. That "may" is permission **with respect to reads**, and reading it as permission full
+stop breaks a promise `B3-D1` never mentions:
+
+| contract | what it is about | what compaction owes it |
+|---|---|---|
+| the drop claim | **the ANSWER a reader gets** at each observable sequence | preserve every answer |
+| `DurableSeq` | **a PROMISE ABOUT A SEQUENCE**, monotone non-decreasing | preserve the engine's proof of it |
+
+`Open` re-derives the durable floor as the maximum `largest_seq` over the live tables, and it must:
+D7's forward binding forbids the manifest from recording a durable sequence, so **the tables' own
+bytes are the only place that number can come from**. Drop the highest-sequenced entry — a tombstone
+with nothing left to mask, exactly what the claim permits — and the maximum falls. Every answer is
+preserved; `DurableSeq` goes backwards across a restart.
+
+> **A COMPONENT OBEYS MORE THAN ONE CONTRACT. A RULE DERIVED FROM ONE OF THEM IS NOT PERMISSION UNDER
+> THE OTHERS, AND THE RULE WILL NOT SAY SO — because the contract it came from does not know the
+> others exist.**
+
+**What makes it findable rather than lucky:** the question is *what else does this operation touch
+that someone has already been promised something about?* Compaction touches the set of live tables,
+and the durable floor is derived from that set. The link is one step and nobody walks it while
+reading a claim that is locally airtight.
+
+**`BM77` plants it, and the mutant IS the faithful implementation of `B3-D1`.** Not a typo, not a
+weakened check — what a careful reader of the claim would write. That is precisely the blind spot the
+suite exists for, and it is why the mutant's header says so.
 
 ---
 
