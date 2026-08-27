@@ -812,32 +812,44 @@ selection**, where getting it wrong resurrects deleted data — and `BM80` is th
 ## 7.5 THE SCOPE OF THE CURRENT GREEN — a statement, not a to-do
 
 **READ THIS AS A BOUNDARY ON WHAT THE LANES CURRENTLY ESTABLISH, NOT AS AN ITEM TO BE TICKED OFF.**
-It is the sentence that keeps `cpp-sweep` green from being quoted as something it does not say. It
-**stays true until B3.7 changes the sweep**, and at that point it is *rewritten to describe the new
-boundary* — never deleted because someone got to it. Every phase has a boundary like this; most
-projects leave it unwritten, and that is exactly how a green lane becomes a claim nobody checked.
+It is the sentence that keeps a green lane from being quoted as something it does not say. It is
+**rewritten when a lane's reach changes** — never deleted because someone got to it.
 
-**The compaction install ordering is ARGUED and NOT YET SWEPT.** Every step of it mirrors B2-D5 and
-each window is reasoned through in `db.cc` — a crash before the manifest group leaves the outputs as
-unnamed `.sst` files, a crash after it leaves the *inputs* unnamed, and `Open` removes orphans by the
-same rule in both cases. **None of that has been killed at a kill point.**
+### 7.5.1 What it said until B3.7, kept for the record
 
-**The existing sweep does not reach compaction, and the reason is arithmetic:** the `flush` regime's
-workload crosses the flush threshold **once**, so `|L0| = 1` and the trigger is 4. Every Env call the
-compaction makes is therefore invisible to the lane today.
+> *"The compaction install ordering is ARGUED and NOT YET SWEPT... the `flush` regime's workload
+> crosses the flush threshold once, so `|L0| = 1` and the trigger is 4. Every Env call the compaction
+> makes is therefore invisible to the lane today."*
 
-> **A GREEN SWEEP OVER A PATH IT NEVER ENTERS IS A SIGNAL WITHOUT PROVENANCE**, which is the standing
-> rule this repo already has eight instances of. It is written here so that "the sweep is green" is
-> never read as "compaction is crash-consistent" in the interval before B3.7.
+**That is no longer true, and the replacement is below rather than the section being emptied.**
 
-**Why extending it is B3.7's step and not this one.** Adding flushes changes the workload's kill-point
-count, and the kill-point count is the **denominator of every rate in `FLOORS.txt`**. B2 already paid
-for that once — the manifest raised the count from 175 to 300 and *every* rate fell while not one
-detection count did. So the sweep is extended in the step that **re-measures the floors in the same
-diff**, not in a step that would leave the file describing a denominator that no longer exists.
+### 7.5.2 What the lanes establish now
 
-**What replaces this section at B3.7** is the same kind of sentence with different content: what the
-extended sweep reaches, and what it still does not. The section does not empty out.
+**The compaction install ordering IS swept.** A third regime, `compact`, drives the workload past the
+L0 trigger — **3545 kill points, 0 violations** — and holds a snapshot across the compaction so that
+*both* halves of B3.6's file lifetime are on the swept path rather than only the easy one.
+
+**And its POWER is measured, which is the half that makes the green mean anything.** `BM109` removes
+the directory sync after the compaction's output files: **10 detections of 3530, first at kill point
+663.** A sweep that visits a path proves the engine recovers there; it says nothing about whether a
+defect there would be *detected*. Now it does.
+
+**THE REGIME WAS ADDED RATHER THAN `flush` GROWN, AND THE REASON IS §8.2a's.** Reaching the trigger
+needs four flushes — about four times the `flush` regime's whole workload — so folding it in would
+have multiplied that regime's kill-point count, **the denominator of every rate in `FLOORS.txt`**, and
+diluted every B2 class measured against it for no reason but that one workload reached two paths.
+**`default` and `flush` are byte-identical to before: 305 and 990, unchanged, and no floor moved.**
+
+### 7.5.3 What the lanes still do NOT establish
+
+- **No class is measured at `compact` except `BM109`.** The regime's power is established *at the
+  install ordering* and nowhere else in it; a defect in the merge or the drop rules would be caught
+  by `cpp-test`, not here, and the `covered-by:` labels say which.
+- **The `compact` workload holds ONE snapshot across ONE compaction.** Concurrent readers across
+  several compactions, and a reader whose snapshot outlives two generations of obsolete files, are
+  covered by unit tests and not by a kill-point sweep.
+- **Amplification is measured at v1's scale only** — see §8.2b, and the pre-declared outcome that
+  applies if that scale sits below the crossing point.
 
 ---
 
