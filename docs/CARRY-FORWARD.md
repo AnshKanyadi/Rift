@@ -703,3 +703,31 @@ run to ask. **A covering test nobody can afford to run inside a phase is not a c
 lane with no filter turns one question into sixty.
 
 **Track A does not exit while `corpus-reproduces` is red.**
+
+---
+
+## The lane filter, and what it cost to not have one
+
+**2026-08-27, on Ansh's instruction.** `scripts/mutant-covered.sh` **already had** an `ONLY` filter —
+positional `$1`, single exact name, undocumented, mentioned in no Makefile help. So it existed and
+nobody found it, and the code-position axis of §5e.2b was recorded as *"unresolvable, because asking
+one question costs a full suite run"*. That was true of the lane **as anybody could discover how to
+use it**, which is the only sense that matters.
+
+It now matches Track B's `cpp-mutants` convention exactly — a space-separated list matched by id,
+settable as `ONLY=` or as a positional argument, with the invocation in the Makefile's help:
+
+```
+make mutant-covered ONLY="M46-split-inherits-the-appended-configuration"
+```
+
+> **With no CI, a lane's cost is a fact about whether it gets run at all.** A covering test nobody can
+> afford to run is not a covering test, and a lane that turns one question into sixty is a lane that
+> gets skipped and then trusted.
+
+**Measured, on the question that was blocked:** `M46`'s code-position axis went from *over an hour and
+never taken* to **2 seconds, ok**. Two changes were needed and neither alone was enough — the filter,
+and a covering test that is not itself a 1,000-seed serial sweep.
+
+**Still owed:** `scripts/mutants.sh` and `scripts/power-mutants.sh` have no filter at all. The same
+reasoning applies to both and neither was in scope for this instruction; recorded rather than done.

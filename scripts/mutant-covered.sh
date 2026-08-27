@@ -132,7 +132,23 @@
 set -eu
 
 GO=${GO:-go}
-ONLY=${1:-}
+# ONLY: run this lane for a named subset, space separated.
+#
+# # Why a filter is a correctness feature and not a convenience
+#
+# It existed before this comment did -- as a single exact name, undocumented, and
+# nobody found it. So the code-position axis of §5e.2b was recorded as
+# "unresolvable, because asking one question costs a full suite run", which was
+# true of the lane as anybody could discover how to use it.
+#
+# **With no CI, a lane's cost is a fact about whether it gets run at all.** A
+# covering test nobody can afford to run is not a covering test, and a lane that
+# turns one question into sixty is a lane that gets skipped and then trusted.
+#
+# Track B's `cpp-mutants` is the precedent and this now matches it: a
+# space-separated list, matched by id, so `ONLY="M46-... M34-..."` asks about two
+# classes and nothing else.
+ONLY="${ONLY:-${1:-}}"
 ROOT=$(pwd)
 TEST_TIMEOUT=${TEST_TIMEOUT:-3600s}
 
@@ -241,7 +257,9 @@ if [ "$JOBS" -gt 1 ]; then
   running=0
   for patch in sim/mutants/*.patch; do
     name=$(basename "$patch" .patch)
-    [ -z "$ONLY" ] || [ "$ONLY" = "$name" ] || continue
+    if [ -n "$ONLY" ]; then
+      case " $ONLY " in *" $name "*) ;; *) continue ;; esac
+    fi
     : > "$tmp/$name.launched"
     cover_one "$patch" "$name" "$tmp/$name.result" &
     running=$((running + 1))
@@ -299,7 +317,9 @@ report_one() {
 
 for patch in sim/mutants/*.patch; do
   name=$(basename "$patch" .patch)
-  [ -z "$ONLY" ] || [ "$ONLY" = "$name" ] || continue
+  if [ -n "$ONLY" ]; then
+    case " $ONLY " in *" $name "*) ;; *) continue ;; esac
+  fi
   if [ "$JOBS" -le 1 ] && overbudget; then
     printf '   BUDGET   the lane has spent %ss of its %ss and stopped at %s.\n' \
       "$(( $(date +%s) - started ))" "$COVER_BUDGET" "$name"

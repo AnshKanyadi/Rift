@@ -891,6 +891,12 @@ names.** So the null is not about reach.
 **Detection, against that:** 0 of 400 under `current`; 0 of 200 under `a4`; and **0 at seeds 23 and 1
 specifically**, where the precondition demonstrably fired.
 
+> **A null at a seed known to meet the precondition is a different object from a null over a range.**
+> The first is the class failing where it should fire; the second is the class failing to arrive, and
+> only the second is evidence about reach. Eight preconditions met and zero detections at those exact
+> seeds is stronger evidence than any number of seeds, because it rules out the explanation that more
+> searching would have helped.
+
 > **The gap is between the precondition and the consequence.** A divergent birth configuration is not
 > yet a defect. It becomes one only when the new range **then receives a membership entry** that the
 > replica which started behind reads as an illegal transition — and that needs a conf change aimed at
@@ -909,6 +915,54 @@ say a seed search is the wrong instrument.
 
 **Not retired.** `M46` is `expect: killed` and its covering test still exists; what is open is the
 BUNDLE, and the honest state is that this corpus entry has no reproducing schedule at HEAD.
+
+### The directed test, and what it answered
+
+**Ansh, ruling: directed test, not a generator option.** *"A generator option is a claim about
+reachability under `floors.go`'s rule, so it changes what every floor in the file means. A directed
+test that arranges both halves changes nothing about the sweep's shape, costs the least, and answers
+the actual question — does the defect exist when the two coincidences are made to coincide."*
+
+`TestASplitDoesNotInheritAnUnappliedConfiguration` (`store/splitconf_test.go`) arranges both halves by
+hand: a replica holding a configuration entry appended **above** the split's index and applied by
+nobody, then the split applied at that index. No seed, no scheduler, no sweep.
+
+**It kills `M46` in 0.3 seconds**, with a verdict that names the defect exactly:
+
+```
+the right range was born with configuration voters=[1 2]; the log at the split's index
+says voters=[1 2 3]
+```
+
+> **So `M46` is aimed at a real defect.** The larger finding the search was leaving open — *that the
+> mutant might be aimed at something that is not a defect at all* — does not apply. The class is
+> real, the line is right, and the only thing missing was an instrument that could reach it.
+
+**It carries its own vacuity guard**, and the guard earned its place immediately: it fails if the tail
+it arranged is not actually divergent, and it caught two construction errors of mine before the
+assertion could pass over nothing — a conf change that `ApplyConfEntry` refused, and a
+`ConfChangeTransition` left at its zero value. **A directed test that arranges a coincidence must
+assert that it arranged it**, or it is a sweep with one seed.
+
+**And it replaces a covering test nobody could run.** `TestSplitInheritsTheConfigurationAtItsIndex`
+was a 1,000-seed **serial** sweep, over an hour. `M46` now declares
+`power-covered-by: TestASplitDoesNotInheritAnUnappliedConfiguration`, and
+`make mutant-covered ONLY="M46-…"` answers in **2 seconds**.
+
+### Two things this generalises, now that each has two instances
+
+> **A bundle pins ONE schedule, so a class needing two independent coincidences has no single schedule
+> to pin.** That is a statement about the corpus's coverage model rather than about BUG-015 or
+> BUG-024, and two instances make it a property rather than a coincidence. The corpus is a good
+> artifact for a defect a schedule *produces* and a poor one for a defect two schedules must *meet*
+> to produce.
+
+> **A mutant that slows the system tenfold makes a seed search cost tenfold.** `M46` runs at ~50 s per
+> seed against a clean 4.7, because illegal configuration transitions make the cluster churn — so the
+> first search spent 5h34m without finishing 3,000 seeds. **The classes hardest to find by search are
+> exactly the ones search is most expensive for**, which is a practical argument for directed tests on
+> top of the evidential one, and it generalises to any class whose mutation is disruptive rather than
+> subtle.
 
 **Symptom, verbatim:
 

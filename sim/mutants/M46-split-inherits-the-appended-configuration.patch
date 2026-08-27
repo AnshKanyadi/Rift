@@ -1,11 +1,9 @@
 # id: M46-split-inherits-the-appended-configuration
-# covering-test: TestSplitInheritsTheConfigurationAtItsIndex
-# package: ./sim/hunt/
 # expect: killed
-# power-seeds: 3000
-# power-floor: 1
-# power-ceiling: 900
-# power-measured: 1 of 3000, first at seed 215, under current at commit A5-close; was 5 of 3000, first at seed 56, at commit 6e716d5+A5-open. FRAGILE: this class is at 1 detection in 3000 and its first has moved 56 -> 215 across one phase, so it is floored at detected-at-all and the ceiling is widened to 900 -- far enough that ordinary drift does not fail the lane, near enough that a move past a third of the range does. It catches BUG-015, and if it reaches zero the class is gone rather than quiet
+# covering-test: TestASplitDoesNotInheritAnUnappliedConfiguration
+# package: ./store/
+# power-covered-by: TestASplitDoesNotInheritAnUnappliedConfiguration -- a DIRECTED test, and the exemption is earned by a measurement rather than by the sentence. This class needs TWO independent things to coincide: a replica applying a split while holding a configuration entry appended ABOVE the split index and applied by nobody, and the range that split produces then being handed a membership change. A sweep buys the first and hopes for the second. Measured: the precondition occurred 8 times in 200 seeds under A7 shape and 25 in 200 under a4, and detection was ZERO AT THE SEEDS WHERE IT FIRED -- 0 of 400 under current, 0 of 200 under a4, and 0 at seeds 23 and 1 specifically. A null at a seed known to meet the precondition is a different object from a null over a range: it is the class failing where it should fire rather than failing to arrive. The directed test arranges both halves and kills this patch in 0.3s with a verdict naming the defect -- born voters=[1 2] against a log that says voters=[1 2 3] at the split index. It also carries its own VACUITY guard: it fails if the tail it arranged is not divergent, which caught a construction error before the assertion could pass over nothing
+# power-refutation: the sweep is not the instrument and 600 seeds across two shapes say so with the precondition counted rather than assumed. The previous covering test, TestSplitInheritsTheConfigurationAtItsIndex, was a 1,000-seed SERIAL sweep taking over an hour -- a covering test nobody can afford to run inside a phase is not a covering test, and its cost is why this declaration carried a pre-no-op measurement for a whole phase
 # mutates: a range born from a split inherits the ACTIVE configuration, which is effective on append and is not a function of the applied prefix. Two replicas applying the same split entry with different appended tails give the new range two different birth configurations, and the one that starts behind reads the next membership entry as an illegal transition (BUG-015)
 --- a/store/machine.go
 +++ b/store/machine.go

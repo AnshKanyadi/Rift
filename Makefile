@@ -204,7 +204,10 @@ power-toy: ## The toy's four flaw classes, floored since A0
 
 .PHONY: mutant-covered
 mutant-covered: ## Every covering test EXECUTES the line its mutant changes (not around it)
-	sh scripts/mutant-covered.sh
+	@#     make mutant-covered ONLY="M46-split-inherits-the-appended-configuration"
+	@# A space-separated list runs the lane for those classes only. With no CI, a
+	@# lane's cost is a fact about whether it gets run at all.
+	ONLY="$(ONLY)" sh scripts/mutant-covered.sh
 
 .PHONY: power-decl
 power-decl: ## Every mutant's power DECLARATION is consistent -- milliseconds, no sweep
