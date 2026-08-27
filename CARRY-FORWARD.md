@@ -276,6 +276,36 @@ label: `covers-correctness:` for what catches a wrong traversal, `covered-by:` f
 
 
 
+
+---
+
+**CLOSING NOTE (B4.5), 2026-08-27 — EVERY LOOP B4 ADDED, IN BOTH LANGUAGES.**
+
+The rule is about **what a loop terminates on**, not about C++, so B4's Go loops are audited on the
+same terms. **Thirty-four loops across four files**, and all but four are bounded `for` loops over a
+fixed container — a shape whose progress quantity is the container's own length and which needs no
+note. The four that decide something:
+
+| loop | progress quantity | independent of what it might be wrong about? | correctness instrument |
+|---|---|---|---|
+| `ParseDiffArtifact`'s **section walk** | `at`, advancing by `5 + length` where `length` was bounds-checked against the footer **before** it was used | **yes** — the section KIND cannot affect it, and an unknown kind is refused rather than skipped | the 21-fixture corpus, both decoders |
+| `Issue`'s **batch grouping** | the outer index `i`, set to `j - 1` and then incremented, where `j > i` always | **yes** — `j` advances at least once per batch because the first op is unconditionally included | `DiffDriver.EveryArtifactItWritesIsOneTheClassifierAccepts`, and `cpp-diff` itself |
+| `Judge`'s **batch grouping** | the same shape in Go, `i = j - 1` with `j > i` | **yes** | `TestKilledRunsAgree`; a mis-grouping makes the model disagree with the engine everywhere |
+| **`Bisect`** | `hi - lo`, strictly shrinking whichever branch is taken | **yes** — *the judge's verdict decides the direction; it does not decide that the interval shrinks* | `TestBisectNamesTheOperation` |
+
+**THE LAST ROW IS THE FAMILIAR ONE AND IT IS THE THIRD TIME.** `ConcatIter::Seek`, `L1FileFor` and now
+`Bisect` are all binary searches whose termination rests on the interval and whose **correctness** rests
+on the comparator — and all three carry the same sentence, because it is the same fact.
+
+**`Author`'s batch counter is worth its own line**, because it is the one place a loop's bound depends
+on a value the loop sets: `left_in_batch` is decremented each iteration and reset from the RNG when it
+reaches zero. **The outer loop is bounded by `count` regardless**, so `left_in_batch` cannot extend it
+— it only decides where batches begin. Stated because a reader meeting a counter reset inside a loop
+should be told it is not the loop's bound.
+
+**Four for four, and it is only evidence because the question was asked mechanically** — a grep over
+every `for` and `while` in the files B4 added, in both languages.
+
 ---
 
 **CLOSING NOTE (B3.7), 2026-08-27 — EVERY LOOP B3 ADDED, AUDITED MECHANICALLY.**
