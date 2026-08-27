@@ -731,3 +731,47 @@ and a covering test that is not itself a 1,000-seed serial sweep.
 
 **Still owed:** `scripts/mutants.sh` and `scripts/power-mutants.sh` have no filter at all. The same
 reasoning applies to both and neither was in scope for this instruction; recorded rather than done.
+
+---
+
+## OBLIGATION: eight sweep-based covering tests remain, due at the phase that next touches their classes
+
+**Raised A7, 2026-08-27. Ansh: record it as a named obligation with the count and the reason, due at
+whichever phase next touches those classes, rather than as a general to-do.**
+
+Nine covering tests were converted from seed sweeps to directed tests this phase, which took
+`make mutants` from **six days to about 2.7 hours** and from `INVALID` to runnable. **Eight sweeping
+covering tests remain**, and they are the whole of the residual cost:
+
+| covering test | seeds | classes it covers |
+|---|---|---|
+| `TestFailoverDoesNotManufactureViolations` | 1,000 | A1 failover |
+| `TestDurableRecordAgreesWithTheEngine` | 300 | A1 durability |
+| `TestConfigurationSurvivesRecovery` | 200 | A3 membership recovery |
+| `TestStaleDurabilityCompletionIsRefused` | 200 | A1 epoch guard |
+| `TestClientHistoryIsLinearizable` | 100 | A1 linearizability |
+| `TestRestartsMintTheirOwnStartTimestamp` | 64 | A6 identity |
+| `TestToySurvivesOneThousandSeeds` | 64 | A0 toy |
+| `TestSnapshotEquivalenceOracleReportsNothing` | (sweep) | A2, six classes |
+| **total** | **~1,928 seeds ≈ 2.7 h per baseline pass** | |
+
+**The framing is the Makefile header's own sentence:** *the cost is driven by the number of sweeping
+tests, not by any one bound.* No value of `RAFT_SEEDS` fixes this; only converting the tests does.
+
+**Why it is NOT being done now, and this is the reason rather than the excuse.** These belong to A1
+through A6 classes whose defects would have to be understood properly to write an honest directed
+replacement — a directed test asserts a specific mechanism, and one written from a patch header
+without understanding the defect will assert the wrong thing and pass. **Improvising that at a phase's
+end is how a covering test comes to name the wrong assertion**, which is precisely the failure mode
+this phase spent itself finding in `M34` and `M46`.
+
+**Due:** at whichever phase next touches each class, converted alongside work that already requires
+understanding the defect. **Not** as a batch, and **not** by anybody reading only the patch header.
+
+**The standard each replacement must meet**, from the nine written this phase:
+
+1. it arranges the precondition directly rather than hoping a schedule produces it;
+2. it **asserts that it arranged it** — every one of the nine caught a construction error of its
+   author's before the real assertion could pass over nothing;
+3. `make mutant-covered ONLY="<id>"` reports `ok`, which is a different question from *does it kill*
+   and caught four defects in this phase's own tests.

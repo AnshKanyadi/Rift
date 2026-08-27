@@ -933,6 +933,46 @@ by chasing an accusation instead of tuning the accuser.
 > is that an instrument needs an instrument, which is what §8.1b's two-numbers rule and §5e's
 > enumeration are both for.
 
+### 5b0.3 The third case has a property the other two lack, and it is why it is worse
+
+In case 1 the oracle disagreed with a correct system. In case 2 it agreed with a broken one because it
+was never asked the relevant question. **In case 3 the oracle and the system were wrong *identically*,
+so there was no disagreement to be found** — the model read at the recorded timestamp because the code
+read at the recorded timestamp, and comparing them returned "agree" every time.
+
+This is **`GF-22`, which is Track B's** — cited here across the track boundary and not owned by this
+document. Track B states it as *two defects whose symptoms cancel are invisible to every test that
+asserts an ANSWER, because the answer was right — arrived at by two errors that annihilate*, and
+`GF-25` restates it one level down: **when the answer is right for an accidental reason, only an
+assertion about the mechanism can tell you.**
+
+A7's instance is the same shape with the errors pointing the **same** direction rather than opposite
+ones, and the consequence is sharper than cancellation:
+
+> **A failure in which both sides of a comparison are wrong the same way survives any check built on
+> comparison.** Not because the check is weak — because the check's question has been answered
+> consistently by two things that share the mistake.
+
+**What it took to break it was a question asked from outside the pair.** Not a better differential, not
+more seeds: a table with a row for *"the read's timestamp is log-ordered"* and the question *does read
+index preserve this?* — which neither the code nor the model is consulted about. **That is what §5e's
+enumeration is**, and it is why the enumeration is an exit criterion rather than a document.
+
+### 5b0.4 The chain, stated as a count
+
+Three instrument corrections in one phase, each exposing the next, and the order matters:
+
+1. **`M76` corrected the oracle** — it had been comparing at `Index` rather than `AppliedAt` and would
+   have failed clean runs (§5b).
+2. **The §5e enumeration found BUG-028**, and fixing it required correcting the *model* to read the
+   latest version rather than at a recorded timestamp — which broke the identical-wrongness above.
+3. **The corrected model immediately made a false accusation** on seed 36, and chasing it down rather
+   than tuning the accuser found **BUG-032**.
+
+> Each correction made the next defect *speak*. An instrument that has just been fixed is the most
+> informative thing in the repository, and the first thing it says is worth taking seriously even when
+> — especially when — it appears to be wrong.
+
 ---
 
 ## 5b. A mutant found a defect in the instrument aimed at it
