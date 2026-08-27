@@ -391,6 +391,99 @@ accusation would make the next one less likely to be written.
 
 ---
 
+### BUG-006 — a table the engine wrote and could never open again
+
+| field | value |
+|---|---|
+| **Found by** | **the B4 differential rig, on its first outing**, `compact` seed 6 — a CLEAN run, no kill |
+| **Phase** | present since B3.5e; found at B4.2 |
+| **Reproduce** | `SstWriter.ATombstoneEndingAtTheLargestDataKeyDoesNotMoveTheBound`; end to end, `rift_diff compact 6` |
+| **Invariant that caught it** | `VerifyTables` — D4 §5.1 point 2, the manifest held to the classifier's derivation |
+| **Mutant class** | **`BM113`**, added in the same PR as the fix |
+| **Id note** | `BUG-004` and `BUG-005` are B3.5e's cancelling pair; this is the next free id |
+| **Fix commit** | this one |
+
+**THE SEVERITY IS A PERMANENT REFUSAL, NOT DATA LOSS, AND THAT DISTINCTION LEADS.**
+
+> **A DEFECT THAT LOSES DATA IS DISCOVERED AND MOURNED. A DEFECT THAT REFUSES TO OPEN IS DISCOVERED
+> AND CANNOT BE WORKED AROUND.**
+
+The bytes are intact. Every table is valid, every checksum passes, the WALs are complete — and
+`DB::Open` fails with `key bounds disagree with the manifest`, on this open and every open after it.
+There is no retry, no partial recovery, and no way in.
+
+**The triggering shape is unremarkable:** *any range delete whose end lands exactly on the highest key
+present, at a lower sequence.* `compact` seed 6 produced it in 800 operations.
+
+**Root cause.** `TableBuilder` and `ValidateTable` disagreed about when a range tombstone's end
+widens a table's `largest`:
+
+| | comparison |
+|---|---|
+| `TableBuilder::AddRangeTombstone` | `CompareInternalKey` — **internal keys** |
+| `ValidateTable` | `.compare(ExtractUserKey(...))` — **user keys** |
+
+The internal order is user key ascending and **tag descending**, so at one user key a *smaller tag
+sorts later*. A tombstone ending at the largest data key with a lower sequence compares **greater** to
+the writer and **equal** to the classifier. The writer widens; the classifier does not; the manifest
+records the writer's and is held to the classifier's.
+
+**THE PROVENANCE IS THE PART WITH THE MOST TEACHING IN IT.** §6.1a *is* this correction — *"The bound
+is a statement about USER KEYS. It is compared as one."* — written at B3.5e, applied to the
+classifier, **and never carried to the writer.** The comment explaining the fix sits ten lines from
+the code that still had the bug.
+
+> **A CORRECTION APPLIED TO THE SITE THAT FAILED RATHER THAN TO THE INVARIANT LEAVES EVERY OTHER
+> IMPLEMENTATION OF THAT INVARIANT DEFECTIVE — AND THE COMMENT BESIDE THEM SAYS OTHERWISE.**
+
+It is `GF-7`'s family: a claim attached near code that does not honour it. **Second time in this
+engine** a correct comment has sat beside an incorrect line — `BM55` was the first.
+
+**SO THE FIX WAS NOT APPLIED TO THE SITE. IT WAS APPLIED TO THE INVARIANT**, and the audit that
+demands came next.
+
+**Every place in the engine that compares a bound, and what it compares:**
+
+| site | before | after |
+|---|---|---|
+| `TableBuilder::AddRangeTombstone` — largest | **internal** ✗ | user, via `WidensUpperBound` |
+| `TableBuilder::AddRangeTombstone` — smallest | **internal** ✗ | user, via `WidensLowerBound` |
+| `TableBuilder::AddUnboundedRangeTombstone` — smallest | **internal** ✗ | user, via `WidensLowerBound` |
+| `ValidateTable` — largest | user ✓ | user, via `WidensUpperBound` |
+| **`ValidateTable` — smallest** | **internal ✗ — A SECOND INSTANCE, FOUND BY THE AUDIT** | user, via `WidensLowerBound` |
+| `VerifyL1IsARun`, `L1FileFor`, input selection, the L1 sort | user ✓ | unchanged |
+| `Table::Iter::Seek`, block index, entry ordering | internal ✓ — **correctly**: these order ENTRIES, not bounds | unchanged |
+
+**The fifth row is why the audit was worth doing.** `ValidateTable`'s *smallest* still compared
+internal keys after B3.5e corrected its sibling **ten lines below**. It was latent only because the
+writer compared internal keys too — **the two agreed while both were wrong**, which is a shared blind
+spot rather than a disagreement, and no comparison between them could have found it.
+
+> **ONE FACT, SEVERAL PLACES, ONE CORRECTED — the class `BUG-032` cost Track A.** The remedy is the
+> one that class always wants: `WidensUpperBound` / `WidensLowerBound` are **one implementation**, and
+> both the writer and the classifier call it. There is nothing left to keep in step.
+
+**THE REACH ARGUMENT, AND IT IS THE DIFFERENTIAL'S JUSTIFICATION AS A MEASUREMENT RATHER THAN A
+CLAIM.** With this defect present:
+
+| instrument | result |
+|---|---|
+| 377 C++ tests | **all passed** |
+| 3 sweep regimes, **4,840 kill points** | **0 violations** |
+| 147 mutant classes | **all killed** |
+| **8 clean differential runs** | **found it** |
+
+No sweep workload ever produced a tombstone ending exactly on the largest key, so no kill point could
+reach it. **A fault-injection sweep and a differential find different things, and this is the
+measurement that shows it rather than the claim.** The differential needed **no crash schedule at
+all** — the defect is in the write path and appears on a clean close.
+
+**What it would have cost in production:** an engine that accepts writes, acknowledges them, closes
+cleanly, and cannot be restarted. Discovered at the worst possible moment, on a restart, with the
+data intact and unreachable.
+
+---
+
 ### HARNESS-001 — a mutation lane's scratch copy silently lost three files of the tree under test
 
 | field | value |

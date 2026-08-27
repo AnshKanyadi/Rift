@@ -67,6 +67,10 @@ func TestRecoveredLessThanPromised(t *testing.T) {
 // This is the direction that requires engine/model to retain every version
 // between durable and visible. A model that rounded its watermark up would be
 // compared against an engine that rounded up and agree with it.
+//
+// NOTE THE RUN IS COMPLETE — every write carries a sequence. On a run cut short
+// by a kill, recovering above the watermark is LEGITIMATE (a Sync in flight),
+// and this test is what caught the widening being applied unconditionally.
 func TestRecoveredMoreThanPromised(t *testing.T) {
 	a := artifact(
 		[]Op{set(1, "a", "1"), sync(), set(2, "b", "2")},
@@ -91,6 +95,48 @@ func TestRecoveredAStateAtNoSequence(t *testing.T) {
 	got, why := Judge(a)
 	if got != RecoveredNeither {
 		t.Fatalf("outcome = %v (%s), want recovered-neither", got, why)
+	}
+}
+
+// AND ON A RUN CUT SHORT, RECOVERING ABOVE THE WATERMARK IS LEGITIMATE. This is
+// B1's two-element recovery set, widened: a Sync in this engine can run a
+// FLUSH, each with its own fsync, so a kill inside one can leave any prefix
+// between the last completed watermark and the in-flight target durable.
+//
+// GF-14's other half for the rule above: without it, "recovered more is a
+// violation" would be asserted by a judge that has never seen the legitimate
+// case, and every killed schedule with an in-flight Sync would be reported as
+// an engine defect.
+func TestRecoveringAboveTheWatermarkIsLegitimateOnARunCutShort(t *testing.T) {
+	a := artifact(
+		[]Op{
+			set(1, "a", "1"), sync(), set(2, "b", "2"),
+			{Kind: OpSet, Seq: 0, Key: []byte("c"), Value: []byte("3")}, // never issued
+		},
+		1,
+		map[string][]byte{"a": []byte("1"), "b": []byte("2")}, // the in-flight target
+	)
+	got, why := Judge(a)
+	if got != Agree {
+		t.Fatalf("outcome = %v (%s), want agree", got, why)
+	}
+}
+
+// AND THE WIDENING IS BOUNDED: above what the engine ever assigned is still a
+// violation, cut short or not.
+func TestRecoveringAboveWhatWasEverAssignedIsAViolation(t *testing.T) {
+	a := artifact(
+		[]Op{
+			set(1, "a", "1"), sync(),
+			{Kind: OpSet, Seq: 0, Key: []byte("b"), Value: []byte("2")}, // never issued
+		},
+		1,
+		map[string][]byte{"a": []byte("1"), "b": []byte("2")}, // state from an op never accepted
+	)
+	got, why := Judge(a)
+	if got == Agree {
+		t.Fatalf("outcome = agree, want a violation: the engine produced state "+
+			"from an operation it never accepted (%s)", why)
 	}
 }
 

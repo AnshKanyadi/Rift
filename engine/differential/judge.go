@@ -92,28 +92,109 @@ func Judge(a *Artifact) (Outcome, string) {
 		record()
 	}
 
-	want, ok := stateAtSeq(history, engine.SeqNum(a.Watermark))
-	if !ok {
+	if _, ok := stateAtSeq(history, engine.SeqNum(a.Watermark)); !ok {
 		return RecoveredNeither, fmt.Sprintf(
 			"the artifact's watermark %d is not a sequence this log ever applied", a.Watermark)
 	}
-	if diff := compare(want, a.Recovered); diff != "" {
-		// WHICH DIRECTION, NAMED. A verdict that cannot say whether the engine
-		// kept too little or too much is a verdict nobody can act on.
-		if other, at := findMatchingSeq(history, a.Recovered); other {
-			if at > engine.SeqNum(a.Watermark) {
-				return RecoveredMore, fmt.Sprintf(
-					"recovered the state at sequence %d, above the promised watermark %d: %s",
-					at, a.Watermark, diff)
-			}
-			return RecoveredLess, fmt.Sprintf(
-				"recovered the state at sequence %d, below the promised watermark %d: %s",
-				at, a.Watermark, diff)
+
+	// THE RECOVERY SET IS A RANGE, NOT A VALUE, AND THE FIRST VERSION OF THIS
+	// JUDGE COMPARED AGAINST A VALUE.
+	//
+	// B1's exactness oracle already knew this and stated it as a two-element
+	// set: R ∈ {G_{k-1}, G_k} when a Sync was in flight at the kill. "A Sync
+	// can complete on the device with the kill preempting its return: the bytes
+	// are durable, the caller never learned it."
+	//
+	// The differential inherits that and it is WIDER here, because a Sync in
+	// this engine can run a FLUSH — writing a table and a manifest edit, each
+	// with its own fsync — so a kill inside one Sync can leave ANY prefix
+	// between the last completed watermark and the in-flight target durable.
+	//
+	//	acceptable = the state at some applied sequence in [w, inFlight]
+	//
+	// where inFlight is the highest sequence the engine assigned before it
+	// died. Ops after the kill carry sequence 0, so that maximum IS the
+	// in-flight Sync's target and needs no new field in the frozen format.
+	//
+	// WHAT THIS DOES NOT PERMIT, so the widening is bounded rather than
+	// generous: recovering BELOW w is still a violation — the promise was
+	// broken; recovering ABOVE inFlight is still a violation — the engine
+	// produced state from operations it never accepted; and recovering a state
+	// at NO applied sequence is still a violation, torn or interleaved.
+	// AND THE WIDENING APPLIES ONLY TO A RUN THAT WAS CUT SHORT, which the
+	// first version of this rule missed and a hand-built test caught.
+	//
+	// On a CLEAN run the engine closed normally, and `Close` does not sync —
+	// deliberately, so that close-then-reopen is indistinguishable from
+	// kill-then-reopen. So unsynced writes MUST be lost, there is no Sync in
+	// flight, and R must equal exactly G_w. Allowing the range there would
+	// forgive precisely the defect the strict comparison exists to catch:
+	// unsynced data surviving a clean shutdown.
+	//
+	// Whether the run was cut short is a fact about the LOG, not about the
+	// engine's opinion: the driver stops issuing at the kill, so every op after
+	// it carries sequence 0. A run in which every write carries a sequence ran
+	// to completion.
+	completed := true
+	inFlight := engine.SeqNum(0)
+	for _, op := range a.Submission {
+		if engine.SeqNum(op.Seq) > inFlight {
+			inFlight = engine.SeqNum(op.Seq)
 		}
-		return RecoveredNeither, fmt.Sprintf(
-			"recovered a state matching no applied sequence (watermark %d): %s", a.Watermark, diff)
+		switch op.Kind {
+		case OpSet, OpDelete, OpDeleteRange:
+			if op.Seq == 0 {
+				completed = false
+			}
+		}
 	}
-	return Agree, ""
+	if completed {
+		inFlight = engine.SeqNum(a.Watermark)
+	} else if inFlight < engine.SeqNum(a.Watermark) {
+		inFlight = engine.SeqNum(a.Watermark)
+	}
+
+	matches := matchingSeqs(history, a.Recovered)
+	if len(matches) == 0 {
+		want, _ := stateAtSeq(history, engine.SeqNum(a.Watermark))
+		return RecoveredNeither, fmt.Sprintf(
+			"recovered a state matching no applied sequence (watermark %d, in flight %d): %s",
+			a.Watermark, inFlight, compare(want, a.Recovered))
+	}
+	for _, at := range matches {
+		if at >= engine.SeqNum(a.Watermark) && at <= inFlight {
+			return Agree, ""
+		}
+	}
+	// WHICH DIRECTION, NAMED, AND FROM THE CLOSEST MATCH RATHER THAN THE FIRST.
+	// The first version reported the FIRST matching sequence, so an empty
+	// recovered state always matched sequence 0 and every such divergence was
+	// reported as "recovered less" — including one that had recovered MORE and
+	// happened to be empty because a clear-everything ran above the watermark.
+	// A verdict that names the wrong direction sends the reader to the wrong
+	// component, which is HARNESS-006's cost.
+	best := matches[0]
+	for _, at := range matches {
+		if absDiff(at, engine.SeqNum(a.Watermark)) < absDiff(best, engine.SeqNum(a.Watermark)) {
+			best = at
+		}
+	}
+	want, _ := stateAtSeq(history, engine.SeqNum(a.Watermark))
+	if best > inFlight {
+		return RecoveredMore, fmt.Sprintf(
+			"recovered the state at sequence %d, above what the engine could have made durable (%d): %s",
+			best, inFlight, compare(want, a.Recovered))
+	}
+	return RecoveredLess, fmt.Sprintf(
+		"recovered the state at sequence %d, below the promised watermark %d: %s",
+		best, a.Watermark, compare(want, a.Recovered))
+}
+
+func absDiff(a, b engine.SeqNum) engine.SeqNum {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 // snapshot is the model's full state after one applied sequence. It is a named
@@ -156,16 +237,19 @@ func stateAtSeq(history []snapshot, seq engine.SeqNum) (map[string][]byte, bool)
 	return nil, false
 }
 
-// findMatchingSeq reports whether the recovered state equals the model's state
-// at SOME applied sequence, and which. That is what separates "recovered the
-// wrong amount" from "recovered something that never existed".
-func findMatchingSeq(history []snapshot, got map[string][]byte) (bool, engine.SeqNum) {
+// matchingSeqs returns EVERY applied sequence whose state equals the recovered
+// one. All of them, not the first: an empty recovered state matches sequence 0
+// and may also match a much later one, and reporting only the first names the
+// wrong direction. That separates "recovered the wrong amount" from "recovered
+// something that never existed" without guessing which amount.
+func matchingSeqs(history []snapshot, got map[string][]byte) []engine.SeqNum {
+	var out []engine.SeqNum
 	for _, h := range history {
 		if compare(h.state, got) == "" {
-			return true, h.seq
+			out = append(out, h.seq)
 		}
 	}
-	return false, 0
+	return out
 }
 
 // compare returns "" when the two states are equal, and otherwise the first
