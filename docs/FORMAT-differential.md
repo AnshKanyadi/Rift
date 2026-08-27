@@ -145,6 +145,11 @@ non-decreasing is refused: the rig assigns them and the model replays in that or
 model cannot replay in order is a log the judge cannot use — and finding that out in the judge would
 report it as a divergence in the engine.
 
+> **ZERO IS EXEMPT FROM THAT RULE**, because `SYNC`, `SNAPSHOT_TAKE` and `SNAPSHOT_RELEASE` consume no
+> sequence and carry 0 by definition. A check phrased as *"never decreases"* refuses **every legal
+> artifact containing a Sync — which is all of them.** The first implementation was phrased that way
+> and the accepting half of the covering test is what found it.
+
 ---
 
 ## 4. What is NOT in this format, and why
