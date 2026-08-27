@@ -1743,6 +1743,62 @@ avoid.
 
 ---
 
+### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
+
+**Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**
+
+`DESIGN-B5` §2 specified a catch-all at every `extern "C"` entry point, plus a function that throws
+through the boundary to induce it. The build refused: `cannot use 'try' with exceptions disabled`.
+**The archive has been `-fno-exceptions` since B1.** `throw` does not compile, `try` does not compile,
+and `operator new` **aborts** rather than throwing.
+
+> **A DESIGN DOC WRITTEN BEFORE ITS CODE CAN SPECIFY A MECHANISM THAT THE CODE'S OWN CONSTRAINTS MAKE
+> UNNECESSARY.**
+
+**AND THE CHEAP REPAIR IS TO WEAKEN THE CODE UNTIL IT MATCHES THE DOC.** That direction is always
+available, and it is always wrong. Here it was four small steps, each individually reasonable:
+
+1. drop `-fno-exceptions` from `RIFT_CXX_FLAGS`;
+2. add the `try`/`catch (...)` wrapper the doc specifies;
+3. make `rift_test_throw` actually throw, so the backstop is induced;
+4. ship a **weaker property that matches a paragraph.**
+
+> **IT IS INVISIBLE IN REVIEW, BECAUSE THE RESULT IS A DOCUMENT AND AN IMPLEMENTATION IN AGREEMENT.**
+> A future reader meeting a catch-all with a design citation beside it will assume it was reasoned —
+> and it *was*, just before the reasoning met the build.
+
+**WHAT THE WRAPPER WOULD HAVE COST, which is the half that makes this a finding rather than a
+near-miss.** A `catch (...)` does not merely add a line: it **converts an exception into a code and
+loses what the exception was.** A boundary that reports `RIFT_INTERNAL` for everything is a boundary
+where **every failure looks the same** — allocation failure, a contract violation, a future
+contributor's `throw` — and the first thing anyone debugging across it would want is the one thing it
+discarded.
+
+**So `GF-31` is confirmed from the other direction.** There, a fix made a defect unrepresentable and
+the mutant's survival was the evidence. Here, **the compiler supplies the guarantee the wrapper would
+have approximated**, and supplies it more strongly:
+
+| | catch-all | `-fno-exceptions` |
+|---|---|---|
+| an exception crossing | caught, **identity lost** | **cannot exist** |
+| enforcement | a rule each entry point remembers | a compiler flag |
+| what a reviewer must check | every function has the wrapper | one line of the build |
+
+**The rule that follows, and it is about where a claim lives:**
+
+> **NOTHING IN THE SOURCE CAN ASSERT ITS OWN BUILD. A PROPERTY HELD BY A FLAG IS ENFORCED WHERE FLAGS
+> LIVE, OR IT IS NOT ENFORCED.**
+
+`cpp-scan` part 7 reads the compile options and refuses a tree where `-fno-exceptions` is missing or
+does not reach `rift_capi` — induced by removing it.
+
+**The tell, for next time.** When a doc specifies a *mechanism* rather than a *property*, the mechanism
+is a guess about how the property will be obtained. **Write the property; discover the mechanism.**
+§2 should have said *no exception crosses this boundary* and left how open — and it now does, with the
+mechanism recorded as what the code turned out to already have.
+
+---
+
 ### GF-31 — a fix that makes a defect unrepresentable costs the instrument that detected it
 
 **Raised by** `BUG-006`'s fix and `BM113`'s survival. **Both halves are recorded, because the free-win
