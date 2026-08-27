@@ -478,6 +478,26 @@ reach it. **A fault-injection sweep and a differential find different things, an
 measurement that shows it rather than the claim.** The differential needed **no crash schedule at
 all** — the defect is in the write path and appears on a clean close.
 
+**AND THE FIX MADE THE DEFECT UNREPRESENTABLE, WHICH THE MUTANT DISCOVERED BY SURVIVING.** `BM113`
+was aimed first at `WidensUpperBound` itself and **survived** — correctly. The predicate takes a
+**bare user key**, so comparing it against a full internal key behaves identically; there is no way to
+express the bug through that signature.
+
+> **A FIX THAT MAKES A DEFECT INEXPRESSIBLE IS STRONGER THAN ONE THAT MAKES IT WRONG — AND NO MUTANT
+> CAN ASSERT THE DIFFERENCE AT THE SITE IT PROTECTS.** The survival is the evidence.
+
+So `BM113` was re-aimed at the site where the class **can** still recur: a caller building its own
+internal key and comparing for itself, which is what `TableBuilder` did before the fix and what an
+inlining edit — *"why call a helper for two lines"* — would reintroduce.
+
+**A SECOND CONSEQUENCE, AND IT IS A REAL TRADE RATHER THAN A FREE WIN.** Collapsing two
+implementations into one removed the disagreement — and **removed the instrument that detected one.**
+The reproduction asserts writer *equals* classifier, and with both calling one predicate they agree
+even when the rule is wrong. What is left must be asserted against the **invariant** rather than
+against the other implementation, which is why `BoundWideningIsAStatementAboutUserKeys` tests the
+predicate directly, in **both tag directions** — a rule comparing internal keys would be right about
+one of them by accident.
+
 **What it would have cost in production:** an engine that accepts writes, acknowledges them, closes
 cleanly, and cannot be restarted. Discovered at the worst possible moment, on a restart, with the
 data intact and unreachable.
