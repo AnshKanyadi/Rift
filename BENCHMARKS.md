@@ -52,6 +52,25 @@ means*, **before this program was written.** None of that is decided here.
 | **read** | **tables consulted per point read, MEASURED** — the harness opens the tables and counts, per sampled key, those whose bloom filter says *maybe* and whose range admits it. Not derived from the level structure, because the filter's whole purpose is to make the real number smaller than `\|L0\| + 1` |
 | **conditions reported** | `L0 left` — uncompacted L0 files when the workload stopped. A run ending with L0 partly full has not paid for their compaction, so its write number would read low |
 
+### Provenance — what a future reader needs to tell whether these are current
+
+**Recorded now because I2 will restructure this file, and a number whose provenance has to be
+re-derived is a number nobody can trust or retire.**
+
+| | |
+|---|---|
+| **taken at commit** | `19f1d45` (Track B, branch `rift-b`) |
+| **engine shape** | two levels; L0 from flushes, L1 a non-overlapping run of files capped at the flush threshold; compaction trigger `\|L0\| >= 4`; range tombstones in-table; file lifetime by reference count |
+| **caps** | **as shipped**: flush threshold 4 MiB, WAL buffer 256 MiB, max record 32 MiB |
+| **crossing point** | derived from the caps as `8 · K · F` = 128 MiB — **not a constant**, so a caps change moves it |
+| **what would invalidate these** | any change to the compaction policy, the trigger, the flush threshold, or the output-file cap. A change to the READ path invalidates the read column only |
+| **regenerate** | `make cpp-amp` |
+
+**THE SHAPE IS RECORDED BECAUSE THE NUMBERS ARE ABOUT IT.** Write amplification of 8.08 is a fact
+about *this* policy at *these* caps; quoted without them it is not a fact about anything. When I2 sets
+the reporting standard, this row is what tells a reader whether the table survived the change or must
+be re-run.
+
 ### Results
 
 **Hardware:** Apple M1, macOS (Darwin 25.3.0), APFS. Single process, single thread, `TestEnv`

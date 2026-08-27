@@ -403,6 +403,17 @@ item.
 | (b) | bounded by the L0→L1 ratio; L1 rewritten per compaction, so still O(data) per compaction | `K` + 1 | one copy in L1 plus L0's overlap | **inputs must cover every L1 file overlapping the key range**, or tombstones may not be dropped |
 | (c) | best: each level rewrites a bounded fraction | levels + 1 | tunable | per-level bottom-most rule |
 
+**WHERE THE NUMBERS LIVE, AND WHY NOT HERE.** They are in `BENCHMARKS.md`; this document carries the
+decision and the methodology with a pointer. Ruled at B3's sign-off:
+
+> **A PUBLISHED CLAIM AND A DECISION RECORD HAVE DIFFERENT READERS AND DIFFERENT LIFETIMES.** I2 will
+> restructure `BENCHMARKS.md` when it sets the reporting standard, and **a decision record should not
+> have to be restructured because a reporting standard changed** — what was decided here, and on what
+> evidence, does not change when the table around the evidence is reformatted.
+
+`BENCHMARKS.md` carries a **provenance block** for exactly that transition: the commit the numbers were
+taken at, the engine shape they describe, the caps, and what would invalidate them.
+
 **RULED BY MEASUREMENT, B3.7b: (b).** Write amplification is **8.08 at the 128 MiB crossing point**,
 below the 10× threshold this section fixed in advance — so `(b)` holds at the size the threshold
 named and **wins on the measurement rather than on A6's rule alone.** `(c)` is not reopened. The
