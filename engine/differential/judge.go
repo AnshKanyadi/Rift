@@ -134,18 +134,26 @@ func stateOf(db *model.DB) map[string][]byte {
 	return out
 }
 
-// stateAtSeq returns the state after the LAST batch at or below seq. The model
-// retains every version between durable and visible precisely so this is
-// answerable for any applied sequence rather than only the newest.
+// stateAtSeq returns the state at EXACTLY seq, and reports false if the log
+// never applied it.
+//
+// AN EXACT MATCH RATHER THAN THE NEAREST BELOW, and the difference is a real
+// verdict. The first version returned the state at the last sequence at or
+// below seq, so a watermark the log never applied — 99 in a run that applied
+// two batches — silently compared against the newest state and AGREED.
+//
+// A watermark is not an approximation. The engine reports one it applied, or it
+// is claiming durability for a sequence that does not exist, and the judge must
+// say so rather than compare against the nearest thing. Every applied sequence
+// IS in this history, because the model retains every version between durable
+// and visible — which is the property that makes an exact match answerable.
 func stateAtSeq(history []snapshot, seq engine.SeqNum) (map[string][]byte, bool) {
-	var best map[string][]byte
-	found := false
 	for _, h := range history {
-		if h.seq <= seq {
-			best, found = h.state, true
+		if h.seq == seq {
+			return h.state, true
 		}
 	}
-	return best, found
+	return nil, false
 }
 
 // findMatchingSeq reports whether the recovered state equals the model's state
