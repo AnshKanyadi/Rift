@@ -249,6 +249,58 @@ it demands is to ask, of every assertion, "what value would this read if the
 thing I am checking were broken?" — and if the answer is "the same one", the
 assertion is decoration no matter how specific it looks.
 
+### BUG-004 and BUG-005 — two defects in one step whose symptoms cancelled
+
+| field | value |
+|---|---|
+| **Found by** | **a mutant surviving** — `BM97`, on its second induction |
+| **Phase** | B3.5e, found and fixed before the step was signed |
+| **Reproduce** | `Compaction.ASnapshotBelowARangeTombstoneKeepsTheVersionItHides` (BUG-004); `RangeDelete.ARangeSurvivesTheCompactionThatMovesItToLevelOne` (BUG-005) |
+| **Invariant that caught it** | none directly — see below, that is the entry |
+| **Mutant class** | `BM105` preserves BUG-004; `BM97`/`BM101` cover BUG-005 |
+| **Fix commit** | this one |
+
+**BUG-004 — clause 1 asked about the wrong sequence.** It tested whether a range tombstone covered
+the key at the **top of a version's interval**. That conflates two different sequences: a snapshot at
+5 and a tombstone at 9 are both "inside the interval" of a version at 4, and **the tombstone is
+invisible to the snapshot.** The version is the answer at 5, and it was being dropped.
+
+> **DATA LOSS FOR A SNAPSHOT BELOW A RANGE DELETE** — and it passed every end-to-end test, because a
+> live snapshot **holds the pre-compaction tables resident** and reads through them. The loss appears
+> at the next Open, after the snapshot is gone.
+
+**BUG-005 — the sink was told its tombstones after it had written its files.** `RunCompaction` called
+`SetTombstones` at the *end* of the merge. The sink closes output files *during* it, and a file closed
+before it has been told the tombstones writes none. **The interface header already said "handed over
+BEFORE the first entry"** — the contract was written down, in the same step, by the same author, and
+the implementation violated it.
+
+**THE ENTRY IS THAT THE TWO CANCELLED.** BUG-004 dropped the versions a tombstone hid, so BUG-005's
+missing tombstone changed no answer: every read returned `<absent>`, **for the wrong reason**. Fixing
+BUG-004 alone turned four passing tests red. Fixing BUG-005 alone would have changed nothing anyone
+could observe.
+
+> **A PAIR OF DEFECTS WHOSE SYMPTOMS CANCEL IS INVISIBLE TO EVERY TEST THAT ASSERTS AN ANSWER.** Both
+> produce the right answer together. Only a question about a *mechanism* separates them.
+
+**What found it was a mutant SURVIVING, which asks a different question.** A test asks *is the answer
+right?* A mutant asks *is this line load-bearing?* `BM97` blinded the L1 tombstone lookup and nothing
+failed — and it was **correct**: the lookup was not load-bearing, because nothing ever reached it.
+The survival was true information about the engine, not a weak mutant.
+
+**This is the strongest argument the catalogue has produced for the practice.** `BM97` had already
+been held out once (its workload did not exist at B3.5d) and re-added deliberately. Relabelling it as
+*"covered by the compaction tests"* would have been plausible, would have closed the file, and would
+have left two defects in a shipped step. **GF-16's rule — reach the workload, never relabel — is what
+kept the question open long enough to answer it.**
+
+**Fix.** Clause 1 now tests **per observable sequence**: a version is required when some `s` both
+sees it as newest *and* has no tombstone above it visible at that same `s`. The tombstone verdict now
+runs **before the merge loop**, where the header always said it did; nothing in it depends on the
+merge, so this is not a reordering for convenience.
+
+---
+
 ### BUG-003 — a guard that reads as a serialiser and never serialised anything
 
 | field | value |
