@@ -348,3 +348,33 @@ internally as iterate-and-point-delete per `[A3]`, replaced at B3.
 **Early payment is measurable only against the alternative**, which is why the second row is written
 down rather than left as "it would have been worse". One instance is not a trend; it is one data
 point, and it is recorded as one.
+
+
+---
+
+## CF-5 — `table.h`'s residency, and what still depends on it
+
+| field | value |
+|---|---|
+| **Raised** | B3.5c, 2026-08-26 |
+| **Raised by** | Claude, retiring `Apply`'s expansion |
+| **Discharged by** | **B3.6** |
+| **Check** | a snapshot or iterator taken before a compaction still reads correctly when the input files are **deleted from the Env**, with the table's bytes NOT resident |
+| **Compare against** | `db.cc` install step 5, and `table.h`'s header note |
+
+**The obligation.** B2-D7 made whole-file residency a **requirement**: `DeleteRange` expanded at
+`Apply`, `Apply` makes no Env call, and the expansion had to read every live table. B3.5 retired the
+expansion, so **`Apply` no longer needs it** — and the note was updated to say so.
+
+**What was NOT retired, and is written down rather than assumed:**
+
+> A snapshot or iterator outliving a compaction reads through tables whose **files have already been
+> deleted** (install step 5). That is correct **only because the bytes are in memory.**
+
+**"No longer required by X" is not "no longer required."** The residency is now a *lifetime* property
+rather than a correctness requirement of `Apply`, and B3.6 is where it becomes a reference count on
+the file instead.
+
+**The cost of leaving it.** It is not currently a bug — it is a correctness argument resting on an
+implementation detail, which is exactly `GF-20`'s shape: *a premise that moves*. The premise here
+moves the day anything reads a block on demand, which is the first thing B5's cache work would do.

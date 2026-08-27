@@ -611,11 +611,45 @@ same rule that deleted `BM73`: a fault nothing can produce is a fault nobody can
 
 **What it changes elsewhere:**
 
-- **`Apply` stops expanding**, so `DeleteRange` becomes `O(1)` in the range — which retires B2-D7's
-  requirement that whole SSTables be resident, and with it `table.h`'s memory cost;
+- **`Apply` stops expanding**, so `DeleteRange` becomes `O(1)` in the range;
 - **the read path must consult range tombstones** in every table it touches, before trusting a value;
 - **compaction must merge and drop them by §1.2's rules** — a range tombstone is droppable when it
   covers nothing older outside the inputs, which is clause 2 over a range rather than a key.
+
+**AND ONE OF THOSE THREE IS NOW KNOWN TO BE WRONG AS WRITTEN.** Retiring the expansion does *not*
+retire `table.h`'s residency — it retires **`Apply`'s dependency on it**. A snapshot or iterator
+outliving a compaction still reads through tables whose **files have been deleted**, and that works
+only because the bytes are in memory. **"No longer required by X" is not "no longer required."**
+That dependency is B3.6's subject, and until B3.6 replaces it with reference-counted file lifetime it
+is the reason the deletion at install step 5 is safe.
+
+---
+
+### 6.1c — WHAT B3.5e COST, AND THE ONE THING THAT FOUND IT
+
+**Two defects, in the same step, whose symptoms cancelled exactly.** Both are in `BUGS.md` as
+`BUG-004`/`BUG-005`; what belongs here is the consequence for the design.
+
+| | what it did | why no test saw it |
+|---|---|---|
+| **BUG-004** | clause 1 tested the tombstone at the **top of the interval** instead of at each observable sequence | a snapshot below a range delete lost its version — invisible, because the snapshot holds the pre-compaction tables **resident** and reads through them |
+| **BUG-005** | the sink was told its tombstones **after** it had written its files | the header already said *"handed over BEFORE the first entry"* — the contract was written and then not met |
+
+> **THE FIRST DROPPED THE VERSIONS THE SECOND FAILED TO HIDE.** Together they produced the right
+> answer at every read. Separately, each is a data-loss bug.
+
+**What found it was a MUTANT SURVIVING, and that is a different question from a test's.** A test asks
+*is the answer right?*; a mutant asks *is this line load-bearing?* `BM97` blinded the L1 tombstone
+lookup and nothing failed — **correctly**, because nothing reached it.
+
+**It had already been held out once.** At B3.5d its workload did not exist, and it was deliberately
+kept out of the lane rather than relabelled. Re-added at B3.5e it survived again, and *that* second
+survival is what opened both bugs. **Relabelling it as "covered by the compaction tests" would have
+been plausible, would have closed the file, and would have shipped both defects.**
+
+**The design consequence: BUG-004's shape is preserved as `BM105` rather than only fixed.** It is what
+a careful reader reaches by *simplifying* — the tombstone test looks independent of `s`, so it gets
+hoisted out of the loop. A fix without the class is a fix that gets undone by someone tidying.
 
 ---
 
