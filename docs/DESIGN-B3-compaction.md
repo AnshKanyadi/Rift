@@ -1015,15 +1015,23 @@ class column must print nothing.
 artifacts and may not consult its beliefs, made mechanical by §2.2a and conditioned by §2.2b. The
 correction lands in `cpp-scan` as a rule, not an exception.
 
-**B3-Q2 — NOT RULED; PROCEEDING ON MY READING AND FLAGGING IT.** The implementation instruction did
-not address this one, so B3 proceeds on the reading below and it is called out here rather than
-treated as settled. If the reading is wrong, §1.2's claim is wrong and the phase is wrong with it.
+**B3-Q2 — RULED, 2026-08-26: `S` IS THE LIVE SNAPSHOTS ONLY.** A retired snapshot has no reader that
+can observe the version it pinned, so keeping that version required would make compaction unable to
+reclaim space **nothing can see** — which is `keep(k)`'s over-requirement (§1.2a) arriving a second
+time from a different direction.
 
-**Does `S` include sequences a snapshot COULD be taken at, or only live ones?** §1.1 says live
-ones, which is what makes dropping possible at all. The stricter reading — never drop anything a
-future snapshot might want — permits no compaction whatsoever, so this is really a question about
-whether the frozen `Snapshot` contract promises anything about sequences no snapshot holds. I read it
-as no. Worth one sentence from you, because §1.2's whole claim rests on it.
+**AND THE RULING CAME WITH THE CONDITION THAT MAKES IT A FACT RATHER THAN A PARAGRAPH.** `S` moves
+under a running compaction, and §1.3 argued both directions safe. The half that matters is not an
+argument at all — it is `pin_seq ≤ max(S)`, **asserted in `DoCompact`**:
+
+> Every sequence the inputs hold is at or below the visible sequence already in `S`. Given that, for
+> any later `s`, `keep(k)` at `s` is *the newest version of k in the inputs* — **which the visible
+> sequence already required.** A snapshot taken mid-compaction requires nothing new.
+
+It holds today because tables carry only flushed data while `seq_` runs ahead of them, and it stops
+holding the day a compaction takes the immutable memtable as an input. **That is a change someone
+will propose, which is why it is a `RIFT_CHECK` and not a sentence.** `BM83` and the deleted `BM84`
+are the two mutants that bound the reading; §1.3 carries the full record.
 
 **B3-Q4 — RULED (b), 2026-08-26: the sentinel `end_len == 0xFFFFFFFF`, unboundedness in the bytes
 rather than in a convention.** Landed at B3.5b with three conditions, all met — its own induced
