@@ -1434,6 +1434,64 @@ it at the moment of writing.
 
 ---
 
+### GF-26 — a new regime is not landed until one class is floored against it
+
+**Raised by** the `compact` sweep regime, B3.7a.
+
+The regime landed at **3545 kill points, 0 violations**. That reads as a strong result and it was a
+**green with unknown sensitivity**: the sweep visited every Env call the compaction makes, and
+nothing in it had been shown capable of *detecting* anything there.
+
+> **A SWEEP THAT VISITS A PATH PROVES THE ENGINE RECOVERS THERE. IT SAYS NOTHING ABOUT WHETHER A
+> DEFECT THERE WOULD BE DETECTED.**
+
+**IT IS THE VACUOUS-GREEN SHAPE AT REGIME GRANULARITY** rather than at checker granularity — `GF-1`'s
+family, one level up. `GF-1` asks whether a *lane* verifies an absence; this asks whether a *whole
+regime* does. The failure looks better than `GF-1`'s, because a large kill-point count and a zero
+violation count read as thorough.
+
+**`BM109` is what closed it**: remove the directory sync after the compaction's output files, and the
+sweep reports **10 detections of 3530, first at kill point 663**. The regime now has a floor, so a
+change that quietly stops it reaching the compaction fails the campaign instead of reporting 3545
+green points over a path it no longer enters.
+
+> **THE STANDING RULE: A NEW REGIME IS NOT LANDED UNTIL AT LEAST ONE CLASS IS FLOORED AGAINST IT.**
+
+**Stated as standing because B4 will add regimes** — the differential rig against `engine/model`, the
+crash-consistency sweep at other cap settings — and the same question arrives with each. The cost is
+one mutant per regime, which is small beside a regime whose green means only that it ran.
+
+---
+
+### GF-27 — extending a regime is paid for by every floor already measured against it
+
+**Raised by** §8.2a's decision at B3.7a.
+
+Reaching the L0 compaction trigger needs four flushes — roughly four times the `flush` regime's whole
+workload. Folding it into `flush` was the obvious move and would have been wrong:
+
+> **AN EXTENSION THAT MULTIPLIES A REGIME'S KILL-POINT COUNT DILUTES EVERY CLASS ALREADY MEASURED
+> AGAINST IT. THE COST OF EXTENDING A REGIME IS PAID BY EVERY EXISTING FLOOR.**
+
+Every rate in `FLOORS.txt` is a fraction of that count. Quadruple the denominator and every B2 rate
+falls, **while no class has lost any power at all** — the classes are exactly as detectable as they
+were, at points that are now a smaller share of a larger space.
+
+**B2 already paid this once**: the manifest took `default` from 175 to 300, every rate fell, not one
+detection count did. The lesson then was `GF-6` — *keep a count floor beside every rate floor*. The
+lesson now is the one before it: **do not move the denominator unless the work requires it.**
+
+**So the answer is a separate regime, not a wider one.** `default` and `flush` stayed byte-identical
+at 305 and 990; no floor moved; the re-measurement obligation was discharged **by being made
+unnecessary rather than by being performed.**
+
+**It is the same logic as the regime column itself** (§8.4, ratified at A6): a number measured at
+non-default caps never aggregates with a default-cap number, because the two denominators are
+incomparable. **A regime is the unit at which measurements are comparable** — so the way to add
+coverage without invalidating measurements is to add a unit, not to widen one.
+
+---
+
 ### GF-24 — a count with nothing to derive beats a threshold with a justification
 
 **Raised by** B3.6's first attempt at file lifetime.
@@ -1474,6 +1532,42 @@ someone introduced a variable between the vector and the call.
 be raised* — with the derivation done in a comment rather than by an instrument. `GF-13` says where a
 number should come from; this says a number you have to *argue for* is a number that will be wrong
 later, whoever argues.
+
+---
+
+### GF-28 — a guard phrased as "not the other one" changes meaning when a third appears
+
+**Raised by** the sweep workload's flush gate, B3.7a.
+
+```cpp
+if (regime != SweepRegime::kFlush) return;   // written when there were two
+```
+
+It reads *"only the flush regime continues"* and means *"every regime except flush stops"*. Those are
+the same sentence with two regimes and different sentences with three. When `compact` arrived it
+**silently returned** — so the first compaction sweep ran the six-key default workload and reported
+**305 kill points with a census containing no compaction at all.**
+
+> **THE FAILURE IS SILENT BECAUSE THE GUARD STILL EVALUATES.** Nothing is malformed, nothing throws,
+> no case is unhandled. A closed `switch` would have failed the build on the new enumerator; a
+> comparison against one member of that enum will not, because the expression stays valid and its
+> meaning quietly changes.
+
+**The fix is to name what the guard MEANS rather than what it excludes** — `if (regime ==
+kDefault) return;`, *"the default regime stops here"* — which stays true whatever is added. The
+general form:
+
+> **PHRASE A GUARD BY WHAT IT ADMITS, NOT BY WHAT IT REJECTS. THE REJECTED SET GROWS WITHOUT
+> TOUCHING THE CODE.**
+
+**And the tell that it had happened was a NUMBER, not an error**: 305 kill points where thousands
+were expected. The census — which lists Env calls by kind — is what made it diagnosable in one look,
+because a compaction sweep with no `kEnvDeleteFile` entries is not a sweep of a compaction.
+
+**`-Wmissing-field-initializers` deserves its line beside it.** Adding a member to `Driver` broke two
+positional aggregate initialisers, and the compiler said so. **That is the compiler doing the job a
+convention would otherwise have had to** — the call sites are designated-initialised now, so the next
+member cannot silently land in the wrong slot.
 
 ---
 

@@ -826,8 +826,17 @@ It is the sentence that keeps a green lane from being quoted as something it doe
 ### 7.5.2 What the lanes establish now
 
 **The compaction install ordering IS swept.** A third regime, `compact`, drives the workload past the
-L0 trigger — **3545 kill points, 0 violations** — and holds a snapshot across the compaction so that
-*both* halves of B3.6's file lifetime are on the swept path rather than only the easy one.
+L0 trigger — **3545 kill points, 0 violations**.
+
+**AND IT HOLDS A SNAPSHOT ACROSS THE COMPACTION, WHICH IS A DESIGN DECISION AND NOT A DETAIL.**
+Without a live reader the drop rule reclaims everything and the input files retire **inside** the
+compaction — the short path, in which `RetireTable` and `DropObsolete` run back to back and the
+reference count never has to hold anything. With one, the inputs go on the obsolete list and are
+collected by a **later** call, which is the path where a crash can land between the two.
+
+> **A WORKLOAD CHOSEN TO REACH THE HARDER HALF IS A DESIGN DECISION.** Left to the obvious workload,
+> the sweep would have covered B3.6's file lifetime only where it is trivially correct, and reported
+> 3545 green points for it.
 
 **And its POWER is measured, which is the half that makes the green mean anything.** `BM109` removes
 the directory sync after the compaction's output files: **10 detections of 3530, first at kill point
