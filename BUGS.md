@@ -1133,6 +1133,55 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-021 and HARNESS-022 — the measuring instrument's own two failures
+
+Filed together because they are one instrument's two ways of lying, found hours apart, **and because
+the second was only findable after the first was fixed.**
+
+| field | value |
+|---|---|
+| **Found by** | inspection of the printed numbers, both times — **not by any instrument** |
+| **Phase** | B3.7b, before the number was published |
+| **Mutant class** | `BM110` preserves the first, `BM111` the second |
+| **Fix commit** | `19f1d45` (both), classes at `e70951a` |
+
+**HARNESS-021 — it returned zero where it should have returned bytes.** Write amplification is bytes
+written over bytes submitted, and the harness summed `LedgerEntry::durable_bytes_after` over Append
+calls. That field is **the size of a file after a Sync has promoted it**, and is left at zero for an
+Append. The first run printed **write amplification 0.00**.
+
+> **IT ANNOUNCED ITSELF ONLY BECAUSE ZERO CANNOT BE TRUE.** A field that returned a plausible-but-wrong
+> number in the same slot — a partial count, a stale size — would have been **published in
+> `BENCHMARKS.md` as the result that decides `B3-D3`.** The instrument was saved by the magnitude of
+> its own error.
+
+**Fix:** the ledger records `append_bytes` **at the call**, and `MeasureAmplification` `RIFT_CHECK`s
+the sum is non-zero — so the class cannot return quietly.
+
+**HARNESS-022 — it printed a number without the condition it was true under.** A workload that stops
+with L0 partly full **has not paid for those files' compaction**, so its write amplification reads
+*low*. That is precisely the direction that flatters the conclusion `(b)` was being measured for.
+
+**And it was found only after HARNESS-021 was fixed**, because until then the number was `0.00` and
+there was nothing to be suspicious of. **A broken instrument hides the questions you would ask about a
+working one.**
+
+**Fix:** `L0 left` is a printed column, and the conclusion states the caveat when it is non-zero.
+
+> **A NUMBER WHOSE CONDITIONS ARE NOT PRINTED BESIDE IT INVITES THE READER TO ASSUME THE BEST ONES.**
+
+**WHAT BOTH HAVE IN COMMON IS WHO CAUGHT THEM.** Neither was caught by a test, a lane, a mutant or a
+checker — **both were caught by reading the output**, which is the least reliable instrument this
+project has and the only one that was pointed at the measurement. That is `GF-26` one level over, and
+it is why `BM110` and `BM111` exist: the number that decides a design question now has classes under
+it, so the next such failure fails a lane instead of depending on someone noticing.
+
+**The counterfactual, since it is what makes the argument concrete:** had `HARNESS-021` produced 4.2
+instead of 0.00, `BENCHMARKS.md` would today carry a wrong write-amplification curve, `B3-D3` would
+have been ruled on it, and nothing in the repository would disagree.
+
+---
+
 ### HARNESS-020 — a test corrected an assumption the author had asserted
 
 **Symptom.** `FileLifetime.AnOpenIteratorHoldsItsInputFilesToo` failed with `expected 200, got 50`.
