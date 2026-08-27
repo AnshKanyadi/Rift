@@ -91,7 +91,7 @@ that is not malformed — it is **incomplete**, and an operator needs those told
 
 | kind | name | payload |
 |---:|---|---|
-| 1 | `PROVENANCE` | `engine_commit:str` `model_commit:str` `seed:u64` `flush_bytes:u64` `wal_buffer_bytes:u64` `max_record_bytes:u64` |
+| 1 | `PROVENANCE` | `engine_commit:str` `model_commit:str` **`regime:str`** `seed:u64` `flush_bytes:u64` `wal_buffer_bytes:u64` `max_record_bytes:u64` |
 | 2 | `SUBMISSION` | `op_count:u32` then `op*` |
 | 3 | `WATERMARK` | `w:u64` |
 | 4 | `RECOVERED` | `entry_count:u32` then (`key:str` `value:str`)* |
@@ -136,9 +136,10 @@ implementation. Each row is a shape a hand-built fixture produces.
 | trailing bytes after the footer | the footer ends the file; anything after it is a second file or a mistake, and neither is this one |
 | `SUBMISSION` with `op_count == 0` | an artifact of nothing reproduces nothing |
 | `RECOVERED` keys not **strictly ascending** | the comparison is a set comparison; duplicates would let one decoder see a key the other does not, and unsorted keys make byte-identity depend on insertion order |
-| `VERDICT.outcome` names no enumerator | the range check comes first, because the byte came off disk. `-Werror=switch` is about enumerators that exist |
+| `VERDICT.outcome` names no enumerator | the range check comes first, because the byte came off disk. `-Werror=switch` is about enumerators that exist. **`0` (unjudged) is NOT in this row — see below** |
 | `PROVENANCE.engine_commit` or `model_commit` **empty** | **B4-Q1.** *An artifact naming no commit is the same defect as an exit run at an uncommitted tree naming a commit that does not contain what ran* |
 | either commit ending in `-dirty` | a run at an uncommitted tree cannot be reproduced, so an artifact claiming to be one is refused at the door |
+| `PROVENANCE.regime` empty | **the caps identify the CONFIGURATION and not the SWEEP.** `flush` and `compact` share caps and differ only in workload, so the regime is *not* recoverable from the numbers beside it — and **provenance that is derivable-in-principle from other fields is provenance nobody derives.** Track A paid for that three times: `power-config: a3`, the A6 banner, the single-label opt-out. The string is **derived from the regime's own name**, never written beside the caps, which is the fix that ended the banner problem |
 
 **AND ONE REFUSAL THAT IS NOT ABOUT THE BYTES.** A `SUBMISSION` whose op sequences are not
 non-decreasing is refused: the rig assigns them and the model replays in that order, so a log the
@@ -149,6 +150,26 @@ report it as a divergence in the engine.
 > sequence and carry 0 by definition. A check phrased as *"never decreases"* refuses **every legal
 > artifact containing a Sync — which is all of them.** The first implementation was phrased that way
 > and the accepting half of the covering test is what found it.
+
+---
+
+### 3.1 UNJUDGED IS A LEGAL STATE, AND THE CORPUS GATE IS SEPARATE
+
+**A correction to this document's first version, recorded rather than quietly made.** It said an
+artifact without a verdict is refused, reasoning that *"an artifact without a verdict cannot reproduce
+a finding."*
+
+**That is true of a CORPUS ENTRY and false of a FILE.** The C++ driver **cannot reach a verdict** —
+reaching one requires the model, which is Go — so the artifact necessarily exists unjudged **for the
+length of its journey between the two processes.** A format that refused that state would refuse
+every file the driver can write.
+
+> **THE CORPUS PROMISE ATTACHES TO A JUDGED ARTIFACT, NOT TO THE FORMAT.**
+
+So `VERDICT.outcome == 0` parses, and **`RequireJudged` is the gate** a file must pass to enter
+`seeds/differential/`. It is the same shape as `DESIGN-B3` §6.1a: the requirement was about what the
+**manifest records**, not about what any file may contain — and a rule enforced at the wrong edge
+either refuses legal states or fails to bind the artifact that matters.
 
 ---
 
