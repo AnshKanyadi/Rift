@@ -733,6 +733,64 @@ func (l *rangeLedger) SnapshotsByNode() []struct {
 	return out
 }
 
+// SnapshotsWithInstant returns each recorded snapshot with its node AND the
+// instant it was recorded, which SnapshotsByNode drops.
+//
+// The instant is what an ORDERING question needs, and ordering is the axis a
+// precondition measurement gets wrong first: "the receiver had a snapshot
+// somewhere in this run" is an upper bound that reads as abundant while the real
+// precondition -- the snapshot existed BEFORE the message arrived -- may never
+// occur at all.
+func (l *rangeLedger) SnapshotsWithInstant() []struct {
+	Node int
+	Rec  SnapshotRecord
+	At   clock.Instant
+} {
+	out := make([]struct {
+		Node int
+		Rec  SnapshotRecord
+		At   clock.Instant
+	}, 0, len(l.snaps))
+	for _, s := range l.snaps {
+		out = append(out, struct {
+			Node int
+			Rec  SnapshotRecord
+			At   clock.Instant
+		}{s.node, s.rec, s.at})
+	}
+	return out
+}
+
+// ReceivedByNode returns every message a node accepted, with the node and the
+// instant, for diagnosis.
+//
+// It exists for the question §5e.2b's fourth axis asks: not "did the sweep
+// DETECT this class" but "did the sweep ever produce the PRECONDITION the class
+// needs". A detection null is weak evidence -- it cannot tell an unreachable
+// class from a blind instrument -- and a precondition null measured off the wire
+// is strong, because the wire is where the precondition either happened or did
+// not. Ansh's standing rule: an exclusion may cite a measurement or an argument
+// about reachability, never the excluded class's own declaration.
+func (l *rangeLedger) ReceivedByNode() []struct {
+	Node int
+	Msg  raft.Message
+	At   clock.Instant
+} {
+	out := make([]struct {
+		Node int
+		Msg  raft.Message
+		At   clock.Instant
+	}, 0, len(l.recv))
+	for _, r := range l.recv {
+		out = append(out, struct {
+			Node int
+			Msg  raft.Message
+			At   clock.Instant
+		}{r.node, r.msg, r.at})
+	}
+	return out
+}
+
 // CommittedPrefix exposes the committed prefix for diagnosis.
 func (l *rangeLedger) CommittedPrefix(through raft.Index) ([]raft.Entry, bool) {
 	return l.committedPrefix(through)

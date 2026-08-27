@@ -216,6 +216,22 @@ type RaftMeta struct {
 	// every A6 finding in seeds/ would reproduce as a clean run.
 	Accounts     int `json:"accounts"`
 	Transfers2PC int `json:"transfers_2pc"`
+
+	// A7's two, and the reasoning a FOURTH time -- which is the point at which
+	// the reasoning stops being a comment and becomes a pattern.
+	//
+	// A bundle that did not carry these replays a cluster with the read-index
+	// path OFF against a schedule recorded on one where it is on. It happened:
+	// A7 shipped with `ReadIndex` and `FollowerReadPerMille` on RaftOptions and
+	// neither on this struct, so every bundle recorded or re-recorded during the
+	// phase replayed A6-SHAPED, silently, exactly as the three comments above
+	// predict -- "the plan is identical either way".
+	//
+	// The failure has one signature every time: an option is added to the SHAPE
+	// and not to the thing that PINS the shape, and the corpus goes on being
+	// green about a cluster that is no longer the one under test.
+	ReadIndex            bool `json:"read_index"`
+	FollowerReadPerMille int  `json:"follower_read_per_mille"`
 }
 
 // InconclusiveMeta is a checker that could not reach a verdict.
@@ -311,6 +327,8 @@ func cmdRun(args []string) int {
 	snapReads := fs.Uint64("snapshot-reads-per-mille", 400, "raft workload: share of reads naming a remembered timestamp")
 	accounts := fs.Int("accounts", 8, "raft workload: bank accounts, one key each; 0 disables the bank")
 	transfers2pc := fs.Int("transfers-2pc", 40, "raft workload: transactions the bank runs; 0 disables the bank")
+	readIndex := fs.Bool("read-index", true, "raft workload: serve plain reads by read index instead of by a log entry (A7)")
+	followerReads := fs.Int("follower-read-per-mille", 333, "raft workload: share of plain reads addressed to one replica rather than broadcast (A7)")
 	_ = fs.Parse(args)
 
 	meta := Meta{Seed: *seed, Workload: *wl}
@@ -370,6 +388,8 @@ func cmdRun(args []string) int {
 			SnapshotReadPerMille: *snapReads,
 			Accounts:             *accounts,
 			Transfers2PC:         *transfers2pc,
+			ReadIndex:            *readIndex,
+			FollowerReadPerMille: *followerReads,
 		}
 		meta.Raft = &RaftMeta{
 			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
@@ -380,6 +400,8 @@ func cmdRun(args []string) int {
 			SnapshotReadPerMille: opt.SnapshotReadPerMille,
 			Accounts:             opt.Accounts,
 			Transfers2PC:         opt.Transfers2PC,
+			ReadIndex:            opt.ReadIndex,
+			FollowerReadPerMille: opt.FollowerReadPerMille,
 		}
 		var err error
 		if p, err = hunt.MaterializeRaftWith(*seed, opt); err != nil {
@@ -634,6 +656,8 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 				SnapshotReadPerMille: meta.Raft.SnapshotReadPerMille,
 				Accounts:             meta.Raft.Accounts,
 				Transfers2PC:         meta.Raft.Transfers2PC,
+				ReadIndex:            meta.Raft.ReadIndex,
+				FollowerReadPerMille: meta.Raft.FollowerReadPerMille,
 			}
 		}
 		res, err := hunt.RunRaftWith(p, opt, tr)

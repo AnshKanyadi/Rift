@@ -635,3 +635,35 @@ the wrong point rather than at the wrong line — M79 and M80 both read zero on 
 that reason. So before `M34`'s two zeros are read as reach, its **aim** is varied: it is an
 `append-from-zero-over-a-snapshot` class, and the questions are which role appends, and at which point
 relative to the install.
+
+---
+
+## Owed out of A7's BUG-009 re-pin
+
+**M34's declaration is stale in two independent ways**, both found while re-pinning BUG-009 and
+neither a reason to hold the bundle, which now reproduces at seed 155.
+
+1. **Its floor names a shape in which the class cannot occur.** `power-config: a2`, and under `a2`
+   the precondition — an append from index 1 arriving at a node whose prefix is *already* in a
+   snapshot — occurred **0 times in 200 seeds**, against 5,051 appends-from-index-1 that did not meet
+   the ordering. Under A7's shape it occurs **once in 200 seeds**. The declaration should name A7's
+   shape with that rate, and the measurement it currently cites (`2 of 3000 … at commit A5-close`)
+   predates the term-start no-op, which moved every trace.
+2. **Its covering test does not kill it.** `TestSnapshotPrefixIsNotOverwritten` **passes with `M34`
+   applied at HEAD**, so the class is `expect: killed` and survives. That is a covering-test failure,
+   not a floor failure, and it is the axis `make mutant-covered` is blind to here — the test executes
+   the line, and the line no longer produces an observable difference on the seeds it sweeps.
+
+**`M46` is owed the same two checks** and its declaration carries the same staleness marker
+(`1 of 3000, first at seed 215, under current at commit A5-close`). Its covering test,
+`TestSplitInheritsTheConfigurationAtItsIndex`, is a 1,000-seed serial sweep that takes over an hour,
+which is why it has not been re-run inside a phase.
+
+**And `RaftMeta` needs the treatment `send()` got.** BUG-034 is the fourth time an option was added
+to the shape and not to the thing that pins the shape, and the third time the struct's own comment
+predicted it. The fix that worked for BUG-027 was to **invert the default so the compiler asks the
+question**; the equivalent here is a check that every field of `hunt.RaftOptions` is either carried by
+`RaftMeta` or named in an exemption list with a reason — the same shape as
+`TestAddCensusCoversEveryField`, which exists because a counter added to one place and not the other
+reads low. **A bundle records the shape its writer knows how to write down, and nothing today asks
+whether the writer knows the whole shape.**

@@ -549,11 +549,65 @@ between a check that runs twice a run and one that runs whenever there is someth
 | **Found by** | sim — the 10,000-seed exit run, through `raft.truncateFrom`'s assertion |
 | **Phase** | A2 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M34-append-from-zero-over-a-snapshot.patch && go run ./cmd/simctl replay --bundle seeds/BUG-009` |
-| **Reproduce (seed)** | found at seed **1364**, 1 of 3000 seeds reaching it; `seeds/BUG-009` carries seed **105**, re-recorded at BUG-022's fix. The read mark moved every raft trace and seed 13 regenerated cleanly while no longer reaching `M34` at all — the search §16.3 warns a regeneration is. Found again at 105 of a 0–800 sweep, where the mutant panics `state machine safety failing` |
+| **Reproduce (seed)** | **155** |
 | **Invariant that caught it** | state machine safety, asserted inside `raft/` — *a truncation may not reach an entry this node was told was committed* |
 | **Mutant class** | none existed — added `M34-append-from-zero-over-a-snapshot` |
 | **Fix commit** | *(this commit)* |
 | **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
+
+**Why 155 is the authoritative seed, and where the others went.** The
+`Reproduce (seed)` field is parsed by `scripts/bundle-seeds.sh` and read by a
+stranger following an instruction. **A field a script parses holds one value, not
+a paragraph** — this one had accumulated three seeds and a search narrative, and
+the first time the pre-push hook ran against a remote it refused the push over the
+inconsistency. That refusal is correct and is the point of the check.
+
+The history, which belongs here rather than in the field:
+
+| seed | when it was authoritative | why it stopped being |
+|---|---|---|
+| **1364** | A2, at discovery — 1 of 3,000 seeds reaching the class | the trace space it indexed no longer exists |
+| **13** | briefly, after BUG-022's read mark | regenerated **cleanly** — it replayed fine and no longer reached `M34` at all, which is the failure §16.3 warns a regeneration is |
+| **105** | after BUG-022's fix, found in a 0–800 sweep | A7's term-start no-op moved every trace again; at HEAD it replays identically with `M34` applied |
+| **155** | **now** | measured at HEAD: `detected=1 of=1` under A7's shape, and the bundle reproduces its finding under `M34` |
+
+**And the search that found it is §5e.2b's rule in its first application.** `M34`
+had two nulls against it — 0 of 3,000 in the gating lane and 0 of 6,000 in an
+earlier re-pin search — and a third, 0 of 3,000 under `a2` at HEAD, taken here.
+Before reading any of them as reach, the **aim** was varied along the four axes:
+
+- **line** — `matches(idx == 0)` is the line that carries the property, and its
+  comment says why. The aim is right. (Track B's `BM55` is the axis's origin.)
+- **code position** — its covering test `TestSnapshotPrefixIsNotOverwritten`
+  **passes with `M34` applied at HEAD**, so the mutant survives its own test.
+- **role** — the receiver must be a node whose prefix is already in a snapshot.
+- **time** — the snapshot must exist **before** the append arrives.
+
+The last one is what everything turned on, and **the first measurement of it was
+wrong in the same way the mutant was.** Counting "an append from index 1 arrived
+at a node that has a snapshot *somewhere in the run*" reads **2,870 per 120
+seeds** — abundant, and meaningless. Counting the ordering properly — the
+snapshot existed **at or before** the message — reads:
+
+| shape | appends from index 1 carrying entries | of those, receiver already had a snapshot |
+|---|---|---|
+| A7's shape (`current`) | 5,051 / 200 seeds | **1**, at seed **155** |
+| `a3` | 649 / 200 seeds | **0** |
+| `a2` | 636 / 200 seeds | **0** |
+
+> **`M34`'s floor was declared under `a2`, and under `a2` the precondition does not
+> occur at all.** The two nulls were not evidence about the harness's reach; they
+> were taken under a shape in which the class is unreachable **by construction**,
+> against a declaration that named that shape.
+
+Three orders of magnitude separate the upper bound from the real precondition, and
+the axis that separates them is **time** — the same axis `M79` turned on one
+document over. A precondition measurement is a claim about aim too.
+
+**What this leaves owed.** `M34`'s power declaration still says `power-config: a2`
+with a pre-no-op measurement, and it should say A7's shape with 1 in 200. Its
+covering test passes with the mutant applied and must not. Both are recorded in
+CARRY-FORWARD; neither is a reason to hold the bundle, which now reproduces.
 
 **Symptom, verbatim:**
 
@@ -2123,3 +2177,53 @@ trap covers `EXIT INT TERM`, so a kill reverts.
 declares are the first numbers in the project taken by a driver that can prove which tree produced
 them, and the three that were nearly declared without that proof are the argument for it. A floor is
 a claim about the harness; a floor taken against an unknown tree is a claim about nothing.
+
+### BUG-034 — (harness) the bundle format stopped carrying the build, one phase before anybody looked
+
+| | |
+|---|---|
+| **Symptom** | Every bundle in `seeds/` replays with the **read-index path off**, whatever shape it was recorded on. `make corpus` is green over it, because the plan is identical either way. |
+| **Found by** | trying to re-pin BUG-009 at a seed measured under A7's shape, and finding the bundle could not express that shape. |
+| **Invariant that caught it** | none. The corpus lane cannot see this: it compares a replay against a recording made by the same incomplete writer. |
+
+**The defect.** `simctl`'s `RaftMeta` pins the build a bundle replays against. It carries A2's four,
+A3's two, **A4's two**, **A5's two**, **A6's two** — and not A7's. `ReadIndex` and
+`FollowerReadPerMille` are on `hunt.RaftOptions`, set by `A7Options`, and absent from the struct that
+records what ran.
+
+**The struct predicted this, three times, in its own comments.** They are worth reading in order:
+
+> *A4's two build parameters. A bundle that did not carry them would replay a single-range cluster
+> against a schedule recorded on a split one, which is the "bundle that does not pin its build"
+> failure this struct exists to prevent — and it would do it silently, since the plan is identical
+> either way.*
+>
+> *A5's two. Same reasoning: a bundle that did not carry them would replay a single-version store
+> against a schedule recorded on an MVCC one.*
+>
+> *A6's two. Same reasoning a third time, and the sharpest instance of it: a bundle that did not carry
+> these would replay a cluster with NO TRANSACTIONS against a schedule recorded on one running the
+> bank, and every A6 finding in `seeds/` would reproduce as a clean run.*
+
+A7 added two options to the shape and none to the thing that pins the shape.
+
+> **The failure has one signature every time: an option is added to the SHAPE and not to the thing
+> that PINS the shape, and the corpus goes on being green about a cluster that is no longer the one
+> under test.**
+
+**This is the fourth occurrence, and the third time the reasoning was written down before it
+happened.** BUG-027 is the same shape in `raft/` — `sendGatedOn`'s comment described the defect one
+phase before it occurred. **A comment that predicts a defect and does not prevent it is a comment
+doing the wrong job**, and this struct now has four such comments. The remedy that worked for BUG-027
+was to invert the default so the compiler asks the question; the equivalent here is owed and is
+recorded in CARRY-FORWARD rather than improvised at the end of a phase.
+
+**What it invalidates, stated plainly.** Nothing in `seeds/` has ever exercised the read-index path,
+including the twenty-four bundles re-recorded during this phase. `make corpus`'s green is honest
+about what it checked and silent about what it could not: **a bundle records the shape its writer
+knows how to write down.**
+
+**The fix.** `ReadIndex` and `FollowerReadPerMille` join `RaftMeta`, the two `simctl run` flags, and
+the replay path that reconstructs options from the bundle. Verified by round trip: a bundle recorded
+at seed 155 carries `read_index: true, follower_read_per_mille: 333`, and BUG-009's re-pin — which is
+measured under A7's shape and would have replayed A6-shaped — reproduces its finding.
