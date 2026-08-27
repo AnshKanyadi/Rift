@@ -1556,6 +1556,16 @@ amplification below 2 is the instrument, not the engine*), a bound the workload 
 are the assertions `AmpInstrument.*` now carries, and they exist because **a plausible wrong number is
 indistinguishable from a result.**
 
+**THE OPERATIONAL CONSEQUENCE, WHICH IS THE PART THAT CHANGES WHAT YOU DO NEXT:**
+
+> **WHEN AN INSTRUMENT IS FOUND WRONG, THE NEXT QUESTION IS WHAT IT WAS HIDING — NOT WHETHER IT IS
+> FIXED.**
+
+Fixing it is the easy half and feels like completion. The instrument was **producing readings the
+whole time it was wrong**, and every one of them was accepted; so the fix does not end the incident,
+it **starts the audit** of what those readings were used to conclude. At B3.7b that audit was one
+question long — *is `8.08` steady-state?* — and it found `HARNESS-022`.
+
 **It is `GF-26` from the other side.** `GF-26` says an instrument with no class floored against it has
 unknown sensitivity. This says an instrument that is *itself* broken has unknown sensitivity **about
 its own defects** — and both are answered the same way: put a class under the instrument, not only
