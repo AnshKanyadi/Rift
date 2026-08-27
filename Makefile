@@ -183,6 +183,12 @@ cpp-sweep: ## The kill-point sweep: every Env call, killed before and after its 
 # two byte-identical, so no floor moves (section 8.2a).
 	$(CPP_BUILD)/test/rift_sweep compact
 
+.PHONY: cpp-amp
+cpp-amp: ## B3.7b: compaction amplification -- the measurement that decides B3-D3
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_amp -j $(WORKERS)
+	$(CPP_BUILD)/test/rift_amp
+
 .PHONY: cpp-build
 cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
 	@# Not a member of CPP_LANES: cpp-test subsumes it. It exists so a mutant can

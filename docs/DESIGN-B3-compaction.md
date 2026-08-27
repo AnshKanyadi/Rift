@@ -403,6 +403,13 @@ item.
 | (b) | bounded by the L0→L1 ratio; L1 rewritten per compaction, so still O(data) per compaction | `K` + 1 | one copy in L1 plus L0's overlap | **inputs must cover every L1 file overlapping the key range**, or tombstones may not be dropped |
 | (c) | best: each level rewrites a bounded fraction | levels + 1 | tunable | per-level bottom-most rule |
 
+**RULED BY MEASUREMENT, B3.7b: (b).** Write amplification is **8.08 at the 128 MiB crossing point**,
+below the 10× threshold this section fixed in advance — so `(b)` holds at the size the threshold
+named and **wins on the measurement rather than on A6's rule alone.** `(c)` is not reopened. The
+model over-predicted (10.00 predicted, 8.08 measured), which is the safe direction; the fitted
+crossing is nearer 170 MiB. Full methodology, conditions and caveats: `BENCHMARKS.md`. Reproduce with
+`make cpp-amp`.
+
 **Recommendation: (b).**
 
 (a) is rejected **not for being slow but for making the measurement meaningless**: the exit criterion
@@ -1023,6 +1030,10 @@ compaction path gets its own regime rather than sharing one — and §8.4's rule
 number measured at non-default caps never aggregates with a default-cap number.
 
 ### 8.2b The amplification measurement, and the outcome that is not "try harder"
+
+> **RUN, B3.7b. The measurement reached the crossing point and answered: 8.08 < 10, so `(b)` wins on
+> evidence.** The pre-declared fallback below was NOT reached — recorded because a rule that is only
+> ever quoted when it is convenient is not a rule, and this one held while it cost nothing.
 
 §8.1 fixed the threshold **before any candidate ran**: `(b)` crosses 10× write amplification at
 **≈128 MiB** of live data, from `WA ≈ 2 + D/(K·F)` with `K·F = 16 MiB`. Three data sizes spanning the
