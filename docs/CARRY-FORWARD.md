@@ -758,6 +758,17 @@ covering tests remain**, and they are the whole of the residual cost:
 **The framing is the Makefile header's own sentence:** *the cost is driven by the number of sweeping
 tests, not by any one bound.* No value of `RAFT_SEEDS` fixes this; only converting the tests does.
 
+**MEASURED, 2026-08-27, and it is firmer than the estimate above.** With all nine A7 conversions in
+place, `make mutants`' baseline — the 52 covering tests in one `go test` binary — **still exceeded two
+hours of monotonic time and died on its own timeout**: `panic: test timed out after 2h0m0s`. That is
+the baseline alone, before any of the 70 per-mutant runs.
+
+> **So this obligation is not a tidiness item.** The lane is in the `ci` target and cannot pass at any
+> timeout anybody would put in CI, and the eight remaining sweeps are the whole of the reason. The
+> script's own sanctioned remedy is *more time, never shorter sweeps* — which is correct as far as it
+> goes and does not scale: the honest fix is the conversion, and it is due at whichever phase next
+> touches each class.
+
 **Why it is NOT being done now, and this is the reason rather than the excuse.** These belong to A1
 through A6 classes whose defects would have to be understood properly to write an honest directed
 replacement — a directed test asserts a specific mechanism, and one written from a patch header
