@@ -908,6 +908,16 @@ lets ranges be split out of it; none deliberately targets a just-split range. Th
 the schedule generator, not of the seed space, and 600 seeds across two shapes is enough evidence to
 say a seed search is the wrong instrument.
 
+**The ratio, measured rather than asserted.** The seed search cost **5h34m** and did not finish 3,000
+seeds, because `M46` runs at ~50 s/seed against a clean 4.7 — illegal configuration transitions make
+the cluster churn. The directed test that arranges both halves kills the same mutant in **0.3
+seconds**.
+
+> **Five and a half hours against three tenths of a second, for the same question.** That is the
+> practical argument for a directed test over a search whenever a mutation is *disruptive* rather than
+> subtle — and it compounds with the evidential one, because the classes hardest to reach by search
+> are exactly the ones search is most expensive for.
+
 > **Which is BUG-024's conclusion arriving again: a per-seed bundle may be the wrong artifact for this
 > class.** A bundle pins one schedule. A class that needs two independent things to coincide — a
 > divergent tail at a split, and a membership change onto the range that split produced — is better
@@ -2327,3 +2337,56 @@ knows how to write down.**
 the replay path that reconstructs options from the bundle. Verified by round trip: a bundle recorded
 at seed 155 carries `read_index: true, follower_read_per_mille: 333`, and BUG-009's re-pin — which is
 measured under A7's shape and would have replayed A6-shaped — reproduces its finding.
+
+### BUG-035 — (harness) a timeout that had not fired, on a clock that had not advanced
+
+| | |
+|---|---|
+| **Symptom** | `make mutants`' baseline binary carried `-test.timeout=2h0m0s` and had been running **2h56m** without firing it. |
+| **Found by** | reading it, and refusing to leave it as an unexplained observation. |
+| **Reproduce** | any long lane on a Mac that is allowed to sleep: `ps -o etime=` and the Go test timeout disagree by exactly the time the machine spent asleep. |
+| **Invariant that caught it** | none. This is a provenance question, and this project has spent six instances on those. |
+
+**The two obvious explanations were both wrong**, and ruling them out is what made the third
+findable:
+
+- *reading the wrapper instead of the binary* — no: pid 40801 **is** `hunt.test`, started 13:37:05,
+  carrying `-test.timeout=2h0m0s` on its own command line. That is the parent-versus-worker confusion
+  the exit run produced (1.2 s of CPU over six hours), and it is not this;
+- *elapsed starting before the binary* — no: the `go test` wrapper and the binary started one second
+  apart.
+
+**The actual cause.** `ps etime` is **wall clock** and advances while the machine sleeps. Go's test
+timeout is a `time.AfterFunc`, backed by a **monotonic** clock, which on Darwin **stops** during
+sleep. The machine had been entering *Maintenance Sleep* repeatedly:
+
+```
+total sleep since the binary started: 3,720 s = 62.0 minutes
+2h56m wall  -  62m asleep  =  1h54m monotonic  <  2h timeout
+```
+
+The timeout had not fired because, on its own clock, it was not yet due.
+
+> **A wall-clock elapsed and a timeout are measured on different clocks, and system sleep is the gap
+> between them.** "The timeout has not fired" is not evidence that the timeout is broken — until you
+> have checked which clock each side is counting on.
+
+**Why this one matters more than its size**, and it is not a hypothetical: **a timeout that does not
+fire when you expect it to is indistinguishable from one that will never fire, and the mutant lane's
+entire defence against a hang is that timeout.** Track B lost eleven and a half hours to exactly
+that. Being unable to tell those apart is the whole problem.
+
+**The discriminator, and it was already available.** Read **CPU time**, not wall elapsed. CPU advances
+only while the process runs, so a hung process shows flat CPU against climbing wall, and a sleeping
+machine shows both moving slowly together. Measured here, live:
+
+```
+cpu at T      152:30.17
+cpu at T+25s  153:03.71     -> 33 s of CPU in 25 s of wall: running, and multithreaded
+```
+
+**This is the same rule this phase already has, one clock over.** *Started is read from the process,
+never from the launch* became *the tree state is read from the tree, never from the fact that a revert
+was supposed to have happened* (BUG-033), and is now: **liveness is read from the CPU clock, never
+from the wall clock**, because the wall clock is the one thing in the pair that keeps moving when
+nothing is happening.

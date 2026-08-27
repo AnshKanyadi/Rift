@@ -775,3 +775,28 @@ understanding the defect. **Not** as a batch, and **not** by anybody reading onl
    author's before the real assertion could pass over nothing;
 3. `make mutant-covered ONLY="<id>"` reports `ok`, which is a different question from *does it kill*
    and caught four defects in this phase's own tests.
+
+---
+
+## A per-seed rate does not compose into a suite time when the suite shares a process
+
+**A7, 2026-08-27, and it is the same author making the same class of estimate error a second time.**
+
+`make mutants`' baseline was estimated at **2.7 hours** from ~1,928 seeds at ~5 s/seed — a per-seed
+rate measured on a quiet machine, multiplied by a seed count. The baseline is **52 covering tests
+sharing one `go test` binary**, running their sweeps at `NumCPU` workers, at load average 20.9.
+
+> **A per-seed rate is a property of one seed run alone. It does not compose into a suite time when
+> the suite shares a process**, because the thing that made the rate what it was — a free machine — is
+> exactly what the suite removes.
+
+**This is the shard-count-is-not-parallelism finding one level over.** There, the shard count was
+taken to be the machine's parallelism, and eight shards on eleven cores produced a load average of
+21 — *every wall-clock estimate derived from the shard count was wrong, not by arithmetic but by
+multiplying the wrong number.* Here the same shape: a rate multiplied by a count, where the count
+changes the conditions the rate was measured under.
+
+**Recorded rather than hidden because it is the second instance**, and two instances is what turns an
+error into a class. The remedy is the one this project already uses everywhere else: **measure the
+thing you are going to claim, under the conditions you are going to claim it in.** A suite time is
+measured by running the suite, once, and quoting that.
