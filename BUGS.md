@@ -2385,8 +2385,42 @@ cpu at T      152:30.17
 cpu at T+25s  153:03.71     -> 33 s of CPU in 25 s of wall: running, and multithreaded
 ```
 
-**This is the same rule this phase already has, one clock over.** *Started is read from the process,
-never from the launch* became *the tree state is read from the tree, never from the fact that a revert
-was supposed to have happened* (BUG-033), and is now: **liveness is read from the CPU clock, never
-from the wall clock**, because the wall clock is the one thing in the pair that keeps moving when
-nothing is happening.
+### The general form, which is worth more than the timeout
+
+**This project decided the wall/monotonic distinction in A0.4 and made it uncompilable.** `clock.Wall`
+and `clock.Mono` are separate defined types; `Mono` has **no encoder and a poison `MarshalJSON`**
+whose only job is to turn a silent success into a loud failure —
+
+> *"a monotonic reading must never be serialized; its epoch is this boot of this node, so the value
+> means nothing anywhere else"*
+
+— and `determinismcheck` rejects a `clock.Mono` in any exported or tagged struct field outside the
+package. Three mechanisms, one distinction, enforced by the compiler and a vet pass.
+
+**And then the same distinction arrived in how the harness reads its own processes, where nothing
+enforces it, and nobody recognised it.** `ps etime` is a Wall reading. A Go test timeout is a Mono
+deadline. Comparing them is exactly the mistake A0.4 made unrepresentable inside `clock` — and it cost
+an unexplained observation and two wrong hypotheses before anyone said the word "monotonic".
+
+> **A distinction made uncompilable in one layer is not thereby known in another.** The type system
+> defends the code that uses the types. It defends nothing about the shell command an engineer runs to
+> ask whether the code is still alive, and that is where the same confusion went on living.
+
+### The chain this belongs to, which is one rule and not three
+
+Each was added after something misled somebody, and the shape is identical every time — **read the
+thing, not the proxy for the thing**:
+
+| what misled | the proxy that was read | the thing itself |
+|---|---|---|
+| an exit run believed to be running for two hours, which had refused at launch | the launch | **the process** |
+| three mutant floors measured against a tree that still had an earlier mutant applied (BUG-033) | the revert that was supposed to have happened | **the tree** |
+| a 2h timeout that had not fired at 2h56m (this entry) | the wall clock | **the CPU clock** |
+
+**And the discriminator was available the whole time, in every one of them.** `ps` was there before the
+first. `git diff` was there before the second. `ps -o time=` was there before the third.
+
+> **The failure is not missing instrumentation. It is reading the number that was easier to reach.**
+> `etime` is the first column anybody looks at; `time` is one flag away and answers a different
+> question. Every entry in this chain is a case where the right number was one flag, one command, or
+> one `grep` away, and the wrong one was already on the screen.
