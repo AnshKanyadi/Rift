@@ -538,6 +538,92 @@ does this mechanism's correctness argument assume, and does this system provide 
 running the audit at all: the table of facts came out clean at A6 and the phase's most expensive
 defect was in the column the table has no room for.
 
+### 4.1r REPORTED AT CLOSE: the ten facts, and the count that matters is not ten of ten
+
+**Ten facts named before the code. Ten held as derivations. Three defects landed in the read path and
+not one of them is among the ten.**
+
+| # | fact | verdict at close |
+|---|---|---|
+| 1 | the read index, captured **at arrival** | held — D-A7-3 ruled A and the index is carried through the round |
+| 2 | leadership confirmed **at the broadcast's term** | held — `TestAReadIsNotConfirmedByAStaleTerm` |
+| 3 | caught up = `applied >= THIS READ'S index` | held — and `M76` plants its removal and is killed |
+| 4 | a follower's read reflects **the leader's** index | held — `takeReadStates` adopts it |
+| 5 | the no-op's term is the term at `becomeLeader` | held — `noop.Term = r.term`, inside `becomeLeader` |
+| 6 | leadership **at the confirming round**, not at arrival | held, on fact 2's mechanism |
+| 7 | the applied index a read waits on is **the range's** | **taken from the right place, and the right place was not maintained** — BUG-032 |
+| 8 | the read mark, as of every read by either path | held **by exclusion**: D-A7-5 keeps every mark-staging read on the log |
+| 9 | which read path, by **promise** not by syntax | held — `!ReadTS.IsSet() && Txn == nil` |
+| 10 | a follower holds **no** local mark | held, same exclusion as 8 |
+
+**Exclusions stated:** facts 8 and 10 are held *by construction rather than by test*. D-A7-5 rules that
+a read carrying a timestamp keeps its log entry, so nothing that stages a read mark ever reaches the
+read-index path, and `M71` re-pointed is that boundary planted as a defect. They are not evidence that
+the mark machinery works; they are evidence that read index never touches it.
+
+#### Fact 7 is the honest one, and it is a third failure mode
+
+BUG-032 is not the fact taken from the wrong place. `n.applied` **is** the range's applied index, per
+`Replica`, exactly as the table names. The number at that place was not advanced when a snapshot
+install moved the state machine.
+
+> **The table asks where a fact is taken from. It does not ask whether that place is kept true.**
+
+That is a dimension neither §4 nor §4.1 has a column for, and it is worth naming because the remedy is
+different: the fact table is answered by reading a derivation, the assumption audit by reading an
+argument, and this one only by asking **what else writes to the place this fact is read from** — which
+for `n.applied` was one branch out of four.
+
+#### And the headline is A6's result repeating exactly
+
+A6 named six facts, none became a defect, and BUG-022 happened anyway. A7 named ten, none became a
+defect, and **BUG-026, BUG-028 and BUG-032 happened anyway** — all three in the read path, none in the
+table.
+
+> **The table came out clean and the phase's defects were in the column it has no room for. Twice.**
+
+That is the argument for §4.1 existing, and it is the argument that produced §5e: after the second
+occurrence, "run a second audit in the form the miss would have been caught by" stops being a
+per-phase device and becomes an enumeration the phase owes.
+
+### 4.1s REPORTED AT CLOSE: the assumption audit, re-asked against the code that landed
+
+Seven assumptions, three of which this system does not provide — **and that is still the count**. Each
+re-asked against the code at close rather than against the code proposed:
+
+| the assumption | still the verdict? |
+|---|---|
+| a leader knows its own commit index | **no**, unchanged — the term-start no-op is why, and `NoOpsApplied` is 1,440,422 across the exit run |
+| a heartbeat quorum means *this* leader | yes **only at the broadcast's term**, and that is what the code checks |
+| a read leaves no trace the system depends on | **no**, unchanged since BUG-022 — D-A7-5 is that assumption failing, and it holds by keeping timestamped reads on the log |
+| a follower's applied index is a sound freshness bound | yes — *because a read index is a fact about a position rather than about a node* |
+| the term-start no-op is committed before any read in that term | **not automatically** — `readFloor()` is `max(commitIndex, termStart)` and that is the fix, not a property |
+| serving a read advances no replicated state | **no if the mark ever moves off the log** — B is a phase, not a decision, and it has not been taken |
+| **P-NOOP: `Propose` never issues the zero `ProposalID`** | **yes, and it has NOT silently expired** |
+
+#### P-NOOP, checked rather than assumed
+
+`raft.go:1293` still refuses the zero `ProposalID`. **And the premise now expires loudly at the site
+that depends on it**, which is what §4.1a asked for: `becomeLeader`'s no-op carries the sentence *"if
+it is ever relaxed, this no-op stops being distinguishable from a client proposal and breaks
+SILENTLY"*. The refusal's own doc comment still gives only the original reason — proposal identity —
+so the second reason lives at the dependent rather than at the dependency. That is the weaker of the
+two placements and it is stated here rather than quietly accepted.
+
+#### The audit's own miss, which is the same shape as the audit's justification
+
+**BUG-028 should have been a row and was not.** D-A7-5's ruling rests on one sentence — *a plain read
+has no timestamp to protect* — and that is an assumption in exactly this table's form. Had it been a
+row, the question *does this system provide it?* answers **no**: `serveReadyReads` gave the read a
+timestamp, from the serving replica's own clock, at arrival.
+
+> **An assumption named in a ruling and not in the audit is an assumption nobody re-asks.**
+
+The audit was built because *naming every fact you take is not the same as naming every fact you
+need*. Its own miss is one narrower step: **naming an assumption somewhere is not the same as putting
+it where it gets re-asked.** §5e is the answer to both, and it is the answer because it enumerates a
+class rather than a list.
+
 ### 4.1a P-NOOP, the named premise D-A7-6 rests on, written so it expires loudly
 
 Ansh, ruling A: *"say plainly what the no-op's identity rests on… and add it to the assumption audit
