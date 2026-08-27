@@ -1133,6 +1133,35 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-020 — a test corrected an assumption the author had asserted
+
+**Symptom.** `FileLifetime.AnOpenIteratorHoldsItsInputFilesToo` failed with `expected 200, got 50`.
+
+**Root cause: the expectation, not the engine.** An `Iterator` captures its `Version` and its sequence
+**when it is created**, so it sees the database as of that moment — the 150 keys written afterwards
+are invisible to it by construction. **50 was right.** I had written 200, having assumed an iterator
+tracks the live database.
+
+**Why it is worth an entry rather than a silent fix.** The frozen interface says what an iterator is,
+and I asserted the opposite **in a test I was writing to prove something else**. Had the engine
+happened to behave that way, the test would have passed and **encoded a false claim about the frozen
+contract** in the file a future reader consults for what iterators do.
+
+> **THE FIXTURE-FIRST ORDERING CAUGHT THE AUTHOR RATHER THAN THE CODE**, which is the case for it that
+> is easiest to forget: it is usually argued as *"a checker written afterwards agrees with the
+> implementation"*. This is the other direction — **a checker written first disagrees with the
+> author**, and the author is who was wrong.
+
+**Related but distinct from `HARNESS-006`'s family.** There, a checker wrong in the direction that
+sends debugging to the wrong component. Here the checker was *right* and my expectation of it was
+wrong — which is cheaper, and only because the engine did not share my misunderstanding.
+
+**Fix.** The expectation is 50, with the reason at the assertion, and the comment says what the first
+version was asserting: *that an iterator is live rather than snapshotted, which is not what the frozen
+interface says.*
+
+---
+
 ### HARNESS-019 — the revert that ate a step, after its own entry had been written
 
 **Symptom.** Five mutant patches reported `patch does not apply` at once, and B3.5e's uncommitted
