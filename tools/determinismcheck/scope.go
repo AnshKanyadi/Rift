@@ -67,11 +67,39 @@ var defaultCore = []string{
 // needs a goroutine is therefore an exclusion; a package that needs one
 // time.Now is a hatch.
 var defaultExclude = []string{
-	// DR-11's poller, which adapts the C++ engine's blocking Sync() to the
-	// async durability contract. Whichever of these two names A0.5 and B5
-	// settle on, the other line goes.
-	"github.com/anshkanyadi/rift/engine/real/...",
-	"github.com/anshkanyadi/rift/engine/pump/...",
+	// DR-11's poller was reserved here under two candidate names, "whichever
+	// of these two names A0.5 and B5 settle on, the other line goes."
+	//
+	// BOTH WENT. B1-Q11, ruled at B5: the poller is part of the HARNESS, not
+	// the engine's contract -- a production embedder supplies its own. So
+	// there is no engine/real and no engine/pump, and a reservation for a
+	// package that will never exist is a hole in the boundary held open for
+	// nothing. What actually arrived is the cgo adapter below, which is a
+	// different thing: an Engine implementation, not a poller.
+	//
+	// THE CGO ENGINE. An exclusion rather than a hatch, by this table's own
+	// test: it needs `sync` for its durability callbacks, and no hatch
+	// sanctions sync in core scope. `unsafe` is the second reason and the more
+	// fundamental one -- a cgo boundary is pointer identity and layout by
+	// construction, which is exactly what core scope exists to keep out.
+	//
+	// AND IT IS THE CONSTITUTION'S OWN SCOPING, not a hole: "deterministic-
+	// replay guarantees are scoped to sim runs on engine/model; C++ engine
+	// correctness comes from the Env fault rig, differential tests, corpus
+	// reruns in verification mode, and real chaos." Replay identity is defined
+	// on the model. This package is checked by cpp-cgo and by the differential,
+	// which are the instruments that claim apply to it.
+	"github.com/anshkanyadi/rift/engine/riftcgo/...",
+
+	// The B4 differential judge. Nothing in it executes during a simulated
+	// run: it reads artifact FILES that a finished run left behind, and its
+	// end-to-end test spawns the C++ writer with os/exec. That is
+	// sim/checker's situation exactly, and it gets sim/checker's answer.
+	//
+	// THE JUDGE'S INDEPENDENCE IS WHY IT CANNOT BE IN CORE. It must reach the
+	// filesystem, because reading bytes neither engine handed it is the whole
+	// mechanism by which it is a second opinion rather than a mirror.
+	"github.com/anshkanyadi/rift/engine/differential/...",
 
 	// The hunt driver. Orchestration by Amendment A5's own text, which names
 	// hunters alongside real-mode drivers and cmd/. Named exactly, never as a

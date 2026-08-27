@@ -24,7 +24,7 @@ COLD_CACHE   := ./scripts/cpp-cold-cache.sh
 # The lane set `make cpp-ci` runs under network isolation. It grows as
 # lanes un-stub; every member must be runnable by hand, because nothing
 # runs it for us.
-CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-sweep cpp-diff
+CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-sweep cpp-diff cpp-cgo
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -70,7 +70,10 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 
 .PHONY: determinism
 determinism: ## Custom vet pass: no time.Now, no global rand, no map range, mailbox rule
-	$(GO) run ./tools/determinismcheck/cmd/determinismcheck ./...
+# -tags rift_cgo, so the cgo engine is LOADED AND ANALYZED rather than vanishing
+# from ./... -- see engine/riftcgo/doc.go. The pass only typechecks, so this
+# needs no C++ build; TestHatchRegistry asserts the package was actually seen.
+	$(GO) run ./tools/determinismcheck/cmd/determinismcheck -tags rift_cgo ./...
 
 .PHONY: tooling-only
 tooling-only: ## Assert golang.org/x/tools never enters a shipping binary (DESIGN-A0 Q4)
@@ -191,6 +194,18 @@ cpp-diff: ## B4: the differential harness -- the C++ engine against engine/model
 # engine, so this lane is two processes by construction rather than by
 # discipline -- see docs/DESIGN-B4-verification.md section 4.
 	$(GO) test ./engine/differential/ -count=1
+
+.PHONY: cpp-cgo
+cpp-cgo: ## B5: the Go wrapper over the C boundary, against engine/model
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_capi -j $(WORKERS)
+# ONLY THE ARCHIVE PATH IS HERE. The header's location is package-relative and
+# lives in the source via ${SRCDIR}, so this package TYPECHECKS with no C++ build
+# present -- which is what lets `make determinism` load the whole tree without a
+# C++ toolchain. The archive is a build artifact whose directory this recipe
+# chooses, so it is the one thing the lane has to say.
+	CGO_LDFLAGS="-L$(CURDIR)/$(CPP_BUILD)/test -lrift_capi -lrift_engine" \
+	$(GO) test -tags rift_cgo ./engine/riftcgo/ -count=1
 
 .PHONY: cpp-amp
 cpp-amp: ## B3.7b: compaction amplification -- the measurement that decides B3-D3

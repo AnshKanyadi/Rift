@@ -206,7 +206,20 @@ func TestScopeTable(t *testing.T) {
 
 		// Excluded by name: the real-mode adapters that need what the rules
 		// forbid, and which do not run inside a simulated run.
-		{mod + "engine/real", scopeOff},
+		//
+		// engine/real and engine/pump/poller USED TO BE PINNED HERE, reserved
+		// under two candidate names for DR-11's poller. B1-Q11 ruled at B5 that
+		// the poller is part of the HARNESS and not the engine's contract, so
+		// neither package will ever exist and both reservations went. What
+		// arrived instead is riftcgo -- an Engine implementation over the C
+		// boundary, excluded for `sync` and `unsafe`, neither hatchable.
+		{mod + "engine/riftcgo", scopeOff},
+		{mod + "engine/differential", scopeOff},
+		// AND THE EXCLUSIONS MUST NOT REACH ONE PACKAGE FURTHER, which for
+		// these two is the whole risk: they sit directly beneath engine/...,
+		// the pattern that puts engine/model in scope.
+		{mod + "engine/riftcgonot", scopeCore},
+		{mod + "engine/differentialish", scopeCore},
 		// Both polarities pinned explicitly. Collection runs during a simulated
 		// run and is in scope with no exclusion and no hatches; only the
 		// package that imports porcupine and runs afterwards is excluded, and
@@ -216,7 +229,6 @@ func TestScopeTable(t *testing.T) {
 		{mod + "sim/hunt/inner", scopeCore}, // named exactly: no wildcard adopts a subpackage
 		{mod + "sim/toy", scopeCore},
 		{mod + "sim/plan", scopeCore},
-		{mod + "engine/pump/poller", scopeOff},
 
 		// Orchestration around runs.
 		{mod + "cmd/simctl", scopeOff},

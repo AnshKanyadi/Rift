@@ -513,6 +513,74 @@ data intact and unreachable.
 
 ---
 
+### BUG-007 — a 100 KB value was unreadable through the Go wrapper, and a comment said it was fine
+
+| field | value |
+|---|---|
+| **Found by** | **the B5.2 parity suite, on its first run** — `TestALargeValueCrossesIntact`, no fault of any kind |
+| **Phase** | introduced and found inside B5.2 |
+| **Reproduce** | `make cpp-cgo`; any value larger than `block*1024+4096` bytes, reached by iterating |
+| **Invariant that caught it** | wrapper/model parity — the two engines must return the same state |
+| **Mutant class** | **`BM116`** (the wrapper) and **`BM115`** (the boundary's half), both added in the same PR as the fix |
+| **Fix commit** | this one |
+
+**Symptom.** `iter.Error()` returns `riftcgo: buffer too small` and iteration stops. Every key below the
+large value is returned correctly; the large one and *everything after it* is silently absent, because a
+cursor that errors is a cursor that ends. A caller checking `Error()` sees a failure it cannot act on;
+a caller that only ranges to exhaustion sees **a short database**.
+
+**Root cause, and it is on the Go side.** `rift_iter_block` returns `RIFT_BUFFER_TOO_SMALL` *without
+consuming anything*, precisely so a caller can grow and retry without losing its position. That is the
+documented contract and the C++ side implements it exactly. The wrapper's `fill()` treated the status
+as fatal — it never grew.
+
+**THE COMMENT IS THE ENTRY.** The first version of `fill()` carried this, three lines above the bug:
+
+> *"Sized so an ordinary pair never round-trips twice. A short buffer is CORRECT — the C side holds the
+> pair rather than dropping it — so this is a performance choice and not a correctness one, which is the
+> only reason a guess is acceptable here."*
+
+Every clause is true **of the boundary**. None of it was true of the code beneath it. The comment
+describes a caller that grows; the code was a caller that gives up. And the reasoning it offers — *a
+guess at the buffer size is acceptable because the failure mode is benign* — is exactly the reasoning
+that made the undersized buffer look deliberate rather than unfinished.
+
+> **A COMMENT ASSERTING A PROPERTY THE CODE BESIDE IT DOES NOT IMPLEMENT IS INDISTINGUISHABLE, TO A
+> READER, FROM A COMMENT DESCRIBING ONE. THE EYE SUPPLIES THE MISSING HALF.**
+
+This is `GF-11`'s shape moved one boundary out, and it is worse here than in the C++ engine for a
+structural reason: **the two halves of this contract are in different languages**, so no compiler, no
+type, and no single test file spans them. The C++ suite passed. The Go build passed. The property they
+jointly promise was checked by neither until a test crossed the boundary with a value big enough to
+matter.
+
+**THE FIX WAS TO BOTH SIDES, AND THE SECOND HALF IS THE MORE USEFUL ONE.** The wrapper now grows and
+retries. But a caller told only *"too small"* has to **guess** how much to grow by, and a guess that is
+still too small loops — so the loop would have had no terminating quantity, which `CF-3` forbids.
+`rift_iter_block` now reports the capacities the pair **needs** on that path, exactly as `rift_db_get`
+already did for point reads. One grow always suffices, and the wrapper *asserts* that a second refusal
+is impossible rather than tolerating it.
+
+> **THE BOUNDARY ALREADY HAD THE IDIOM. IT WAS APPLIED TO ONE OF THE TWO CALLS THAT NEEDED IT.**
+
+An inconsistency inside one interface is not a style defect; it is a place where a caller's correct
+instinct — *this call behaves like that one* — produces wrong code. `rift_db_get` taught the wrapper's
+author to expect `needed`, and `rift_iter_block` did not provide it.
+
+**Why the mutant class is two classes.** `BM116` is the defect as it occurred, on the Go side, and it
+is the first mutant in this catalogue that patches Go — the runner always copied the whole tree and
+never cared about the language, so all that was missing was `cpp-cgo`, a lane running the Go half of
+the boundary. `BM115` is the half a Go-only fix would have left standing: a boundary that reports its
+*used* bytes rather than its *needed* ones still refuses correctly, still consumes nothing, and passes
+every C++ test that checks the status code. It is caught only because its covering test asserts the two
+numbers **by name** rather than asserting that the call refused — `GF-25` at the boundary.
+
+**What it would have caused in production.** Any embedder iterating a database containing a value
+larger than its block buffer would read a truncated database, with an error most range loops never
+check. The threshold is a function of the *block size*, so the same database is complete at one
+setting and short at another — which is the worst version of this defect, because the natural
+diagnosis is that the data is missing.
+
 ### HARNESS-001 — a mutation lane's scratch copy silently lost three files of the tree under test
 
 | field | value |
