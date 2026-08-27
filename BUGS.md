@@ -1394,6 +1394,90 @@ third thing: an entry that neither builds the remedy nor admits it did not.
 **The pattern in that table is the argument.** Three built remedies, no recurrence. One written-down
 remedy, one recurrence — and the recurrence cost the largest single loss of work in Track B.
 
+**AND THE ARGUMENT WAS DEMONSTRATED WITHIN HOURS OF BEING WRITTEN.** The `FLOORS.txt` row recording
+`BM105` contained `O(|S|)` — **two delimiters** — which is `HARNESS-017` exactly, recurring on the
+same day. **The lane refused the row.** Nobody remembered anything; the check that was *built* caught
+it at the moment of writing.
+
+> **THAT IS THE WHOLE DIFFERENCE BETWEEN A RULE AND A REMEDY, ARRIVING AS ITS OWN EVIDENCE.** The rule
+> was written that morning by an author who then broke it that afternoon and was stopped by a
+> mechanism rather than by recall.
+
+---
+
+### GF-24 — a count with nothing to derive beats a threshold with a justification
+
+**Raised by** B3.6's first attempt at file lifetime.
+
+Retiring a compaction input, the question is *does anyone still hold this table?* The first version
+compared `shared_ptr::use_count()` at the retirement site against a threshold **worked out by
+reasoning**:
+
+```cpp
+// `t` is one reference, and the caller's `in_l0`/`in_l1` vector is another.
+// Anything above two is a reader.
+if (t.use_count() > 2) { ... }
+```
+
+**A snapshot's input file was deleted underneath it.**
+
+**THE SPECIFIC ERROR IS SUBTLER THAN THE RULE, AND IT IS WHY THE RULE IS NEEDED.** `t` is declared
+`const std::shared_ptr<sst::Table>&` — **a reference to the vector's element, not a copy.** It adds
+nothing to the count. The arithmetic was correct about a world with one more reference in it than
+this one has.
+
+> **REASONING CANNOT CATCH THIS CLASS, BECAUSE THE REASONING IS WHAT IS WRONG.** Re-reading the
+> justification confirms it. Every step follows; the premise about how many holders exist is the
+> defect, and it is the same premise the re-reading uses.
+
+**The remedy is structural, and it generalises past reference counts:**
+
+> **PREFER A COUNT WITH NOTHING TO DERIVE OVER A THRESHOLD WITH A JUSTIFICATION. THE JUSTIFICATION IS
+> THE PART THAT GOES STALE.**
+
+Every retired table now goes on **one list**, and the count is taken in **one place** with **one
+holder to subtract**: `use_count() == 1` on `obsolete_` means the list is the only holder. There is no
+arithmetic, so there is nothing to get wrong — and, more to the point, **adding a local anywhere else
+cannot move the answer.** The original threshold would have silently changed meaning the first time
+someone introduced a variable between the vector and the call.
+
+**The family.** It is `GF-13`'s cousin — *a bound derived from another instrument's measurement cannot
+be raised* — with the derivation done in a comment rather than by an instrument. `GF-13` says where a
+number should come from; this says a number you have to *argue for* is a number that will be wrong
+later, whoever argues.
+
+---
+
+### GF-25 — a gate on the mechanism and a test on the answer are two instruments, not one
+
+**Raised by** B3.6's file-lifetime gate, and it is `GF-22` one level down.
+
+`GF-22`: two defects whose symptoms cancel are invisible to every test that asserts an **answer**.
+This is the same observation without needing two defects:
+
+> **WHEN THE ANSWER IS RIGHT FOR AN ACCIDENTAL REASON, ONLY AN ASSERTION ABOUT THE MECHANISM CAN TELL
+> YOU.**
+
+**The instance.** A snapshot reading through a compacted-away table returns the correct value whether
+or not the file still exists — `table.h` holds the image resident, so the bytes are there either way.
+A test that read through the snapshot would have passed against a build that deleted the file
+immediately, **and it did**: three of B3.6's four tests passed while the reference count was wrong.
+
+**So the pair is:**
+
+| instrument | asserts | catches |
+|---|---|---|
+| `FileLifetime.AnInputFileOutlivesTheCompactionWhileASnapshotHoldsIt` | **the file is on disk** | the mechanism failing while residency masks it |
+| `...ASnapshotSurvivesTwoCompactionsAndReadsThroughThem` | **the read is right** | the mechanism working and the read still wrong |
+
+**Neither is sufficient and neither is redundant.** Drop the first and the reference count can be
+deleted entirely with every test green. Drop the second and the file can be kept alive while the
+version it holds is wrong.
+
+**It is the same shape as `covers-correctness:` versus `covered-by:` in `FLOORS.txt`** (`GF-12`), and
+as the two instruments B3-D7a requires of every loop: **the danger is never that one instrument
+fails, it is that one instrument passing feels like coverage it does not provide.**
+
 ---
 
 ### GF-22 — two defects whose symptoms cancel are invisible to every test that asserts an answer
