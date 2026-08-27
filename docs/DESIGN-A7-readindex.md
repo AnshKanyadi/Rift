@@ -1472,6 +1472,66 @@ separates an oracle that works from one that merely speaks.
    are unevidenced is a list, not a finding.** It has already returned BUG-028, which no sweep and no
    review found.
 
+### 8.2r RULED: `make mutants` is INVALID at close, and the gate is ruled rather than waived
+
+**Ansh, 2026-08-27:** *"A7 signs without `make mutants` green, and the gate is ruled rather than
+waived. The distinction matters, so here is the reasoning on the record."*
+
+**The state, stated plainly.** `make mutants` reports:
+
+```
+INVALID  the unpatched tree does not pass the packages these mutants target.
+         panic: test timed out after 2h0m0s
+```
+
+**Four things the next person needs, and they are separable:**
+
+**1. It is INVALID because its baseline cannot finish — not because a mutant survived.** The lane
+refuses to attribute anything to a tree it could not first watch pass, which is the lane working. No
+mutant has been reported ALIVE. The failure is upstream of the question the lane exists to ask.
+
+**2. No A7 class is unverified by it.** Each of the nine classes this phase added — `M74`, `M76`–`M82`
+and `M34`/`M46` re-pointed — was **induced by hand and confirmed individually**, and
+`make mutant-covered ONLY="<id>"` is green for each. What the lane cannot do is run all seventy in one
+pass inside any timeout a person would set. That is a statement about the *suite*, not about any
+class in it.
+
+**3. The cause is inherited, and it is measured.** Eight sweep-based covering tests from A1 through
+A6 — ~1,928 seeds, listed by name and class in CARRY-FORWARD — put the baseline over **two hours of
+monotonic time**, before any of the seventy per-mutant runs. A7 converted nine covering tests from
+sweeps to directed tests, taking the lane from **six days to a two-hour baseline**; it did not create
+the residue and cannot honestly remove it, because **writing directed replacements for classes whose
+defects you have not studied is how a covering test comes to name the wrong assertion** — which is
+exactly the failure this phase spent itself finding in `M34` and `M46`.
+
+**4. What would make it green.** Converting those eight, each at the phase that next touches its
+class, alongside work that already requires understanding the defect. That is recorded as a named,
+dated obligation with the measured number attached rather than an estimate.
+
+#### Why the 8-hour timeout was refused
+
+`scripts/mutants.sh` prescribes its own remedy — *"The remedy is to give it enough time, never to
+shorten the sweeps"* — and a future reader **will** reach for it, so this is written where they will
+be standing:
+
+> **Raising the timeout would make the number pass without making the claim true.**
+
+The prescription is **right in direction and does not scale**. It is correct that shortening a sweep
+is worse than waiting for it; it is not correct that waiting is a remedy for a lane whose cost grows
+with the *number* of sweeping tests. The Makefile's own header already says why: *the cost is driven
+by the number of sweeping tests, not by any one bound.* At eight sweeps the answer is hours; the
+answer to the next eight is not a bigger number.
+
+#### And the difference this section exists to make
+
+> **A gate that cannot pass for a stated reason, recorded, is different from a gate quietly excluded —
+> and the difference is that this one is written where the next person meets it.**
+
+Not in a commit message, not in a handoff that expires, and not in the sign-off's silence: in §8, next
+to the criteria it belongs to, with the cause, the scope, the measurement and the remedy.
+
+---
+
 ### 8.3 Seed count and sequencing
 
 25,000, sharded, as A6 ran. `make exit-run` is one command and the machinery is built.
