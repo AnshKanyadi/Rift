@@ -886,6 +886,55 @@ would have caught the next one. The two tests added with BUG-025 are that thing,
 
 ---
 
+## 5b0. Three ways an oracle fails, and this phase produced one of each
+
+**Ansh, ordering the narrative:** *"the narrative with all three oracle entries in one section — not an
+oracle that was wrong, not an oracle that was silent, but a guarantee that was copied without its
+reason."*
+
+An oracle is the only thing standing between a green run and a false claim, so the ways it can fail
+are worth enumerating rather than meeting one at a time. A7 produced three, and they are genuinely
+distinct — different symptoms, different detectors, different remedies.
+
+| | what failed | how it showed | what found it | the remedy |
+|---|---|---|---|---|
+| **1. The oracle was WRONG** (§5b) | `read-index-answers-match-the-log` compared against `Index` rather than `AppliedAt`, so it would have failed **clean** runs | a mutant's kill carried a verdict describing state *ahead* of the confirmed index — which is not what the mutant plants | `M76`, by the discrepancy between the verdict and the planted defect | compare at the position the node reached; *too fresh is not stale* |
+| **2. The oracle was RIGHT and SILENT** (BUG-026) | the same oracle checked *agreement with the log* and nothing checked *ownership of the key* | nothing. The live answer and the replay agreed, both saying "not found" | porcupine, and only because a client happened to observe the write | give it the half it was missing, and enumerate the class (§5e) |
+| **3. The GUARANTEE was copied without its reason** (BUG-028) | `serveReadyReads` copied *answered-at-a-timestamp* from `answerAt`, where that is safe **because the entry's timestamp is log-ordered** | nothing either — and both the code and the model asked the same wrong question, so they agreed | **the §5e enumeration**, by listing the property and asking whether read index kept it | ask the question a plain read actually asks: the latest version |
+
+### 5b0.1 Why the third is not a special case of the second
+
+The second is an **instrument** problem: a property nobody assigned to a checker. The third is a
+**code** problem that *produced* an instrument problem — and it is the more dangerous of the two,
+because the wrong question propagated.
+
+`ReadAt(key, ts)` returns *the newest version at or before ts*. The replicated path passes it the
+entry's timestamp, which is log-ordered and therefore above every earlier write's, so the answer is
+the latest. `serveReadyReads` passed it a clock reading, which is not. **Both sites look right in
+isolation**, and `answerAt`'s comment — *"answered at its own timestamp… not at the newest version"* —
+is true where it is written and false where it was copied.
+
+> **Copying the shape of a guarantee is how you lose it quietly.**
+
+And the model inherited the mistake: `ValueAtIndex` also read at the recorded timestamp, so the oracle
+and the system were wrong in the same way and agreed. Correcting the model to read the **latest**
+version is what made the defect speak — and the first thing it said was a **false accusation** on seed
+36, which turned out to be BUG-032. Three instrument corrections in one phase, each of which exposed
+the next.
+
+### 5b0.2 What the three have in common, which is the part worth carrying
+
+None of them was found by reading the code. §5b was found by a mutant whose kill was *too good*;
+BUG-026 by a client that happened to observe the write it missed; BUG-028 by an enumeration; BUG-032
+by chasing an accusation instead of tuning the accuser.
+
+> **An oracle's failure is not visible from inside the oracle.** Every one of these was found by
+> something outside it — a mutant, a client, a table, a contradiction — and the practical consequence
+> is that an instrument needs an instrument, which is what §8.1b's two-numbers rule and §5e's
+> enumeration are both for.
+
+---
+
 ## 5b. A mutant found a defect in the instrument aimed at it
 
 Every prior instance in this project is a planted defect revealing something about **coverage** or
