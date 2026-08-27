@@ -1,10 +1,9 @@
 # id: M74-noop-reaches-a-state-machine-arm
-# covering-test: TestRaftExitCriteria
-# package: ./sim/hunt/
 # expect: killed
-# power-seeds: 30
-# power-detector: sweep
-# power-measured: 30 seeds, current, sharded once: the sweep detector fires with 1599 dataless entries matching a state-machine arm, against a clean tree at sweepfail=0 -- so the criterion is a DIFFERENCE and not a presence. Per-seed rate is 0 of 30 because a no-op reaching the KV arm decodes to an empty command and changes nothing observable per seed; the class is visible only as an aggregate, which is why it declares a sweep detector on M73's precedent. 1599 is the same number NoOpsApplied reads on the clean tree, which is the tightest possible confirmation that the mutation routes every no-op into the arm
+# covering-test: TestATermStartNoOpMatchesNoStateMachineArm
+# package: ./store/
+# power-covered-by: TestATermStartNoOpMatchesNoStateMachineArm -- a DIRECTED test on the entry raft actually produces. Becoming leader appends the no-op, the loopback scheduler lets it commit, and the two propositions are then counted on a real applied entry rather than hoped for across a sweep. It asserts its own non-vacuity first: no no-op applied means the two zeros are statements about an entry that does not exist
+# power-refutation: this class named TestRaftExitCriteria, a 10,000-seed sweep costing 19 hours per invocation at the exit run's measured 6.9 s/seed. Seven mutants named it, so make mutants -- which is in the ci target -- asked for six days for that one covering test, and its baseline timed out and reported INVALID. A covering test built on a sweep stops covering when the workload moves and does it silently; this one is directed and cannot
 # mutates: the apply switch's last arm drops its len(e.Data) > 0 guard, so a term-start no-op falls into the KV command path and is decoded as a command. D-A7-6's FIRST proposition -- no committed entry with empty Data ever reaches a state-machine arm -- negated. Ansh, ruling A: a guard whose stated purpose no longer covers everything resting on it is exactly how BUG-022 happened, so each of the two guards gets its own mutant per section 22.6b: they are independently removable and a single mutant would pass on half the protection
 --- a/store/node.go
 +++ b/store/node.go

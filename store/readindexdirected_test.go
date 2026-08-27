@@ -268,3 +268,141 @@ func TestASnapshotInstallAdvancesTheAppliedIndex(t *testing.T) {
 			snapIndex, r.applied)
 	}
 }
+
+// leaderReplica returns a single-voter replica that has actually become leader,
+// with its term-start no-op appended, committed and applied.
+//
+// The loopback scheduler is what makes that true rather than nearly true: a
+// leader's own append counts toward its quorum only once the driver reports it
+// durable, so without feeding the completion back the no-op never commits and
+// every read waits on an index the log will never reach.
+func leaderReplica(t *testing.T) (*Node, *Replica, *sim.History, *loopback) {
+	t.Helper()
+	m, r, hist := directedReplica(t)
+	lb := &loopback{m: m}
+	if err := r.raft.Campaign(); err != nil {
+		t.Fatalf("campaign: %v", err)
+	}
+	r.drain(serveAt, lb)
+	if r.raft.Role() != raft.RoleLeader {
+		t.Fatalf("the single-voter replica did not become leader: %v", r.raft.Role())
+	}
+	return m, r, hist, lb
+}
+
+// TestATermStartNoOpMatchesNoStateMachineArm is D-A7-6's two propositions, and it
+// replaces a 10,000-seed sweep with the entry itself.
+//
+// The no-op is `EntryNormal`, nil `Data`, the zero `ProposalID`. The apply
+// switch's arms are `isTxnCommand`, `isSplitCommand` and `len(e.Data) > 0`, with
+// NO default — so a dataless entry matches nothing by construction rather than by
+// luck. This counts the construction being true, on an entry raft actually
+// produced.
+func TestATermStartNoOpMatchesNoStateMachineArm(t *testing.T) {
+	_, r, hist, lb := leaderReplica(t)
+
+	// # An ordinary command is applied too, and that is not decoration
+	//
+	// The mutation replaces the `len(e.Data) > 0` arm with a `default`, so a test
+	// that applies only DATALESS entries never executes the line it changes --
+	// `mutant-covered` called the first version of this test DEAD for exactly
+	// that. The contrast is also what makes the assertion mean something: the
+	// switch has to route a real command to that arm and the no-op to none.
+	idx := hist.Begin(0, 0, 1, "put", "k", "v")
+	r.onClient(Request{Op: "put", Key: "k", Value: "v", HistIdx: idx})
+	r.drain(serveAt+1, lb)
+	var applied bool
+	for _, e := range hist.Events() {
+		if e.Key == "k" && !e.InFlight() {
+			applied = true
+		}
+	}
+	if !applied {
+		t.Fatal("the ordinary command was never applied, so the data arm was not executed and " +
+			"this test covers only half the switch")
+	}
+
+	// Non-vacuity: becoming leader must have produced a no-op.
+	if r.NoOpsApplied() == 0 {
+		t.Fatal("no term-start no-op was applied, so the two zeros below are statements about " +
+			"an entry that does not exist")
+	}
+	if got := r.NoOpReachedArm(); got != 0 {
+		t.Errorf("a dataless entry matched %d state-machine arm(s). The apply switch has no "+
+			"default precisely so this cannot happen; an arm that accepts the no-op applies a "+
+			"COMMAND the cluster never issued (DESIGN-A7 section 3a.2)", got)
+	}
+	if got := r.NoOpAnswered(); got != 0 {
+		t.Errorf("the no-op answered %d client operation(s). Its identity is the ZERO ProposalID, "+
+			"which Propose refuses, so it can match no client's proposal -- and answering one "+
+			"would tell a client its write succeeded when nothing of its was applied", got)
+	}
+}
+
+// TestAReadIsNotAnsweredBeforeItsOwnApply is section 1.1's SECOND condition, and
+// it is the half that gets forgotten because the hard-looking half — talking to a
+// quorum — is already done.
+func TestAReadIsNotAnsweredBeforeItsOwnApply(t *testing.T) {
+	m, r, hist := directedReplica(t)
+	put(t, m, r, "k", 100, "v")
+
+	idx := hist.Begin(0, 0, 1, "get", "k", "")
+	r.pendingReads = append(r.pendingReads, pendingRead{
+		ctx: []byte("c1"), histIdx: idx, key: "k", index: 9,
+	})
+	r.applied = 3
+	if r.applied >= 9 {
+		t.Fatal("this replica has already applied past the confirmed index, so waiting is " +
+			"vacuous here")
+	}
+
+	before := r.ReadsServed()
+	r.serveReadyReads(serveAt, &recordingScheduler{})
+
+	if got := r.ReadsServed(); got != before {
+		t.Errorf("the read was answered with applied=%d against a confirmed index of 9.\n"+
+			"  The quorum establishes a POSITION -- that this leader was still leader at or "+
+			"after the read arrived -- and says nothing about whether THIS node has got there. "+
+			"Answering before it has is reading your own past.", r.applied)
+	}
+	for _, e := range hist.Events() {
+		if e.Key == "k" && !e.InFlight() {
+			t.Errorf("the operation was ended as %v with %q before this replica applied to the "+
+				"confirmed index", e.Outcome, e.Value)
+		}
+	}
+	if len(r.pendingReads) != 1 {
+		t.Errorf("the read was dropped rather than kept waiting: %d pending", len(r.pendingReads))
+	}
+}
+
+// TestASnapshotReadKeepsItsLogEntry is D-A7-5's boundary, ruled A.
+//
+// A PLAIN read has no timestamp to protect. A SNAPSHOT read at T is a promise
+// about T that a later commit can break, and BUG-022's third first-committer-wins
+// guard rests on the read mark it leaves — a mark that is a function of the log
+// ONLY because every such read is a log entry. A snapshot read answered off the
+// log stages nothing and the guard consults a record that does not exist.
+func TestASnapshotReadKeepsItsLogEntry(t *testing.T) {
+	m, r, hist, _ := leaderReplica(t)
+	put(t, m, r, "k", int64(r.hlc.Now().Wall)-1_000_000_000, "v")
+
+	// A plain read takes the read-index path: the premise of the contrast.
+	plain := hist.Begin(0, 0, 1, "get", "k", "")
+	r.onClient(Request{Op: "get", Key: "k", HistIdx: plain})
+	if len(r.pendingReads) != 1 {
+		t.Fatalf("a PLAIN read did not take the read-index path (%d pending), so the contrast "+
+			"below is not a contrast", len(r.pendingReads))
+	}
+	r.pendingReads = nil
+
+	// A read naming a remembered timestamp must NOT.
+	snap := hist.Begin(0, 0, 2, "get", "k", "")
+	r.onClient(Request{Op: "get", Key: "k", HistIdx: snap,
+		ReadTS: hlc.Timestamp{Wall: clock.NewWall(int64(r.hlc.Now().Wall) - 500_000_000)}})
+	if len(r.pendingReads) != 0 {
+		t.Errorf("a read naming a timestamp was queued on the READ-INDEX path (%d pending).\n"+
+			"  It stages no read mark there, so BUG-022's guard consults a record that does not "+
+			"exist and a prewrite that should be refused is accepted (D-A7-5).", len(r.pendingReads))
+	}
+}
