@@ -858,13 +858,59 @@ this survive is a loud failure instead of a slow divergence.
 | **Found by** | sim — a raft refusal, seed 9595 of the A4 exit sweep |
 | **Phase** | A4 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M46-split-inherits-the-appended-configuration.patch && go run ./cmd/simctl replay --bundle seeds/BUG-015` |
-| **Reproduce (seed)** | found at seed **9595** of the 10,000-seed exit sweep. `seeds/BUG-015` carries seed **16** and **does not currently reproduce**: A6's workload moved the trace, `M46` detects at 1 in 3,000, and the replacement seed comes from the mutant power measurement under A6's shape (DESIGN-A6 §16.2). The entry is blocked, not retired |
+| **Reproduce (seed)** | **16** — and it does **not** currently reproduce; see *The search, and why the null is a finding* below |
 | **Invariant that caught it** | none — a refusal, from `ApplyConfEntry` declining an illegal transition |
 | **Mutant class** | none existed — added `M46-split-inherits-the-appended-configuration` |
 | **Fix commit** | ebea8c5 |
 | **Minimized?** | no |
 
-**Symptom, verbatim:**
+**The search, and why the null is a finding** *(2026-08-27, and it is OPEN)*.
+
+`seeds/BUG-015` carries seed 16 and replays **identically** with `M46` applied. It was found at seed
+**9595** of A4's 10,000-seed exit sweep; A6's workload moved the trace, then A7's term-start no-op
+moved it again. Under the standing rule it is **not retired on a null** — the entry is blocked.
+
+**§5e.2b's four axes were varied before any null was read as reach**, and three of them returned
+measurements:
+
+| axis | what was asked | what it returned |
+|---|---|---|
+| **line** | is `left.raft.ConfigurationAt(index)` the line that carries the property? | **yes** — `conf` flows straight into `snapMeta.Conf`, the right range's birth configuration, and into the ledger's `RecordRangeBase`. The aim is right |
+| **code position** | does the covering test execute it? | **unresolved** — `TestSplitInheritsTheConfigurationAtItsIndex` is a **1,000-seed serial sweep** taking over an hour, and `scripts/mutant-covered.sh` has no per-mutant filter, so the question costs a full suite run. *That cost is itself the finding: a covering test nobody can afford to run inside a phase is not a covering test.* |
+| **role** | must the applying replica hold a divergent appended tail? | **yes**, and it happens |
+| **time** | must a configuration entry be appended **above** the split's index before the split applies? | **yes, and it occurs** — measured off the wire as a deliberate LOWER bound (a conf entry that arrived no later than the split entry is certainly appended when the split applies) |
+
+```
+current   2675 split entries applied / 200 seeds ->  8 met the precondition, first at seed 23
+a4        1128 split entries applied / 200 seeds -> 25 met the precondition, first at seed  1
+```
+
+**The precondition occurs, and three times more often under `a4` than under the shape `M46`'s floor
+names.** So the null is not about reach.
+
+**Detection, against that:** 0 of 400 under `current`; 0 of 200 under `a4`; and **0 at seeds 23 and 1
+specifically**, where the precondition demonstrably fired.
+
+> **The gap is between the precondition and the consequence.** A divergent birth configuration is not
+> yet a defect. It becomes one only when the new range **then receives a membership entry** that the
+> replica which started behind reads as an illegal transition — and that needs a conf change aimed at
+> a range that was born moments earlier and has to survive long enough to receive it.
+
+**What it would take to reach the class.** Not more seeds: a **workload** that drives a membership
+change onto a newly born range. Every shape in the tree schedules conf changes against the cluster and
+lets ranges be split out of it; none deliberately targets a just-split range. That is a property of
+the schedule generator, not of the seed space, and 600 seeds across two shapes is enough evidence to
+say a seed search is the wrong instrument.
+
+> **Which is BUG-024's conclusion arriving again: a per-seed bundle may be the wrong artifact for this
+> class.** A bundle pins one schedule. A class that needs two independent things to coincide — a
+> divergent tail at a split, and a membership change onto the range that split produced — is better
+> served by a directed test that arranges both than by a search hoping a seed does.
+
+**Not retired.** `M46` is `expect: killed` and its covering test still exists; what is open is the
+BUNDLE, and the honest state is that this corpus entry has no reproducing schedule at HEAD.
+
+**Symptom, verbatim:
 
 ```
 node 2: range 4: raft: node 3 refused the configuration entry at index 5:

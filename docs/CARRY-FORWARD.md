@@ -667,3 +667,39 @@ question**; the equivalent here is a check that every field of `hunt.RaftOptions
 `TestAddCensusCoversEveryField`, which exists because a counter added to one place and not the other
 reads low. **A bundle records the shape its writer knows how to write down, and nothing today asks
 whether the writer knows the whole shape.**
+
+---
+
+## BUG-015 is OPEN, and the next step is not another search
+
+**2026-08-27.** `make corpus-reproduces` reports **20 checked, 4 skipped, 1 failure**, and the failure
+is `seeds/BUG-015`. BUG-009 is resolved at seed 155; this one is not, and it is **not retired on a
+null** — the search is recorded in its BUGS.md entry with all four axes.
+
+**What was measured:** the precondition occurs (8 in 200 seeds under `current`, 25 in 200 under `a4`),
+detection does not (0 of 400 under `current`, 0 of 200 under `a4`, 0 at the two seeds where the
+precondition demonstrably fired). The gap is between precondition and consequence: a divergent birth
+configuration only becomes a defect when the **new** range subsequently receives a membership entry
+the behind replica reads as illegal.
+
+**So the next step is a workload change, not more seeds.** No shape in the tree aims a configuration
+change at a range that was split out moments earlier; every one of them targets the cluster and lets
+ranges appear underneath. Three candidates, cheapest first:
+
+1. **A directed test** that arranges both halves — a split applied with a conf entry appended above
+   it, then a membership change on the range that split produced. This is what `M46` should be
+   floored against, and it makes the class a *test* rather than a *search*.
+2. **A schedule-generator option** that targets a recently-created range with a conf change, declared
+   the way `floors.go` requires — a schedule mix is a claim about reachability, so adding one changes
+   which defects the sweep can find and must say so.
+3. **A wider search**, which is the option this record exists to argue against: 600 seeds across two
+   shapes returned nothing while the precondition fired sixteen times, so more seeds buy more of the
+   precondition and none of the consequence.
+
+**And the covering test cannot be used to check any of this as it stands.**
+`TestSplitInheritsTheConfigurationAtItsIndex` is a 1,000-seed serial sweep, over an hour, and
+`scripts/mutant-covered.sh` has no per-mutant filter — so the code-position axis costs a full suite
+run to ask. **A covering test nobody can afford to run inside a phase is not a covering test**, and a
+lane with no filter turns one question into sixty.
+
+**Track A does not exit while `corpus-reproduces` is red.**
