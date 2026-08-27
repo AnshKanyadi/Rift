@@ -1,12 +1,9 @@
 # id: M34-append-from-zero-over-a-snapshot
-# covering-test: TestSnapshotPrefixIsNotOverwritten
-# package: ./sim/hunt/
 # expect: killed
-# power-seeds: 3000
-# power-config: a2
-# power-floor: 1
-# power-ceiling: 2700
-# power-measured: 2 of 3000, first at seed 2065, under a2 at commit A5-close; was 2 of 3000, first at seed 2065, at commit 6e716d5+A5-open
+# covering-test: TestASnapshottedPrefixRefusesAnAppendFromZero
+# package: ./raft/
+# power-covered-by: TestASnapshottedPrefixRefusesAnAppendFromZero -- a DIRECTED test, and the exemption is earned by measurement rather than by the sentence. The PRECONDITION is an append from index 1 carrying entries arriving at a node whose prefix is ALREADY in a snapshot, and counted with the ordering rather than assumed it reads: A7 shape 1 in 200 seeds (5,051 such appends, one meeting the ordering, at seed 155); a3 0 of 200; a2 0 of 200. The previous declaration floored this class under a2 -- a shape in which the precondition does not occur at all -- and cited 2 of 3000 at commit A5-close, before the term-start no-op moved every trace. Re-measured at HEAD: 0 of 3000 under a2. The class did not become safe and it did not become unreachable; the floor was pointed at a shape that cannot produce it. The directed test gives the node a snapshot itself and cannot drift, and it kills this patch by the original symptom: a panic from truncateFrom, "an entry this node was told was committed is being overwritten"
+# power-refutation: the sweep is not the instrument, and the previous covering test proves the point rather than the class -- TestSnapshotPrefixIsNotOverwritten is a 3,000-seed A2 sweep that PASSES with this patch applied at HEAD, so the mutant survived its own covering test for a phase. A covering test built on a sweep stops covering when the workload moves, and it does it silently
 # mutates: a node whose applied prefix is already in a snapshot accepts an append starting at index 1, because the consistency check treats PrevLogIndex 0 as agreeable to everybody. It then overwrites entries it has already applied and told the cluster were committed
 --- a/raft/raft.go
 +++ b/raft/raft.go
