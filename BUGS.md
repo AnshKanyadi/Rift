@@ -1513,6 +1513,54 @@ it at the moment of writing.
 > was written that morning by an author who then broke it that afternoon and was stopped by a
 > mechanism rather than by recall.
 
+**A THIRD SAME-DAY INSTANCE, AND IT BROKE IN THIS FILE.** A B3.7 report named `HARNESS-021` and
+`HARNESS-022` in its summary block **before either entry had been written** — two ids that resolved to
+nothing, in the file whose job is recording gaps. Caught by re-reading the report, which is `GF-29`'s
+least reliable instrument, and filed at `07044c3`.
+
+**Three instances, all in one day, all in the hands of the author who had just written the rule.**
+That is not carelessness worth apologising for; it is the rule's own claim being demonstrated:
+**a remedy that lives in someone's attention fails at the rate attention fails**, which is often, and
+independently of how recently the rule was written.
+
+---
+
+### GF-29 — a broken instrument hides the questions you would ask about a working one
+
+**Raised by** `HARNESS-021` and `HARNESS-022`, B3.7b — the same instrument, two defects, found hours
+apart and **the second only findable after the first was fixed.**
+
+`HARNESS-021` made write amplification print **`0.00`**. While that number stood there was **nothing
+to be suspicious of**: no reason to ask what conditions it was true under, because it plainly was not
+true at all. Only once it read `8.08` did the next question become askable — *is this a steady-state
+value or a snapshot mid-cycle?* — and the answer was `HARNESS-022`.
+
+> **FIXING ONE INSTRUMENT DEFECT IS WHAT MAKES THE NEXT ONE FINDABLE. SO A SINGLE DEFECT IN AN
+> INSTRUMENT SHOULD RAISE THE PRIOR ON THERE BEING ANOTHER**, and the moment to look is immediately
+> after the first fix, while the output is being read closely for the first time.
+
+**AND THE COUNTERFACTUAL IS THE ARGUMENT, which is why it is recorded as a number and not a worry:**
+
+| what the broken field returned | what would have happened |
+|---|---|
+| **`0.00`** — impossible | caught in one reading; the instrument was **saved by the magnitude of its own error** |
+| **`4.2`** — plausible | `BENCHMARKS.md` would carry a wrong write-amplification curve, `B3-D3` would have been ruled on it, and **nothing in the repository would disagree** |
+
+> **A VALUE THAT CANNOT BE TRUE IS A GIFT. THE DANGEROUS INSTRUMENT DEFECT IS THE ONE THAT RETURNS
+> SOMETHING PLAUSIBLE.**
+
+**What follows for how instruments are built.** Prefer a reading whose failure mode is *impossible*
+over one whose failure mode is *merely wrong*: a count that must be non-zero, a ratio with a floor
+that physics forbids crossing (*every byte is written to the WAL and again to a table, so write
+amplification below 2 is the instrument, not the engine*), a bound the workload cannot exceed. Those
+are the assertions `AmpInstrument.*` now carries, and they exist because **a plausible wrong number is
+indistinguishable from a result.**
+
+**It is `GF-26` from the other side.** `GF-26` says an instrument with no class floored against it has
+unknown sensitivity. This says an instrument that is *itself* broken has unknown sensitivity **about
+its own defects** — and both are answered the same way: put a class under the instrument, not only
+under the thing it measures.
+
 ---
 
 ### GF-26 — a new regime is not landed until one class is floored against it

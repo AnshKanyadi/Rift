@@ -1,6 +1,6 @@
 # DESIGN-B4: verification hardening — the differential harness, and what it compares
 
-**Status: PROPOSED. Nothing in B4 is written until this is ruled on.**
+**Status: APPROVED 2026-08-27. Topology ratified; B4-Q1, B4-Q2 and B4-Q3 all ruled — see §10.**
 **Phase:** B4 (Track B). **Author:** Claude (Session B). **Decider:** Ansh.
 **Depends on:** B3, signed 2026-08-27. **Blocks:** B5, I1.
 **Carries:** `CARRY-FORWARD.md` **CF-3** (standing) and **CF-4**, which comes due here.
@@ -74,7 +74,19 @@ it makes every B4 differential failure ambiguous between *the engine*, *the bind
 three suspects where the point of a differential is to have one. B5's own criterion, *"differential
 tests pass through the cgo path"*, is only meaningful **if the path is the new variable.**
 
-**Recommendation: (b).**
+**RECOMMENDATION: (b). RATIFIED 2026-08-27.**
+
+**The argument, quoted rather than summarised, because it is the decision:**
+
+> **THE MODEL'S VALUE AS A REFERENCE IS THAT TRACK A WROTE IT FOR A DIFFERENT PURPOSE AND HAS BEEN
+> RUNNING ON IT SINCE A0. A PORT DISCARDS EXACTLY THAT.**
+
+**The rejected alternatives, with their reasons, for the record:**
+
+| rejected | reason |
+|---|---|
+| **(a) port `engine/model` to C++** | it compares the engine against **a same-author, same-day second implementation** — the shared-blind-spot failure `B3-D2b` spent a phase avoiding. An agreement between two things one person wrote in one sitting is evidence about that person, not about the contract |
+| **(c) bring B5's cgo binding forward** | **inverts a dependency the phase plan chose**, and gives every failure **three suspects** — engine, binding, rig — where the point of a differential is to have one. B5's own criterion, *"differential tests pass through the cgo path"*, is only meaningful if the path is the new variable |
 
 **What (b) costs, stated rather than discovered:** an artifact format, which is a fourth thing that
 can be wrong; and the rig cannot interleave the two engines operation-by-operation, so a divergence is
@@ -234,7 +246,22 @@ attached.
 
 ## 10. Open questions for Ansh
 
-**B4-Q1 — WHICH `engine/model` DOES THE JUDGE COMPARE AGAINST, AND WHO OWNS IT?**
+**B4-Q1 — RULED (b): PIN BY COMMIT IN THE ARTIFACT.**
+
+The judge compares against `engine/model` **at a named commit, recorded in the artifact**, and:
+
+- **a replay that cannot resolve that commit FAILS LOUDLY rather than falling back to `HEAD`** — a
+  fallback would silently compare against a different reference and report the difference as a
+  divergence in the engine;
+- **the judge REFUSES to run against a dirty `engine/model` worktree**, because a run at an
+  uncommitted tree names a commit that does not contain what ran.
+
+> Track A's reason, one layer out: **an exit run at an uncommitted tree names a commit that does not
+> contain what ran, and a differential artifact naming no commit is the same defect.**
+
+*Retained below as raised.*
+
+**B4-Q1 (as raised) — WHICH `engine/model` DOES THE JUDGE COMPARE AGAINST, AND WHO OWNS IT?**
 
 This worktree (`rift-b`) has its own `engine/model` because it is a worktree of the same repository —
 but it is **a different branch**, and Track A owns that file. Three readings:
@@ -251,14 +278,46 @@ but it is **a different branch**, and Track A owns that file. Three readings:
 which is yours. **(b) is also what makes a B4 finding survivable**: a divergence recorded against a
 named model commit is still reproducible after Track A moves on.
 
-**B4-Q2 — WHERE DOES THE GO JUDGE LIVE?**
+**B4-Q2 — RULED: THE GO JUDGE LIVES ON `main`, IN TRACK A's TREE, IN ITS OWN PACKAGE.**
+
+It consumes `engine/model` and it is Go, **so it belongs where its dependency lives**; putting it on
+`rift-b` would mean a copy or a cross-worktree import.
+
+**Sequencing, fixed:** Session B writes it and commits it on `rift-b` **in a directory that will
+move**; Ansh merges to `main`; Session B then consumes it from there. **The paths are reported before
+they are written**, so the shape is confirmed rather than discovered at merge.
+
+*Retained below as raised.*
+
+**B4-Q2 (as raised) — WHERE DOES THE GO JUDGE LIVE?**
 
 It is Go code that imports `engine/model`, and Track A owns the Go tree. A new package
 (`engine-cpp/differential/` or `tools/differential/`) is Track B's own file and collides with nothing
 today — but it is **Go code on the `rift-b` branch**, and the merge is yours to sequence. I will not
 write into any existing Go package.
 
-**B4-Q3 — IS THE ARTIFACT FORMAT A FROZEN SURFACE?**
+**B4-Q3 — RULED: FREEZE IT, WITH THE CORPUS PROMISE ATTACHED.**
+
+It costs more now, and **B4's own expectation is the reason**: every rig in this project has found real
+defects on its first outing, and
+
+> **A DEFECT FOUND THROUGH A SCRATCH ARTIFACT IS A DEFECT YOU CANNOT HAND ANYONE.**
+
+`seeds/`'s property arriving in Track B is the phase's most valuable byproduct, and it is **much
+cheaper to build in than to retrofit — as Track A learned twice.**
+
+**Two conditions on the freeze:**
+
+1. **The artifact carries the commit it was produced at** (B4-Q1's answer, applied to the C++ side as
+   well as the model's).
+2. **A STORED ARTIFACT MUST REPRODUCE ITS FINDING, NOT MERELY REPLAY.** The strict criterion Track A
+   arrived at after the loose one let three bundles go stale: it is not enough that the artifact runs
+   again — **it must produce the same verdict**, which means the verdict it produced is *in* the
+   artifact and a replay that reaches a different one fails.
+
+*Retained below as raised.*
+
+**B4-Q3 (as raised) — IS THE ARTIFACT FORMAT A FROZEN SURFACE?**
 
 `seeds/`'s promise is that *"`simctl replay <seed>` reproduces any historical bug at the commit that
 contained it."* If B4's artifacts are to have that property, the format is frozen the day the first
@@ -282,8 +341,8 @@ what B4.0 costs**, so it is a decision rather than a preference.
 
 | id | question | my reading |
 |---|---|---|
-| **B4-Q1** | which `engine/model` | **(b) pin by commit in the artifact** — flagged, touches the worktree boundary |
-| **B4-Q2** | where the Go judge lives | a new Track B package; the merge sequencing is yours |
-| **B4-Q3** | is the artifact format frozen | **freeze at B4.0**, classifier-first — but it changes B4.0's cost, so it is yours to rule |
+| **B4-Q1** | which `engine/model` | **RULED: pin by commit in the artifact.** Unresolvable commit fails loudly; a dirty `engine/model` worktree is refused |
+| **B4-Q2** | where the Go judge lives | **RULED: on `main`, in Track A's tree, its own package.** Written on `rift-b` in a directory that will move; paths reported before writing |
+| **B4-Q3** | is the artifact format frozen | **RULED: frozen, with the corpus promise.** Carries its producing commit; must REPRODUCE its finding, not merely replay |
 
-**Nothing in B4 is written until this is ruled on.**
+**All three ruled 2026-08-27. B4.0 proceeds.**
