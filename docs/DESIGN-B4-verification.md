@@ -225,7 +225,46 @@ strictly stronger question than any asked so far.
 > harsher kill schedule — **not to record a clean result.**
 
 **Stated now, before the first run**, for §8.1's reason: an expectation fixed in advance cannot be
-adjusted to fit whatever arrives. The phase text already says it — *"BUGS.md entries exist (same rule:
+adjusted to fit whatever arrives.
+
+---
+
+### 8.1 WHAT IT FOUND — assessed against the expectation above
+
+**IT FOUND A REAL ENGINE DEFECT ON ITS FIRST OUTING**, `BUG-006`, on **`compact` seed 6 with no kill
+at all**. The expectation held and did not have to be invoked.
+
+**And the reach argument is a measurement rather than a claim.** With `BUG-006` present:
+
+| instrument | result |
+|---|---|
+| 377 C++ tests | all passed |
+| 3 sweep regimes, 4,840 kill points | 0 violations |
+| 147 mutant classes | all killed |
+| **8 clean differential runs** | **found it** |
+
+No sweep workload ever produced a tombstone ending exactly on the largest key, so no kill point could
+reach it. **A fault-injection sweep and a differential find different things.**
+
+**IT ALSO FOUND ITSELF, TWICE, AND BOTH ARE THE SAME LESSON.**
+
+1. **The driver could not tell a failed reopen from an empty recovery**, so the first divergence
+   arrived as *"the engine recovered nothing"* when the truth was *"the rig could not look."*
+   `HARNESS-006`'s shape: **a rig that cannot report why it could not look will report the engine.**
+   The real message appeared only once the reopen's status was recorded.
+2. **The judge compared against ONE watermark where the contract permits a RANGE.** B1's exactness
+   oracle already knew this as a two-element set; a Sync here can run a **flush**, so a kill inside one
+   can leave any prefix between the last completed watermark and the in-flight target durable. The
+   first version reported a legitimate recovery as a violation — and named the **wrong direction**,
+   because an empty recovered state matches sequence 0 and it reported the first match rather than the
+   nearest.
+
+**AND `BM114` SURVIVING IS THE THIRD.** The rig issued **one op per batch**, so it never reached the
+intra-batch rules at all. The mutant's survival is what found it; the fix widened the workload and the
+class now floors the regime.
+
+> **THREE OF THE FIRST FOUR FINDINGS WERE ABOUT THE RIG.** That is not a failure of the rig — it is
+> what §8 predicted in the other direction, and every one of them made the fourth finding possible. The phase text already says it — *"BUGS.md entries exist (same rule:
 zero bugs found means the rig is too weak)"* — and this section is that rule with its consequence
 attached.
 
