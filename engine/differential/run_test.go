@@ -88,17 +88,32 @@ func TestKilledRunsAgree(t *testing.T) {
 	}
 	var failures []failure
 	runs := 0
+	cutShort := 0
 	for _, regime := range []string{"flush", "compact"} {
 		for seed := uint64(1); seed <= 4; seed++ {
-			// Sweep kill points across the run. The ordinal count is discovered
-			// by the driver; here it is sampled at a fixed set of fractions so
-			// the test is deterministic and bounded.
-			for _, kill := range []uint64{7, 23, 61, 137, 291, 613} {
+			// Sweep kill points across the run. The ordinals are a fixed,
+			// deterministic set rather than a random sample -- the corpus
+			// promise rests on a schedule that reproduces.
+			//
+			// THEY ARE SPREAD ACROSS THE ORDINAL SPACE ON PURPOSE, not
+			// clustered early: a kill at ordinal 7 lands in the Open, and a
+			// suite of only-early kills would report a swept run while never
+			// reaching a flush, a compaction or a manifest swap.
+			for _, kill := range []uint64{7, 23, 61, 137, 291, 613, 907, 1381, 2003} {
 				a, outcome, why := runOne(t, bin, regime, seed, kill)
 				runs++
+				for _, op := range a.Submission {
+					if op.Seq == 0 && (op.Kind == OpSet || op.Kind == OpDelete ||
+						op.Kind == OpDeleteRange) {
+						cutShort++
+						break
+					}
+				}
 				if outcome != Agree {
 					failures = append(failures, failure{regime, seed, kill, outcome, why})
-					_ = a
+					if at := Bisect(a); at >= 0 {
+						t.Logf("  bisected to operation %d of %d", at, len(a.Submission))
+					}
 				}
 			}
 		}
@@ -106,11 +121,67 @@ func TestKilledRunsAgree(t *testing.T) {
 	if runs == 0 {
 		t.Fatal("no schedules ran")
 	}
+	// GF-26 / §8: A GREEN RUN COUNT IS NOT A RESULT UNLESS THE KILLS LANDED.
+	//
+	// A kill ordinal past the end of a run is a no-op, and a suite of those
+	// would report seventy-two swept schedules over seventy-two clean runs. So
+	// the sweep asserts that its kills ACTUALLY CUT RUNS SHORT -- which is
+	// visible in the log, because ops after a kill carry sequence 0.
+	if cutShort == 0 {
+		t.Fatal("no schedule was cut short: every kill ordinal was past the " +
+			"end of its run, so this suite swept nothing and reported green")
+	}
+	t.Logf("%d schedules, %d cut short by their kill, %d divergences",
+		runs, cutShort, len(failures))
 	for _, f := range failures {
 		t.Errorf("DIVERGENCE %s seed %d kill %d: %v -- %s",
 			f.regime, f.seed, f.kill, f.outcome, f.why)
 	}
-	t.Logf("%d killed schedules, %d divergences", runs, len(failures))
+}
+
+// THE BISECT — B4.3, and the cost topology (b) pays.
+//
+// A file-mediated differential cannot compare operation-by-operation, so a
+// mismatch names a RUN. The bisect narrows it to an OPERATION, and it bisects
+// THE SUBMISSION LOG rather than the kill schedule:
+//
+//	Because the log is an artifact and both engines are deterministic, the
+//	bisect is A FUNCTION OF THE FILE. It needs no re-run of the schedule that
+//	produced the divergence, and it works at any commit.
+//
+// That is `seeds/`'s property applied to a two-engine comparison, and it is the
+// reason the artifact carries the whole log rather than a summary.
+func Bisect(a *Artifact) int {
+	if outcome, _ := Judge(a); outcome == Agree {
+		return -1
+	}
+	// CF-3: the progress quantity is `hi - lo`, which strictly shrinks on every
+	// iteration whichever branch is taken. It is an integer interval over the
+	// log's length and does not depend on the judge's verdict — the thing this
+	// loop could be wrong about.
+	//
+	// Its correctness instrument is separate: TestBisectNamesTheOperation.
+	lo, hi := 0, len(a.Submission)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		prefix := *a
+		prefix.Submission = a.Submission[:mid]
+		// The watermark cannot exceed what the prefix applied, or the judge
+		// refuses it as a sequence the log never reached — which would report
+		// the truncation rather than the defect.
+		prefix.Watermark = 0
+		for _, op := range prefix.Submission {
+			if op.Seq > prefix.Watermark {
+				prefix.Watermark = op.Seq
+			}
+		}
+		if outcome, _ := Judge(&prefix); outcome == Agree {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
 }
 
 // A CORPUS ENTRY MUST REPRODUCE ITS FINDING, NOT MERELY REPLAY -- B4-Q3's
@@ -135,6 +206,32 @@ func ReproduceFinding(bin string, a *Artifact) error {
 			"recorded %v, re-run reached %v (%s)", a.Outcome, outcome, why)
 	}
 	return nil
+}
+
+// THE BISECT NAMES AN OPERATION, induced against a synthetic divergence so the
+// mechanism is exercised whether or not the engine ever diverges again.
+//
+// A bisect that has never narrowed anything is a bisect nobody can rely on at
+// the moment it is needed, which is always the moment a real divergence appears.
+func TestBisectNamesTheOperation(t *testing.T) {
+	a := artifact(
+		[]Op{set(1, "a", "1"), set(2, "b", "2"), set(3, "c", "3"), sync()},
+		3,
+		// The engine "lost" c: the divergence is introduced by the third write.
+		map[string][]byte{"a": []byte("1"), "b": []byte("2")},
+	)
+	at := Bisect(a)
+	if at != 3 {
+		t.Fatalf("bisect = %d, want 3 (the prefix through the third op is the "+
+			"shortest that diverges)", at)
+	}
+}
+
+func TestBisectReturnsMinusOneWhenThereIsNoDivergence(t *testing.T) {
+	a := artifact([]Op{set(1, "a", "1"), sync()}, 1, map[string][]byte{"a": []byte("1")})
+	if at := Bisect(a); at != -1 {
+		t.Fatalf("bisect = %d on an agreeing artifact, want -1", at)
+	}
 }
 
 func TestAJudgedArtifactReproducesItsFinding(t *testing.T) {

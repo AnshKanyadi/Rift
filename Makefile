@@ -24,7 +24,7 @@ COLD_CACHE   := ./scripts/cpp-cold-cache.sh
 # The lane set `make cpp-ci` runs under network isolation. It grows as
 # lanes un-stub; every member must be runnable by hand, because nothing
 # runs it for us.
-CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-sweep
+CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-sweep cpp-diff
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -182,6 +182,15 @@ cpp-sweep: ## The kill-point sweep: every Env call, killed before and after its 
 # diluted every B2 class measured against it. A separate regime leaves the other
 # two byte-identical, so no floor moves (section 8.2a).
 	$(CPP_BUILD)/test/rift_sweep compact
+
+.PHONY: cpp-diff
+cpp-diff: ## B4: the differential harness -- the C++ engine against engine/model
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_diff -j $(WORKERS)
+# THE GO JUDGE RUNS THE COMPARISON. It reads artifacts and never links the C++
+# engine, so this lane is two processes by construction rather than by
+# discipline -- see docs/DESIGN-B4-verification.md section 4.
+	$(GO) test ./engine/differential/ -count=1
 
 .PHONY: cpp-amp
 cpp-amp: ## B3.7b: compaction amplification -- the measurement that decides B3-D3
