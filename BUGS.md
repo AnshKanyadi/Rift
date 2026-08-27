@@ -1638,6 +1638,65 @@ independently of how recently the rule was written.
 
 ---
 
+### HARNESS-024, -025, -026 — the differential rig's three findings about itself
+
+**All three arrived before the rig's first finding about the engine could be trusted, and every one of
+them made that finding possible.** Filed together because they are one instrument learning to be one.
+
+**HARNESS-024 — the rig could not tell a failed reopen from an empty recovery.**
+The first divergence read *"the engine recovered nothing."* The truth was that `DB::Open` had refused
+the reopened image and the driver, having no field for that, left `recovered` empty either way.
+
+> **A RIG THAT CANNOT REPORT WHY IT COULD NOT LOOK WILL REPORT THE ENGINE.**
+
+`HARNESS-006`'s shape, and the diagnosis could not begin until the reopen's status was recorded — at
+which point the real message appeared in one line: `key bounds disagree with the manifest`. **The
+finding was `BUG-006` all along and was unreadable for the length of one edit.**
+
+**HARNESS-025 — the judge compared against ONE watermark where the contract permits a RANGE.**
+B1's exactness oracle had already worked this out as a two-element set: *"a Sync can complete on the
+device with the kill preempting its return."* The differential inherited the problem and **not the
+answer** — and it is WIDER here, because a `Sync` in this engine can run a **flush**, each step with
+its own fsync, so a kill inside one can leave any prefix between the last completed watermark and the
+in-flight target durable.
+
+**It also named the wrong direction.** An empty recovered state matches sequence 0, and the judge
+reported the **first** matching sequence — so a run that recovered *more* than promised, and happened
+to be empty because a clear-everything ran above the watermark, was reported as *"recovered less."*
+**A verdict that names the wrong direction sends the reader to the wrong component**, which is
+`HARNESS-006`'s cost paid by the instrument built to avoid it.
+
+**And the fix was nearly too permissive.** Widening to a range unconditionally would have forgiven the
+defect the strict comparison exists to catch: **unsynced data surviving a clean shutdown.** A
+hand-built test caught that — the widening applies only to a run cut short, which is a fact about the
+**log** (ops after a kill carry sequence 0), not about the engine's opinion.
+
+**HARNESS-026 — the rig issued one op per batch, so it never reached the intra-batch rules.**
+Found by `BM114` surviving **both** lanes. A `DeleteRange` covering keys written earlier in the same
+batch, a `Set` after one re-adding a key, two ranges merging to their union, batch atomicity — none of
+it was exercised, and nothing said so.
+
+> **§8's EXPECTATION WORKING IN THE OTHER DIRECTION: a rig that finds nothing has said something about
+> itself.** Here a *mutant* that found nothing said it.
+
+**Batches are now expressed by a shared sequence**, which needed no format change because that is what
+a batch **is** — and a field recording what the sequences already say would be a second source of
+truth about one fact.
+
+---
+
+**THE COMMON SHAPE, AND IT IS WORTH MORE THAN THE THREE ENTRIES.** Each was found by taking a result
+the rig produced and asking *what would have to be true of the RIG for this to be what it says?*
+
+- *"recovered nothing"* → **could the rig have failed to look?**
+- *"recovered less than promised"* → **is one watermark the whole contract?**
+- *"the mutant survived"* → **does the workload reach the thing it blinds?**
+
+None of the three is discoverable by reading the rig. All three are discoverable by disbelieving one
+of its outputs for one minute.
+
+---
+
 ### HARNESS-023 — a shared-fixture check that asked whether the bytes parse, not what they say
 
 **Symptom.** `BM112` swaps two provenance fields in **both** C++ ends — writer and reader together —
