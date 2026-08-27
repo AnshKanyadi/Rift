@@ -1167,6 +1167,21 @@ moving premise is a scheduled defect. This one:
 tests, which is the second time this session that a tool's blast radius exceeded its job. The first
 cost a comment; this cost an afternoon. There is no third.
 
+**THE GENERAL FORM, AND IT IS `GF-20`'s SIBLING:**
+
+> **WHEN A DEFECT'S REMEDY IS WRITTEN DOWN RATHER THAN BUILT, THE REMEDY HAS THE DEFECT'S OWN SHAPE
+> AND COMES DUE ON THE DEFECT'S OWN SCHEDULE.**
+
+`GF-20` says correctness resting on a moving premise is a *scheduled defect*. This says a **remedy**
+resting on someone remembering is one too — and worse, because the entry reads as closure. The
+catalogue said *a helper's side effect must be no wider than its purpose*, named the instance, and
+left the helper unchanged. The next firing was not a new lesson; it was **the same lesson, charged at
+the size of the work in flight.**
+
+**The test: after writing an entry, ask what would have to change for the second instance to be
+impossible rather than merely recognised.** If the answer is "nothing — I would notice", the entry is
+not finished. Filed as `GF-23`.
+
 ---
 
 ### HARNESS-018 — a temporary bound to a `const std::string&`, and every Slice into it dangling
@@ -1339,6 +1354,100 @@ only the loud one is self-announcing.
 
 > **A REGISTRY CROSS-CHECK HAS TWO FAILURE MODES AND ONLY ONE OF THEM TELLS YOU.** Both directions
 > get induced, or the quiet one is what you have.
+
+---
+
+### GF-23 — a remedy that is written down rather than built has the defect's own shape
+
+**Raised by** `HARNESS-019`, which is `HARNESS-016`'s second instance firing at a hundred times the
+cost — see that entry for the mechanism.
+
+> **WHEN A DEFECT'S REMEDY IS WRITTEN DOWN RATHER THAN BUILT, THE REMEDY HAS THE DEFECT'S OWN SHAPE
+> AND COMES DUE ON THE DEFECT'S OWN SCHEDULE.**
+
+It is `GF-20`'s sibling. `GF-20`: correctness resting on a premise that moves is a **scheduled
+defect**. This: a **remedy** resting on someone remembering is one too — and it is worse in one
+specific way. **The entry reads as closure.** A moving premise at least announces itself in the
+comment that names it; a written-down remedy looks like the problem is handled, and the catalogue
+grows a row that says so.
+
+**THE TEST, AND IT IS ONE QUESTION:**
+
+> After writing an entry, ask **what would have to change for the second instance to be IMPOSSIBLE
+> rather than merely RECOGNISED.** If the answer is *"nothing — I would notice"*, the entry is not
+> finished.
+
+**What it is not.** Not a demand that every entry ship a mechanism — some defects have no mechanical
+remedy, and `§3.2.1`'s residual bypass is the model for saying so out loud. The rule is that the
+**choice** be made and stated, not that it always come out the same way. What is forbidden is the
+third thing: an entry that neither builds the remedy nor admits it did not.
+
+**Instances in this catalogue, both ways:**
+
+| entry | remedy | outcome |
+|---|---|---|
+| `HARNESS-013` (the 11½-hour hang) | **built** — `LANE_TIMEOUT`, TIMEOUT as a distinct outcome | no second instance |
+| `HARNESS-014` (registry matched nothing) | **built** — the cross-check induced both directions | no second instance |
+| `HARNESS-017` (delimiter with no escape) | **built** — `cpp-scan` refuses >7 fields | no second instance |
+| `HARNESS-016` (helper's blast radius) | **written down only** | **fired again, at a step's cost** |
+
+**The pattern in that table is the argument.** Three built remedies, no recurrence. One written-down
+remedy, one recurrence — and the recurrence cost the largest single loss of work in Track B.
+
+---
+
+### GF-22 — two defects whose symptoms cancel are invisible to every test that asserts an answer
+
+**Raised by** `BUG-004` and `BUG-005`, B3.5e. Filed here rather than under either bug, because the
+class is the **pair**, not either member.
+
+**BUG-004** dropped the point versions a range tombstone hid. **BUG-005** failed to write the
+tombstone into the output files. Each alone loses data. **Together, every read returns the right
+answer** — the key is absent, which is what the caller asked for, arrived at by two errors that
+annihilate.
+
+**THE ASYMMETRIC EVIDENCE IS THE PROOF, AND IT IS WORTH STATING AS A MEASUREMENT:**
+
+| | effect on the suite |
+|---|---|
+| fix `BUG-004` alone | **four passing tests turn red** |
+| fix `BUG-005` alone | **nothing observable changes** |
+| both present | **everything green** |
+| both fixed | everything green |
+
+> **A TEST SUITE CANNOT SEE THIS CLASS AT ALL.** Not a weak suite — *any* suite, however thorough,
+> whose assertions are about **answers**. The answers are correct. There is no input on which the
+> engine returns the wrong thing.
+
+**What can see it is a question about a MECHANISM rather than an ANSWER.** A test asks *is the answer
+right?* A mutant asks:
+
+> **IS THIS LINE LOAD-BEARING?**
+
+`BM97` blinded the L1 tombstone lookup, and **nothing failed** — because nothing reached it. That
+survival was **true information about the engine**, not a gap in the catalogue. The distinction
+matters: a survival is usually read as *the suite is too weak here*, and this one meant *this code is
+unreachable, and the reason it is unreachable is a second bug.*
+
+**How to find the pair once one member is suspected.** The tell is the asymmetry above: **fix one,
+and if a previously-green test goes red rather than a red one going green, the other member is
+there.** A single defect's fix does not turn passing tests red.
+
+**And it is an argument for mutants having a place beside tests rather than being a coverage metric.**
+
+**`BM104` ADDS A RULE ABOUT THE PATCHES THEMSELVES, learned the same day.** Blinding clause 1's
+tombstone test by *deleting* the covering call left its helper unused, `-Werror` failed the build,
+and the **control lane** was killed:
+
+> **A MUTANT MUST REMOVE EXACTLY ONE BELIEF. A MUTATION THAT CHANGES THE BUILD IS NOT A MUTATION** —
+> a patch that fails to compile blinds nothing, and the lane correctly refuses to attribute anything
+> to it.
+
+The fix is to keep the call and discard its answer, so the only thing removed is the *acting on* it.
+The lane already had the machinery to catch this — the direction control is exactly the assertion
+that the patch alone does not break the build — which is why it reported `BROKEN` rather than a
+survival.
+Coverage would have reported both lines executed. They were — with their effects cancelling.
 
 ---
 
@@ -1570,6 +1679,27 @@ is exactly the inferred kind.
 the engine — but reaching the first two required a fixture and a snapshot workload the suite did not
 have, and **`B3.6`'s whole subject is the workload `BM79` forced into existence.** A relabelled
 `BM79` would have deferred that discovery to the step that assumed it already worked.
+
+---
+
+**`BM97` IS THE STRONGEST DEMONSTRATION THIS CATALOGUE HAS, AND IT IS THE ONE TO CITE.** Its history
+is three separate chances to close the file with a defensible sentence:
+
+1. **B3.5d — held out.** Compaction did not yet emit tombstones into L1, so its workload did not
+   exist. It was kept **out of `mutants/`** with its absence recorded in the commit, rather than
+   admitted with a label explaining why it could not fire.
+2. **B3.5e — re-added, and it survived again.** The available label was
+   *"covered by the compaction tests"* — **plausible, defensible, and false.**
+3. **The second survival is what opened `BUG-004` and `BUG-005`** — two data-loss defects whose
+   symptoms cancelled (`GF-22`), invisible to every test in the suite.
+
+> **A PLAUSIBLE LABEL IS THE DANGEROUS ONE.** An implausible label gets questioned. This one would
+> have been accepted by any reviewer, closed the obligation, and shipped both defects.
+
+**Cite this whenever an opt-out is proposed on the strength of an ARGUMENT rather than a
+MEASUREMENT** — an exemption, a `covered-by:` that was reasoned to instead of induced, a mutant
+excused because its class "is obviously covered elsewhere". The argument here was correct in every
+particular except the conclusion.
 
 ---
 
