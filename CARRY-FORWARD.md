@@ -275,6 +275,43 @@ Every loop added by B3.3b and B3.4 carries both instruments, and `FLOORS.txt` di
 label: `covers-correctness:` for what catches a wrong traversal, `covered-by:` for everything else.
 
 
+
+---
+
+**CLOSING NOTE (B3.7), 2026-08-27 — EVERY LOOP B3 ADDED, AUDITED MECHANICALLY.**
+
+**The audit is a grep, not a recollection**, because `GF-23` says a remedy that rests on remembering
+has the defect's own shape. Every `for`/`while` in the files B3 added or changed was enumerated, and
+each of the **eight new loops** carries its progress quantity at the code:
+
+| loop | progress quantity | independent of what it might be wrong about? | correctness instrument |
+|---|---|---|---|
+| `RunCompaction`'s merge | `inputs_consumed`, against a **derived** bound (`Σ ValidateTable` entries) | **yes** — a count of entries taken, not a cursor, not a key | `AdjudicateMerge` (order, values) + `AdjudicateDrops` (what survived) |
+| clause 1's observable walk | position in `observable`, **fixed before the merge and never modified inside it** | **yes** — independent of tombstones, drop rules and the comparator | `Compaction.ASnapshotBelowARangeTombstoneKeepsTheVersionItHides` |
+| clause 2's tombstone verdict | position in `tombstones`, a fixed vector | **yes** | `RangeDelete.ATombstoneWithNothingLeftToHideIsDroppedByCompaction` |
+| `L1FileFor`'s binary search | `hi - lo`, strictly shrinking | **yes** — *"the comparator decides the direction; it does not decide that the interval shrinks"* | `Compact.EverythingIsStillThereAfterAReopen` (`BM81` proves the separation) |
+| `L1FileFor`'s exclusive-bound skip | `lo`, an integer index bounded by `l1.size()` | **yes** — not derived from the comparator nor from the exclusive flag | `RangeDelete.ARangeSpanningOutputFilesIsSplitAndEveryPieceApplies` |
+| `Table::NewestCovering` | position in `tombstones_`, fixed at Open | **yes** | `RangeDelete.ARangeSurvivesTheCompactionThatMovesItToLevelOne` |
+| `MemTable::NewestCoveringLocked` | position in `ranges_`, under the lock | **yes** | `RangeDelete.TheSameRuleHoldsAtEveryPlaceItIsWritten` |
+| `MeasureAmplification`'s fill | `live_bytes`, rising by a **positive constant** per iteration | **yes** — counted by the harness from what it SUBMITTED, so an engine bug cannot stall it | `AmpInstrument.*` |
+
+**`ConcatIter`'s four loops were audited at B3.3a** and are unchanged: `file_` for `Next`/`Prev`,
+`hi - lo` for `Seek`, with the note that *correctness depends on the comparator here; termination does
+not.*
+
+**THE ANSWER IS EIGHT FOR EIGHT, AND THAT IS ONLY EVIDENCE BECAUSE THE QUESTION WAS ASKED
+MECHANICALLY.** An empty result from a search nobody ran is indistinguishable from an empty result
+from a search that found nothing — which is `GF-1`'s shape applied to an audit rather than to a lane.
+
+**Two of the eight needed the answer written down rather than merely being true**, and those are the
+ones the audit earned: the exclusive-bound skip (added at B3.5e, no CF-3 note) and the amplification
+fill (added at B3.7b, in harness code where the rule applies just as much). **Both terminated
+correctly and neither said why**, which is exactly the state CF-3 exists to prevent — the next person
+to change them would have had nothing to preserve.
+
+**CF-3 REMAINS OPEN**, deliberately. It is not a B3 obligation that closes at B3's end; it binds every
+loop this engine adds, and B4's differential rig and B5's cgo poller will both add some.
+
 ---
 
 ## CF-4 — ask GF-15's question once across the frozen interface, at B4
