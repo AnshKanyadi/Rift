@@ -967,6 +967,71 @@ the only honest ways to reach "(c) is needed" are to measure past it or to show 
 
 ---
 
+## 8.2 B3.7's TWO OBLIGATIONS, WRITTEN BEFORE EITHER IS RUN
+
+**They are separate work with one property in common: each moves a number that something else is
+compared against, so each carries the thing it invalidates in the same diff.**
+
+### 8.2a The sweep extension, and why the floors re-measure in the same change
+
+§7.5 states the boundary: **compaction has no kill-point coverage.** The `flush` regime crosses the
+threshold once, so `|L0| = 1` against a trigger of 4, and every Env call the compaction makes is
+invisible to the lane.
+
+Extending the workload past the trigger adds kill points — **and the kill-point count is the
+denominator of every rate in `FLOORS.txt`.**
+
+> **B2 ALREADY PAID FOR THIS LESSON AND IT IS NOT PAID TWICE.** The manifest took the count from 175
+> to 300; **every rate fell and not one detection count did.** A lane that failed the build on that
+> would have reported arithmetic as a regression, and a maintainer lowering the rate floors in
+> response would have lowered them for the wrong reason and lost the bound for the right one.
+
+**So the extension and the re-measurement are ONE DIFF, and the ordering inside it is fixed:**
+
+1. extend the workload, and **record the new kill-point count per regime**;
+2. re-measure **every** class the sweep reaches — not only the ones that look affected, because the
+   denominator moved for all of them;
+3. update `FLOORS.txt`'s rates in the same commit, with the new count stated in the header;
+4. **detection COUNTS and CEILINGS are compared against the old ones**, because those are the two
+   bounds the denominator does not touch (`GF-6`). A count that fell is a real regression; a rate
+   that fell alone is arithmetic.
+
+**A third regime is likely and is decided by measurement, not in advance.** If reaching the trigger
+requires so much workload that the `flush` regime's own kill points are diluted past usefulness, the
+compaction path gets its own regime rather than sharing one — and §8.4's rule applies unchanged: a
+number measured at non-default caps never aggregates with a default-cap number.
+
+### 8.2b The amplification measurement, and the outcome that is not "try harder"
+
+§8.1 fixed the threshold **before any candidate ran**: `(b)` crosses 10× write amplification at
+**≈128 MiB** of live data, from `WA ≈ 2 + D/(K·F)` with `K·F = 16 MiB`. Three data sizes spanning the
+crossing point; the deliverable is the curve and where it crosses.
+
+**AND THE PRE-DECLARED OUTCOME STANDS EXACTLY AS WRITTEN:**
+
+> **IF v1 RUNS BELOW THE CROSSING POINT, THE QUESTION IS NOT DECIDABLE ON EVIDENCE, AND `(b)` WINS ON
+> A6's RULE RATHER THAN ON A BENCHMARK.** That is a **result**, recorded as one.
+
+**What it must not be allowed to become.** A measurement that comes back below the threshold is
+**not** an inconclusive one to be retried at a larger size until it discriminates:
+
+| the honest reading | the reading to refuse |
+|---|---|
+| *"at v1's scale the policies are not distinguishable; the crossing point is 128 MiB; `(b)` wins on A6"* | *"inconclusive — run it bigger"* |
+
+**Because "run it bigger" is how a benchmark gets sized until it says something**, which is the thing
+§8.1 exists to prevent, and the reason the number was fixed in advance. **The only honest ways to
+reach "(c) is needed" are to measure past the crossing point on a workload Rift actually produces, or
+to show the arithmetic wrong.** Neither is "the first answer was boring."
+
+**Amendment A4's vocabulary applies and settles it.** `inconclusive` is a real outcome in this
+project — a checker that hit its timeout — and it means *the instrument did not finish*. A
+measurement that finished and returned a number below a threshold is a **pass with a recorded value**,
+not an inconclusive. Calling it inconclusive would be the second thing A4 forbids: quietly counting
+something that did not conclude, in the opposite direction.
+
+---
+
 ## 9. B3-D9 — the landing sequence
 
 The two ordering invariants hold unchanged: **the observer lands before the observed**, and **a gate
