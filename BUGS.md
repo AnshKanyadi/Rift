@@ -1525,6 +1525,43 @@ independently of how recently the rule was written.
 
 ---
 
+### HARNESS-023 — a shared-fixture check that asked whether the bytes parse, not what they say
+
+**Symptom.** `BM112` swaps two provenance fields in **both** C++ ends — writer and reader together —
+and the fixture corpus test **passed**.
+
+**Root cause.** The check asserted `ok()`: *did these bytes parse?* With both ends swapped they parse
+perfectly. The lengths are right, the section decodes, the checksum covers it — **the wrong string
+simply lands in the wrong field.**
+
+> **A SHARED-FIXTURE CHECK THAT ASKS "DOES IT PARSE?" CANNOT CATCH A DISAGREEMENT ABOUT WHAT THE BYTES
+> MEAN — WHICH IS THE ONLY DISAGREEMENT IT EXISTS FOR.**
+
+**It is `GF-25` in the fixture corpus:** an assertion about the **outcome** where one about the
+**content** was needed. The corpus was built for exactly this class and could not see it.
+
+**AND THE MUTANT IS WHAT FOUND IT, WHICH IS THE PART TO KEEP.** `BM112` was planted to *demonstrate*
+the two-decoder pair's value, on the assumption the pair already worked. The first induction reported
+it killed — by `AcceptsTheCanonicalArtifactAndReportsWhatItHolds`, an **in-test** fixture that does
+assert values — and only checking *which* test fired showed the corpus test had passed.
+
+> **A MUTANT KILLED BY THE WRONG INSTRUMENT IS A MUTANT THAT LOOKS COVERED.** The `covered-by:` label
+> would have named a test that catches the class, while the check built for it stayed blind. That is
+> `GF-7`'s shape in the label file, avoided only because the label is DETERMINED by induction and the
+> determination reads *which* assertion failed.
+
+**Fix.** Both decoders' corpus tests now assert **field by field** against values written in the
+document's terms — `engine_commit == "abc123"`, `regime == "flush"`, the seed, the caps, the op, the
+watermark, the recovered pair, the outcome — so a swap of any two fails even though the bytes are
+structurally perfect.
+
+**The residual, stated:** the two decoders still need not agree on *which* refusal fires when a file
+breaks more than one rule, only that neither accepts it. That is deliberate — pinning the refusal
+would couple the two implementations' internal ordering, which is the coupling the pair exists to
+avoid.
+
+---
+
 ### GF-29 — a broken instrument hides the questions you would ask about a working one
 
 **Raised by** `HARNESS-021` and `HARNESS-022`, B3.7b — the same instrument, two defects, found hours

@@ -33,14 +33,63 @@ func read(t *testing.T, name string) []byte {
 	return b
 }
 
-func TestLegalFixturesAreAccepted(t *testing.T) {
-	for _, name := range []string{"legal-minimal.diff", "legal-every-op.diff", "legal-unjudged.diff"} {
+// THE VALUES, NOT MERELY THAT THE BYTES PARSE — and the difference is the whole
+// point of the pair.
+//
+// The first version asserted only that Parse returned no error. BM112 swaps two
+// provenance fields in both C++ ends, so the bytes still parse perfectly and the
+// wrong string lands in the wrong field: a parse-only assertion passes. A
+// shared-fixture check that asks "does it parse?" cannot catch a disagreement
+// about what the bytes MEAN, which is the only disagreement it exists for.
+//
+// The expected values come from the document's terms via the corpus generator,
+// never read back from either decoder.
+func TestLegalMinimalSaysWhatTheDocumentSaysItSays(t *testing.T) {
+	a, err := Parse(read(t, "legal-minimal.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := a.Provenance.EngineCommit, "abc123"; got != want {
+		t.Errorf("engine commit = %q, want %q", got, want)
+	}
+	if got, want := a.Provenance.ModelCommit, "def456"; got != want {
+		t.Errorf("model commit = %q, want %q", got, want)
+	}
+	if got, want := a.Provenance.Regime, "flush"; got != want {
+		t.Errorf("regime = %q, want %q", got, want)
+	}
+	if got, want := a.Provenance.Seed, uint64(7); got != want {
+		t.Errorf("seed = %d, want %d", got, want)
+	}
+	if got, want := a.Provenance.FlushBytes, uint64(4194304); got != want {
+		t.Errorf("flush bytes = %d, want %d", got, want)
+	}
+	if len(a.Submission) != 1 {
+		t.Fatalf("submission = %d ops, want 1", len(a.Submission))
+	}
+	op := a.Submission[0]
+	if op.Kind != OpSet || op.Seq != 1 || string(op.Key) != "a" || string(op.Value) != "1" {
+		t.Errorf("op = %+v, want Set a=1 at seq 1", op)
+	}
+	if a.Watermark != 1 {
+		t.Errorf("watermark = %d, want 1", a.Watermark)
+	}
+	if string(a.Recovered["a"]) != "1" {
+		t.Errorf("recovered[a] = %q, want %q", a.Recovered["a"], "1")
+	}
+	if a.Outcome != Agree {
+		t.Errorf("outcome = %v, want agree", a.Outcome)
+	}
+}
+
+func TestOtherLegalFixturesParse(t *testing.T) {
+	for _, name := range []string{"legal-every-op.diff", "legal-unjudged.diff"} {
 		a, err := Parse(read(t, name))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if a.Provenance.Regime == "" {
-			t.Fatalf("%s: no regime", name)
+		if a.Provenance.Regime != "flush" {
+			t.Fatalf("%s: regime = %q", name, a.Provenance.Regime)
 		}
 		if len(a.Submission) == 0 {
 			t.Fatalf("%s: no operations", name)
