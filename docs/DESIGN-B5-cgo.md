@@ -37,24 +37,43 @@ What needs deciding is the *shape*, and the decisions are:
 
 ---
 
-## 2. B5-D2 — NO EXCEPTION CROSSES, AND IT IS ENFORCED RATHER THAN PROMISED
+## 2. B5-D2 — NO EXCEPTION CROSSES, AND THE ENFORCEMENT IS THE COMPILER
 
 **An exception unwinding through a C frame into Go is undefined behaviour**, and the failure is not a
 crash at the boundary — it is a corrupted Go stack, diagnosed anywhere.
 
-**Every `extern "C"` entry point is wrapped**, and the wrapper is one place:
+### 2.1 THIS DECISION WAS WRITTEN WRONG AND THE BUILD CORRECTED IT
 
-```
-try { ... } catch (...) { return kInternal; }
-```
+**What §2 said before the file compiled:** wrap every entry point in
+`try { ... } catch (...) { return kInternal; }`, and induce the backstop with a function that throws
+through the boundary on purpose.
 
-**AND `catch (...)` IS NOT THE WHOLE ANSWER**, which is the part worth writing down. It converts an
-exception into a code and **loses what it was**. So the engine's own discipline stands: this engine
-does not throw, `RIFT_CHECK` aborts rather than throws, and `Status` is the error channel everywhere.
-**The catch is a backstop for `std::bad_alloc` and for a future contributor**, not the design.
+**What the build said:** `error: cannot use 'try' with exceptions disabled`. The archive is compiled
+**`-fno-exceptions`** — and has been since B1.
 
-> **A BACKSTOP THAT NOBODY HAS SEEN FIRE IS A BACKSTOP NOBODY HAS TESTED.** So a test throws through
-> a boundary function deliberately and asserts the code comes back — and a mutant removes the catch.
+> **THERE IS NO EXCEPTION TO CATCH.** `throw` does not compile, `try` does not compile, and
+> `operator new` **aborts** rather than throwing `std::bad_alloc`. The property the catch-all was
+> going to provide **is already provided, by the compiler, more strongly.**
+
+**This is `GF-31` arriving one phase later: a defect that cannot be written is better than one that is
+caught.** A `catch (...)` converts an exception into a code and **loses what it was**; a flag that
+makes the exception impossible loses nothing, because there is nothing to lose.
+
+**THE DECISION IS CORRECTED HERE RATHER THAN THE FLAG BEING RELAXED TO FIT IT** — which is the
+temptation worth naming, because the doc was written first and the *easy* repair is to make the code
+match the doc.
+
+### 2.2 What is enforced, and where
+
+| claim | enforced by |
+|---|---|
+| no exception can cross the boundary | **`-fno-exceptions` on the archive** — a compiler flag, not a wrapper |
+| the flag is still there tomorrow | **`cpp-scan`**, which asserts it on the archive's compile options, and **`BM115`**, which removes it |
+| a null handle is `RIFT_INVALID_ARGUMENT`, never a dereference | **`Guard`**, kept for this — one place where every entry point's preconditions live |
+
+**`rift_test_throw` is kept and cannot throw**, and the test that calls it asserts exactly that: the
+code round-trips. **It never asserts that an exception was caught**, which would be a claim about a
+mechanism this build does not have.
 
 ---
 

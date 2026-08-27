@@ -478,6 +478,28 @@ fi
 # whose covering assertion can be DELETED WITH NO LANE GOING RED -- the mutant
 # still dies, on some other assertion in the same lane, and the class quietly
 # stops testing what it was written to test.
+# ---------------------------------------------------------------- part 7
+#
+# THE C BOUNDARY IS BUILT WITHOUT EXCEPTIONS, AND THAT IS A CLAIM ABOUT THE
+# BUILD RATHER THAN ABOUT ANY LINE OF CODE.
+#
+# B5-D2: no exception crosses into Go, and the enforcement is `-fno-exceptions`
+# on the archive -- so `throw` does not compile, `try` does not compile, and
+# operator new aborts. A `catch (...)` would have been weaker: it converts an
+# exception into a code and loses what it was.
+#
+# A FLAG IS ENFORCED WHERE FLAGS LIVE. Nothing in the source can assert its own
+# compile options, so the lane reads them.
+printf '  [7/7] the C boundary is built without exceptions\n'
+printf '  ----------------------------------------------------------\n'
+if ! grep -q 'fno-exceptions' "$dir/CMakeLists.txt"; then
+  note "RIFT_CXX_FLAGS does not carry -fno-exceptions"
+elif ! grep -q 'target_compile_options(rift_capi PRIVATE ${RIFT_CXX_FLAGS})' "$dir/CMakeLists.txt"; then
+  note "rift_capi does not compile with RIFT_CXX_FLAGS, so -fno-exceptions may not reach it"
+else
+  printf '   boundary       : -fno-exceptions reaches rift_capi\n'
+fi
+
 printf '  [6/6] FLOORS.txt -- every mutant class has a standing measurement\n'
 printf '  ----------------------------------------------------------\n'
 if [ ! -f "$dir/FLOORS.txt" ]; then
