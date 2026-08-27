@@ -350,6 +350,21 @@ checking the rule's own statement would object.
 
 ---
 
+**DISCHARGED, B4.4, 2026-08-27 — `docs/CF4-SWEEP.md`.**
+
+Both conditions swept over the whole surface. **Condition 1** tabulates ten derived facts with who
+depends on each: **nine agree, one did not** — `BUG-006`, and the rig found it before the table was
+written. **Condition 2** asks *what did this let us avoid deciding* of each retired shim, and its
+answers are the phase's: `DeleteRange`'s expansion produced `B3-Q4`, `Apply`'s expansion produced
+`GF-20`, `table.h`'s residency produced `CF-5`, and B2's iterate-and-point-delete is **what the
+differential is for** — two engines implementing one operation by entirely different mechanisms,
+agreeing across 96 runs.
+
+**What it did not cover is written down too:** facts derived across the cgo boundary (B5's), facts the
+Go side derives (Track A's surface), and the differential's own derived facts.
+
+---
+
 **SECOND SWEEP CONDITION, ADDED 2026-08-26 AFTER `B3-Q4`: EVERY PLACE B2 OR B3 REMOVED AN EXPANSION.**
 
 `GF-18`: *a shim that makes a case unnecessary makes the gap it hides invisible.* B2's
