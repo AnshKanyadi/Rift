@@ -1,0 +1,18 @@
+# id: M82-the-allow-list-grows-by-two
+# expect: killed
+# covering-test: TestTheAllowListIsExactlyTheStatedNonGates
+# package: ./raft/
+# power-covered-by: TestTheAllowListIsExactlyTheStatedNonGates -- a DIRECTED test that counts how many message types send() releases and requires exactly the three with a written non-gate argument on Ready.Messages. It answers in 0.3s
+# power-refutation: this class is INVISIBLE to any sweep by construction and that is not a claim about reach. Growing the allow list changes no behaviour on its own -- both read-index sites still use sendGated -- so no seed can produce a different trace. What it changes is what the NEXT edit is allowed to do silently, which is a property of the source and not of any run. A rate for it would read zero forever and would mean nothing
+# mutates: the two read-index message types are added to send()'s allow list, with both call sites left gated. Nothing observable changes -- which is the point. This is the shape of the NEXT occurrence of BUG-027: after the structural fix, forgetting to gate is no longer possible, and the only way back in is a deliberate edit to an enumerated list sitting next to a comment saying the argument is the part that matters. M80 is the defect; this is the door it would come through
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -2750,7 +2750,7 @@
+ // each other by tools/gatepin.
+ func (r *Raft) send(m Message) {
+ 	switch m.Type {
+-	case MsgPreVote, MsgPreVoteResp, MsgTimeoutNow:
++	case MsgPreVote, MsgPreVoteResp, MsgTimeoutNow, MsgReadIndex, MsgReadIndexResp:
+ 	default:
+ 		panic(fmt.Sprintf("raft: node %d released a %s through send(), which withholds nothing. "+
+ 			"Every message that leaves this node carries r.term and makes a claim about it; only "+

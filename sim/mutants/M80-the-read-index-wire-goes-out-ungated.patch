@@ -1,0 +1,28 @@
+# id: M80-the-read-index-wire-goes-out-ungated
+# expect: killed
+# covering-test: TestTheReadIndexWireIsGatedOnTheTerm
+# package: ./raft/
+# power-covered-by: TestTheReadIndexWireIsGatedOnTheTerm -- a DIRECTED test driving BOTH read-index send sites through raft: a follower FORWARDING a read and a leader ANSWERING one, each asserted withheld until its own term is durable. It answers in 0.3s against a 19-hour sweep. The first choice was TestTheAllowListIsExactlyTheStatedNonGates, which KILLS this mutant -- the allow list grows and the count changes -- and make mutant-covered called it DEAD because it never executes the two CALL SITES the patch also replaces. Killing a mutant and executing the line it changes are different questions, and a test that goes around the path cannot fail for the right reason. That lane caught this, which is the second time in one session it has corrected a covering test of mine
+# power-refutation: this class named TestRaftExitCriteria when it was declared -- a 10,000-seed sweep, 19 hours per invocation at the exit run's measured 6.9 s/seed. Seven mutants named it, so make mutants asked for six days of machine time for that covering test alone, and make mutants is in the ci target. Declaring a sweep as a covering test is the disease this phase diagnosed twice and then reproduced four times while writing the general form
+# mutates: both read-index call sites revert to a plain send, so each leaves its node advertising a term that may not be durable. This is BUG-027 exactly as it shipped. Note what the structural fix does to it: with the allow list UNCHANGED, send() now refuses these types outright, so the old defect can no longer be written by accident -- it becomes a crash at the call site rather than a silent claim on the wire. That is the whole point of inverting the default, and the mutant is killed by the covering test either way. The allow list is a SEPARATE claim and is M82. This is BUG-027 restored exactly -- but it is planted at the ALLOW-LIST rather than only at the call sites on purpose, because the structural fix changes what the human error looks like. Before the fix the error was forgetting to gate; after it, the only way in is adding a type to an enumerated list next to a comment saying the argument is the part that matters. So the mutant is the shape of the next occurrence. IT MUST INCLUDE THE REQUEST SIDE: a first attempt planted only MsgReadIndexResp and measured 0 of 400, and the reason is a finding rather than a miss -- the RESPONSE is sent by a leader, and a leader's term is necessarily durable (it could not have won its election otherwise), which is the same gated-by-consequence argument MsgTimeoutNow rests on. The reachable half is the REQUEST, forwarded by a FOLLOWER whose term bump may still be in flight, and all three violations observed in the wild say 'sent a read-index', not 'read-index-resp'. Killed by persist-before-reply, which holds every type but the two pre-vote types to Term <= durableTerm
+# power-note: the patch changes only the two CALL lines and leaves the // GATE: comments in place. An earlier version replaced the comments too, and make mutant-covered called it DEAD -- coverage is measured on the UNMUTATED tree and a comment line is never 'covered', so a replaced run that STARTS at a comment can never satisfy the lane. A mutant should change code, not prose, and the lane made that concrete rather than stylistic. Leaving the comments also means TestEveryGateHasACallSite fires as well: a GATE comment discharged by a plain send is exactly what it pins
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1786,7 +1786,7 @@
+ 		}
+ 		// GATE: the forward advertises this follower's term, so it is a
+ 		// response-after-a-term-bump in all but name (BUG-027).
+-		r.sendGated(Message{Type: MsgReadIndex, From: r.id, To: r.leader, Term: r.term,
++		r.send(Message{Type: MsgReadIndex, From: r.id, To: r.leader, Term: r.term,
+ 			ReadCtx: append([]byte(nil), ctx...)})
+ 		return nil
+ 	default:
+@@ -1855,7 +1855,7 @@
+ 		}
+ 		// GATE: the quorum makes the INDEX safe and never made the TERM safe.
+ 		// The reply carries both (BUG-027).
+-		r.sendGated(Message{Type: MsgReadIndexResp, From: r.id, To: q.from, Term: r.term,
++		r.send(Message{Type: MsgReadIndexResp, From: r.id, To: q.from, Term: r.term,
+ 			ReadCtx: q.ctx, ReadIndex: q.index})
+ 	}
+ 	r.pendingReads = kept

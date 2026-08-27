@@ -1,12 +1,9 @@
 # id: M81-snapshot-install-leaves-applied-behind
-# covering-test: TestRaftExitCriteria
-# package: ./sim/hunt/
 # expect: killed
-# power-seeds: 600
-# power-floor: 1
-# power-ceiling: 100
-# power-config: a7-nosplit
-# power-measured: 1 of 600, first at seed 36, under a7-nosplit -- and 0 of 800 under CURRENT. THE SHAPE IS PART OF THE FLOOR (DESIGN-A7 section 5d): splitting hides this class, because a split-born range seeds its clock from the entry that created it and holds fewer versions per key, so the deep version chain this defect needs never forms. Seed 36 is the seed the real defect was first observed on. A floor of 1 in 600 is fragile and is stated as such rather than rounded up into confidence
+# covering-test: TestASnapshotInstallAdvancesTheAppliedIndex
+# package: ./store/
+# power-covered-by: TestASnapshotInstallAdvancesTheAppliedIndex -- a DIRECTED test. The sweep measured 0 of 800 under A7 shape and 1 of 600 under a7-nosplit, because splitting hides the class; the directed test installs the snapshot itself and does not depend on a shape at all, which is 5d's remedy taken to its conclusion rather than recorded
+# power-refutation: this class named TestRaftExitCriteria when it was declared -- a 10,000-seed sweep, 19 hours per invocation at the exit run's measured 6.9 s/seed. Seven mutants named it, so make mutants asked for six days of machine time for that covering test alone, and make mutants is in the ci target. Declaring a sweep as a covering test is the disease this phase diagnosed twice and then reproduced four times while writing the general form
 # mutates: installing a snapshot no longer advances this replica's `applied`, so the state machine moves forward and the number that says where it is does not. raft's own appliedIdx IS advanced on install, so this restores a shadowed fact maintained on one path and not the other -- the same family as a census counter incremented both in a caller and in the function extracted out of it, except that this one reads LOW. Low is not harmless: serveReadyReads waits on it, so a read the snapshot already covers waits for a committed entry that may never arrive on a quiet range; and the ledger records it as AppliedAt, so read-index-answers-match-the-log replays the committed log to a position BELOW the node's real state and reports a correct answer as stale. It is killed by that oracle -- as a FALSE ACCUSATION of a correct answer, which is the shape this class always takes and the reason it went three phases unnoticed: nothing in the tree compared a node's claimed position against its actual state, and the oracle that could compare them derived both sides from the same understated number until BUG-028's fix made the model read the latest version instead
 --- a/store/node.go
 +++ b/store/node.go
