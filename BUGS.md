@@ -1133,6 +1133,42 @@ evidence until its provenance is.**
 
 ---
 
+### HARNESS-019 — the revert that ate a step, after its own entry had been written
+
+**Symptom.** Five mutant patches reported `patch does not apply` at once, and B3.5e's uncommitted
+source work was gone: the exclusive-bound derivation, the tombstone-carrying compaction, the roller's
+split, the run check's move onto opened tables. Rewritten from scratch.
+
+**Root cause.** The induction helper reverted a patch with `git checkout -- engine-cpp/src`, which
+reverts **everything uncommitted under that path** — not the patch it had applied.
+
+**AND THAT IS EXACTLY `HARNESS-016`'s SECOND INSTANCE, ALREADY RECORDED.** The entry says it: *"one
+reverted a directory to undo a patch."* When it first fired it cost one comment. It had a written
+entry, a named general form — *a helper's side effect must be no wider than its purpose* — and a
+diagnosis. **What it did not have was a fix in the tool.**
+
+> **AN ENTRY THAT FIXES THE RECORD AND NOT THE TOOL SCHEDULES THE SAME DEFECT AT A LARGER SIZE.** The
+> second firing was not a new lesson. It was the same lesson, charged at the size of the work in
+> flight.
+
+**Fix, in the tool this time.** `scripts/cpp-induce.sh` reverts with **`git apply -R`** — the exact
+inverse of the apply, whose side effect is no wider than its purpose — and **refuses to run at all on
+a dirty tree**, because an induction reads which assertion fails, and on a dirty tree that answer is
+about a tree nobody will build again. It also reports an **abort** as a kill rather than as a
+survival, which `FLOORS.txt`'s header has warned about since B3.1.
+
+**The general form is `GF-20`'s sibling and belongs beside it.** `GF-20`: correctness resting on a
+moving premise is a scheduled defect. This one:
+
+> **A DEFECT WHOSE REMEDY IS "REMEMBER NOT TO DO THAT" IS A SCHEDULED DEFECT TOO.** The remedy has to
+> live somewhere that cannot forget.
+
+**What it cost, stated plainly:** one step's uncommitted work, rewritten from the design and the
+tests, which is the second time this session that a tool's blast radius exceeded its job. The first
+cost a comment; this cost an afternoon. There is no third.
+
+---
+
 ### HARNESS-018 — a temporary bound to a `const std::string&`, and every Slice into it dangling
 
 **Symptom.** A fixture asserted a tombstone's start was `"m"`. It read back `"e"`, and the block's
