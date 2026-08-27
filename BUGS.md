@@ -56,6 +56,38 @@ the seed pass.
 
 ---
 
+## FOR THE TRACK B WRAP-UP — B3's three, marked by Ansh at sign-off
+
+**Not the largest work of the phase; the best.** Recorded here so a wrap-up written months later does
+not have to rediscover which findings carried weight.
+
+**1. `BUG-004`/`BUG-005` and `GF-22` — two defects whose symptoms cancelled.** Invisible to every test
+that asserts an **answer**, because the answer was right — arrived at by two errors that annihilate.
+Separated only because **a mutant survived**, asking a question a test cannot: *is this line
+load-bearing?* What makes it a demonstrated class rather than a hypothesis is the **asymmetric
+evidence**: fixing `BUG-004` alone turned **four passing tests red**; fixing `BUG-005` alone would
+have changed **nothing observable**. And `BM97`'s history is the citation for **a plausible label
+being the dangerous one** — held out once when its workload did not exist, re-added rather than
+relabelled, and the second survival is what opened both bugs. *"Covered by the compaction tests"*
+would have been accepted by any reviewer.
+
+**2. The observer-before-the-observed ordering, used eight times — and the two times it corrected the
+SPECIFICATION rather than the code.** `keep(k)` over-requiring at B3.0, found by building the
+adjudicator before any compaction existed; and the range-deletion semantics at B3.5a, fixed in the
+model before a writer existed. **Both corrections were in the claim, not in an implementation**, which
+is not the benefit the ordering is usually argued for. It is usually defended as *"a checker written
+afterwards agrees with the implementation"*. Its actual yield here was **twice catching a wrong
+specification before anything was built to it** — and once, at `HARNESS-020`, catching the author.
+
+**3. `GF-23` gaining a same-day instance.** *A remedy that is written down rather than built has the
+defect's own shape and comes due on the defect's own schedule.* Written in the morning after
+`HARNESS-019` cost a step's work; **broken by its own author that afternoon** — a `FLOORS.txt` row
+containing `O(|S|)`, two delimiters — and **caught by a mechanism rather than by recall**, because
+`HARNESS-017`'s remedy had been built into `cpp-scan` rather than merely recorded. The shortest
+possible demonstration of the rule, arriving as its own evidence.
+
+---
+
 ## Entries
 
 Counts: 2 entries. Both were found by `make cpp-sweep` — the kill-point sweep — in the cycle that
