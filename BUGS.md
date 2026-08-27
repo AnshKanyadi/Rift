@@ -56,7 +56,7 @@ the seed pass.
 
 ---
 
-## FOR THE TRACK B WRAP-UP — B3's three, marked by Ansh at sign-off
+## FOR THE TRACK B WRAP-UP — marked by Ansh at sign-off
 
 **Not the largest work of the phase; the best.** Recorded here so a wrap-up written months later does
 not have to rediscover which findings carried weight.
@@ -79,7 +79,16 @@ is not the benefit the ordering is usually argued for. It is usually defended as
 afterwards agrees with the implementation"*. Its actual yield here was **twice catching a wrong
 specification before anything was built to it** — and once, at `HARNESS-020`, catching the author.
 
-**3. `GF-23` gaining a same-day instance.** *A remedy that is written down rather than built has the
+**3. B4's answer to why a sweep AND a differential both exist, as a measurement rather than a claim.**
+With `BUG-006` present in the tree: **377 tests passed, 4,840 kill points across three sweep regimes
+reported zero violations, and 147 mutant classes were all killed.** **Eight clean differential runs
+found it** — no crash schedule involved. No sweep workload ever produced a tombstone ending exactly on
+the largest key, so no kill point could reach it.
+
+> **A FAULT-INJECTION SWEEP AND A DIFFERENTIAL FIND DIFFERENT THINGS**, and this is the number that
+> shows it rather than the sentence that asserts it.
+
+**4. `GF-23` gaining a same-day instance.** *A remedy that is written down rather than built has the
 defect's own shape and comes due on the defect's own schedule.* Written in the morning after
 `HARNESS-019` cost a step's work; **broken by its own author that afternoon** — a `FLOORS.txt` row
 containing `O(|S|)`, two delimiters — and **caught by a mechanism rather than by recall**, because
@@ -1731,6 +1740,89 @@ structurally perfect.
 breaks more than one rule, only that neither accepts it. That is deliberate — pinning the refusal
 would couple the two implementations' internal ordering, which is the coupling the pair exists to
 avoid.
+
+---
+
+### GF-31 — a fix that makes a defect unrepresentable costs the instrument that detected it
+
+**Raised by** `BUG-006`'s fix and `BM113`'s survival. **Both halves are recorded, because the free-win
+reading is the wrong one.**
+
+**THE STRENGTHENING.** `BUG-006` was two implementations of one rule disagreeing. The fix was not to
+correct the wrong one — it was to make the rule **one function**, `WidensUpperBound`, taking a **bare
+user key**. Through that signature there is no internal key to compare against, so **the defect cannot
+be written**.
+
+> **A FIX THAT MAKES A DEFECT UNREPRESENTABLE IS STRONGER THAN ONE THAT MAKES IT WRONG.**
+
+**AND NO MUTANT CAN ASSERT THE DIFFERENCE AT THE SITE IT PROTECTS.** `BM113` was aimed there and
+**survived** — an equivalent mutant, because the mutated comparison behaves identically. **The
+survival is the evidence for the strengthening**, which is a strange and useful thing: the class was
+re-aimed at the caller, where an inlining edit could still reintroduce it.
+
+**THE COST, AND IT IS REAL.** Two implementations of one rule can **disagree**, and a disagreement is
+**detectable by comparison** — which is precisely what `VerifyTables` did, loudly, on every Open. One
+implementation cannot disagree with itself.
+
+| before the fix | after |
+|---|---|
+| two rules, comparable | one rule, nothing to compare |
+| a disagreement is caught by `VerifyTables` | the rule can be **wrong in one place and consistent everywhere** |
+| the reproduction asserts *writer equals classifier* | that assertion now passes under `BM113` |
+
+> **COLLAPSING TWO IMPLEMENTATIONS INTO ONE REMOVES A FAILURE CLASS AND REMOVES THE INSTRUMENT THAT
+> DETECTED IT.** What is left must be asserted **against the invariant**, not against a second
+> implementation.
+
+Hence `BoundWideningIsAStatementAboutUserKeys`, which tests the predicate directly and in **both tag
+directions** — a rule comparing internal keys would be right about one of them by accident.
+
+**AND IT IS NOT AN ARGUMENT AGAINST CONSOLIDATION.** `BUG-006` cost a permanently unopenable database;
+the instrument it removed only ever fired *because* the defect existed. The point is that **the ledger
+has two entries, not one** — and a consolidation that does not add the invariant assertion has spent
+an instrument and bought nothing to replace it.
+
+**The tension with `B3-D2b` is deliberate and worth stating**, because these look contradictory: the
+harness keeps a **second** implementation of `Covers` on purpose, and the engine collapses to **one**
+implementation of `WidensUpperBound` on purpose.
+
+> **THE DIFFERENCE IS WHO THE TWO IMPLEMENTATIONS BELONG TO.** Two inside one engine are a
+> maintenance hazard whose disagreement is a bug. **One in the engine and one in the checker are an
+> oracle** — and collapsing *those* is the shared blind spot `B3-D2b` forbids.
+
+---
+
+### GF-30 — disbelieve a new instrument's first three outputs
+
+**Raised by** the differential rig's three findings about **itself** (`HARNESS-024`, `-025`, `-026`),
+which arrived before its first finding about the engine could be trusted.
+
+**THE METHOD, AND IT IS ONE QUESTION:**
+
+> **TAKE A RESULT THE RIG PRODUCED AND ASK WHAT WOULD HAVE TO BE TRUE OF THE RIG FOR THIS TO BE WHAT
+> IT SAYS.**
+
+| the output | the question | what it was |
+|---|---|---|
+| *"recovered nothing"* | **could the rig have failed to look?** | the reopen had failed and the driver had no field for it |
+| *"recovered less than promised"* | **is one watermark the whole contract?** | the contract permits a range; B1's oracle already knew |
+| *"the mutant survived"* | **does the workload reach the thing it blinds?** | one op per batch, so the intra-batch rules were never exercised |
+
+> **NONE OF THE THREE IS DISCOVERABLE BY READING THE RIG. ALL THREE ARE DISCOVERABLE BY DISBELIEVING
+> ONE OF ITS OUTPUTS FOR ONE MINUTE.**
+
+**Why reading does not find them.** Each is a **missing** case, not a wrong one: an unrecorded status,
+an unmodelled second element, an unreached shape. Reading checks that what is there is right, and all
+three rigs were right about everything they contained.
+
+**STANDING PRACTICE FOR EVERY NEW INSTRUMENT — I1 and I2 included.** A rig's **first three outputs are
+the cheapest place it will ever be wrong**: nothing depends on them yet, no result has been reported
+from them, and the author still remembers what the code was supposed to do. The same doubt applied
+after fifty runs costs a retraction.
+
+**It composes with `GF-29`.** That one says a single instrument defect raises the prior on another —
+so the first disbelief is not the last, and the moment to look again is immediately after the first
+fix, while the output is being read closely for the first time.
 
 ---
 
