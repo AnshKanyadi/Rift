@@ -51,32 +51,61 @@ func Judge(a *Artifact) (Outcome, string) {
 	}
 	record() // the empty state, at sequence 0
 
-	for _, op := range a.Submission {
+	// CONSECUTIVE WRITES SHARING A NON-ZERO SEQUENCE ARE ONE BATCH.
+	//
+	// That is what a batch IS in this engine — every op in one applies at one
+	// sequence — so the artifact expresses batching without a field, and the
+	// judge must group the same way or it applies as several batches what the
+	// engine applied as one.
+	//
+	// THE DIFFERENCE IS NOT COSMETIC. Within a batch, a DeleteRange covers keys
+	// written EARLIER in the same batch and a Set after it re-adds the key —
+	// rules that only exist because the ops share a sequence. Replayed one per
+	// batch, every one of them would be exercised wrongly and the model would
+	// disagree with the engine for a reason that is the judge's fault.
+	for i := 0; i < len(a.Submission); i++ {
+		op := a.Submission[i]
+		if isWrite(op.Kind) {
+			b := engine.NewBatch()
+			j := i
+			for ; j < len(a.Submission); j++ {
+				w := a.Submission[j]
+				if !isWrite(w.Kind) {
+					break
+				}
+				// Sequence 0 means the op was never issued — the run was cut
+				// short — and such ops are grouped by position rather than by
+				// sequence, because they have none.
+				if j > i && w.Seq != op.Seq {
+					break
+				}
+				switch w.Kind {
+				case OpSet:
+					b.Set(w.Key, w.Value)
+				case OpDelete:
+					b.Delete(w.Key)
+				case OpDeleteRange:
+					// nil means unbounded in engine.Batch, and the artifact's
+					// flags are what distinguish that from an empty key.
+					var start, end []byte
+					if w.StartBounded {
+						start = w.Key
+					}
+					if w.EndBounded {
+						end = w.Value
+					}
+					b.DeleteRange(start, end)
+				}
+			}
+			if _, err := db.Apply(b, false); err != nil {
+				return RecoveredNeither, fmt.Sprintf(
+					"model refused a batch the engine accepted: %v", err)
+			}
+			record()
+			i = j - 1
+			continue
+		}
 		switch op.Kind {
-		case OpSet:
-			b := engine.NewBatch().Set(op.Key, op.Value)
-			if _, err := db.Apply(b, false); err != nil {
-				return RecoveredNeither, fmt.Sprintf("model refused a Set the engine accepted: %v", err)
-			}
-		case OpDelete:
-			b := engine.NewBatch().Delete(op.Key)
-			if _, err := db.Apply(b, false); err != nil {
-				return RecoveredNeither, fmt.Sprintf("model refused a Delete the engine accepted: %v", err)
-			}
-		case OpDeleteRange:
-			// nil means unbounded in engine.Batch, and the artifact's flags are
-			// what distinguish that from an empty key.
-			var start, end []byte
-			if op.StartBounded {
-				start = op.Key
-			}
-			if op.EndBounded {
-				end = op.Value
-			}
-			b := engine.NewBatch().DeleteRange(start, end)
-			if _, err := db.Apply(b, false); err != nil {
-				return RecoveredNeither, fmt.Sprintf("model refused a DeleteRange the engine accepted: %v", err)
-			}
 		case OpSync:
 			// THE MODEL'S DURABILITY IS DRIVEN, NOT AUTOMATIC. A Sync in the
 			// C++ engine makes everything applied so far durable, so the model
@@ -203,6 +232,10 @@ func absDiff(a, b engine.SeqNum) engine.SeqNum {
 type snapshot struct {
 	seq   engine.SeqNum
 	state map[string][]byte
+}
+
+func isWrite(k OpKind) bool {
+	return k == OpSet || k == OpDelete || k == OpDeleteRange
 }
 
 func stateOf(db *model.DB) map[string][]byte {
