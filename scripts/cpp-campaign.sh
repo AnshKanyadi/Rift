@@ -103,7 +103,10 @@ printf '  ----------------------------------------------------------\n'
 # BASELINE GATE. The unpatched sweep must find nothing, or every number below is
 # unattributable and no floor means anything.
 copy_tree "$scratch/baseline"
-for reg in default flush; do
+# THREE REGIMES SINCE B3.7. `compact` was added rather than growing `flush`,
+# so `default` and `flush` keep their kill-point counts and no floor moved --
+# see FLOORS.txt's header and DESIGN-B3 section 8.2a.
+for reg in default flush compact; do
   base=$(build_and_sweep "$scratch/baseline" "$reg")
   case $base in
     TIMEOUT)
@@ -146,7 +149,7 @@ while IFS= read -r line; do
   # replacement.
   minn=$(printf '%s' "$line" | awk -F'|' '{print $7}' | sed 's/^ *//; s/ *$//')
   [ -n "$minn" ] || minn=0
-  case $reg in default|flush) ;; *)
+  case $reg in default|flush|compact) ;; *)
     printf '   BAD      %s: unknown regime "%s"\n' "$cls" "$reg"; fails=$((fails + 1)); continue ;;
   esac
 

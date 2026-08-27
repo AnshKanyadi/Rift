@@ -175,6 +175,13 @@ cpp-sweep: ## The kill-point sweep: every Env call, killed before and after its 
 # separately and their numbers are never aggregated (section 8.4).
 	$(CPP_BUILD)/test/rift_sweep default
 	$(CPP_BUILD)/test/rift_sweep flush
+# AND COMPACTION, ADDED AT B3.7 AS ITS OWN REGIME RATHER THAN BY GROWING
+# `flush`. Reaching the L0 trigger needs four flushes -- about four times the
+# flush regime's whole workload -- and folding that in would have multiplied its
+# kill-point count, which is the DENOMINATOR OF EVERY RATE in FLOORS.txt, and
+# diluted every B2 class measured against it. A separate regime leaves the other
+# two byte-identical, so no floor moves (section 8.2a).
+	$(CPP_BUILD)/test/rift_sweep compact
 
 .PHONY: cpp-build
 cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
