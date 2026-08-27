@@ -378,3 +378,38 @@ the file instead.
 **The cost of leaving it.** It is not currently a bug — it is a correctness argument resting on an
 implementation detail, which is exactly `GF-20`'s shape: *a premise that moves*. The premise here
 moves the day anything reads a block on demand, which is the first thing B5's cache work would do.
+
+---
+
+**DISCHARGED, B3.6, 2026-08-27.** The argument is gone rather than strengthened, per `GF-20`.
+
+`db.cc` keeps the **file** alive until the last reader drops its `shared_ptr`: a retired table goes on
+an `obsolete_` list and is deleted when nothing but that list holds it. So a snapshot reading through
+a compacted-away table is correct **because the file is there**, not because the bytes happen to be
+resident. `table.h`'s note is updated: **residency is now a performance property and no correctness
+claim rests on it.**
+
+**The count is `shared_ptr::use_count()` and not a second counter**, because every reader already
+holds one for exactly as long as it may read. A separate refcount would be a second source of truth
+about one fact.
+
+**IT TOOK TWO ATTEMPTS AND THE FIRST IS THE LESSON.** The first version compared `use_count()` at the
+retirement site against a threshold worked out by reasoning — *"`t` is one reference and the caller's
+vector is another, so above two is a reader"* — and **double-counted the same reference**, because
+`t` is a reference *to* the vector's element. A snapshot's file was deleted underneath it, and the
+test caught it because it asserts about **the file** rather than about the answer.
+
+> **A REFERENCE-COUNT THRESHOLD DERIVED BY REASONING ABOUT WHICH LOCALS HAPPEN TO EXIST IS A NUMBER
+> THAT CHANGES WHEN SOMEONE ADDS A VARIABLE.**
+
+Restructured so there is nothing to derive: **one place takes a count, and one holder to subtract.**
+`use_count() == 1` on the `obsolete_` list means the list is the only holder. Adding a local anywhere
+else cannot move it.
+
+**What made the defect visible was the shape of the assertion.** A test that only read through the
+snapshot would have passed either way — the bytes are resident, so the answer is right. The gate is
+`FileLifetime.AnInputFileOutlivesTheCompactionWhileASnapshotHoldsIt`, and it asserts the **file is on
+disk**. Reading through the snapshot is the *other* half.
+
+**`NewIter`'s named gap from B3.4 is closed here too**: an iterator holds its `Version`, so it holds
+its files, and the count sees it without a special case.
