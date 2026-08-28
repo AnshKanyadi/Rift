@@ -1831,31 +1831,61 @@ and one of them is **not** discharged.
 | **D-A7-6 (§3a)** — how the no-op is represented | **ruled A** and landed: `EntryNormal`, nil `Data`, the zero `ProposalID`. The frozen interface was not opened. `P-NOOP` is a named premise in §4.1a and has been checked at close (§4.1s) |
 | the counted plain-read census field (ruling 9) | **landed** — `ReadsServed`, `FollowerReads`, `ReadAgreeCompared`, `ReadsOutOfExtent`, all reported by the exit run |
 | the fate of the replicated read path (ruling 4) | **decided: it stays.** It is the differential oracle's other half, and BUG-026 and BUG-028 are both cases where the comparison between the two paths is the only thing that could have spoken. Removing it would have removed the instrument |
-| **the ledger-side oracle for ruling 3's condition (§5a), and its `i - 1` mutant** | **NOT BUILT — the one open item.** See below |
+| **the ledger-side oracle for ruling 3's condition (§5a), and its `i - 1` mutant** | **BUILT AND INDUCED at exit** — `read-index-at-arrival`, `M83`. See §10.1 |
 
-### 10.1 The open item, stated rather than absorbed into a sign-off
+### 10.1 The item that was open, and the rule that stays regardless
 
-**§8.1 lists ruling 3 as one of the five gates a run can fail**, and names its evidence as *"an oracle
-over the ledger and **induced**, not argued in prose."* What exists:
+**It was open, it was flagged rather than folded into a sign-off, and Ansh ruled: build it.** Keeping
+the sentence here regardless of the outcome, because it is the general form and it will apply again at
+I1 and I2:
 
-- **the condition IS induced** — `TestAReadIsNeverAnsweredBelowItsStampedIndex` in `raft/`, whose doc
-  quotes the ruling verbatim and which fails when the stamp is taken late;
-- **the oracle specified in §5a is NOT built.** §5a.2's property — *for every read answered off the
-  log at stamped index `i`, every write acknowledged to a client before that read was issued occupies
-  a log index at or below `i`* — is asserted by none of the eighteen oracles in `raftcheck`. The three
-  halves of `read-index-answers-match-the-log` are different properties: *the read waited*, *the
-  answer matches the log at the position reached*, and *the range owned the key*;
-- **the `i - 1` mutant of §5a.5 is not planted.**
+> **A gate that is half met and describes itself as met is worse than one that is half met and says
+> so.**
 
-**Why the gap matters, in §5's own terms.** A directed unit test establishes the property **at one
-schedule**. §5's argument for wanting property 2 at all is that *porcupine can only see a stale read
-when some client observed the write it missed* — so a unit test at a single seed is precisely the
-weaker instrument the oracle was specified to replace. The gate is **half met**: the claim is not
-living in prose, but it is also not being checked on every run.
+**What was missing.** §8.1 lists ruling 3 as one of the five gates a run can fail, with its evidence
+*"an oracle over the ledger and induced, not argued in prose."* The condition was induced
+(`TestAReadIsNeverAnsweredBelowItsStampedIndex`), and the oracle was not built — §5a.2's property was
+asserted by none of the eighteen oracles in `raftcheck`, and the `i - 1` mutant of §5a.5 was not
+planted. A directed unit test establishes the property **at one schedule**, and §5's argument for
+wanting property 2 at all is that *porcupine sees a stale read only when some client observed the
+write it missed*.
 
-> **This is recorded here rather than folded into a sign-off**, because a gate that is half met and
-> described as met is worth less than one that is half met and says so. What it would take is stated
-> in §5a: an oracle over `Ledger.Reads()` correlating each off-log stamp against the log index of
-> every write the history shows acknowledged before that read was issued, plus the `i - 1` mutation to
-> induce it.
+**What was built.**
 
+- **`read-index-at-arrival`**, an oracle over the ledger asserting §5a.2 exactly: *for every read
+  answered off the log at stamped index `i`, every write acknowledged to a client before that read was
+  issued occupies a log index at or below `i`.* It needed two new boundary observations —
+  `WriteRecord` (the log position that answered a client, taken from the entry) and `ReadRecord.
+  IssuedAt` (arrival, which in this simulator is issue) — both recorded where the answer crosses to
+  the client, so §5a.3's independence argument holds: nothing is read back out of a state machine.
+- **Scope: same range only.** Log indices are per-range; after a split the right-hand range starts a
+  fresh log, and comparing across them would manufacture violations out of correct behaviour.
+- **`M83-the-read-index-is-stamped-one-low`**, §5a.5's mutation exactly: `readFloor()` returns one
+  index below the commit index.
+
+**§8.1b's two numbers, both at 60 seeds:**
+
+| | |
+|---|---|
+| fires on the plant | **58 of 60, first at seed 0** |
+| silent on the clean tree | **0 of 60** |
+| non-vacuity beside the silence | **3,469** (read, already-acknowledged-write) pairs compared across those 60 clean seeds |
+
+The third row is the one that makes the second mean anything: a silence over comparisons that happened
+rather than over an oracle that never reached one.
+
+**Two things the lane corrected while this was built**, both worth keeping:
+
+1. The first version of `M83` **only added lines**, and `mutant-covered` reported `SKIP` — correctly,
+   because an addition-only patch has no deleted-or-replaced run and therefore no line whose coverage
+   can be required. **A mutant that only adds is asking a different question from one that replaces**,
+   and the lane declines the second question when the patch does not pose it. Rewritten as a
+   replacement of `return r.commitIndex`.
+2. The covering test was first pointed at `store/`, where a directed test drives a real acknowledged
+   write and a real read through `onClient`. `mutant-covered` **skips a cross-package pair** — the
+   patch is in `raft/` — so the declaration names ruling 3's own induction, in the patch's own
+   package, and the store-level test stands beside it as a third instrument.
+
+**Three instruments now stand on this class, asking three different questions:** can a read be
+answered below its stamp (`raft/`), can the oracle speak (`raftcheck/`, seven cases in milliseconds),
+and does the system feed that oracle a sound stamp (`store/`, through the real `readFloor`).

@@ -1,0 +1,24 @@
+# id: M83-the-read-index-is-stamped-one-low
+# expect: killed
+# covering-test: TestAReadIsNeverAnsweredBelowItsStampedIndex
+# package: ./raft/
+# power-seeds: 60
+# power-floor: 29
+# power-ceiling: 5
+# power-measured: 58 of 60, first at seed 0, under CURRENT (A7's shape), against 0 of 60 on the clean tree -- DESIGN-A7 8.1b's two numbers, both taken at 60 seeds. Non-vacuity beside them: ArrivalCompared totals 3,469 (read, already-acknowledged-write) pairs across those 60 clean seeds, so the silence is a silence over comparisons that happened rather than over an oracle that never reached one
+# mutates: readFloor() returns one index below the commit index, so every read is stamped one low. This is DESIGN-A7 5a.5's mutation exactly. Arrival capture is the WEAKER of D-A7-3's two options by construction -- confirmation-time capture is a later point and can never be stale -- so the entire safety case for the cheaper choice is that the stamped index is a sound floor. One index low is that floor being unsound by the smallest possible amount, and it is what an optimisation reaching for an off-by-one would actually produce
+# power-note: the mutation REPLACES `return r.commitIndex` rather than inserting a branch above it. The first version only ADDED lines, and mutant-covered reported SKIP -- correctly, because an addition-only patch has no deleted-or-replaced run and therefore no line whose coverage can be required. A mutant that only adds is asking a different question from one that replaces, and the lane is right to decline the second question when the patch does not pose it
+--- a/raft/raft.go
++++ b/raft/raft.go
+@@ -1799,7 +1799,10 @@
+ 	if r.termStart > r.commitIndex {
+ 		return r.termStart
+ 	}
+-	return r.commitIndex
++	if r.commitIndex == 0 {
++		return 0
++	}
++	return r.commitIndex - 1
+ }
+ 
+ // recordRead files a request and self-acknowledges it: the leader's own vote

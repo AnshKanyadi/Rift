@@ -53,7 +53,12 @@ type Ledger struct {
 
 	// reads is every answer a replica gave a client, in the order the harness
 	// observed them leaving the nodes.
-	reads      []ReadRecord
+	reads []ReadRecord
+
+	// writes is every write a replica ACKNOWLEDGED to a client, with the log
+	// position that answered it. §5a's oracle correlates the two.
+	writes []WriteRecord
+
 	txnReads   []TxnReadRecord
 	audits     []AuditRecord
 	confOrders []ConfOrder
@@ -81,6 +86,29 @@ type Ledger struct {
 	// takes from the system is whether the order was CARRIED OUT; that it reads
 	// from the committed log like every other verdict.
 	moves []MoveRecord
+}
+
+// WriteRecord is one write ACKNOWLEDGED to a client, with the log position that
+// answered it.
+//
+// Observed at the boundary: recorded where the answer crosses to the client,
+// from the entry that produced it, and nothing is read back out of a state
+// machine afterwards. §5a.3's independence argument rests on that -- an oracle
+// that asked a node what index a write got would be asking the system under test
+// whether it behaved.
+type WriteRecord struct {
+	Range uint64
+	Node  int
+
+	// Index is the log position of the entry whose apply answered this client.
+	Index raft.Index
+
+	Key string
+
+	// AckedAt is when the client was told. Not when the entry committed and not
+	// when it applied: §5a.2 is a statement about what a client had been
+	// PROMISED before a later read was issued.
+	AckedAt clock.Instant
 }
 
 // ReadRecord is one answer a replica gave a client, taken as it crossed the
@@ -131,6 +159,13 @@ type ReadRecord struct {
 	// at Index reports that as a violation. Too-fresh is not stale, and a later
 	// state is never a linearizability failure.
 	AppliedAt raft.Index
+
+	// IssuedAt is the instant the client's request arrived, which in this
+	// simulator IS the instant the client issued it -- the scheduler delivers a
+	// client event at the operation's own time. §5a.2 is stated against "before
+	// that read was ISSUED", so the oracle needs the issue instant rather than
+	// the answer instant, and those differ by the whole confirming round.
+	IssuedAt clock.Instant
 
 	// OffLog marks an answer served by READ INDEX rather than by a log entry
 	// (A7). For those, Index is the CONFIRMED read index rather than the
@@ -503,6 +538,14 @@ func (l *Ledger) RecordRead(r provenance.Observed[ReadRecord]) {
 
 // Reads is every answer the harness observed.
 func (l *Ledger) Reads() []ReadRecord { return l.reads }
+
+// RecordWrite files one acknowledged write.
+func (l *Ledger) RecordWrite(r provenance.Observed[WriteRecord]) {
+	l.writes = append(l.writes, r.Fact())
+}
+
+// Writes returns every acknowledged write, in the order clients were told.
+func (l *Ledger) Writes() []WriteRecord { return l.writes }
 
 // RecordTxnRead appends one snapshot read and its answer.
 func (l *Ledger) RecordTxnRead(r provenance.Observed[TxnReadRecord]) {

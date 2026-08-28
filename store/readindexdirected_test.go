@@ -197,7 +197,7 @@ func TestAPlainReadIsAnsweredAtTheLatestVersion(t *testing.T) {
 	}
 
 	idx := hist.Begin(0, 0, 1, "get", "k", "")
-	r.onClient(Request{Op: "get", Key: "k", HistIdx: idx})
+	r.onClient(Request{Op: "get", Key: "k", HistIdx: idx}, serveAt)
 	if len(r.pendingReads) != 1 {
 		t.Fatalf("onClient queued %d reads, want 1; the read-index path was not taken and this "+
 			"test would assert nothing", len(r.pendingReads))
@@ -309,7 +309,7 @@ func TestATermStartNoOpMatchesNoStateMachineArm(t *testing.T) {
 	// that. The contrast is also what makes the assertion mean something: the
 	// switch has to route a real command to that arm and the no-op to none.
 	idx := hist.Begin(0, 0, 1, "put", "k", "v")
-	r.onClient(Request{Op: "put", Key: "k", Value: "v", HistIdx: idx})
+	r.onClient(Request{Op: "put", Key: "k", Value: "v", HistIdx: idx}, serveAt)
 	r.drain(serveAt+1, lb)
 	var applied bool
 	for _, e := range hist.Events() {
@@ -389,7 +389,7 @@ func TestASnapshotReadKeepsItsLogEntry(t *testing.T) {
 
 	// A plain read takes the read-index path: the premise of the contrast.
 	plain := hist.Begin(0, 0, 1, "get", "k", "")
-	r.onClient(Request{Op: "get", Key: "k", HistIdx: plain})
+	r.onClient(Request{Op: "get", Key: "k", HistIdx: plain}, serveAt)
 	if len(r.pendingReads) != 1 {
 		t.Fatalf("a PLAIN read did not take the read-index path (%d pending), so the contrast "+
 			"below is not a contrast", len(r.pendingReads))
@@ -399,10 +399,59 @@ func TestASnapshotReadKeepsItsLogEntry(t *testing.T) {
 	// A read naming a remembered timestamp must NOT.
 	snap := hist.Begin(0, 0, 2, "get", "k", "")
 	r.onClient(Request{Op: "get", Key: "k", HistIdx: snap,
-		ReadTS: hlc.Timestamp{Wall: clock.NewWall(int64(r.hlc.Now().Wall) - 500_000_000)}})
+		ReadTS: hlc.Timestamp{Wall: clock.NewWall(int64(r.hlc.Now().Wall) - 500_000_000)}}, serveAt)
 	if len(r.pendingReads) != 0 {
 		t.Errorf("a read naming a timestamp was queued on the READ-INDEX path (%d pending).\n"+
 			"  It stages no read mark there, so BUG-022's guard consults a record that does not "+
 			"exist and a prewrite that should be refused is accepted (D-A7-5).", len(r.pendingReads))
+	}
+}
+
+// TestAReadStampIsNotBelowAnAcknowledgedWrite is ruling 3's gate, driven through
+// the real `readFloor` rather than over a synthetic ledger.
+//
+// `TestReadIndexAtArrivalSpeaks` induces the ORACLE — it proves the instrument
+// can speak. This proves the SYSTEM feeds it a sound stamp, which is a different
+// question and the one `M83` attacks: `readFloor()` returning one index low is
+// §5a.5's mutation, and it is invisible to a test that constructs its own ledger.
+func TestAReadStampIsNotBelowAnAcknowledgedWrite(t *testing.T) {
+	m, r, hist, lb := leaderReplica(t)
+
+	// A write, acknowledged to a client. Its index is what any read issued
+	// afterwards must reflect.
+	w := hist.Begin(0, 0, 1, "put", "k", "v")
+	r.onClient(Request{Op: "put", Key: "k", Value: "v", HistIdx: w}, serveAt)
+	r.drain(serveAt+1, lb)
+
+	acked := m.cfg.Ledger.Writes()
+	if len(acked) == 0 {
+		t.Fatal("no write was acknowledged, so there is nothing for a read stamp to be below and " +
+			"this test would pass over an empty comparison")
+	}
+
+	// A read issued after it.
+	g := hist.Begin(serveAt+2, 0, 2, "get", "k", "")
+	r.onClient(Request{Op: "get", Key: "k", HistIdx: g}, serveAt+2)
+	if len(r.pendingReads) != 1 {
+		t.Fatalf("the read did not take the read-index path (%d pending)", len(r.pendingReads))
+	}
+	stamp := r.pendingReads[0].index
+	if stamp == 0 {
+		// Confirmation needs a round this single-voter harness does not run; the
+		// stamp raft chose is still the thing under test, so read it directly.
+		stamp = r.raft.ReadFloorForTest()
+	}
+	r.pendingReads[0].index = stamp
+	r.applied = stamp
+	r.serveReadyReads(serveAt+3, lb)
+
+	for _, aw := range acked {
+		if aw.Index > stamp {
+			t.Errorf("a read issued at %d was stamped at index %d, but the write of %q at index "+
+				"%d had already been acknowledged at %d.\n"+
+				"  Arrival capture is the WEAKER of D-A7-3's two options, so the whole safety "+
+				"case for the cheaper choice is that the stamp is a sound floor (DESIGN-A7 §5a).",
+				int64(serveAt+2), stamp, aw.Key, aw.Index, int64(aw.AckedAt))
+		}
 	}
 }

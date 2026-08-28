@@ -395,6 +395,11 @@ type pendingRead struct {
 	histIdx int
 	key     string
 
+	// issuedAt is when this request arrived, which in the simulator IS when the
+	// client issued it. §5a.2's property is stated against "before that read was
+	// issued", and the answer instant is a whole confirming round later.
+	issuedAt clock.Instant
+
 	// anyReplica is what the CLIENT asked for, kept so a reroute reissues the
 	// same question. Dropping it would silently turn a follower read into a
 	// broadcast read -- the same silent conversion `rerouteAt` refuses for a
@@ -463,7 +468,7 @@ func (n *Replica) jitter() {
 // onClient proposes a command. A node that is not the leader simply does not
 // answer, which the checker treats as "may or may not have happened" -- correct,
 // since an unavailable replica is behaving properly.
-func (n *Replica) onClient(req Request) {
+func (n *Replica) onClient(req Request, arrivedAt clock.Instant) {
 	// # A follower may serve a plain read, and ONLY a plain read (D-A7-2)
 	//
 	// It confirms nothing itself: `raft.ReadIndex` forwards to the leader, the
@@ -538,9 +543,21 @@ func (n *Replica) onClient(req Request) {
 	// read served by read index -- so the boundary is a thing the suite kills
 	// rather than a thing this comment remembers (ruling 11).
 	//
-	// D-A7-4, ruled: BOTH paths stay for the phase. The replicated path is the
-	// differential oracle's other half, and a differential between them is the
-	// only instrument that can catch a stale read no client observed.
+	// # D-A7-4, DECIDED AT EXIT: both paths stay, and the replicated one is an
+	// # INSTRUMENT rather than a user
+	//
+	// It is kept because it is the differential oracle's other half, and a
+	// differential between the two paths is the only instrument that can catch a
+	// stale read no client observed. That was the argument when the ruling was
+	// made; A7 then produced two cases where it was the argument that mattered:
+	// BUG-026 and BUG-028 are both defects where comparing the two paths is the
+	// only thing that could have spoken.
+	//
+	// **Stated here rather than only in the design doc, because a path kept for
+	// what it MEASURES rather than for what it SERVES looks dead to anyone
+	// counting callers.** Traffic on it is not the reason it exists, and a
+	// future reader who removes it as unused removes the instrument that catches
+	// the class this phase spent itself on.
 	if n.cfg.ReadIndex && req.Op == "get" && !req.ReadTS.IsSet() && req.Txn == nil {
 		n.readSeq++
 		ctx := encodeReadCtx(n.cfg.ID, n.readSeq)
@@ -549,6 +566,7 @@ func (n *Replica) onClient(req Request) {
 		}
 		n.pendingReads = append(n.pendingReads, pendingRead{
 			ctx: ctx, histIdx: req.HistIdx, key: req.Key, anyReplica: req.AnyReplica,
+			issuedAt:    arrivedAt,
 			viaFollower: n.raft.Role() != raft.RoleLeader,
 		})
 		return
@@ -1016,8 +1034,9 @@ func (n *Replica) serveReadyReads(at clock.Instant, s sim.Scheduler) {
 		// version", which is the question this path actually asks.
 		n.cfg.Ledger.RecordRead(provenance.Witness(raftcheck.ReadRecord{
 			Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: q.index, Key: q.key,
-			At:    hlc.Timestamp{},
-			Value: string(v), Found: ok && err == nil, Refused: err != nil, When: at,
+			At:       hlc.Timestamp{},
+			IssuedAt: q.issuedAt,
+			Value:    string(v), Found: ok && err == nil, Refused: err != nil, When: at,
 			OffLog: true, AppliedAt: n.applied,
 		}))
 		switch {
@@ -1118,6 +1137,19 @@ func (n *Replica) answerAt(e raft.Entry, op, key string, readTS hlc.Timestamp, a
 		// oracle that knows which timestamp it named.
 		if c.histIdx >= 0 {
 			n.cfg.History.End(c.histIdx, at, sim.RespOK, val)
+		}
+		// # §5a's other half: the write, with the position that answered it
+		//
+		// Recorded HERE, where the answer crosses to the client, and taken from
+		// the entry rather than asked of the state machine. `read-index-at-arrival`
+		// correlates these against off-log read stamps: a write acknowledged
+		// before a read was issued must occupy an index at or below that read's
+		// stamp, or the stamp was not a sound floor (DESIGN-A7 §5a.2).
+		if op == "put" {
+			n.cfg.Ledger.RecordWrite(provenance.Witness(raftcheck.WriteRecord{
+				Range: uint64(n.rng), Node: n.cfg.Ordinal, Index: e.Index,
+				Key: key, AckedAt: at,
+			}))
 		}
 	}
 	n.inflight = kept

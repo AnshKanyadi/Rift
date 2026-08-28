@@ -2403,3 +2403,117 @@ func (o *ReadIndexAgreement) Check() *sim.Violation {
 	}
 	return nil
 }
+
+// ReadIndexAtArrival: every read answered off the log reflects every write a
+// client had already been told about.
+//
+// # DESIGN-A7 §5a, and it is ruling 3's gate
+//
+// D-A7-3 was ruled *A, at arrival*: the read index is `commitIndex` captured when
+// the request arrives, carried through the confirming round. Arrival capture is
+// the WEAKER of the two options by construction — confirmation-time capture is a
+// later point and can never be stale — so **the entire safety case for the
+// cheaper choice is that the stamped index is a sound floor.** Ansh's ruling
+// attached a condition to it: *a read arriving at index i and confirmed later
+// must be provably not answerable at any index below i, induced.* That claim is
+// not allowed to live in prose.
+//
+// # What it asserts
+//
+//	For every read answered off the log at stamped index i: every write
+//	acknowledged to a client before that read was issued occupies a log index
+//	at or below i.
+//
+// That is the linearizable-read condition stated as a POSITION rather than as a
+// value — *a read index is a fact about a position, not about a node* — so the
+// check is about positions too. The derivation it protects:
+//
+//   - a write completes only after it is committed, so at the instant it is
+//     acknowledged its index is at or below the leader's commitIndex;
+//   - the read captures i = commitIndex AT ARRIVAL, which is after that
+//     acknowledgement;
+//   - commitIndex is monotonic, so i >= that write's index.
+//
+// Each of the three is a place the implementation can go wrong: acknowledging
+// before commit, capturing after the answer rather than at arrival, and a
+// commitIndex that moves backwards across a term change — which is the
+// term-start no-op, from the other side.
+//
+// # Why it is independent of the thing it judges
+//
+// Both inputs are boundary observations: the write's index is taken from the
+// entry that answered the client, and the read's stamp is the index the node
+// advertised in the same act of answering. Neither is a statement by a store
+// about what it believes was visible. And the comparison is arithmetic on log
+// positions, sharing no code with the read path — so a defect in `readFloor`
+// cannot cancel against the oracle's own derivation, which is `GF-22`'s failure
+// mode and the one this project has learned to design against.
+//
+// # Why porcupine is not this
+//
+// Per-key linearizability sees a stale read only when some client observed the
+// write that was missed. In a quiet history nobody observed it and porcupine is
+// green over a lie. This is a statement about positions and needs no observer.
+//
+// # Scope: same range only
+//
+// Log indices are per-range, so a write acknowledged on range 1 and a read
+// stamped on range 2 are positions in different logs and are not comparable.
+// After a split the right-hand range starts a fresh log, and comparing across
+// them would manufacture violations out of correct behaviour.
+type ReadIndexAtArrival struct {
+	base
+	compared int
+}
+
+// NewReadIndexAtArrival builds the oracle.
+func NewReadIndexAtArrival(l *Ledger) *ReadIndexAtArrival {
+	return &ReadIndexAtArrival{base: base{l: l, name: "read-index-at-arrival"}}
+}
+
+// Compared is how many (read, earlier-write) pairs were actually checked. The
+// non-vacuity witness: a sweep in which no read was ever issued after an
+// acknowledged write on its own range compares nothing, and a green over zero
+// comparisons is this register's commonest entry.
+func (o *ReadIndexAtArrival) Compared() int { return o.compared }
+
+// Interested returns false: this is a property of recorded answers, evaluated
+// once at the end.
+func (o *ReadIndexAtArrival) Interested(sim.Kind) bool { return false }
+
+// OnStep is never called: see Interested.
+func (o *ReadIndexAtArrival) OnStep(sim.View, sim.Event) *sim.Violation { return nil }
+
+// Check compares every off-log read against the writes already acknowledged when
+// it was issued.
+func (o *ReadIndexAtArrival) Check() *sim.Violation {
+	writes := o.l.Writes()
+	for _, r := range o.l.Reads() {
+		if !r.OffLog || r.Refused || r.IssuedAt == 0 {
+			continue
+		}
+		for _, w := range writes {
+			if w.Range != r.Range || w.AckedAt >= r.IssuedAt {
+				continue
+			}
+			o.compared++
+			if w.Index > r.Index {
+				return &sim.Violation{Checker: o.name, Detail: fmt.Sprintf(
+					"range %d: a read of %q was issued at instant %d and answered OFF THE LOG at "+
+						"stamped index %d, but the write of %q at index %d had already been "+
+						"acknowledged to a client at instant %d.\n"+
+						"  The stamped index is the whole safety case for capturing at ARRIVAL "+
+						"rather than at confirmation (D-A7-3, ruled A): a read may be answered as "+
+						"soon as this replica reaches that index, so an index below an "+
+						"already-acknowledged write lets the answer miss a write the cluster had "+
+						"promised. commitIndex is monotonic and the acknowledgement precedes the "+
+						"arrival, so this cannot happen unless the stamp is taken from somewhere "+
+						"other than commitIndex at arrival",
+					r.Range, r.Key, int64(r.IssuedAt), r.Index, w.Key, w.Index, int64(w.AckedAt))}
+			}
+		}
+	}
+	return nil
+}
+
+var _ sim.Oracle = (*ReadIndexAtArrival)(nil)

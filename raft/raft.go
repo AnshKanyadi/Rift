@@ -3195,3 +3195,11 @@ func count(bs []bool) int {
 	}
 	return n
 }
+
+// ReadFloorForTest exposes the stamp a read taken now would carry.
+//
+// Exported for one reason: ruling 3's gate is that the stamp is a sound floor,
+// and a test that cannot see the stamp cannot assert it. Everything else about
+// the read path is observable from outside; this one number is chosen inside and
+// is only ever compared against facts the ledger already holds.
+func (r *Raft) ReadFloorForTest() Index { return r.readFloor() }

@@ -1074,6 +1074,13 @@ type RaftResult struct {
 	NoOpReachedArm int
 	NoOpAnswered   int
 
+	// ArrivalCompared is how many (read, already-acknowledged write) pairs
+	// `read-index-at-arrival` actually checked. Non-vacuity for ruling 3's gate:
+	// a sweep where no read was ever issued after an acknowledged write on its
+	// own range compares nothing, and a green over zero is this register's
+	// commonest entry.
+	ArrivalCompared int
+
 	// ReadsOutOfExtent is how many read-index reads were declined at ANSWER
 	// time because the range's extent no longer covered the key, and rerouted.
 	// BUG-026's fix, with its own number: a sweep reading ZERO has not opened
@@ -1621,6 +1628,16 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	// It was caught by the oracle's own non-vacuity counter rather than by
 	// reading the code, which is the argument for having built the counter.
 	if opt.ReadIndex {
+		// §5a / ruling 3's gate. Same placement and the same reason as the
+		// differential below: a final-state oracle in the list built by
+		// AllWithRebalance is never invoked, because SetOracles drives OnStep
+		// and nothing else.
+		arrival := raftcheck.NewReadIndexAtArrival(ledger)
+		if v := arrival.Check(); v != nil && res.Violated == nil {
+			res.Violated = v
+		}
+		res.ArrivalCompared = arrival.Compared()
+
 		agree := raftcheck.NewReadIndexAgreement(ledger, valueAtIndex(ledger))
 		if v := agree.Check(); v != nil && res.Violated == nil {
 			res.Violated = v
@@ -1822,6 +1839,7 @@ type RaftCensus struct {
 	FollowerReads       int
 	ReadsOutOfExtent    int
 	ReadAgreeCompared   int
+	ArrivalCompared     int
 	ReadIndexRuns       int
 	MovesOrdered        int
 	MovesCompleted      int
@@ -1982,6 +2000,7 @@ func CensusOf(seed uint64, r RaftResult) RaftCensus {
 	c.FollowerReads += r.FollowerReads
 	c.ReadsOutOfExtent += r.ReadsOutOfExtent
 	c.ReadAgreeCompared += r.ReadAgreeCompared
+	c.ArrivalCompared += r.ArrivalCompared
 	c.ReadIndexRuns += r.ReadIndexRuns
 	c.MovesOrdered += r.MovesOrdered
 	c.MovesCompleted += r.MovesCompleted
@@ -2129,6 +2148,7 @@ func AddCensus(a, b RaftCensus) RaftCensus {
 		{&out.ReadsServed, b.ReadsServed},
 		{&out.FollowerReads, b.FollowerReads},
 		{&out.ReadsOutOfExtent, b.ReadsOutOfExtent},
+		{&out.ArrivalCompared, b.ArrivalCompared},
 		{&out.ReadAgreeCompared, b.ReadAgreeCompared},
 		{&out.ReadIndexRuns, b.ReadIndexRuns},
 		{&out.MovesOrdered, b.MovesOrdered}, {&out.MovesCompleted, b.MovesCompleted},

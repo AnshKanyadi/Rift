@@ -340,7 +340,7 @@ func (m *Node) onClient(ev sim.Event, s sim.Scheduler) {
 		s.At(ev.At+staleRetryDelay, sim.KindClient, sim.NodeID(m.cfg.Ordinal), next)
 		return
 	}
-	r.onClient(req)
+	r.onClient(req, ev.At)
 }
 
 // staleRetryDelay is how long a client waits before retrying with a refreshed
