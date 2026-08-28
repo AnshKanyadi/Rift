@@ -981,6 +981,87 @@ That is `GF-42`'s mechanism, and this is its first live subject.
 
 ---
 
+
+---
+
+## `make mutant-covered` is UNRUNNABLE ON THIS MACHINE, and stopped by ruling rather than abandoned
+
+**Ansh, 2026-08-28, after the merge lane set.** *"Stop running `mutant-covered` here. It cannot
+complete on this machine… That is the same disposition `make mutants` got and for a related reason."*
+
+**Measured, three runs, not estimated:**
+
+| run | shape | outcome |
+|---|---|---|
+| full lane, single job | all 71 classes | **terminated at 1h35m53s**, 14 of 71 done, every one `ok` |
+| full lane, single job | all 71 classes | terminated at `M19` |
+| `ONLY=` chunk of 10 | `M23`…`M31` | **terminated at 59m**, 2 of 10 done (`M24`, `M25`), both `ok` |
+| `make cpp-ci`, for contrast | 11 C++ lanes | **completed**, ~25 minutes, exit 0 |
+
+**The cause is not the lane's total cost. It is the runtime's per-job ceiling, and the ceiling is
+variable** — 59 minutes in one case, 1h36m in another, with a 25-minute job completing reliably.
+
+> **A LANE WHOSE COST EXCEEDS THE RUNTIME CEILING IS NOT AN EXPENSIVE LANE. IT IS AN UNRUNNABLE ONE,
+> AND THE TWO LOOK IDENTICAL IN A BUDGET.**
+
+**Why chunking is not the answer, which is the ruling's own reasoning.** `ONLY=` exists and works; six
+chunks of ten would formally cover the 71. But `GF-44` has since measured the obligation at **~20**
+sweep-backed covering tests and **~6,450 seeds** rather than eight and ~1,928. Chunking against the
+corrected table is *"a way to spend a day proving something we already know"* — the lane's verdict on
+the classes it reaches has been `ok` every time, and what is missing is not the verdict but the
+capacity to reach them.
+
+**What would make it runnable, stated so this is a disposition and not a shrug:**
+
+1. **Convert the sweeps.** Not the eight the old table named — the ~20 the derived one does. This is
+   the only fix that shrinks the lane rather than rescheduling it.
+2. **Failing that, a runtime without the ceiling** — CI with a job budget in hours, where the lane is
+   merely expensive.
+
+**Both this lane and `make power-mutants` are blocked by the same obligation**, which is what makes
+that obligation the single highest-value piece of work left in Track A. See below.
+
+**Recorded the same way `make mutants` was at A7:** named, measured, with its cause, and never by
+loosening anything. No timeout was raised, no seed count reduced, no class skipped. Every class the
+lane did reach passed.
+
+---
+
+## THE HIGHEST-VALUE WORK LEFT IN TRACK A: convert the ~20 sweep-based covering tests
+
+**Elevated 2026-08-28 on Ansh's instruction, with the corrected numbers from `GF-44`.**
+
+**Two lanes are blocked by this one obligation** — `make mutant-covered` and `make power-mutants` —
+and nothing else in Track A is blocking two lanes at once.
+
+| | recorded before | derived now |
+|---|---|---|
+| sweep-backed covering tests | 8 | **~20** |
+| seeds, once per test (`mutants` baseline) | ~1,928 | **~6,450** |
+| classes they cover | not stated | **24** in the `assertOracleSilent` family alone |
+
+**Converting all eight of the original list would NOT have closed it.** That is the correction's
+practical content: the eight were a correct enumeration of one sweeping idiom, and the majority of the
+cost sits in the other one.
+
+**The cheapest single win, and it is not close:**
+
+> **`TestLeaderCompletenessOracleReportsNothing` — 2,000 seeds, covering exactly ONE class.** The
+> largest sweep in the repository, absent from the original table entirely, and the only class that
+> depends on it. Converting it to a directed test removes ~2,000 seeds from every baseline pass at the
+> cost of one covering test.
+
+Next after it, by seeds-per-class-freed: `TestLogMatchingOracleReportsNothing` (500, one class), then
+`TestPersistBeforeReplyOracleReportsNothing` (500, three classes — more seeds freed per test converted,
+but three classes to re-cover).
+
+**A9's own standard applies to each conversion:** a directed test replaces a sweep only when
+`mutant-covered` confirms it executes the line its mutant changes, and only when the class is still
+killed. Nine conversions were done that way at A7 and the lane corrected the author four times in the
+process; this is not a mechanical rewrite.
+
+---
+
 ## OBLIGATION: `engine/riftcgo`'s determinism scope, decided at I1 by the pass
 
 **Opened at the A7/B5 merge, 2026-08-27. Due at I1, where the cgo lane exists and the C++ archive is

@@ -307,6 +307,19 @@ The model is not the world, and these are the specific places it is kinder:
   baseline**; the remaining eight are a named, dated obligation, due at whichever phase next touches
   each class. **Raising the timeout was refused: it would make the number pass without making the
   claim true.** Every A7 class was induced and confirmed individually.
+- **`make mutant-covered` is UNRUNNABLE on this machine, and that is a different thing from
+  expensive.** Measured three times: terminated at **1h35m53s** with 14 of 71 classes done, terminated
+  again at `M19`, and terminated at **59m** with 2 of 10 done under an `ONLY=` chunk — while
+  `make cpp-ci` at ~25 minutes completes. The runtime's per-job ceiling is real and variable, and *a
+  lane whose cost exceeds it is not an expensive lane, it is an unrunnable one, and the two look
+  identical in a budget.* **Every class the lane reached passed.** Nothing was loosened to get there:
+  no timeout raised, no seed count cut, no class skipped.
+- **And the obligation blocking it turned out to be three times larger than recorded.** The
+  sweep-cost table said eight covering tests and ~1,928 seeds; the derived figures are **~20** and
+  **~6,450**, including a **2,000-seed** sweep the table omitted entirely. Converting the eight would
+  not have closed it. This is now the single highest-value piece of work left in Track A — two lanes
+  are blocked by it — and the cheapest win is the 2,000-seed leader-completeness sweep, which covers
+  exactly one class. See `BUGS.md` **GF-44**.
 - **One corpus bundle no longer reproduces.** Its defect class is real and is killed by a directed test
   in 0.3 seconds; what is missing is a *schedule* that exhibits it. A search costing 5h34m found none,
   and the reason is now understood: the class needs two independent things to coincide, and **a bundle

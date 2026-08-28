@@ -5285,8 +5285,139 @@ stated rather than papered over** — what this buys is that the blockers somebo
 re-asked on every push, at the cost of one `grep` each.
 
 **Its first live subject is honest about the cost it names:** `make power-mutants` is queued behind the
-eight remaining sweep-based covering tests, and the declaration names the most expensive of them as a
-tripwire. Verified still blocked; induced by renaming the tripwire and requiring the lane to fail.
+sweep-based covering tests, and the declaration names the largest of them as a tripwire. Verified still
+blocked; induced by renaming the tripwire and requiring the lane to fail. *(The tripwire was re-pointed
+the next day: it first named the largest of the **eight the table listed**, which `GF-44` showed was
+only the second-largest in the repository. A tripwire on the second-largest sweep goes green while the
+largest stands.)*
+
+#### The sharper form, found the next day, and it is the one to keep
+
+A fourth instance arrived immediately and it is worse than the first three, because the refuting
+evidence was **not** somewhere else:
+
+> **`CARRY-FORWARD.md`'s sweep-cost table said ~1,928 seeds. Three paragraphs below it, in the same
+> entry, added later by the same author: *"`make mutants`' baseline still exceeded two hours of
+> monotonic time and died on its own timeout."* Recorded as *firmer than the estimate above*. It is
+> also inconsistent with it, and nobody reconciled them.**
+
+At 1,928 seeds a two-hour death is a puzzle worth a paragraph. At the derived ~6,450 it is arithmetic.
+The measurement was right, was written down, was labelled as superseding the estimate — and the
+estimate stayed on the page, three paragraphs up, where every later reader would meet it first.
+
+> **A MEASUREMENT THAT CONTRADICTS THE TABLE BESIDE IT DOES NOT CORRECT THE TABLE BY BEING TRUE.
+> SOMEBODY HAS TO NOTICE THEY DISAGREE.**
+
+**And the operational consequence names who that somebody is.** A stale blocker rots over months and
+anyone might catch it. This is different and sharper:
+
+> **WHEN A NUMBER AND A MEASUREMENT IN ONE DOCUMENT DISAGREE, THAT IS A FINDING AT THE MOMENT OF
+> WRITING — AND THE WRITER IS THE ONLY PERSON POSITIONED TO SEE IT.** Nobody else will ever hold both
+> halves in mind at once: the later reader meets the table first and stops there, and the reader who
+> reaches the measurement has already accepted the table.
+
+So the obligation is on the hand adding the measurement, not on a future audit: **write a number beside
+an older one and you have taken on the job of reconciling them, or of saying in the text that you did
+not.**
+
+---
+### GF-43 — a log with two writers fails in the reader, and it fails as silence
+
+**Raised 2026-08-28 from `BUG-043`, and filed as a shape because the failure mode is the one this
+project cares most about.**
+
+An orphaned job from an earlier session held `lanes3.log` open for **10 hours 7 minutes**. A later run
+truncated the same path and wrote from offset 0. The orphan then wrote at its own large offset,
+punching a **1,369-byte NUL hole** between them. Every other log in the directory had zero NULs.
+
+`grep` classifies a file containing NULs as binary and suppresses output. So:
+
+```
+grep -n "=== LANE" lanes3.log     ->  nothing, exit 0
+tail lanes3.log                   ->  the lines are right there
+```
+
+> **A LOG WITH TWO WRITERS DOES NOT FAIL IN THE WRITER. IT FAILS IN THE READER, AND IT FAILS THE ONE
+> WAY A READER CANNOT DETECT: BY RETURNING NOTHING, SUCCESSFULLY.**
+
+*No matches* and *this tool has silently given up* are the same observation. That is the vacuous-green
+register's own theme arriving in the instrument used to read the repository rather than in the
+repository.
+
+**The operational half, which is the finding rather than its decoration.** The anomaly was hit
+**twice**. It was noticed both times — *"the grep for `=== LANE` returned nothing?! That's odd"* — and
+stepped past both times, because `tail` still worked and the numbers still looked sane. It was
+available, it cost one command to chase, and it was dismissed.
+
+> **AN ANOMALY THAT IS CHEAP TO CHASE AND GETS DISMISSED IS NOT A SMALL MISTAKE. IT IS THE ONLY
+> WARNING THE SILENT FAILURE MODE EVER GIVES.**
+
+**What resolved it was the standing rule, applied late.** Ansh asked *"is it even running?"*. `ps`
+answered in one command — and `ps` is where the second job was. The rule already existed and already
+covered this:
+
+> **READ RUN STATE FROM THE PROCESS, NEVER FROM A WATCHER OR A LAUNCH — AND NEVER FROM A LOG A SECOND
+> PROCESS MIGHT BE HOLDING.**
+
+The last clause is what this instance adds. Six lanes had been reported from a file rather than from
+the thing producing it; every one of them survived re-checking, which is luck rather than method.
+
+**Mechanised as practice, not code:** a lane log is named per invocation so two runs cannot share a
+path; `ps` is the first check when progress is in question; and an orphan check runs before starting
+long work, because a job that outlives its session is invisible to everything except `ps` and competes
+for the machine the measurements are taken on.
+
+---
+
+### GF-44 — a derivation that finds one pattern reports completeness over that pattern, not over the population
+
+**Raised 2026-08-28 from the sweep-cost table correction, which is the merge's most consequential
+result because it changes the size of a signed obligation.**
+
+`CARRY-FORWARD.md` recorded **eight** sweep-based covering tests totalling **~1,928 seeds**. The
+derived figures are **~20** tests and **~6,450 seeds**. Three errors, and they have three different
+causes, which is why they are recorded apart rather than as one bad table:
+
+| | error | cause |
+|---|---|---|
+| 1 | `TestToySurvivesOneThousandSeeds` recorded as **64**; it runs **1,000** | **one wrong cell in an otherwise careful table** — five of the six other numbered rows are exact. Contradicted by the test's own *name*, which is the cheapest possible check and was never made |
+| 2 | `TestSnapshotEquivalenceOracleReportsNothing` listed as `(sweep)`, no number, "A2, six classes" | **an unnumbered row reads as the heaviest.** It is **50 seeds**, the lightest of them. A missing number is not neutral; a reader fills it in from the surrounding rows |
+| 3 | the whole `assertOracleSilent` family absent — **13** tests, **24** classes, including a **2,000-seed** sweep | **the derivation looked for one idiom.** It found every test sweeping with a local `const seeds` loop and reported that as the population |
+
+**The third is the one that generalises.**
+
+> **A DERIVATION THAT FINDS ONE PATTERN REPORTS COMPLETENESS OVER THAT PATTERN, NOT OVER THE
+> POPULATION — AND THE REPORT LOOKS THE SAME EITHER WAY.**
+
+The original table was not careless. It was a correct enumeration of one mechanism, presented as an
+enumeration of the cost. Nothing in its output could have said *"and there is a second way to sweep."*
+
+**So the limit of a derivation belongs inside the entry it produces**, naming the patterns searched, so
+the next reader can ask whether there is a third. This entry's own limit is recorded with it: it finds
+a `const seeds` loop and the `assertOracleSilent` family, and a third idiom would be missed exactly the
+way the second was.
+
+**And the derivation was wrong the first time.** A misplaced `?` in `assertOracleSilentWith?\(` made it
+report **one** sweep instead of thirteen. It was caught only because two scripts written minutes apart
+disagreed — one step from correcting a signed record with a broken script.
+
+> **THIS IS THE THIRD TIME A NUMBER WAS NEARLY REPORTED FROM AN INSTRUMENT NOBODY CHECKED.** The
+> others: the killed measurement driver that left a mutant applied, so three floors were measured
+> against a tree nobody had checked (`BUG-033`); and the tar-exclusion glob that did not anchor, so
+> mutant verdicts were computable against a tree that was not the repository (recorded inside
+> `BUG-B007`, against `BM21` — *"a glob that 'usually' anchors is not an anchor"*).
+
+*(Ansh referred to that last one as "the M73 glob". Track A's `M73` is
+`a-read-answer-lands-in-any-incarnation` and is unrelated; the glob is Track B's, in `BUG-B007`. Noted
+rather than silently substituted, because a citation nobody checks is the same class as everything
+above.)*
+
+**The consequence for the obligation, which is why this is not a bookkeeping fix.** *"Eight sweeping
+covering tests remain, and they are the whole of the residual cost"* is false. Converting all eight
+would leave the 2,000-seed `TestLeaderCompletenessOracleReportsNothing` and twelve more sweeps in
+place — the majority of the cost. The blocker tripwire watching *"the 1,000-seed one and the most
+expensive"* was re-pointed for the same reason: **a tripwire on the second-largest sweep goes green
+while the largest stands.**
 
 ---
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
