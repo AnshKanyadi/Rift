@@ -48,7 +48,7 @@ inconclusive is never counted as a pass.**
 
 ---
 
-## 3. What was found: 36 defects, every one reproducing from a seed
+## 3. What was found: 35 defects, every one reproducing from a seed
 
 `BUGS.md` carries, for each: the symptom, the seed or kill point, the root cause, the fix, **the
 invariant that caught it**, which mutant class would have caught it, and what it would have caused in
@@ -59,14 +59,21 @@ the fix.
 
 | found by | count | representative |
 |---|---|---|
-| a structural invariant inside `raft/` | 9 | **BUG-005** — a follower acknowledged index 15 with 5 on disk; **BUG-009** — a replica overwrote entries it had already reported committed |
-| per-key linearizability (porcupine) | 5 | **BUG-004** — a client was told its write succeeded and no committed entry contained it; **BUG-026** — a read returned "key not found" a second after that key was written and acknowledged |
-| conservation and snapshot isolation | 4 | **BUG-022** — a transaction committed *underneath* an answer the database had already given |
-| persist-before-reply | 1 | **BUG-027** — a read-index message advertised a term that was not yet on disk |
-| **the harness checking itself** | 8 | **BUG-016**, **BUG-020**, **BUG-025**, **BUG-029**, **BUG-031**, **BUG-033**, **BUG-034**, **BUG-035** |
-| a mutant surviving, or a mutant's verdict being wrong | 4 | **BUG-023**; and A7's differential oracle, which killed its mutant with a verdict describing something the mutant does not do |
+| **persist-before-reply** — a message may not attest to state that is not on disk | 4 | **BUG-005** — a follower acknowledged index 15 with 5 on disk; **BUG-027** — an A1 oracle catching an A7 wire |
+| other structural assertions inside `raft/` and the driver | 6 | **BUG-009** — a replica overwrote entries it had already reported committed |
+| **snapshot equivalence** — a node's state must equal the log's state at its position | 4 | **BUG-011**, on 178 of the first 300 seeds of its phase |
+| **conservation, atomicity, snapshot isolation** | 5 | **BUG-022** — a transaction committed underneath an answer already given |
+| **per-key linearizability** (porcupine) | 3 | **BUG-004** — a client told its write succeeded, with no committed entry containing it; **BUG-026** |
+| a **non-vacuity counter reading zero** | 2 | **BUG-025** — follower reads implemented, dispatched, and answered by nobody |
+| the rebalance oracle | 1 | **BUG-016** |
+| a plain sweep, the first after a feature landed | 1 | **BUG-010** |
+| inspection while diagnosing a different defect | 1 | **BUG-012** |
+| **the harness checking itself, or somebody reading its own record** | 6 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035** |
 | **an enumeration** — listing a property and asking whether it still held | 1 | **BUG-028** |
-| a false accusation, chased down instead of tuned away | 1 | **BUG-032** |
+| **a false accusation**, chased down instead of tuned away | 1 | **BUG-032** |
+
+*Thirty-five, and the categories are taken from each entry's own "Found by" line rather than assigned
+afterwards.*
 
 ### Four a stranger should read
 
@@ -213,7 +220,7 @@ before the first, `git diff` before the second, `ps -o time=` before the third.
 | | |
 |---|---|
 | phases signed | **A0 – A7** |
-| defects found, all reproducing from a seed | **36** |
+| defects found, all reproducing from a seed | **35** |
 | mutant classes, each with a covering test and a measured floor or a named instrument | **71** |
 | corpus bundles | **24** |
 | vacuous-green register | **27 instances** |
