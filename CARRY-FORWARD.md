@@ -495,3 +495,43 @@ disk**. Reading through the snapshot is the *other* half.
 
 **`NewIter`'s named gap from B3.4 is closed here too**: an iterator holds its `Version`, so it holds
 its files, and the count sees it without a special case.
+
+---
+
+## CF-6 — the fault schedule that has never crossed the cgo boundary
+
+**Opened at B5.4. Comes due at I1.**
+
+**What is not covered.** Every fault-injected run in Track B — the kill-point sweep, the crash rig,
+the differential's kill schedules — drives the C++ `DB` **directly**, on a `TestEnv`. The Go wrapper
+has never been killed. `rift_db_open` takes a **path**, so the C boundary cannot be handed a
+`TestEnv`, and there is at present no way to inject a fault into an engine reached through cgo.
+
+**Why that was accepted rather than fixed at B5.** Closing it needs one of two things, and both were
+declined with reasons recorded in `DESIGN-B5` §10.1: a test-only `rift_db_open_on_env`, which is
+permanent boundary surface whose only caller is a test, on the one interface B5 exists to keep narrow;
+or a Go artifact encoder, which is a third implementation of a format whose two Ansh weighed and paid
+for individually. Neither is worth buying for a gap that **I1 closes for free**.
+
+**Why I1 closes it.** I1 runs the full Track A stack on the C++ engine and reruns the historical seed
+corpus in verification mode. That stack reaches the engine through `engine/riftcgo` and it crashes,
+restarts, and loses unsynced writes by design — so the wrapper meets a fault schedule there as a
+consequence of what I1 *is*, not as something added for it.
+
+**What must actually be checked when it does**, because "it happens incidentally" is how a gap stays
+open while looking closed:
+
+1. **A crash mid-`Apply` through the wrapper** leaves no Go-side state claiming a sequence the engine
+   never took. `Apply` returns a `SeqNum` before durability; a crash between the two is the ordinary
+   case and the wrapper must not have cached anything about it.
+2. **`OnDurable` fires from the Go side.** After a restart, the watermark it reports must be the
+   engine's and not a value the wrapper remembered across the crash.
+3. **An iterator holding a block across a crash.** The wrapper holds decoded pairs in Go memory that
+   the C side no longer backs. Nothing must read them as live.
+
+> **THE HONEST STATEMENT UNTIL THEN, and it is in the test file as well as here: the cgo path is
+> verified against `engine/model` on clean runs and is NOT verified under faults.**
+
+**What would make this urgent earlier:** any I1 divergence whose reproduction differs between the
+native differential and the cgo path. That would mean the boundary is doing something under faults
+that it does not do without them, and this entry becomes the first place to look.

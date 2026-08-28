@@ -224,6 +224,11 @@ func replayAgainstTheModel(t *testing.T, regime string, seed uint64, ops []diffe
 
 		seq := op.Seq
 		bc, bm := engine.NewBatch(), engine.NewBatch()
+		// CF-3: the progress quantity is i, and the inner loop advances it at
+		// least once because the outer loop entered with ops[i].Seq == seq.
+		// Stated rather than relied on: an inner loop that can consume nothing
+		// makes the outer one infinite, and the guard that prevents it here is
+		// two lines away rather than in this condition.
 		n := 0
 		for i < len(ops) && ops[i].Seq == seq {
 			switch ops[i].Kind {

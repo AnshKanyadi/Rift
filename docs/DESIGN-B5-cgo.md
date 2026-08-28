@@ -208,3 +208,80 @@ not**. Per B3's precedent the numbers live there and this document keeps the dec
 | **B5.5** | the numbers, swept sizes, `BENCHMARKS.md` with provenance |
 
 **Stop condition, unchanged:** an engine defect stops and reports; everything else keeps to the close.
+
+---
+
+## 10. What landed, and where it departed from what was decided
+
+**Written at B5.5's close, before sign-off, because a design document that records only its decisions
+and not their fate is a record of intentions.**
+
+### 10.1 `B5-D6` — the differential through cgo. **DEPARTED.**
+
+§6 asked for **byte-identical artifacts** from a cgo-path run and a native run at the same seed. That
+is not reachable, and the reason is structural rather than incidental:
+
+> **`rift_db_open` takes a PATH.** The C boundary cannot be handed a `TestEnv`, and *every*
+> differential schedule — including the clean control — runs on one. A cgo run therefore cannot be
+> given the same faults, cannot be killed at the same ordinal, and cannot produce the same artifact.
+
+**Two ways to close that gap were available and both were declined**, with reasons:
+
+| option | why not |
+|---|---|
+| a test-only `rift_db_open_on_env` | permanent boundary surface whose only caller is a test, on the one interface B5 exists to keep narrow |
+| a Go artifact **encoder** | a third implementation of a format whose *two* implementations Ansh weighed and paid for individually |
+
+**What landed instead.** The C++ engine, reached through cgo, is compared against `engine/model` on
+the differential's own workloads — 3 regimes × 6 seeds × 200 seeded operations, with the operations
+read from real `rift_diff` artifacts' `SUBMISSION` sections so the two runs *cannot* have submitted
+different things. With no kill, the recovery **range** the contract permits does not apply and the
+comparison is **exact after every batch**, which is a stronger form of agreement than a recovered-state
+check rather than a weaker one.
+
+**What it does not cover, stated so it is never read as covered:** *a fault schedule crossing the
+boundary.* Nothing in B5 tests that, and the test says so at the top of its own file.
+
+**It was measured rather than assumed to have teeth.** `BM114` reddens it and it names the batch —
+`compact/4 after seq 307 (3 ops)` — where `cpp-diff` reports a recovered-state disagreement at the
+end. `BM120` floors it (GF-26): snapshots that pin nothing, a defect **no other lane in this repo can
+see**, because every other snapshot test reads its snapshot immediately and a snapshot that pins
+nothing passes all of them.
+
+### 10.2 `B5-D4` — `kBusy`. **DISCHARGED AS RULED, and the quantity was not the obvious one.**
+
+§7.6.1 bound B5 to a bidirectional predicate and a rig that *drives*. Both landed. The finding inside
+it is worth keeping in this document because it is a fact about the engine and not about the rig:
+
+> **`Wal::Sync` zeroes `buffered_bytes_` at the swap and then does its I/O with the mutex released.**
+> For the whole duration of an fsync the bytes are resident, undrained, and counted by nothing. A
+> threshold charged against `buffered_` alone reports **no backlog** exactly while the poller is
+> behind — the one moment backpressure means anything.
+
+So it is charged against **buffered + in-flight**, which is identically the harness's
+`submitted − drained`, and *that identity* is what lets the predicate be stated without asking the
+engine anything. `BM117` is that defect; it passes every sequential test, and the window is reachable
+only from **inside** a `Sync` — entered through the promotion hook rather than a second thread, so the
+rig stays single-threaded and the moment is a place rather than a race.
+
+### 10.3 `B5-D7` — the numbers. **IN `BENCHMARKS.md`, per B3's precedent.**
+
+This document keeps the decision and the methodology's *reasons*; the table and its provenance live in
+`BENCHMARKS.md` §B5.5. The headline the table was run to produce:
+
+> **One pair per boundary crossing costs +111%. Sixty-four costs +21%, and it saturates there.**
+
+That is the measurement that justifies the block interface existing rather than a per-entry cursor
+across `extern "C"` — ~90 percentage points removed by batching — and it is why `DefaultBlock = 64` is
+64 and not a taste.
+
+### 10.4 The two smaller departures
+
+- **`B5-D2`'s catch-all** was corrected at B5.0 rather than the `-fno-exceptions` flag being relaxed
+  to fit it. Recorded as `GF-32`; §2.1 carries the correction.
+- **The poller's package name.** `scope.go` reserved `engine/real` and `engine/pump` for it under
+  A0.5, "whichever of these two names A0.5 and B5 settle on, the other line goes." **Both went.**
+  B1-Q11 ruled the poller harness-side, so neither package will exist, and a reservation for one that
+  will not is a hole in the determinism boundary held open for nothing. `engine/riftcgo` — an `Engine`
+  implementation, which is a different thing from a poller — took its place, excluded for `sync` and
+  `unsafe`, neither hatchable.
