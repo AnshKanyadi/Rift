@@ -133,7 +133,14 @@ func TestReplayReportsFirstDivergentStep(t *testing.T) {
 	}
 	perturbed, ok := perturbOneFault(string(b))
 	if !ok {
-		t.Skip("this seed produced no fault entry to perturb")
+		// Not a skip. The point of this test is that a replay in a FRESH PROCESS
+		// notices a plan that no longer matches its recorded hash, and with
+		// nothing perturbed it notices nothing while passing. The bundle is
+		// generated a few lines up from a seed this test chose, so "no fault
+		// entry" means the generator stopped producing them -- which is a
+		// finding about the fixture, not a reason to report success.
+		t.Fatal("the generated plan carries no fault entry to perturb, so nothing was changed " +
+			"and a pass here would say only that replay ran, not that it can refuse")
 	}
 	if err := os.WriteFile(planPath, []byte(perturbed), 0o644); err != nil {
 		t.Fatalf("writing plan: %v", err)

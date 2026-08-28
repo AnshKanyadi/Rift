@@ -104,8 +104,15 @@ func TestALeaderDoesNotServeAReadAgainstAnInheritedCommitIndex(t *testing.T) {
 	if r.termStart == 0 {
 		t.Fatal("becomeLeader did not record a term-start index")
 	}
+	// The window is ARRANGED, not hoped for: this test never feeds an append
+	// response, so the term-start no-op cannot reach a quorum and commitIndex
+	// stays inherited. If it committed anyway the arrangement broke, and the
+	// assertion below would pass over a window that does not exist.
 	if r.commitIndex >= r.termStart {
-		t.Skip("this term's no-op committed immediately; the inherited window does not exist here")
+		t.Fatalf("the no-op at %d is already committed (commitIndex %d), so the inherited-window "+
+			"this test exists to check does not exist in this run. Nothing acknowledged an "+
+			"append here, so if the no-op committed, the arrangement is wrong rather than the "+
+			"window being unreachable", r.termStart, r.commitIndex)
 	}
 	if err := r.ReadIndex([]byte("early")); err != nil {
 		t.Fatalf("read index: %v", err)

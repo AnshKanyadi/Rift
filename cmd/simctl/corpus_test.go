@@ -145,7 +145,13 @@ func TestEveryStoredBundleReplays(t *testing.T) {
 func TestCorpusLaneDetectsRot(t *testing.T) {
 	bundles := corpus(t)
 	if len(bundles) == 0 {
-		t.Skip("no bundle to damage")
+		// Not a skip. This test exists because a lane over a corpus that
+		// currently reproduces cannot tell "every bundle replays" from "replay
+		// always says yes" -- and with no bundle to damage it cannot tell that
+		// either, while reporting success. A rot detector that skips when there
+		// is nothing to damage is the thing it was built to catch.
+		t.Fatal("seeds/ holds no bundle to damage, so this lane cannot show that replay is " +
+			"capable of refusing anything, and a green here would say only that it ran")
 	}
 	src := bundles[0]
 	bin := build(t)
