@@ -1479,6 +1479,22 @@ separates an oracle that works from one that merely speaks.
 > Distinguishing unreached from broken is a diagnostic convenience. Catching a checker that would fail
 > correct runs is the difference between a verification claim and a false one.
 
+#### 8.1b.1 The limit on this rule, found by nearly failing it
+
+**Two numbers are necessary and not sufficient**, and §5a.4c is the demonstration. An oracle built on
+the read's ANSWER instant instead of its ISSUE instant would have produced **both numbers unchanged** —
+it fires on `M83` and it is silent on a clean tree — while accepting a stamp taken at any point up to
+the answer, which is **the option D-A7-3 did not rule**.
+
+> A pair of numbers tells you an instrument DISCRIMINATES. It does not tell you the instrument is
+> discriminating on the property that was ruled.
+
+What closed that gap was neither number. It was **reading the ruling's own words** — *"before that read
+was issued"* — rather than the convenient field already sitting in the struct. A reader who has
+internalised the two-numbers rule will otherwise take it as complete, and it is not: it is a floor
+under an instrument, not a check that the instrument was aimed at the right claim. §5e.2b's four axes
+are the other half of that question.
+
 ### 8.2 The standing set
 
 1. **Every new oracle induced.** No gate counts until its failure has been induced. This covers the

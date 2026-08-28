@@ -24,6 +24,25 @@
 # by execution rather than by assertion. That is what makes it mechanical rather
 # than remembered.
 #
+# # SKIP is an ANSWER, and the person most likely to misread it is editing this file
+#
+# A patch that only ADDS lines has no deleted-or-replaced run, so there is no line
+# whose coverage can be required and the question this lane asks -- *does the
+# covering test execute the line this patch changes* -- has no subject. The lane
+# reports SKIP, and that is the correct verdict rather than a failure to reach one.
+#
+# **A mutant that only adds is asking a different question from one that
+# replaces.** An addition changes what happens NEXT TIME somebody edits nearby; a
+# replacement changes what happens now, and only the second has a line to cover.
+#
+# SKIP reads like a gap. The temptation is to make the lane say something --
+# require coverage of the line ABOVE the insertion, or of the inserted lines
+# themselves on the mutated tree -- and both would turn a precise verdict into a
+# false one, because neither is the question. **When SKIP appears, look at the
+# patch, not at this file.** If the class deserves a coverage answer, rewrite the
+# mutation as a replacement so that it poses one; A7's `M83` was rewritten exactly
+# that way, from an inserted branch to a replacement of `return r.commitIndex`.
+#
 # # Why the FIRST line and not every line, which is what it used to be
 #
 # The first version required every deleted line to be covered, and its first

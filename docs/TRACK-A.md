@@ -72,8 +72,23 @@ the fix.
 | **an enumeration** — listing a property and asking whether it still held | 1 | **BUG-028** |
 | **a false accusation**, chased down instead of tuned away | 1 | **BUG-032** |
 
-*Thirty-five, and the categories are taken from each entry's own "Found by" line rather than assigned
-afterwards.*
+### How that table was built, which is the same rule as everything else here
+
+Three numbers were in play while writing this section:
+
+| number | where it came from | |
+|---|---|---|
+| **36** | `grep -c '^### BUG-'` | **wrong** — `BUGS.md` carries a `BUG-NNN` template heading, and a count counted it |
+| **33** | the categories, assigned from memory | **wrong** — it did not sum to any population at all |
+| **35** | every entry's own *"Found by"* line, extracted | **right** |
+
+The one that is right is the one **derived from the artifact** rather than from a count over it or a
+recollection of it. That is the same rule three of this project's standing rules are (§6): *read the
+thing, not the proxy for the thing* — and it is worth having arrive here, in the document a stranger
+reads, rather than only in the design notes.
+
+> A summary table in a document about vacuous verification that does not add up to its own population
+> is the exact shape of thing this repository exists to refuse.
 
 ### Four a stranger should read
 
