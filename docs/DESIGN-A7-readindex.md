@@ -847,6 +847,45 @@ only that the workload did not overlap. The census carries the number of reads t
 judged, and `exitCriteriaFailures` refuses a sweep in which it is zero — the same construction
 `ResolverDeclarations` got (§40.5), added against a measurement rather than by argument.
 
+### 5a.4b Three instruments on one class, and they are not redundant
+
+A reader counting instruments will see three things pointed at ruling 3 and suspect duplication. They
+ask three different questions, and no two of them can answer each other's:
+
+| instrument | where | the question |
+|---|---|---|
+| `TestAReadIsNeverAnsweredBelowItsStampedIndex` | `raft/` | **can a read be answered below its stamp?** A property of the protocol, at one schedule, deterministic |
+| `TestReadIndexAtArrivalSpeaks` | `raftcheck/` | **can the oracle speak?** Seven cases over a synthetic ledger, milliseconds — the instrument's own induction, which must not wait on a sweep |
+| `TestAReadStampIsNotBelowAnAcknowledgedWrite` | `store/` | **does the SYSTEM feed that oracle a sound stamp?** A real acknowledged write and a real read through `onClient`, reading the stamp `readFloor` actually chose |
+
+And `read-index-at-arrival` itself is the fourth thing: **the property checked on every run of the
+sweep**, which is what none of the three provides. The first is one schedule; the second judges the
+judge; the third is one schedule again, at a different layer. Only the oracle is continuous.
+
+> **An instrument that can speak and an instrument that is being fed the right input are separate
+> claims**, and the class where they were conflated is §5b's — an oracle that killed its mutant with a
+> verdict describing something the mutant does not do.
+
+### 5a.4c `IssuedAt`, and why it is the subtle correctness point
+
+§5a.2 is stated against *"every write acknowledged to a client **before that read was issued**"*. The
+convenient timestamp is the one already on the record — `When`, the instant the read was **answered**
+— and it is **a whole confirming round later**.
+
+An oracle built on the answer instant would have compared each read against every write acknowledged
+before it was *answered*, which includes writes acknowledged **during** the confirming round. Those
+are writes the read is entitled to miss: they were not promised to anyone when the stamp was taken.
+The check would still fire on `M83` and would still be silent on a clean tree — **and it would be
+quietly weaker in a direction nothing would have flagged**, because it would have accepted a stamp
+taken at any point up to the answer, which is precisely the option D-A7-3 did **not** rule.
+
+> That is the **guarantee-copied-without-its-reason** class (§5b0, case 3) avoided by reading the
+> ruling's own words rather than the timestamp that was already in the struct.
+
+So `ReadRecord.IssuedAt` was added, carried from `onClient`'s arrival instant through `pendingRead`,
+for one reason: **the ruling says *issued*, and the two instants differ by exactly the window the
+gate is about.**
+
 ### 5a.5 The mutant
 
 `i - 1` is the mutation: stamp the read one index low. It is the smallest possible version of the
@@ -1876,11 +1915,18 @@ rather than over an oracle that never reached one.
 
 **Two things the lane corrected while this was built**, both worth keeping:
 
-1. The first version of `M83` **only added lines**, and `mutant-covered` reported `SKIP` — correctly,
-   because an addition-only patch has no deleted-or-replaced run and therefore no line whose coverage
-   can be required. **A mutant that only adds is asking a different question from one that replaces**,
-   and the lane declines the second question when the patch does not pose it. Rewritten as a
-   replacement of `return r.commitIndex`.
+1. The first version of `M83` **only added lines**, and `mutant-covered` reported `SKIP`.
+   **That is the lane answering correctly, not failing to answer** — an addition-only patch has no
+   deleted-or-replaced run, so there is no line whose coverage can be required, and the question
+   *"does the covering test execute the line this patch changes"* has no subject. **A mutant that only
+   adds is asking a different question from one that replaces.**
+
+   > **Recorded because `SKIP` reads like a gap.** A future author will see it, take it for a hole in
+   > the lane, and add a rule that makes the lane answer a question the patch did not ask — which
+   > would turn a precise verdict into a false one. The remedy when `SKIP` appears is to look at the
+   > patch, not at the lane.
+
+   Rewritten as a replacement of `return r.commitIndex`, which poses the question.
 2. The covering test was first pointed at `store/`, where a directed test drives a real acknowledged
    write and a real read through `onClient`. `mutant-covered` **skips a cross-package pair** — the
    patch is in `raft/` — so the declaration names ruling 3's own induction, in the patch's own

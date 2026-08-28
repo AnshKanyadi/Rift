@@ -2455,12 +2455,20 @@ func (o *ReadIndexAgreement) Check() *sim.Violation {
 // write that was missed. In a quiet history nobody observed it and porcupine is
 // green over a lie. This is a statement about positions and needs no observer.
 //
-// # Scope: same range only
+// # Scope: same range only, and the failure direction is why this is stated here
 //
 // Log indices are per-range, so a write acknowledged on range 1 and a read
 // stamped on range 2 are positions in different logs and are not comparable.
-// After a split the right-hand range starts a fresh log, and comparing across
-// them would manufacture violations out of correct behaviour.
+// After a split the right-hand range starts a FRESH log at a low index, so an
+// unscoped comparison would report the older range's high indices as violations
+// of the new range's stamps.
+//
+// That direction is the one worth naming: it MANUFACTURES VIOLATIONS OUT OF
+// CORRECT BEHAVIOUR. A false accusation from a safety oracle is debugged in the
+// component it accuses -- somebody would go looking for a stale read in the read
+// path -- and the defect would be here, in the comparison. An oracle that is
+// wrong in the other direction merely stays quiet; one that is wrong in this
+// direction sends people to the wrong place with a seed in hand.
 type ReadIndexAtArrival struct {
 	base
 	compared int
