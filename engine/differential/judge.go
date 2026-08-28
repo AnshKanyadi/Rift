@@ -3,10 +3,10 @@ package differential
 import (
 	"bytes"
 	"fmt"
-	"sort"
 
 	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/engine/model"
+	"github.com/anshkanyadi/rift/internal/sorted"
 )
 
 // Judge replays an artifact's submission log into engine/model and compares the
@@ -295,12 +295,13 @@ func compare(want, got map[string][]byte) string {
 	for k := range got {
 		keys[k] = struct{}{}
 	}
-	ordered := make([]string, 0, len(keys))
-	for k := range keys {
-		ordered = append(ordered, k)
-	}
-	sort.Strings(ordered)
-	for _, k := range ordered {
+	// sorted.Keys rather than a local range-and-sort. Not for determinism --
+	// the sort was already there and correct -- but because key order is never
+	// an accident anywhere in this tree, and a second place that gets it right
+	// inline is a place a future edit can get it wrong with no lane noticing.
+	// That is BUG-032's one-fact-two-places shape at the level of an idiom
+	// rather than of a value.
+	for _, k := range sorted.Keys(keys) {
 		w, inWant := want[k]
 		g, inGot := got[k]
 		switch {
