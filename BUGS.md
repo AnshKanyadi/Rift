@@ -1811,6 +1811,87 @@ avoid.
 
 ---
 
+### GF-33 — an assertion about the members present cannot fail on a member added
+
+**Raised at B5.3**, by `Status::Code::kBusy` crossing the C boundary as an integer no header names.
+
+Three declarations of one set exist: `Status::Code` in C++, `rift_status` in the C header, and
+`codeError`'s switch in Go. The boundary held them together with **nine `static_assert`s, one per
+code** — each pinning a value, all nine correct, and **all nine still correct after a tenth code was
+added.** `ToC` was a `static_cast`, which agrees with anything. The engine gained a code, the boundary
+compiled without a word, and `rift_status(9)` reached the wrapper.
+
+> **AN ASSERTION ABOUT THE MEMBERS PRESENT CANNOT FAIL ON A MEMBER ADDED. ONLY AN ASSERTION ABOUT THE
+> SET CAN.**
+
+**It is `GF-25` one turn further.** `GF-25` was *assert the content, not the outcome*; this is *assert
+the set, not its members*. Both are the same mistake about what an assertion ranges over, and both
+produce the same symptom: a check that is individually true, collectively silent, and reads in review
+as thorough **because there are so many of them**. Nine asserts look like more rigour than one switch.
+They are less.
+
+**The fix is a mechanism that already existed three files away.** `status.h` says *"NO `default:` ARM
+MAY EVER SWITCH OVER THIS TYPE — `-Werror=switch` is what makes adding an enumerator a build failure
+until somebody classifies it."* `ToC` is the one place two independently-declared enums must agree, and
+it was the one place not using it. The C++ side now refuses to compile; the Go side has no
+exhaustiveness check to borrow, so `TestEveryStatusTheHeaderDeclaresIsMapped` **parses `rift.h`** and
+holds the wrapper to it — a test that derives its set from somewhere other than the code under test is
+the only kind that can fail on an addition.
+
+**The operational form, for I1 and I2:** whenever the same set is declared in more than one place, the
+question is not *"is each member right"* but *"what makes adding one break something."* If the answer
+is *"the reviewer notices"*, there is no check.
+
+---
+
+### GF-34 — a second implementation is only a check when something runs both
+
+**Raised by `BM118`'s survival**, B5.3.
+
+The rig computes the backpressure threshold independently of the engine, on purpose: `AdjudicateBusy`
+is the harness's arithmetic, the engine has its own, and the pair exists so neither is believed. `BM118`
+changed the engine's comparison from `>` to `>=`. It was aimed at the test asserting exactly that edge
+— `TheBoundaryValueItselfIsNotOwed` — **and survived**, because that test calls `AdjudicateBusy`. It
+asserts the harness's edge with great precision and says nothing whatever about the engine's.
+
+> **TWO IMPLEMENTATIONS OF ONE RULE ARE A CHECK ONLY WHERE SOMETHING RUNS BOTH AND COMPARES THEM. A
+> TEST OF EITHER ONE ALONE IS A TEST OF THAT ONE ALONE — AND IT LOOKS EXACTLY LIKE THE CHECK.**
+
+This is the *reverse* of `BM113`. There, a fix made the defect unrepresentable through an API and the
+mutant survived because there was nothing left to catch. Here nothing was fixed and nothing was
+unrepresentable: **the covering test simply pointed at the wrong one of two things with the same
+name.** Both survivals were the mutant working; only one of them meant the code was safe.
+
+The workload was reached rather than the mutant relabelled (`GF-16`): the covering test now drives real
+writes onto a threshold chosen as an exact multiple of one write's cost, so the backlog lands on
+`busy_bytes` exactly — legal under `>`, refused under `>=`, and nothing else in the suite separates
+them.
+
+---
+
+### GF-35 — a policy that latches is indistinguishable from one that works
+
+**Raised by `BM119`**, B5.3, and it is a shape three mechanisms in this repo now share.
+
+`BM119` never releases the in-flight charge, so the backlog only grows: after enough bytes every write
+returns `kBusy` forever and no amount of draining clears it. **A database that refuses all writes and
+reports a legitimate, documented reason for each one.** The rig's entire forward assertion passes under
+it — backpressure is owed, backpressure is signalled, the predicate holds on every write.
+
+> **THE INTERESTING HALF OF A MECHANISM THAT SAYS "NOT NOW" IS WHEN IT STARTS SAYING "NOW".**
+
+The same shape as the seam's consecutive-zero-write bound, and the same shape a lease that never
+expires would have. In each, the safety direction is asserted everywhere and the liveness direction is
+asserted nowhere, because the safety direction is the one the mechanism is *for* — and a mechanism
+stuck permanently in its own purpose looks, to every test of that purpose, like it is working
+perfectly.
+
+**Mechanically:** any test that asserts a refusal must be followed by the thing that clears it and a
+write that succeeds. Two lines, and they are the only two lines in `BM119`'s covering test that do
+anything.
+
+---
+
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**

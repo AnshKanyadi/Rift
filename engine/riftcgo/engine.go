@@ -35,6 +35,25 @@ import (
 // ONE ENUM, ONE MEANING: the C codes are Status::Code's values, held together
 // by a static_assert on the C++ side. This function is the only place a code
 // becomes a Go error, so a new code cannot arrive with two meanings.
+// ErrBusy is backpressure: the write was NOT applied, and the caller should
+// drain before retrying.
+//
+// A SENTINEL AND NOT A STRING, because this is the one code a caller is
+// expected to ACT on rather than report. errors.Is(err, ErrBusy) is the
+// difference between a retry loop and a crash; an anonymous errors.New here
+// would leave every caller matching on message text.
+var ErrBusy = errors.New("riftcgo: busy -- unsynced backlog above the threshold")
+
+// errForCode is codeError reached from a plain integer.
+//
+// IT EXISTS BECAUSE A _test.go FILE MAY NOT IMPORT "C". The exhaustiveness test
+// derives its code set by PARSING rift.h -- which is the only way it can fail
+// on a code nobody added a case for -- and it therefore holds those codes as
+// integers rather than as cgo constants. Without this, the test would have to
+// name the codes itself, and a test that names the set it is checking checks
+// nothing.
+func errForCode(code int) error { return codeError(C.rift_status(code)) }
+
 func codeError(st C.rift_status) error {
 	switch st {
 	case C.RIFT_OK:
@@ -55,6 +74,8 @@ func codeError(st C.rift_status) error {
 		return errors.New("riftcgo: killed")
 	case C.RIFT_INVALID_ARGUMENT:
 		return errors.New("riftcgo: invalid argument")
+	case C.RIFT_BUSY:
+		return ErrBusy
 	case C.RIFT_INTERNAL:
 		return errors.New("riftcgo: internal boundary failure")
 	case C.RIFT_BUFFER_TOO_SMALL:
