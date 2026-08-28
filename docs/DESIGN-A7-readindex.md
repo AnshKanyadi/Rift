@@ -1820,18 +1820,42 @@ decision, and why this restatement is written against A rather than against both
 
 ---
 
-## 10. What this document still owes
+## 10. What this document still owes — CLOSED AT EXIT, with one item OPEN
 
-Written here rather than in §9 so that the list is short and checkable at exit:
+The pre-code version of this list ended *"No A7 code is written."* It is closed here item by item,
+and one of them is **not** discharged.
 
-- ~~the **restated** three-guard totality argument (ruling 13)~~ — **written, §9a.** What remains is
-  the induction: `M71` re-pointed at `P` negated, and `M72` re-induced against the restated form;
-- **D-A7-6 (§3a), open** — how the no-op is represented; it gates the first commit, and option B
-  would touch the frozen raft interface;
-- ~~the ledger-side oracle for ruling 3's condition~~ — **specified, §5a**, with its independence
-  argument and seven induction cases. What remains is building it and the `i - 1` mutant;
-- the counted plain-read census field (ruling 9), before any number reaches BENCHMARKS.md;
-- the fate of the replicated read path (ruling 4), decided at exit and recorded here.
+| owed | state at close |
+|---|---|
+| the restated three-guard totality argument (ruling 13) | **written**, §9a — and `M71`/`M72` re-induced against the restated form, both measured at **22 of 600, first at seed 30**, under A7's shape |
+| **D-A7-6 (§3a)** — how the no-op is represented | **ruled A** and landed: `EntryNormal`, nil `Data`, the zero `ProposalID`. The frozen interface was not opened. `P-NOOP` is a named premise in §4.1a and has been checked at close (§4.1s) |
+| the counted plain-read census field (ruling 9) | **landed** — `ReadsServed`, `FollowerReads`, `ReadAgreeCompared`, `ReadsOutOfExtent`, all reported by the exit run |
+| the fate of the replicated read path (ruling 4) | **decided: it stays.** It is the differential oracle's other half, and BUG-026 and BUG-028 are both cases where the comparison between the two paths is the only thing that could have spoken. Removing it would have removed the instrument |
+| **the ledger-side oracle for ruling 3's condition (§5a), and its `i - 1` mutant** | **NOT BUILT — the one open item.** See below |
 
-**No A7 code is written.** The next commit is the term-start no-op, alone, with the re-measurement it
-requires.
+### 10.1 The open item, stated rather than absorbed into a sign-off
+
+**§8.1 lists ruling 3 as one of the five gates a run can fail**, and names its evidence as *"an oracle
+over the ledger and **induced**, not argued in prose."* What exists:
+
+- **the condition IS induced** — `TestAReadIsNeverAnsweredBelowItsStampedIndex` in `raft/`, whose doc
+  quotes the ruling verbatim and which fails when the stamp is taken late;
+- **the oracle specified in §5a is NOT built.** §5a.2's property — *for every read answered off the
+  log at stamped index `i`, every write acknowledged to a client before that read was issued occupies
+  a log index at or below `i`* — is asserted by none of the eighteen oracles in `raftcheck`. The three
+  halves of `read-index-answers-match-the-log` are different properties: *the read waited*, *the
+  answer matches the log at the position reached*, and *the range owned the key*;
+- **the `i - 1` mutant of §5a.5 is not planted.**
+
+**Why the gap matters, in §5's own terms.** A directed unit test establishes the property **at one
+schedule**. §5's argument for wanting property 2 at all is that *porcupine can only see a stale read
+when some client observed the write it missed* — so a unit test at a single seed is precisely the
+weaker instrument the oracle was specified to replace. The gate is **half met**: the claim is not
+living in prose, but it is also not being checked on every run.
+
+> **This is recorded here rather than folded into a sign-off**, because a gate that is half met and
+> described as met is worth less than one that is half met and says so. What it would take is stated
+> in §5a: an oracle over `Ledger.Reads()` correlating each off-log stamp against the log index of
+> every write the history shows acknowledged before that read was issued, plus the `i - 1` mutation to
+> induce it.
+
