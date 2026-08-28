@@ -105,6 +105,12 @@ func codeError(st C.rift_status) error {
 // bytePtr returns a pointer C may read for the duration of one call, and nil
 // for a nil slice — which is how UNBOUNDED crosses, since an empty non-nil
 // slice is the EMPTY KEY and the two must not become the same pointer.
+// bytePtr is the BOUND mapping: a nil slice becomes a null pointer, which the C
+// side reads as Unbounded. rift.cc says why the distinction lives in the
+// pointer -- "there is no way to pass 'unbounded' as bytes".
+//
+// USE IT ONLY FOR BOUNDS. For a key or a value there is no such concept, and a
+// null pointer there is rejected as RIFT_INVALID_ARGUMENT; see bytePtrExact.
 func bytePtr(b []byte) (*C.char, C.size_t) {
 	if b == nil {
 		return nil, 0
@@ -113,6 +119,34 @@ func bytePtr(b []byte) (*C.char, C.size_t) {
 		// A non-nil empty slice needs a non-nil pointer, or the C side reads it
 		// as unbounded. `&empty[0]` panics on a zero-length slice, so a
 		// one-byte backing array is used and the length says zero.
+		return (*C.char)(unsafe.Pointer(&emptySentinel[0])), 0
+	}
+	return (*C.char)(unsafe.Pointer(&b[0])), C.size_t(len(b))
+}
+
+// bytePtrExact is the KEY-OR-VALUE mapping: nil and empty are the same thing,
+// because a key or a value has no unbounded case to distinguish them.
+//
+// # The defect this fixes, found at I1 on the stack's first contact
+//
+//	panic: store: node 3 cannot apply range 1's committed batch:
+//	       riftcgo: invalid argument
+//
+// engine/model accepts Set(key, nil); this package rejected it, because Set
+// used the BOUND mapping and rift_batch_set refuses a null value. Two engines
+// disagreeing on a legal input, on a path with no unbounded case at all.
+//
+//	A MAPPING THAT IS CORRECT AND LOAD-BEARING IN ONE PLACE IS A TRAP IN
+//	ANOTHER, and one helper serving two call sites with opposite requirements
+//	is how the trap gets set. The bound case NEEDS nil to mean something; the
+//	value case needs it to mean nothing.
+//
+// Not caught by the differential, and that is a finding about the differential:
+// its generator emits `std::string(1 + rng.Below(40), 'v')`, so a value is
+// always 1..40 bytes and a zero-length one is outside its input space
+// entirely.
+func bytePtrExact(b []byte) (*C.char, C.size_t) {
+	if len(b) == 0 {
 		return (*C.char)(unsafe.Pointer(&emptySentinel[0])), 0
 	}
 	return (*C.char)(unsafe.Pointer(&b[0])), C.size_t(len(b))
@@ -158,11 +192,11 @@ func (d *DB) Apply(b *engine.Batch, sync bool) (engine.SeqNum, error) {
 		var st C.rift_status
 		switch op.Kind {
 		case engine.OpSet:
-			kp, kl := bytePtr(op.Key)
-			vp, vl := bytePtr(op.Value)
+			kp, kl := bytePtrExact(op.Key)
+			vp, vl := bytePtrExact(op.Value)
 			st = C.rift_batch_set(cb, kp, kl, vp, vl)
 		case engine.OpDelete:
-			kp, kl := bytePtr(op.Key)
+			kp, kl := bytePtrExact(op.Key)
 			st = C.rift_batch_delete(cb, kp, kl)
 		case engine.OpDeleteRange:
 			sp, sl := bytePtr(op.Key)

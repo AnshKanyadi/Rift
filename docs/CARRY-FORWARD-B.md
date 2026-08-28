@@ -602,3 +602,34 @@ proves a class is healthy.
 
 **Until then, every report of the catalogue must state the rotted count beside the killed count.** A
 report of "140 killed, 0 survived" that omits the fourteen is the same overstatement in a new place.
+
+---
+
+## OBLIGATION: the differential's generator cannot emit a zero-length value
+
+**Opened at I1, 2026-08-28, by `BUG-B008`. Track B's, because the generator is Track B's.**
+
+`engine-cpp/rig/differential_driver.cc:78`:
+
+```cpp
+op.value = std::string(1 + rng.Below(40), 'v');
+```
+
+**A value is always 1 to 40 bytes.** The differential has run continuously since B4 and has never
+presented either engine with an empty value, so the one distinction Go makes here and C does not — nil
+versus empty — was outside its input space entirely. `BUG-B008` was found instead by Track A's stack
+on its first contact with the engine, which is a more expensive instrument arriving later.
+
+> **AN ORACLE COMPARING TWO IMPLEMENTATIONS IS BOUNDED BY THE INPUTS IT GENERATES, AND THE INPUTS IT
+> GENERATES ARE BOUNDED BY WHAT THEIR AUTHOR THOUGHT WORTH VARYING.** `1 + rng.Below(40)` is not a
+> mistake. It is a decision to always have a value, made without noticing that *no value* is a case.
+
+**What is owed:** widen the generator to include zero-length values and zero-length keys, and re-run
+the differential. **Not done in passing at I1** — a change to the C++ rig's input space is Track B's
+and changes what every differential run since B4 would have covered, which is a statement about the
+corpus as well as the generator.
+
+**What to check when it is:** whether any OTHER dimension is generated with a `1 +`. The value length
+was found by reading one line; the same shape in key length, batch size, or range width would have the
+same effect and the same invisibility.
+

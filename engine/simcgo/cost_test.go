@@ -58,7 +58,7 @@ func TestPerApplyCopyCost(t *testing.T) {
 			if snap {
 				seq, err = d.Apply(b, false)
 			} else {
-				seq, err = d.db.Apply(b, false)
+				seq, err = d.DB.Apply(b, false)
 				d.applied = seq
 			}
 			if err != nil {
@@ -78,10 +78,8 @@ func TestPerApplyCopyCost(t *testing.T) {
 					lag = seq - 8
 				}
 				if snap {
-					if err := d.AdvanceDurable(lag); err != nil {
-						t.Fatalf("advance %d: %v", i, err)
-					}
-				} else if _, err := d.db.Sync(); err != nil {
+					d.AdvanceDurable(lag)
+				} else if _, err := d.DB.Sync(); err != nil {
 					t.Fatalf("sync %d: %v", i, err)
 				}
 			}
@@ -144,25 +142,21 @@ func TestACrashRollsBackToTheHarnessDurablePoint(t *testing.T) {
 	// The fsync completion carries the EARLIER sequence -- the normal case,
 	// because the simulator captured it at apply time. Sync() really runs and
 	// really covers everything, which is exactly the divergence being handled.
-	if err := d.AdvanceDurable(durable); err != nil {
-		t.Fatal(err)
-	}
-	if got := d.db.DurableSeq(); got <= durable {
+	d.AdvanceDurable(durable)
+	if got := d.DB.DurableSeq(); got <= durable {
 		t.Fatalf("premise failed: the engine's own watermark is %d, not past the harness's %d. "+
 			"This test exists because Sync covers everything submitted; if it no longer does, "+
 			"the gap DESIGN-I1 section 12 describes has closed and B may be unnecessary", got, durable)
 	}
 	t.Logf("engine watermark %d is past the harness's durable point %d, as expected",
-		d.db.DurableSeq(), durable)
+		d.DB.DurableSeq(), durable)
 
-	if err := d.Crash(); err != nil {
-		t.Fatalf("crash: %v", err)
-	}
+	d.Crash()
 
-	if v, err := d.db.Get([]byte("kept")); err != nil || string(v) != "v1" {
+	if v, err := d.DB.Get([]byte("kept")); err != nil || string(v) != "v1" {
 		t.Errorf("a write below the harness's durable point did not survive the crash: %q %v", v, err)
 	}
-	if _, err := d.db.Get([]byte("lost")); err == nil {
+	if _, err := d.DB.Get([]byte("lost")); err == nil {
 		t.Error("A WRITE ABOVE THE HARNESS'S DURABLE POINT SURVIVED THE CRASH.\n" +
 			"      That is the whole of what B buys: the engine had synced it, and the\n" +
 			"      simulator had not declared it durable. A crash that keeps it loses\n" +

@@ -50,9 +50,15 @@ import (
 
 // DB is a riftcgo database plus the two primitives the simulator needs.
 type DB struct {
+	// EMBEDDED, so every method of the frozen contract this wrapper does not
+	// override is forwarded unchanged and cannot silently diverge. Get, NewIter,
+	// NewSnapshot, ApproximateDiskBytes, DurableSeq and OnDurable are the
+	// engine's, verbatim; only Apply, Crash and AdvanceDurable are ours, and
+	// each says why at the method.
+	*riftcgo.DB
+
 	dir   string // the live database directory
 	snaps string // where per-sequence snapshots are kept
-	db    *riftcgo.DB
 
 	applied engine.SeqNum // the highest sequence Apply has returned
 	durable engine.SeqNum // the highest sequence the HARNESS considers durable
@@ -72,7 +78,7 @@ func Open(root string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DB{dir: live, snaps: snaps, db: inner}
+	d := &DB{DB: inner, dir: live, snaps: snaps}
 	// Sequence 0 is a real crash point: a node can die before applying
 	// anything, and the empty directory is what it recovers from.
 	if err := d.snapshot(0); err != nil {
@@ -108,11 +114,11 @@ func Open(root string) (*DB, error) {
 // exercised by this route, and they are Track B's Env rig's subject, where the
 // injection is at the syscall.
 func (d *DB) Apply(b *engine.Batch, sync bool) (engine.SeqNum, error) {
-	seq, err := d.db.Apply(b, sync)
+	seq, err := d.DB.Apply(b, sync)
 	if err != nil {
 		return seq, err
 	}
-	if _, err := d.db.Sync(); err != nil {
+	if _, err := d.DB.Sync(); err != nil {
 		return seq, err
 	}
 	d.applied = seq
@@ -123,46 +129,78 @@ func (d *DB) Apply(b *engine.Batch, sync bool) (engine.SeqNum, error) {
 // the engine's WAL and its own durability machinery are exercised -- and
 // separately records the sequence the HARNESS considers durable, which is the
 // one a crash rolls back to. The two differ, and §12 of DESIGN-I1 is why.
-func (d *DB) AdvanceDurable(seq engine.SeqNum) error {
+// It PANICS rather than returning an error, matching engine/model's signature
+// and store.Engine's. That is deliberate: an I/O failure here is the HARNESS
+// failing, not a fault being injected. Returning it would send a harness defect
+// up a path built to carry modelled faults, where it would be reported as a
+// finding about the system.
+func (d *DB) AdvanceDurable(seq engine.SeqNum) {
 	if seq > d.applied {
-		return fmt.Errorf("simcgo: durability advanced to %d, past the last applied sequence %d", seq, d.applied)
+		panic(fmt.Sprintf("simcgo: durability advanced to %d, past the last applied sequence %d", seq, d.applied))
 	}
 	if seq < d.durable {
-		return fmt.Errorf("simcgo: durability moved backwards, %d then %d", d.durable, seq)
+		panic(fmt.Sprintf("simcgo: durability moved backwards, %d then %d", d.durable, seq))
 	}
-	if _, err := d.db.Sync(); err != nil {
-		return err
+	if _, err := d.DB.Sync(); err != nil {
+		panic("simcgo: sync: " + err.Error())
 	}
 	d.durable = seq
-	return d.discardBelow(seq)
+	if err := d.discardBelow(seq); err != nil {
+		panic("simcgo: discarding snapshots: " + err.Error())
+	}
 }
+
+// DurableSeq reports the HARNESS's durable point, not the engine's.
+//
+// # This override is the whole reason the wrapper can be honest
+//
+// Apply syncs, so the engine's own watermark runs ahead of the sequence the
+// simulator has declared durable -- rift_db_sync covers everything submitted
+// and takes no prefix argument. Reporting the engine's number leaks that
+// over-coverage into the store, and store/node.go's continuous cross-check
+// fires immediately:
+//
+//	panic: store: node 3 has made durable something its own record disagrees
+//	with: recorded 5 durable entries above the snapshot, engine returned 6
+//
+// That check compares the driver's record of what it made durable against a
+// read-back of the engine, and it is gated on `visibleSeq == DurableSeq()` --
+// "nothing in flight, so a read-back IS the durable state". With the engine's
+// raw watermark that gate is open almost always and the two derivations are of
+// different things.
+//
+//	THE DRIVER'S RECORD AND THE ENGINE'S ACCOUNT ARE TWO INDEPENDENT DERIVATIONS
+//	OF ONE FACT. Making them agree by reporting the engine's number would not
+//	fix the disagreement, it would delete one of the derivations.
+//
+// So the wrapper reports what the harness declared, and a crash rolls back to
+// exactly that point. From the store's side the C++ engine is then
+// indistinguishable from the model, which is what makes every Track A checker
+// apply to it unchanged.
+func (d *DB) DurableSeq() engine.SeqNum { return d.durable }
 
 // Crash closes the engine, rolls the directory back to the last sequence the
 // harness declared durable, and reopens. Recovery is the engine's own.
-func (d *DB) Crash() error {
-	if err := d.db.Close(); err != nil {
-		return err
+// It PANICS on failure, for the reason AdvanceDurable does.
+func (d *DB) Crash() {
+	if err := d.DB.Close(); err != nil {
+		panic("simcgo: close: " + err.Error())
 	}
 	if err := os.RemoveAll(d.dir); err != nil {
-		return err
+		panic("simcgo: clearing the live directory: " + err.Error())
 	}
 	if err := copyTree(d.snapAt(d.durable), d.dir); err != nil {
-		return err
+		panic("simcgo: restoring the durable snapshot: " + err.Error())
 	}
 	inner, err := riftcgo.Open(d.dir, 0, 0, 0)
 	if err != nil {
-		return err
+		panic("simcgo: reopening after the crash: " + err.Error())
 	}
-	d.db = inner
+	d.DB = inner
 	d.applied = d.durable
-	return nil
 }
 
-func (d *DB) Close() error { return d.db.Close() }
-
-// Inner exposes the wrapped engine for the reads the store makes through the
-// frozen interface. Everything on engine.Engine is forwarded unchanged.
-func (d *DB) Inner() *riftcgo.DB { return d.db }
+func (d *DB) Close() error { return d.DB.Close() }
 
 func (d *DB) snapAt(seq engine.SeqNum) string {
 	return filepath.Join(d.snaps, fmt.Sprintf("%020d", uint64(seq)))

@@ -93,8 +93,12 @@ func NewReplay(base []byte) (*Replay, bool) {
 	if !ok {
 		return nil, false
 	}
-	// THE REPLAY STAYS ON THE MODEL, DELIBERATELY, even at I1 when the nodes run
-	// on the C++ engine. This reconstructs what the log says the state should be,
+	// THE REPLAY STAYS ON THE MODEL, DELIBERATELY, EVEN AT I1 -- NOT AN OVERSIGHT
+	// AND NOT A MISSED CONVERSION. Someone doing an I2 cleanup will find the one
+	// model.New() left in a tree whose nodes run on the C++ engine and reach for
+	// it. This comment is why they must not.
+	//
+	// The nodes run on the C++ engine at I1. This reconstructs what the log says the state should be,
 	// and the snapshot-equivalence oracle compares a node's actual state against
 	// it. An oracle that reconstructs using the same engine it is checking is one
 	// indirection from asking the accused -- the shape BUGS.md's register keeps a

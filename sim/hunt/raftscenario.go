@@ -62,6 +62,18 @@ type RaftOptions struct {
 	// GCRetention is how far behind its clock a leader collects. Zero disables.
 	GCRetention time.Duration
 
+	// NewEngine builds each node's storage. Nil means engine/model.
+	//
+	// I1 sets this to engine/simcgo so the stack runs on the C++ engine. It is a
+	// FACTORY rather than an engine because every node needs its own: one
+	// process, n independent stores, exactly as n machines would have.
+	//
+	// The path a node's engine lives at is harness state and MUST NOT reach the
+	// trace. A run under a different temp root is the same run, and if a path
+	// ever entered a trace hash the fresh-process gate would fail for a reason
+	// that has nothing to do with the system.
+	NewEngine func(node int) store.Engine
+
 	// OverlapDrivers lets the churn driver and the rebalance driver run at the
 	// same time, which DESIGN-A4 section 10 records as an unexercised
 	// interleaving and the A5 sign-off put on A6's checklist.
@@ -1273,6 +1285,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			SnapshotThreshold: opt.SnapshotThreshold,
 			ReadIndex:         opt.ReadIndex,
 			SyncLatency:       syncLatency,
+			NewEngine:         engineFactoryFor(opt, ord),
 			Transport:         run.Transport, Ledger: ledger, History: hist,
 			OnTxnApplied: func(c store.TxnCommand, r store.TxnResult, at clock.Instant, s sim.Scheduler) {
 				if coordRef != nil {
@@ -2272,4 +2285,14 @@ func valueAtIndex(l *raftcheck.Ledger) raftcheck.ValueAtIndex {
 		}
 		return "", false, false, false
 	}
+}
+
+// engineFactoryFor adapts the per-node factory to the per-config one store.
+// Config takes. Nil stays nil, so the model remains the default by absence
+// rather than by a name anyone has to keep in step.
+func engineFactoryFor(opt RaftOptions, ord int) func() store.Engine {
+	if opt.NewEngine == nil {
+		return nil
+	}
+	return func() store.Engine { return opt.NewEngine(ord) }
 }

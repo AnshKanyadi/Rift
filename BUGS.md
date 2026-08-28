@@ -2929,6 +2929,72 @@ than in the commit message, because the next person to write a harness against a
 will reach for the same shortcut.
 
 ---
+### BUG-045 — (harness) a rule written down in the repository is not a rule you have applied
+
+| | |
+|---|---|
+| **Symptom** | Three defects in one afternoon's wiring, each caught immediately by a mechanism already in the tree, and **three of the four things gone wrong that day were written down in files the author had been reading.** |
+| **Found by** | a panic from `store/node.go`'s restart guard; the `determinism` pass; and the wrapper's own first test run. |
+| **Reproduce** | each is induced in place — see the three rows below. |
+| **Invariant that caught it** | one runtime guard, one static pass, one directed test. **None of the three was looking for what it found.** |
+| **Mutant class** | none added. The defect class is not a line; it is the distance between knowing a rule and having it reach the moment it applies. |
+
+| # | the defect | the rule, and where it was already written |
+|---|---|---|
+| 1 | `visibleSeq` put on `Replica`, which shares one engine across many replicas — **one fact in N places** | `BUG-032`, invoked by Ansh in the ruling **ten lines above the code that broke it**: *"the store asking the engine to remember a number the store was handed is the one-fact-two-places shape, and BUG-032 cost Track A three cycles."* |
+| 2 | `tracked.Crash()` did not move the tracked sequence | the model's own `Crash()` moves it, in the file the wrapper wraps |
+| 3 | the source pin written in `store/`, which is core scope, importing `os` | `tools/gatepin`'s package comment, **read the same day**: *"It lives under tools/ rather than in raft/ because it reads the source text, and raft/ is in the determinism pass's core scope where importing os is a build failure."* |
+
+> **A RULE WRITTEN DOWN IN THE REPOSITORY IS NOT A RULE YOU HAVE APPLIED.**
+
+**And it should not be filed as carelessness, because that filing has no remedy.** Each rule was
+known, recently, by the person who broke it — one of them had *just been quoted in the ruling being
+implemented*. What failed was not memory of the rule but its arrival at the moment it applied.
+
+> **THIS IS THE WHOLE ARGUMENT FOR MECHANISMS OVER DISCIPLINE, AND IT NOW HAS FOUR INSTANCES BEHIND IT
+> IN ONE DAY.** Discipline is a claim about what someone will remember while thinking about something
+> else. Every one of these was caught in seconds by something that was not remembering anything.
+
+#### The guard, and what separates an invariant from a test
+
+Defect 1 was caught by `store/node.go`'s restart guard:
+
+```
+panic: store: node 1 read the engine back with sequence 107 visible
+       and only 106 durable
+```
+
+That guard was written for `BUG-005` — a follower acknowledging an index it did not have on disk. It
+has nothing to do with interface refactors, engine wrappers, or shared ownership. It fired on the
+first run anyway, and named the exact quantity that had drifted.
+
+> **AN ASSERTION THAT ONLY EVER CATCHES THE THING IT WAS WRITTEN FOR IS A TEST. ONE THAT CATCHES
+> SOMETHING ELSE IS AN INVARIANT.** The difference is not strength; it is whether the property is
+> stated about the *system's state* or about the *scenario's outcome*. A guard on a state relation
+> holds against defects nobody had imagined when it was written, which is the only kind of protection
+> that survives a refactor.
+
+#### Defect 2 is the subtler half
+
+`tracked.Apply` recorded the sequence. `tracked.Crash()` did not reset it — so after a crash the
+store believed a sequence the engine no longer had.
+
+> **TRACKING A VALUE MEANS TRACKING EVERY TRANSITION OF IT, AND THE ONE THAT IS EASY TO MISS IS THE
+> ONE THAT MOVES IT BACKWARDS.** Every transition, not every increment. The forward path is the one
+> being written and is therefore the one in mind; the backward path belongs to a different operation
+> in a different file, and is remembered only by someone asking *what else changes this?* rather than
+> *what does this change?*
+
+**Fixed:** the tracking lives with the engine it is a fact about (`store.tracked`), so replicas sharing
+an engine share its tracking by construction; `Crash()` returns the value to what survived; and the pin
+that enforces the single Apply path lives in `tools/enginepin`, where reading source text is allowed.
+
+**Verified a no-op:** seed 7's trace hash is byte-identical to the run taken before any of this
+existed — `3a0962294b837e3568ce22fcbf724e52750a71e2cb9b93169444ddca3ab0a07c`. The stash-based
+comparison against the previous commit was *discarded rather than reported*, because an untracked file
+survived the stash and compromised the control.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its
@@ -4650,6 +4716,60 @@ only the loud one is self-announcing.
 
 ---
 
+### BUG-B008 — the cgo boundary rejected a value the model accepts, because one helper served two call sites with opposite requirements
+
+| | |
+|---|---|
+| **Symptom** | `panic: store: node 3 cannot apply range 1's committed batch: riftcgo: invalid argument`, on the first raft seed the Track A stack ran against the C++ engine. |
+| **Found by** | I1, running the stack on `riftcgo` — the first time the two halves ran as one system, which is what I1 is for. |
+| **Reproduce** | `engine.NewBatch().Set([]byte("k"), nil)`: `engine/model` accepts it, `riftcgo` returns `invalid argument`. Isolated in three lines before anything was changed. |
+| **Invariant that caught it** | none — an `Apply` error, surfaced by `store/node.go`'s refusal to continue past one. |
+| **Mutant class** | new, and it must plant the *mapping* rather than the symptom: a patch pointing `Set`'s key and value back at the bound mapping, covered by a directed test applying a nil-valued batch through the cgo path. |
+| **Track** | **Track B** (`engine/riftcgo`), found by Track A's stack. B5 is signed; this is a defect in signed work and was reported as one. |
+
+**The mechanism.** `bytePtr` maps a nil slice to a **null pointer**, and `rift.cc` says why, deliberately:
+
+> *"there is no way to pass 'unbounded' as bytes, so the distinction has to live in the pointer."*
+> `BoundOf(p, n)` returns `Bound::Unbounded()` when `p == nullptr`.
+
+That is correct and load-bearing for `DeleteRange` bounds and iterator bounds. **`Set` and `Delete`
+used the same helper**, and `rift_batch_set` refuses a null value with `RIFT_INVALID_ARGUMENT` —
+because for a key or a value there is no unbounded case for null to mean.
+
+> **A MAPPING THAT IS CORRECT AND LOAD-BEARING IN ONE PLACE IS A TRAP IN ANOTHER, AND ONE HELPER
+> SERVING TWO CALL SITES WITH OPPOSITE REQUIREMENTS IS HOW THE TRAP GETS SET.** The bound case *needs*
+> nil to mean something. The value case needs it to mean nothing. `bytePtr` could only do one.
+
+**It is `BUG-044`'s shape one layer down**, and the pair is worth reading together: there, the frozen
+contract's non-blocking `Apply` was correct and made the naive harness wrong; here, the boundary's
+null-is-unbounded convention is correct and made the batch path wrong. **Both times the guarantee was
+right, documented, and load-bearing, and the defect lived in the joint.**
+
+**WHY THE DIFFERENTIAL NEVER FOUND IT, which is the more valuable half.** `engine/differential` exists
+to catch exactly this — two engines disagreeing on one input — and it has run continuously since B4.
+Its generator:
+
+```cpp
+op.value = std::string(1 + rng.Below(40), 'v');   // engine-cpp/rig/differential_driver.cc:78
+```
+
+**A value is always 1 to 40 bytes. A zero-length value is outside the input space entirely**, so the
+nil/empty distinction — the one distinction Go makes here and C does not — was never presented to
+either engine.
+
+> **AN ORACLE COMPARING TWO IMPLEMENTATIONS IS BOUNDED BY THE INPUTS IT GENERATES, AND THE INPUTS IT
+> GENERATES ARE BOUNDED BY WHAT THEIR AUTHOR THOUGHT WORTH VARYING.** `1 + rng.Below(40)` is not a
+> mistake; it is a decision to always have a value, made without noticing that "no value" is a case.
+
+That is `GF-44` again — an enumeration bounded by where its author looked — and it is the fourth
+instance in five days, this time in a generator rather than a table, a document, or a lane.
+
+**Fixed:** `bytePtrExact` for keys and values, where nil and empty are the same thing; `bytePtr`
+unchanged for bounds, with both now saying at the code which case they are for. **The generator's hole
+is not fixed here** — a change to the C++ rig's input space is Track B's, and widening it to include
+zero-length values is carried rather than done in passing.
+
+---
 ### GF-23 — a remedy that is written down rather than built has the defect's own shape
 
 **Raised by** `HARNESS-019`, which is `HARNESS-016`'s second instance firing at a hundred times the

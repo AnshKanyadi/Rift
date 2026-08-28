@@ -57,6 +57,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/anshkanyadi/rift/store"
 	"maps"
 	"os"
 	"os/exec"
@@ -328,8 +329,15 @@ func cmdRun(args []string) int {
 	accounts := fs.Int("accounts", 8, "raft workload: bank accounts, one key each; 0 disables the bank")
 	transfers2pc := fs.Int("transfers-2pc", 40, "raft workload: transactions the bank runs; 0 disables the bank")
 	readIndex := fs.Bool("read-index", true, "raft workload: serve plain reads by read index instead of by a log entry (A7)")
+	engineName := fs.String("engine", "model", "storage under the stack: model | cgo (cgo needs -tags rift_cgo and the C++ archive)")
+	engineRoot := fs.String("engine-root", "", "directory the cgo engine places one store per node under; empty uses a temp dir")
 	followerReads := fs.Int("follower-read-per-mille", 333, "raft workload: share of plain reads addressed to one replica rather than broadcast (A7)")
 	_ = fs.Parse(args)
+
+	newEngine, engErr := resolveEngine(*engineName, *engineRoot)
+	if engErr != nil {
+		return fail("%v", engErr)
+	}
 
 	meta := Meta{Seed: *seed, Workload: *wl}
 	// One patch keeps the single-string field every existing bundle uses; more
@@ -390,6 +398,7 @@ func cmdRun(args []string) int {
 			Transfers2PC:         *transfers2pc,
 			ReadIndex:            *readIndex,
 			FollowerReadPerMille: *followerReads,
+			NewEngine:            newEngine,
 		}
 		meta.Raft = &RaftMeta{
 			PreVote: opt.PreVote, SnapshotThreshold: uint64(opt.SnapshotThreshold),
@@ -412,7 +421,7 @@ func cmdRun(args []string) int {
 		return fail("unknown workload %q; it is selected explicitly because a default would make toy runs and empty runs indistinguishable in a bundle", *wl)
 	}
 
-	if err := execute(p, &meta, &hist); err != nil {
+	if err := execute(p, &meta, &hist, newEngine); err != nil {
 		return fail("run: %v", err)
 	}
 
@@ -435,6 +444,8 @@ func cmdRun(args []string) int {
 func cmdReplay(args []string) int {
 	fs := flag.NewFlagSet("replay", flag.ExitOnError)
 	dir := fs.String("bundle", "", "bundle directory to replay")
+	engineName := fs.String("engine", "model", "storage under the stack: model | cgo (cgo needs -tags rift_cgo and the C++ archive)")
+	engineRoot := fs.String("engine-root", "", "directory the cgo engine places one store per node under; empty uses a temp dir")
 	strip := fs.Bool("strip-faults", false, "replay with every fault entry removed")
 	rerecord := fs.Bool("rerecord", false, "overwrite the bundle's recorded trace with this run's, keeping its plan")
 	_ = fs.Parse(args)
@@ -480,7 +491,11 @@ func cmdReplay(args []string) int {
 		Scenario: recorded.Scenario, Raft: recorded.Raft,
 	}
 	var hist *sim.History
-	if err := execute(p, &got, &hist); err != nil {
+	newEngine, engErr := resolveEngine(*engineName, *engineRoot)
+	if engErr != nil {
+		return fail("%v", engErr)
+	}
+	if err := execute(p, &got, &hist, newEngine); err != nil {
 		return fail("replay: %v", err)
 	}
 
@@ -620,7 +635,9 @@ func reportStrippedVerdict(recorded, got Meta) int {
 //
 // The workload comes from the meta rather than from a flag, so a replay drives
 // exactly the traffic the recorded run did.
-func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
+// newEngine is the storage the RUN uses, passed beside the plan because a plan
+// is data and cannot carry a function. Nil means engine/model.
+func execute(p *plan.Plan, meta *Meta, hist **sim.History, newEngine func(node int) store.Engine) error {
 	tr := sim.NewTrace(0)
 
 	switch meta.Workload {
@@ -660,6 +677,21 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History) error {
 				FollowerReadPerMille: meta.Raft.FollowerReadPerMille,
 			}
 		}
+		// THE ENGINE TRAVELS BESIDE THE PLAN, NOT INSIDE IT, and this line is
+		// where it is attached rather than in the block above.
+		//
+		// A plan is DATA -- that is what makes it a reproduction unit, and a
+		// func field could not be serialized into one. So the options rebuilt
+		// from a bundle carry every scalar the plan recorded and no engine, and
+		// the engine is the runner's choice. Setting it on the plan-building
+		// options instead (which is what happened first) produced a run that
+		// reported a byte-identical trace on --engine cgo while never opening
+		// the C++ engine at all: the engine root was EMPTY.
+		//
+		//	A RUN THAT REPORTS SUCCESS ON AN ENGINE IT NEVER OPENED IS THE
+		//	VACUOUS GREEN THIS PROJECT KEEPS A REGISTER OF, AND A MATCHING TRACE
+		//	HASH IS THE MOST CONVINCING FORM IT COULD POSSIBLY TAKE.
+		opt.NewEngine = newEngine
 		res, err := hunt.RunRaftWith(p, opt, tr)
 		if err != nil {
 			return err
@@ -912,7 +944,14 @@ func cmdHunt(args []string) int {
 	flawName := fs.String("flaw", "none", "toy flaw to plant")
 	placeName := fs.String("placement", "reactive", "crash targeting: reactive | uniform")
 	failover := fs.Bool("failover", false, "crash the primary and promote a backup")
+	huntEngineName := fs.String("engine", "model", "storage under the stack: model | cgo (cgo needs -tags rift_cgo and the C++ archive)")
+	huntEngineRoot := fs.String("engine-root", "", "directory the cgo engine places one store per node under; empty uses a temp dir")
 	_ = fs.Parse(args)
+
+	huntEngine, huntEngErr := resolveEngine(*huntEngineName, *huntEngineRoot)
+	if huntEngErr != nil {
+		return fail("%v", huntEngErr)
+	}
 
 	sc, err := scenarioFrom(*flawName, *placeName, *failover, 0)
 	if err != nil {
@@ -976,7 +1015,7 @@ func cmdHunt(args []string) int {
 		},
 	}
 	var hist *sim.History
-	if err := execute(p, &meta, &hist); err != nil {
+	if err := execute(p, &meta, &hist, huntEngine); err != nil {
 		return fail("re-running seed %d: %v", c.FirstViolation, err)
 	}
 	if meta.Violation == nil {
@@ -999,7 +1038,7 @@ func cmdHunt(args []string) int {
 	stripFaults(&stripped)
 	tmeta := Meta{Seed: meta.Seed, Workload: meta.Workload, Scenario: meta.Scenario}
 	var thist *sim.History
-	if err := execute(&stripped, &tmeta, &thist); err != nil {
+	if err := execute(&stripped, &tmeta, &thist, huntEngine); err != nil {
 		return fail("stripped-fault triage: %v", err)
 	}
 	if tmeta.Violation != nil {
@@ -1011,4 +1050,24 @@ func cmdHunt(args []string) int {
 	fmt.Println("TRIAGE   violation did not survive fault stripping: consistent with a defect in the")
 	fmt.Println("         system under test, and a corpus candidate")
 	return 0
+}
+
+// resolveEngine turns the --engine name into a per-node factory.
+//
+// The temp root is created here rather than inside the factory so that ONE run
+// gets ONE root and every node lands beneath it. A factory that made its own
+// root per call would scatter n stores across n directories and leave the
+// operator nothing to look at after a failure.
+func resolveEngine(name, root string) (func(node int) store.Engine, error) {
+	if (name == "" || name == "model") && root == "" {
+		return hunt.EngineByName(name, "")
+	}
+	if root == "" {
+		d, err := os.MkdirTemp("", "rift-engine-")
+		if err != nil {
+			return nil, fmt.Errorf("creating an engine root: %w", err)
+		}
+		root = d
+	}
+	return hunt.EngineByName(name, root)
 }
