@@ -774,6 +774,87 @@ covering tests remain**, and they are the whole of the residual cost:
 | `TestSnapshotEquivalenceOracleReportsNothing` | (sweep) | A2, six classes |
 | **total** | **~1,928 seeds ≈ 2.7 h per baseline pass** | |
 
+
+### CORRECTION, 2026-08-28: the table above is wrong in three ways, and the total is understated by about 3×
+
+**Found while chunking `mutant-covered` around the runner's job ceiling**, which forced the question
+*which classes are actually expensive?* — and the answer had to be derived from the source rather than
+read off this table.
+
+**One: a number contradicted by the test's own name.**
+
+| | table | source |
+|---|---|---|
+| `TestToySurvivesOneThousandSeeds` | 64 | **1,000** (`sim/hunt/hunt_test.go:71`, `const seeds int64 = 1000`) |
+
+Sixteen times larger, in a row whose test is *named* for the count. Five of the other six numbered rows
+are exactly right (1000, 300, 200, 200, 100), and `TestRestartsMintTheirOwnStartTimestamp` is **60**
+rather than 64 (`boundSeeds(60)`), which is a rounding rather than an error.
+
+**Two: `(sweep)` hid the cheapest entry, not an expensive one.** `TestSnapshotEquivalenceOracleReportsNothing`
+is **50 seeds**. It is listed without a number and credited with *"A2, six classes"*, which reads as the
+heaviest row in the table. It is the lightest.
+
+**Three, and this is the one that matters: an entire family of sweeps is missing.** The table counts
+only tests that sweep with a local `const seeds` loop. It does not count the `assertOracleSilent`
+family at all — **thirteen** covering tests over **24** classes, verified by extracting every
+`assertOracleSilent(t, "...", N)` call with its enclosing function:
+
+| seeds | classes | covering test |
+|---|---|---|
+| **2,000** | 1 | `TestLeaderCompletenessOracleReportsNothing` |
+| 500 | 3 | `TestPersistBeforeReplyOracleReportsNothing` |
+| 500 | 1 | `TestLogMatchingOracleReportsNothing` |
+| 100 | 2 | `TestStateMachineSafetyOracleReportsNothing` |
+| 100 | 1 | `TestSingleServerChangeOracleReportsNothing` |
+| 60 | 2 | `TestPercolatorInvariantsReportNothing` |
+| 60 | 2 | `TestMVCCReadCorrectnessOracleReportsNothing` |
+| 60 | 1 | `TestTransactionAtomicityOracleReportsNothing` |
+| 60 | 1 | `TestSplitPartitionOracleReportsNothing` |
+| 60 | 1 | `TestRebalanceSafetyOracleReportsNothing` |
+| 50 | 6 | `TestSnapshotEquivalenceOracleReportsNothing` *(the table's one entry from this family)* |
+| 50 | 2 | `TestElectionSafetyOracleReportsNothing` |
+| 50 | 1 | `TestApplyContinuityOracleReportsNothing` |
+
+**`TestLeaderCompletenessOracleReportsNothing` runs 2,000 seeds — twice the largest row in the table —
+and does not appear in it.**
+
+**The corrected totals:**
+
+| | recorded | derived |
+|---|---|---|
+| sweep-backed covering tests | **8** | **~20** |
+| seeds, once per test (`mutants` baseline) | **~1,928** | **~6,450** |
+
+**AND THE ENTRY ALREADY CONTAINED THE EVIDENCE THAT ITS OWN TABLE WAS WRONG.** Three paragraphs below
+it: *"`make mutants`' baseline — the 52 covering tests in one `go test` binary — still exceeded two
+hours of monotonic time and died on its own timeout."* That was recorded as *firmer than the estimate
+above*, and it is — it is also **inconsistent with** the estimate above, and nobody reconciled them. At
+1,928 seeds a two-hour death is a puzzle. At ~6,450 it is arithmetic.
+
+> **A MEASUREMENT THAT CONTRADICTS THE TABLE IT SITS BESIDE DOES NOT CORRECT THE TABLE BY BEING TRUE.
+> SOMEBODY HAS TO NOTICE THEY DISAGREE.**
+
+That is `GF-42` again — a written reason outliving its truth — but sharper, because here the refuting
+evidence was **already in the same entry**, added later by the same author, and the table above it was
+left standing.
+
+**What this changes about the obligation, which is the point of correcting it.** *"Eight sweeping
+covering tests remain, and they are the whole of the residual cost"* is false. Converting all eight
+would leave the **2,000-seed** `TestLeaderCompletenessOracleReportsNothing` and twelve more sweeps
+untouched — the majority of the cost. **Whoever discharges this should start from the derived table,
+not from the eight**, and the cheapest single win is the 2,000-seed leader-completeness sweep, which
+covers exactly one class.
+
+**The limit of this derivation, stated so it is not over-trusted.** It finds two mechanisms: a local
+`const seeds` loop and the `assertOracleSilent` family. A third sweeping idiom, if one exists, would be
+missed the same way the second was — which is exactly how the original table came to be wrong. The
+scan is `assertOracleSilent(?:With)?\(\s*t\s*,\s*"[^"]*"\s*,\s*(\d+)` plus `const seeds`, run line by
+line with the enclosing function tracked, and it was sanity-checked against three known values before
+being trusted. **A first version of this derivation was wrong** — a misplaced `?` in the regex made it
+report one sweep instead of thirteen — and it was caught only because two scripts written minutes apart
+disagreed. The corrected numbers are the ones that survived that disagreement.
+
 **The framing is the Makefile header's own sentence:** *the cost is driven by the number of sweeping
 tests, not by any one bound.* No value of `RAFT_SEEDS` fixes this; only converting the tests does.
 
@@ -885,13 +966,16 @@ property of the class and the shape jointly.
 schedule at all.
 
 <!-- BLOCKER
-     what: make power-mutants is queued behind the eight remaining sweep-based covering tests
-     stale-when: ! grep -rqs "func TestFailoverDoesNotManufactureViolations(" sim/hunt/
+     what: make power-mutants is queued behind the ~20 sweep-based covering tests (NOT the eight the table named; see the 2026-08-28 correction), the largest of which is the 2,000-seed leader-completeness sweep this tripwire watches
+     stale-when: ! grep -rqs "func TestLeaderCompletenessOracleReportsNothing(" sim/hunt/
 -->
 
 **The blocker above is declared machine-checkably**, and `tools/blockercheck` re-asks it on every
-push. It names one of the eight — `TestFailoverDoesNotManufactureViolations`, the 1,000-seed one and
-the most expensive — as the tripwire: when that test stops being a sweep in `sim/hunt/`, the lane says
+push. Its tripwire was re-pointed on 2026-08-28 by the correction below: it named
+`TestFailoverDoesNotManufactureViolations` as *"the 1,000-seed one and the most expensive"*, which was
+true of the eight and false of the repository — `TestLeaderCompletenessOracleReportsNothing` is
+2,000 seeds. **A tripwire on the second-largest sweep would have gone green while the largest stood**,
+which is the same mistake as the table it was derived from. It now names the real maximum: when that test stops being a sweep in `sim/hunt/`, the lane says
 so and this entry gets rewritten rather than quietly continuing to claim a cost it no longer has.
 That is `GF-42`'s mechanism, and this is its first live subject.
 
