@@ -1221,6 +1221,20 @@ Stated up front so no claim is ever broader than the evidence:
      halves are complementary and neither subsumes the other**, and I1's claim is bounded by this
      line: the fault schedule crosses the cgo boundary, and it crosses it carrying the harness's model
      of durability rather than the device's.
+   - **`[I1]` On the C++ engine the unsynced window is *[last sync, now)*, not *[tok.Value, now)*.**
+     The simulator schedules an fsync completion carrying the sequence captured at **apply** time and
+     fires it a latency later; `engine/model` advances its watermark to exactly that sequence, and
+     `rift_db_sync` takes no prefix argument on a frozen boundary, so on `riftcgo` a completion makes
+     everything applied so far durable. **A crash on the C++ engine therefore loses slightly less than
+     the same crash on the model**, and the difference is *measured rather than left open*: across five
+     raft seeds, at each of ~1,650–2,400 durability events, the sequence the event carried lagged what
+     had been applied by **mean 2.1–2.8, max 16–39**. That lag is exactly the extra a C++-engine crash
+     keeps. The window itself is not removed — a crash between syncs still loses everything applied
+     since the last one — it is narrower by that measured amount. **Forced, not preferred:** the
+     faithful alternative (a directory snapshot per `Apply`) was built and measured at **4.8 ms per
+     Apply, 24×**, against ~4,000 Applies per raft seed — 19 s of overhead per seed, ~135 CPU-hours on
+     the 25,000-seed exit run. The measurement is in `engine/simcgo/cost_test.go`, which is kept so the
+     number can be retaken rather than believed.
    - **`[I1]` Determinism through the boundary is demonstrated ACROSS PROCESSES ON ONE BUILD.** Two
      runs in two processes on one machine share a compiler, so identical trace hashes are evidence
      about the source and not about the toolchain. **Cross-toolchain determinism is unmeasured.** See

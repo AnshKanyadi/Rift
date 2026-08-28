@@ -2,9 +2,28 @@
 # covering-test: TestScopeTable
 # expect: killed
 # blinds: the exactness of the differential-judge exclusion, letting a wildcard silently adopt every future subpackage of an orchestration package. Same shape as blind-hunt-wildcard and planted for the same reason: an over-broad exclusion is a hole that reports green, and this one guards a package merged from another track, which is where a boundary is least likely to be re-derived. It ROTted at the merge -- it patched Track A's comment block, which the merge replaced with Track B's better argument -- and the blind lane caught that, which is the point of a lane that distinguishes ROT from SURVIVED
+# re-anchored: 2026-08-28, tools/anchorcheck, which now reads this directory too. GF-41 applies to
+#   blind patches exactly as it applies to mutants -- blind-riftcgo-wildcard rotted within a day when
+#   the comment it matched on was rewritten -- and `make blind` reports that as ROT rather than
+#   preventing it. Mutation unchanged and proved so: old and new applied to clean copies, results
+#   byte-identical.
 --- a/tools/determinismcheck/scope.go
 +++ b/tools/determinismcheck/scope.go
-@@ -123,7 +123,7 @@
+@@ -149,35 +149,35 @@ var defaultExclude = []string{
+ 
+ 	// The B4 differential judge. Nothing in it executes during a simulated
+ 	// run: it reads artifact FILES that a finished run left behind, and its
+ 	// end-to-end test spawns the C++ writer with os/exec. That is
+ 	// sim/checker's situation exactly, and it gets sim/checker's answer.
+ 	//
+ 	// THE JUDGE'S INDEPENDENCE IS WHY IT CANNOT BE IN CORE. It must reach the
+ 	// filesystem, because reading bytes neither engine handed it is the whole
+ 	// mechanism by which it is a second opinion rather than a mirror.
+ 	//
+ 	// And the exclusion is about this package's right to SHELL OUT AND READ
+ 	// FILES. It is not a licence to iterate a map: a judge whose output order
+ 	// depends on map iteration reports the same divergences in a different
+ 	// order on two runs of the same artifact, and its output cannot be diffed.
  	// That is a determinism leak whichever scope the package sits in, and
  	// compare() routes through internal/sorted for that reason rather than
  	// being excused here.
@@ -13,3 +32,17 @@
  
  	// The hunt driver. Orchestration by Amendment A5's own text, which names
  	// hunters alongside real-mode drivers and cmd/. Named exactly, never as a
+ 	// prefix: a wildcard here would silently adopt every future subpackage,
+ 	// which is how a boundary becomes a hole.
+ 	"github.com/anshkanyadi/rift/sim/hunt",
+ 
+ 	// The real-mode driver. It holds the concurrency core packages may not: one
+ 	// goroutine per node, real timers, and a mailbox channel. Amendment A5 --
+ 	// code that needs a goroutine is orchestration and lives outside the
+ 	// boundary, or the design is wrong.
+ 	//
+ 	// The node LOGIC it drives stays in scope. That split is the whole point:
+ 	// node/ is a driver, and the sim.Node it drives is the same type the
+ 	// simulator's loop drives, with no build tag and no branch on mode.
+ 	"github.com/anshkanyadi/rift/node/...",
+ 

@@ -7,9 +7,16 @@
 # ALIVE -- that a kill means the named test caught the blinding, rather than
 # that the test was failing anyway. The stale-test incident of 2026-08-11 is
 # exactly the case it catches.
+# re-anchored: 2026-08-28, tools/anchorcheck, which now reads this directory too. GF-41 applies to
+#   blind patches exactly as it applies to mutants -- blind-riftcgo-wildcard rotted within a day when
+#   the comment it matched on was rewritten -- and `make blind` reports that as ROT rather than
+#   preventing it. Mutation unchanged and proved so: old and new applied to clean copies, results
+#   byte-identical.
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go
-@@ -192,7 +192,7 @@
+@@ -297,11 +297,11 @@ func checkRange(r *reporter, rs *ast.RangeStmt) {
+ 	t := r.pass.TypesInfo.TypeOf(rs.X)
+ 	if t == nil {
  		return
  	}
  	switch t.Underlying().(type) {
@@ -18,3 +25,5 @@
  		// The advice is deliberately not "collect the keys and sort them":
  		// collecting them means ranging the map, which is this rule. Keep the
  		// order beside the map, or take it from a helper outside the core
+ 		// packages, which is where the one blessed implementation belongs.
+ 		r.report(rs.Pos(), ruleMapRange,

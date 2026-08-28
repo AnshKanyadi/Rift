@@ -2,9 +2,15 @@
 # covering-test: TestCoreRules
 # expect: killed
 # blinds: the math/rand import ban
+# re-anchored: 2026-08-28, tools/anchorcheck, which now reads this directory too. GF-41 applies to
+#   blind patches exactly as it applies to mutants -- blind-riftcgo-wildcard rotted within a day when
+#   the comment it matched on was rewritten -- and `make blind` reports that as ROT rather than
+#   preventing it. Mutation unchanged and proved so: old and new applied to clean copies, results
+#   byte-identical.
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go
-@@ -77,7 +77,7 @@
+@@ -90,9 +90,9 @@ func bannedImport(path string) (why string, banned bool) {
+ 
  	// Stricter than D10, which bans package-level math/rand functions: the
  	// import itself is banned, because rand.New(rand.NewSource(seed)) in a core
  	// package is the same bug with a local variable in front of it.
@@ -13,3 +19,4 @@
  		return "randomness is the injected rng.Rand, whose stream this project owns so the seed corpus survives Go upgrades (CLAUDE.md Amendment A1)", true
  
  	case path == "sync" || path == "sync/atomic":
+ 		return "core logic is single-threaded off the event loop, so there is nothing to synchronize; a mutex here means the loop has been bypassed", true

@@ -131,6 +131,20 @@ var defaultExclude = []string{
 	//
 	// The general form is BUGS.md GF-45. The prediction and the outcome are both
 	// on the record, in docs/CARRY-FORWARD.md, closed with the number.
+	// The harness's crashable adapter over the C++ engine. It exists because the
+	// frozen contract has no Crash() and no AdvanceDurable() -- correctly, since
+	// a real engine crashes when the process dies and durability is driven by
+	// whoever owns the poller. DESIGN-I1 D2 refused putting either on the
+	// interface, so the simulator's primitives live here instead.
+	//
+	// EXCLUDED FOR WHAT IT DOES, NOT FOR WHAT IT WRAPS: it copies directory
+	// trees with os and path/filepath, because a simulated crash on a real
+	// engine is a rollback of real files. Core packages reach the outside world
+	// only through injected interfaces, and this package IS the injection.
+	//
+	// Named exactly, never as a prefix, for the reason every entry here is.
+	"github.com/anshkanyadi/rift/engine/simcgo",
+
 	"github.com/anshkanyadi/rift/engine/riftcgo",
 
 	// The B4 differential judge. Nothing in it executes during a simulated

@@ -213,6 +213,8 @@ func TestScopeTable(t *testing.T) {
 		// neither package will ever exist and both reservations went. What
 		// arrived instead is riftcgo -- an Engine implementation over the C
 		// boundary, excluded for `sync` and `unsafe`, neither hatchable.
+		{mod + "engine/simcgo", scopeOff},
+		{mod + "engine/simcgo/inner", scopeCore},
 		{mod + "engine/riftcgo", scopeOff},
 		{mod + "engine/differential", scopeOff},
 		// AND THE EXCLUSIONS MUST NOT REACH ONE PACKAGE FURTHER, which for

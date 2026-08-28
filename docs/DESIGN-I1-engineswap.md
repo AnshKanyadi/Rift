@@ -326,13 +326,61 @@ the fault:** a crash on `riftcgo` loses strictly less than the same crash on the
 | **B** | the harness copies the directory at **every Apply**, keyed by sequence, and on crash restores the copy matching the last *fired* `tok.Value` — so durability-for-crash-purposes is defined by the harness, exactly as the model defines it | a copy per Apply rather than per sync. **Unmeasured**; at sim scale it may be nothing or it may dominate. It also means crash recovery no longer starts from the engine's *own* durable point, which is a fidelity loss of a different kind |
 | **C** | call `Sync()` only at durability events and accept its full coverage: the unsynced window becomes *[last sync, now]* rather than *[tok.Value, now]* | free, and honest only if stated as an idealization. The injector still injects — crashes between syncs still lose writes — but it loses less than the model would, and the difference is not bounded by anything we measure |
 
-**I recommend B, measured first.** `(b)`'s ruling already accepted a per-sync copy; per-Apply is the
-same mechanism at a higher rate, and whether that rate is affordable is a number rather than an
-argument. If it is not affordable, **C with the idealization written into `DESIGN-A0` §7 beside the
-other two** is the honest fallback — but it should be chosen on a measurement, not reached for.
+**RESOLVED: B was built, measured, and is not affordable. C stands, forced by arithmetic.**
 
-**Nothing is implemented past the enumeration.** Reporting before building, because building on C
-silently is how an I1 reports green with the fault it exists to inject made smaller.
+### B, built and measured
+
+`engine/simcgo` implements it and is kept — the correctness test passes and the cost test is the
+number, so both can be retaken rather than believed.
+
+**A defect in B, found by its own test.** The first version snapshotted straight after `Apply`. `Apply`
+does not block on I/O — the frozen contract says so — so the snapshot captured *a directory the data
+had not reached yet*, and the test asserting a kept write survives a crash failed with `key not found`
+on the write it was meant to keep.
+
+> **A SNAPSHOT IS A CLAIM ABOUT WHAT IS ON DISK. TAKING IT AFTER AN OPERATION THAT DELIBERATELY DOES
+> NOT TOUCH THE DISK IS A CLAIM ABOUT NOTHING.**
+
+So correct-B costs an **fsync *and* a tree copy per `Apply`**. That is what was measured.
+
+| | |
+|---|---|
+| Apply only | 209 µs per Apply |
+| Apply + fsync + snapshot | **5.012 ms** per Apply |
+| **overhead** | **4.803 ms, 24×** |
+| Applies per raft seed (seeds 7 / 42 / 1234) | **3,707 / 4,829 / 3,577**, mean ≈ 4,038 |
+| overhead per seed | **≈ 19.4 s** |
+| 500-seed smoke | ≈ 2.7 h |
+| 25,000-seed exit run | ≈ **135 CPU-hours** |
+
+A raft seed on the model completes in well under a second today. **B multiplies the sim's cost by
+orders of magnitude, and the answer is arithmetic rather than preference.**
+
+### C, and the bound that was not going to stay unstated
+
+C's cost was written as *"less than the model would, by an amount nothing bounds."* Ansh refused the
+unbounded clause. Measured on the model, at every durability event, how far the sequence it carries
+lags what has been applied — that lag **is** the extra a C++-engine crash keeps:
+
+| seed | durability events | mean lag | max lag |
+|---|---|---|---|
+| 7 | 1,901 | 2.09 | 16 |
+| 42 | 2,394 | 2.82 | 39 |
+| 1234 | 1,652 | 2.51 | 16 |
+| 99 | 1,813 | 2.42 | 25 |
+| 555 | 2,140 | 2.68 | 24 |
+
+> **A crash on the C++ engine keeps, on average, ~2.5 more sequences than the same crash on the model,
+> and at most 39 across these seeds.** The unsynced window is not removed — a crash between syncs still
+> loses everything applied since the last one — it is **narrower by that measured amount**.
+
+**A stated idealization with a measured gap is honest; one with an unmeasured gap is a hope.** The
+idealization is in `DESIGN-A0` §7 beside the other two, and it carries both numbers: the lag it costs,
+and the 135 CPU-hours that made it forced rather than chosen.
+
+**Nothing about the direction changes:** the difference is conservative — a replica believes less
+durable than reality, which cannot over-acknowledge — but *conservative and correct are different
+properties*, which is why B was built and measured before C was accepted.
 
 ---
 

@@ -96,9 +96,22 @@ import (
 // it. M77 is re-anchored by NARROWING its context to two prose lines, which the
 // table above shows fuzz absorbs, rather than by trimming to zero.
 
-// mutantDir is the catalogue. sim/mutants/ holds every class; blind patches live
-// elsewhere and are checked by their own lane.
-const mutantDir = "../../sim/mutants"
+// patchDirs is every directory of patches this rule governs.
+//
+// # blind/ was missing, and it was missing for a bad reason
+//
+// The first version read only sim/mutants/, with a comment saying blind patches
+// "live elsewhere and are checked by their own lane." That is true and
+// irrelevant: `make blind` checks whether a blind patch is KILLED, not whether
+// it is still ANCHORED, and a patch that stops applying is reported by it as
+// ROT rather than prevented.
+//
+// Measured the day after this lane landed: 9 of 20 blind patches were
+// prose-anchored, and one of them -- blind-riftcgo-wildcard -- rotted within a
+// day when the comment it matched on was rewritten. **The rule's own defect
+// occurred in the directory the rule did not read**, which is GF-44 once more:
+// a check that covers one directory reports completeness over that directory.
+var patchDirs = []string{"../../sim/mutants", "../../tools/determinismcheck/blind"}
 
 // fuzzReach is how many all-prose context lines patch(1) will absorb at a hunk's
 // edge before the hunk stops applying. MEASURED on this toolchain, not assumed:
@@ -179,24 +192,33 @@ func parse(t *testing.T, path string) []hunk {
 
 // TestEveryMutantAnchorsOnCode is the lane.
 func TestEveryMutantAnchorsOnCode(t *testing.T) {
-	ents, err := os.ReadDir(mutantDir)
-	if err != nil {
-		t.Fatalf("reading %s: %v", mutantDir, err)
-	}
-	var names []string
-	for _, e := range ents {
-		if strings.HasSuffix(e.Name(), ".patch") {
-			names = append(names, e.Name())
+	type patch struct{ dir, name string }
+	var names []patch
+	for _, dir := range patchDirs {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("reading %s: %v", dir, err)
+		}
+		for _, e := range ents {
+			if strings.HasSuffix(e.Name(), ".patch") {
+				names = append(names, patch{dir, e.Name()})
+			}
 		}
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].dir != names[j].dir {
+			return names[i].dir < names[j].dir
+		}
+		return names[i].name < names[j].name
+	})
 	if len(names) == 0 {
 		t.Fatal("no patches found, so this lane asserts nothing")
 	}
 
 	checked := 0
-	for _, name := range names {
-		for _, h := range parse(t, filepath.Join(mutantDir, name)) {
+	for _, p := range names {
+		name := p.name
+		for _, h := range parse(t, filepath.Join(p.dir, name)) {
 			first, last := -1, -1
 			for i, l := range h.lines {
 				if l.kind != ' ' {

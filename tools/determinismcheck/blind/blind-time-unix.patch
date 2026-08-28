@@ -2,9 +2,23 @@
 # covering-test: TestCoreRules
 # expect: killed
 # blinds: the audit result that time.Unix returns a host-local-zone Time
+# re-anchored: 2026-08-28, tools/anchorcheck, which now reads this directory too. GF-41 applies to
+#   blind patches exactly as it applies to mutants -- blind-riftcgo-wildcard rotted within a day when
+#   the comment it matched on was rewritten -- and `make blind` reports that as ROT rather than
+#   preventing it. Mutation unchanged and proved so: old and new applied to clean copies, results
+#   byte-identical.
 --- a/tools/determinismcheck/core.go
 +++ b/tools/determinismcheck/core.go
-@@ -159,7 +159,7 @@
+@@ -164,25 +164,25 @@ var timeAllowed = map[string]bool{
+ 
+ 	// Deterministic constructors and parsers: same arguments, same result, on
+ 	// any machine at any moment. Each either takes an explicit *Location or
+ 	// returns UTC.
+ 	//
+ 	// Audited 2026-08-11 for constructors that return a location-bearing Time.
+ 	// Unix, UnixMilli and UnixMicro are exactly that -- they return a Time in
+ 	// the host's local zone, so anything formatted from one reads differently
+ 	// in two datacentres -- and are therefore NOT on this list. Date and
  	// ParseInLocation take a *Location explicitly, and passing time.Local to
  	// either is caught by the ban on Local itself. Parse returns UTC when the
  	// value carries no zone.
@@ -13,3 +27,12 @@
  	"FixedZone": true,
  
  	// A fixed zone. Unlike Local, which is whatever TZ says today.
+ 	"UTC": true,
+ }
+ 
+ // bannedTimeMethod is the closure on host-TZ dependence. Methods on time's
+ // value types are otherwise legal -- Add, Sub, Before, Format all are -- but
+ // Local() is time.Local written with method syntax, and it puts the host's
+ // timezone into anything formatted downstream, including trace output.
+ //
+ // With these banned and the Unix family off the allowlist, every time.Time

@@ -5480,6 +5480,102 @@ script and once in a mind, and neither reported any doubt** — which is why the
 cases is to state the limit of the method inside the artifact the method produced.
 
 ---
+### GF-46 — a ruling answers the question asked, and the axes it does not touch stay open whether or not anyone notices
+
+**Raised at I1, 2026-08-28, by Ansh about his own ruling, and it belongs beside `GF-42` because both
+are about a decision looking more complete than it is.**
+
+D2(b) was ruled on **the rollback question**: when a simulated crash rolls a real engine's directory
+back, how does the harness know what was durable? The ruling answered it — a directory copy per sync
+point — and answered it correctly.
+
+**Implementation then hit a second axis nobody had raised.** `AdvanceDurable(seq)` advances the model's
+watermark to a *specific* sequence; `rift_db_sync` covers everything submitted and takes no prefix
+argument. So the fault differed in **granularity**, not in rollback, and a crash on the C++ engine
+would lose strictly less than the same crash on the model — `BUG-005`'s shape through a door the
+ruling had not been pointed at.
+
+> **A RULING ANSWERS THE QUESTION ASKED. THE AXES IT DOES NOT TOUCH STAY OPEN WHETHER OR NOT ANYONE
+> NOTICES — and a ruled question reads, afterwards, as a settled area.**
+
+Ansh, recording it against himself: *"I ruled on the rollback question because that was the question in
+front of me, and granularity was a second axis nobody had raised."*
+
+**Why it sits beside `GF-42`.** That one is about a written *reason* going stale while the obligation
+stands. This is about a written *decision* covering less than it appears to. In both, the artifact
+looks complete, nothing in it is false, and the incompleteness is invisible from inside it:
+
+| | what looks settled | what is actually open |
+|---|---|---|
+| `GF-42` | an obligation, because its blocker is stated | whether the blocker still holds |
+| `GF-46` | an area, because a question in it was ruled | every axis the question did not name |
+
+**The operational consequence, and it is not "rule more broadly."** A ruling cannot enumerate the axes
+it does not know about — that is `GF-45`'s bound, arriving at a decision instead of at an argument.
+What it can do is be **read as narrow by whoever implements it**:
+
+> **THE IMPLEMENTER IS THE FIRST PERSON TO MEET THE AXES A RULING DID NOT NAME, AND IS THEREFORE THE
+> ONLY PERSON POSITIONED TO REPORT THEM BEFORE THEY ARE BUILT ON.** Reporting one costs a message.
+> Building on one silently produces a phase that reports green with its fault made smaller.
+
+That is what happened here, and it is the reason this entry records a near miss rather than a defect:
+the gap was found while enumerating the store's calls for the implementation, and reported before any
+of it was built on.
+
+---
+
+### GF-44's first recurrence, inside its own document, four days after it was written
+
+**Recorded here rather than as a new form, because it is `GF-44` exactly.**
+
+`DESIGN-I1` §1 stated that the stack calls **two** methods the frozen interface lacks — `VisibleSeq()`
+and `Crash()`. There are **three**. `AdvanceDurable()` is the third and is the one the whole §12 gap
+turns on.
+
+**The cause is `GF-44`'s, verbatim: a derivation that finds one pattern reports completeness over that
+pattern.** The doc was written by reading the *restart path* and the *crash path* — the two paths its
+author had in mind. The durability path was never read, so the method that drives it was never seen,
+and §1's table presented an enumeration of two paths as an enumeration of the interface gap.
+
+**What would have caught it takes seconds and is mechanical:**
+
+```
+grep -ohE "\b(n\.db|m\.db|d\.db|r\.db)\.[A-Z][A-Za-z]*" store/*.go sim/toy/*.go \
+  | sed 's/.*\.//' | sort | uniq -c | sort -rn
+```
+
+```
+12 Apply   5 Get   4 VisibleSeq   3 AdvanceDurable   2 NewIter   2 DurableSeq   2 Crash
+```
+
+That is the enumeration run *afterwards*, and it is what produced the correction.
+
+> **A DESIGN DOCUMENT THAT NAMES AN INTERFACE GAP ENUMERATES THE CALLS. IT DOES NOT REASON FROM THE
+> PATHS ITS AUTHOR HAD IN MIND.** The derivation-finds-one-pattern rule applies to a document exactly
+> as it applies to a script, and a document is the more dangerous of the two, because nobody expects a
+> prose table to have a search behind it that could have been wrong.
+
+**Four days between `GF-44` being written and recurring in the next document its author wrote.** That
+interval is the entry's real content: a general form is not a fix, and knowing the rule did not
+produce the grep.
+
+**And it recurred a second time the same day, in the lane built to enforce `GF-41`.** `tools/anchorcheck`
+read `sim/mutants/` only, with a comment saying blind patches *"live elsewhere and are checked by their
+own lane."* True and irrelevant: `make blind` checks whether a blind patch is **killed**, not whether it
+is still **anchored**, and reports a stopped-applying patch as `ROT` rather than preventing it.
+
+**Measured the day after the lane landed: 9 of 20 blind patches were prose-anchored**, and
+`blind-riftcgo-wildcard` rotted within a day when the comment it matched on was rewritten — by the same
+hand that had written the rule.
+
+> **THE RULE'S OWN DEFECT OCCURRED IN THE DIRECTORY THE RULE DID NOT READ.** A check that covers one
+> directory reports completeness over that directory, in exactly the way a derivation that finds one
+> pattern reports completeness over that pattern.
+
+The lane now reads both directories; all nine were re-anchored with the same byte-identical equivalence
+proof the mutants got.
+
+---
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**

@@ -1,0 +1,18 @@
+# id: blind-simcgo-wildcard
+# covering-test: TestScopeTable
+# expect: killed
+# blinds: the exactness of the sim-adapter exclusion. Its own patch rather than a shared one, for the reason blind-riftcgo-wildcard gives: a mutant is a claim about where a defect lives, and three entries beneath engine/ are three lines. This one guards the newest and least-reviewed of them
+# re-anchored: 2026-08-28, tools/anchorcheck, which now reads this directory too. GF-41 applies to
+#   blind patches exactly as it applies to mutants -- blind-riftcgo-wildcard rotted within a day when
+#   the comment it matched on was rewritten -- and `make blind` reports that as ROT rather than
+#   preventing it. Mutation unchanged and proved so: old and new applied to clean copies, results
+#   byte-identical.
+--- a/tools/determinismcheck/scope.go
++++ b/tools/determinismcheck/scope.go
+@@ -144,5 +144,5 @@ var defaultExclude = []string{
+ 	//
+ 	// Named exactly, never as a prefix, for the reason every entry here is.
+-	"github.com/anshkanyadi/rift/engine/simcgo",
++	"github.com/anshkanyadi/rift/engine/simcgo/...",
+ 
+ 	"github.com/anshkanyadi/rift/engine/riftcgo",
