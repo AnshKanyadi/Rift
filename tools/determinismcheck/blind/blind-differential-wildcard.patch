@@ -1,0 +1,15 @@
+# id: blind-differential-wildcard
+# covering-test: TestScopeTable
+# expect: killed
+# blinds: the exactness of the differential-judge exclusion, letting a wildcard silently adopt every future subpackage of an orchestration package. Same shape as blind-hunt-wildcard and planted for the same reason: an over-broad exclusion is a hole that reports green, and this one arrives with a package merged from another track, which is where a boundary is least likely to be re-derived
+--- a/tools/determinismcheck/scope.go
++++ b/tools/determinismcheck/scope.go
+@@ -125,7 +125,7 @@
+ 	// runs of the same artifact, and its output cannot be diffed. That is a
+ 	// determinism leak whichever scope the package sits in, and it is fixed in
+ 	// the package rather than excused here.
+-	"github.com/anshkanyadi/rift/engine/differential",
++	"github.com/anshkanyadi/rift/engine/differential/...",
+ 
+ 	// The end-of-run checkers. History *collection* runs in-sim and stays
+ 	// dependency-free inside the boundary; porcupine runs after the run is

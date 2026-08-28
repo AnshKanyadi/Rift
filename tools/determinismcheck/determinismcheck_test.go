@@ -215,6 +215,13 @@ func TestScopeTable(t *testing.T) {
 		{mod + "sim/hunt", scopeOff},        // the hunt driver is orchestration
 		{mod + "sim/hunt/inner", scopeCore}, // named exactly: no wildcard adopts a subpackage
 
+		// The differential judge, both polarities. It shells out and reads
+		// artifacts off disk and runs after a rig run rather than during a
+		// simulated one, so it is excluded -- and the exclusion stops at the
+		// package, so a future subpackage arrives checked.
+		{mod + "engine/differential", scopeOff},
+		{mod + "engine/differential/inner", scopeCore},
+
 		// The materialization/orchestration polarity, pinned in both directions.
 		//
 		// Deciding *what run to perform* -- seed to plan -- is the first link in

@@ -2424,3 +2424,58 @@ first. `git diff` was there before the second. `ps -o time=` was there before th
 > `etime` is the first column anybody looks at; `time` is one flag away and answers a different
 > question. Every entry in this chain is a case where the right number was one flag, one command, or
 > one `grep` away, and the wrong one was already on the screen.
+
+### BUG-036 — (harness) four tests that skipped when their precondition was unmet
+
+| | |
+|---|---|
+| **Symptom** | Four tests reported success for runs in which they checked nothing, whenever the data they needed did not turn up. |
+| **Found by** | Ansh, reading `sim/plan/plan_test.go:268`. The other three were found by grepping for the same shape. |
+| **Reproduce** | make each skip's condition true; the test passes without executing its assertion. |
+| **Invariant that caught it** | none. A skip is a success in every reporting mechanism this project has. |
+
+**The class.**
+
+> **A test that skips when its precondition is unmet reports success for a run that checked nothing —
+> and the skip is LATENT until the data changes, at which point nothing announces it.**
+
+That second clause is the dangerous half. A skip is not wrong on the day it is written; it is a green
+that has quietly acquired a dependency on the workload, and the workload in this project moves. A7's
+term-start no-op moved every trace at once. Nothing prints when a test stops asserting.
+
+**The four:**
+
+| | skipped when |
+|---|---|
+| `sim/plan/plan_test.go` | its seed produced no node-0 fault to delete |
+| `cmd/simctl/corpus_test.go` | there was no bundle to damage |
+| `cmd/simctl/freshprocess_test.go` | its plan produced no fault entry to perturb |
+| `raft/readindex_test.go` | the term's no-op had already committed |
+
+**`TestCorpusLaneDetectsRot` is the exemplar**, because its own purpose names the failure:
+
+> **A rot detector that skips when there is nothing to damage is the thing it was built to catch.**
+
+It exists because a lane over a corpus that currently reproduces cannot tell *"every bundle replays"*
+from *"replay always says yes"*. With no bundle to damage it cannot tell that either, and it was
+reporting success.
+
+**The fixes are two shapes, and which one applies is a real distinction.** Where the precondition can
+be *arranged*, arrange it and assert the arrangement: `readindex_test.go` never feeds an append
+response, so the no-op cannot commit and the window exists by construction — if it committed anyway
+the arrangement broke, and that is now a failure. Where the precondition depends on generated data,
+**search for it and fail on exhaustion**: `plan_test.go` now scans seeds for one carrying a node-0
+fault, bounded at 500, and `t.Fatal`s if none is found. Same rule the corpus lane already uses: a
+search that finds nothing is a finding, not a pass.
+
+**The honest measurement, taken before changing anything.** Seed 31337 carried 4 fault entries, **2 of
+them on node 0**, so `plan_test.go`'s skip was **latent rather than active** — the test was running.
+That is the more useful version of the finding: a green that *would* have come to depend on data,
+caught before it did.
+
+**And how the other three were found is the point.** The Track A wrap-up had just recorded, as a named
+general form, that *a rule written about one instance does not generalise itself to its siblings* —
+after a handoff carried a section headed "state it, do not assume it" about one lane while the two
+beside it went unrun. Applying that rule to a ruling made about one test found three more the same
+day. **That is the rule paying out on the day it was written down**, which is the strongest evidence
+available that it was worth writing.

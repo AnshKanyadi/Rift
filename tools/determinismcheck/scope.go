@@ -113,6 +113,20 @@ var defaultExclude = []string{
 	// simulator's loop drives, with no build tag and no branch on mode.
 	"github.com/anshkanyadi/rift/node/...",
 
+	// The differential judge (Track B, landing at the merge). It judges one run
+	// of the differential rig: it shells out to the rig, reads its artifacts
+	// off disk, and reports. Amendment A5's orchestration definition without
+	// stretching it -- nothing in this package executes during a simulated run.
+	//
+	// Named exactly, never as a prefix, for the reason sim/hunt gives above.
+	// The exclusion is about this package's right to SHELL OUT AND READ FILES.
+	// It is not a licence to iterate a map: a judge whose output order depends
+	// on map iteration reports the same divergences in a different order on two
+	// runs of the same artifact, and its output cannot be diffed. That is a
+	// determinism leak whichever scope the package sits in, and it is fixed in
+	// the package rather than excused here.
+	"github.com/anshkanyadi/rift/engine/differential",
+
 	// The end-of-run checkers. History *collection* runs in-sim and stays
 	// dependency-free inside the boundary; porcupine runs after the run is
 	// over, is an external dependency, and needs a timeout -- so it lives out
