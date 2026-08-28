@@ -2126,6 +2126,58 @@ assertion.
 
 ---
 
+### GF-40 — a catalogue only ever run in subsets rots in the parts no subset names
+
+**Raised at B5's close**, by the first full run of the mutant catalogue since B3.
+
+**140 killed, 0 survived, 15 ROT.** A `ROT` is a patch that no longer applies: *the code moved and the
+mutation did not.* **Fourteen of the fifteen were already rotted when B4 signed**, verified by
+replaying every one of them against the tree at `8179320`. They rotted across **B3.5 through B4.2** —
+`BM79` at `5ef23f5`, `BM55` at `71aafba`, `BM105` at `e70951a`, `BM87` as late as `cd2b227` — and
+nothing noticed for two phases. Only `BM16` was B5's, broken by `kBusy`'s in-flight accounting; it is
+re-aimed and killed.
+
+**Why nothing noticed is the finding, and it is not "we forgot to run it".** The catalogue costs hours
+— each class needs a cold control build and a cold covering run — so it is run as `ONLY=` subsets, and
+**every subset that does not name a rotted class is green.** Each phase ran its own new mutants, and
+each phase's run was honest and complete about what it covered.
+
+> **A ROTTED PATCH IS NOT A WEAKER MUTANT. IT IS *NO* MUTANT — AND IT LOOKS EXACTLY LIKE A HEALTHY ONE
+> FROM EVERY DIRECTION EXCEPT ACTUALLY RUNNING IT.**
+
+**THE PAPERWORK WAS COMPLETE FOR ALL FOURTEEN.** This is the part that generalises furthest:
+
+| the check | what it asserted | did it fire |
+|---|---|---|
+| `cpp-scan` part 6 | every mutant class has a `FLOORS.txt` row | no — all fourteen had one |
+| `FLOORS.txt` | every class has a standing measurement with a floor and a ceiling | no — all fourteen had one |
+| the class count in every report | "155 classes" | no — it counted all fourteen |
+
+Each of those was built *because* a previous defect showed that mutants can degrade silently. Together
+they assert that a class is **documented**, **floored**, and **counted**. **Not one of them asserts
+that the patch still applies** — so fourteen classes were fully certified and impossible to run, and
+the number `155` was, for two phases, an overstatement nobody could have caught by reading anything.
+
+> **EVERY CHECK ON THE CATALOGUE MEASURED ITS PAPERWORK. NONE MEASURED WHETHER IT COULD BE EXECUTED.**
+
+**And `BM16` shows the worse variant.** B5.3 added a scope guard whose destructor takes the same mutex
+`BM16` widens the scope of, so the *original* patch would have applied cleanly and **self-deadlocked**
+— a hang, which the runner reports as neither a kill nor a survival. **A mutant that rots into a
+different failure is worse than one that rots into no failure**: the second is refused by name; the
+first is scored. The re-aimed patch drops the re-lock so it once again changes exactly one thing.
+
+**The remedy is built rather than written down (`GF-23`), and it is cheap in exactly the way the thing
+it protects is not.** `make cpp-rot` dry-run-applies all 155 patches. It builds nothing and runs
+nothing; it takes **seconds**, where the catalogue takes **hours**. That asymmetry is the argument for
+it existing separately: *the expensive lane is the one that gets skipped, so the cheap half of what it
+proves should not live inside it.* It would have caught all fourteen on the day each one rotted.
+
+**It is deliberately NOT in `CPP_LANES` yet.** It is red, by fourteen, for a debt that predates the
+branch waiting to merge — and putting a red in front of a merge for that is the exact pressure `GF-39`
+identifies as the wrong moment to make this kind of decision. Carried as `CF-7`.
+
+---
+
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**

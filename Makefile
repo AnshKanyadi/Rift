@@ -16,6 +16,7 @@ CPP_BUILD    ?= engine-cpp/build
 CPP_BUILD_CI := engine-cpp/build-ci
 VENDOR_CHECK := ./scripts/cpp-vendor-check.sh
 NO_NETWORK   := ./scripts/cpp-no-network.sh
+CPP_ROT      := scripts/cpp-rot.sh
 CPP_MUTANTS  := ./scripts/cpp-mutants.sh
 CPP_SCAN     := ./scripts/cpp-scan.sh
 CPP_CAMPAIGN := ./scripts/cpp-campaign.sh
@@ -214,6 +215,17 @@ cpp-cgo: ## B5: the Go wrapper over the C boundary, against engine/model
 # chooses, so it is the one thing the lane has to say.
 	CGO_LDFLAGS="-L$(CURDIR)/$(CPP_BUILD)/test -lrift_capi -lrift_engine" \
 	$(GO) test -tags rift_cgo ./engine/riftcgo/ -count=1
+
+.PHONY: cpp-rot
+cpp-rot: ## Every mutant patch still applies -- seconds, where the catalogue is hours
+	@# DELIBERATELY NOT IN CPP_LANES YET. It currently reports the 14 classes
+	@# that rotted across B3.5-B4.2, found when B5's close ran the full
+	@# catalogue for the first time since B3. Adding it to the lane set before
+	@# those are re-aimed would put a red in front of a merge for a debt that
+	@# predates the branch being merged -- which is the pressure GF-39 says is
+	@# the wrong moment to make this kind of decision under. It joins the lane
+	@# set when Ansh rules on the fourteen.
+	@$(CPP_ROT)
 
 .PHONY: cpp-bench
 cpp-bench: ## B5.5: the numbers -- model, C++ native, C++ through cgo, in one table

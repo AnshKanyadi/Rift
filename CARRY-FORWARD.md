@@ -535,3 +535,55 @@ open while looking closed:
 **What would make this urgent earlier:** any I1 divergence whose reproduction differs between the
 native differential and the cgo path. That would mean the boundary is doing something under faults
 that it does not do without them, and this entry becomes the first place to look.
+
+
+---
+
+## CF-7 — fourteen mutant classes that are documented, floored, counted, and cannot be run
+
+**Opened at B5's close. Due before I1's first mutant is added, and blocking the moment `cpp-rot` joins
+`CPP_LANES`.**
+
+**The state.** The full catalogue ran for the first time since B3 and reported **140 killed, 0
+survived, 15 ROT**. `BM16` was B5's own and is repaired. The other fourteen rotted across **B3.5
+through B4.2**, verified against the tree at `8179320`, and are listed by `make cpp-rot`:
+
+| class | file the code moved under |
+|---|---|
+| `BM55-tables-oldest-first` | `src/db.cc` |
+| `BM57-deleterange-reads-the-memtable-only` | `src/db.cc` |
+| `BM63-write-apply-outside-the-lock` | `src/db.cc` |
+| `BM79-roller-rolls-inside-a-user-key` | `src/db.cc` |
+| `BM80-compaction-reads-only-level-zero` | `src/db.cc` |
+| `EXPAND-ignores-batch-history` | `src/db.cc` |
+| `BM64-range-inverted-accepted` | `src/sst/range_tombstone.cc` |
+| `BM67-range-covers-is-closed` | `src/sst/range_tombstone.h` |
+| `BM72-level-one-run-unchecked` | `src/sst/manifest.cc` |
+| `BM87-writer-does-not-widen-bounds` | `src/sst/table_builder.cc` |
+| `BM88-classifier-does-not-widen-bounds` | `src/sst/table_check.cc` |
+| `BM74-drops-ignore-snapshots` | `src/compaction.cc` |
+| `BM105-clause-one-ignores-the-snapshot-below` | `src/compaction.cc` |
+| `MODEL-append-reaches-content` | `src/env/test/test_env.cc` |
+
+**Why this was not fixed at B5's close.** Re-aiming a mutant is not a mechanical rebase. Each patch is
+**the specification of what a lane is supposed to catch**, so re-aiming it means re-deciding, at code
+that has moved, what the class now means — and three of these sit under `B3.5e`'s cancelling-pair work
+and `BUG-006`'s bounds fix, where the code moved *because a defect was found there*. `BM113` is the
+precedent and the warning: a fix can make a defect **unrepresentable** at the site a mutant aimed at,
+and the honest outcome is then to re-aim at the caller, not to reconstruct the old mutation. That is
+judgment work across two signed phases and it should not be done in front of a merge.
+
+**What each one needs, and the order to do it in.**
+
+1. **Re-apply by hand and ask what the class means now.** For each, the first question is `BM113`'s:
+   *is the defect still expressible here?* If the code moved because the defect was fixed at the
+   invariant, the mutant re-aims at whatever can still reintroduce it — and if nothing can, the class
+   is **deleted with the reason recorded**, as `BM73` and `BM84` were.
+2. **Re-run each individually and confirm both the kill and its direction control.** A re-aimed patch
+   whose control lane goes red is `BM16`'s worse variant — scored, and about something else.
+3. **Check each one's `FLOORS.txt` row still describes what it now blinds.** The rows were written
+   against the old aim.
+4. **Then add `cpp-rot` to `CPP_LANES`**, at which point this class of debt cannot accumulate again.
+
+**Until then, every report of the catalogue must state the rotted count beside the killed count.** A
+report of "140 killed, 0 survived" that omits the fourteen is the same overstatement in a new place.
