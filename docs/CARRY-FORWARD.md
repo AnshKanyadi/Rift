@@ -790,6 +790,23 @@ grew:
 | `make mutants` | the baseline — 52 covering tests in one binary — exceeded **two hours of monotonic time** and died on its own timeout, before any of the 70 per-mutant runs |
 | `make mutant-covered` | **10 of 71 classes in 52 minutes**, projecting **6.1 h against a 6.0 h budget** |
 
+**MEASURED 2026-08-28, and it changes the SHAPE of the obligation rather than its size.** The entry
+above frames the cost as a total — 6.1 h against a 6.0 h budget — as though the question were whether
+anyone can afford an afternoon. It is not. `make mutant-covered` was run twice as a single background
+job on the merged tree and **terminated by the runner both times**: once at `M19`, once after
+**1h35m53s** having completed **14 of 71** classes, every one of them `ok`. `make cpp-ci`, at roughly
+25 minutes, completes.
+
+> **A LANE WHOSE COST EXCEEDS THE RUNNER'S PER-JOB LIFETIME IS NOT AN EXPENSIVE LANE. IT IS AN
+> UNRUNNABLE ONE, AND THE TWO LOOK IDENTICAL IN A BUDGET.**
+
+**The remedy is the filter, and this is what it was added for.** `ONLY=` takes a space-separated list,
+so the 71 classes run as six chunks of ten, each finishing well inside the observed ceiling. That makes
+the lane *runnable* without making it *cheap*: it still costs about six hours of wall clock, and it now
+costs six deliberate invocations rather than one. **Whoever discharges the eight-test obligation should
+know that converting them shrinks a cost that is currently paid in a currency the budget does not
+name.**
+
 **`mutant-covered` pays more than `mutants` for the same eight**, and the reason tells whoever
 discharges this which lane recovers most: it runs every covering test **under coverage
 instrumentation**, so a sweep costs more there than it does anywhere else. Converting the eight

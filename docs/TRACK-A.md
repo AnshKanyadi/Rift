@@ -48,7 +48,7 @@ inconclusive is never counted as a pass.**
 
 ---
 
-## 3. What was found: 42 defects, every one reproducing from a seed
+## 3. What was found: 43 defects, every one reproducing from a seed
 
 `BUGS.md` carries, for each: the symptom, the seed or kill point, the root cause, the fix, **the
 invariant that caught it**, which mutant class would have caught it, and what it would have caused in
@@ -68,7 +68,7 @@ the fix.
 | the rebalance oracle | 1 | **BUG-016** |
 | a plain sweep, the first after a feature landed | 1 | **BUG-010** |
 | inspection while diagnosing a different defect | 1 | **BUG-012** |
-| **the harness checking itself, or somebody reading its own record** | 13 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035**; **BUG-036** — four tests that skipped when their precondition was unmet, so a green depended on the data; **BUG-037** — the determinism pass accepted a `-tags` flag it never forwarded, and reported clean over a package it had loaded no files from; and five at the Track A / Track B merge (**BUG-038**..**BUG-042**), where the two tracks' lane sets met for the first time |
+| **the harness checking itself, or somebody reading its own record** | 14 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035**; **BUG-036** — four tests that skipped when their precondition was unmet, so a green depended on the data; **BUG-037** — the determinism pass accepted a `-tags` flag it never forwarded, and reported clean over a package it had loaded no files from; and six at the Track A / Track B merge (**BUG-038**..**BUG-043**), where the two tracks' lane sets met for the first time — the last of them found by Ansh asking whether a run was actually running, which sent the answer to `ps` instead of to a log two jobs were writing |
 | **an enumeration** — listing a property and asking whether it still held | 1 | **BUG-028** |
 | **a false accusation**, chased down instead of tuned away | 1 | **BUG-032** |
 
@@ -247,7 +247,7 @@ before the first, `git diff` before the second, `ps -o time=` before the third.
 | | |
 |---|---|
 | phases signed | **A0 – A7** |
-| defects found, all reproducing from a seed | **42** |
+| defects found, all reproducing from a seed | **43** |
 | mutant classes, each with a covering test and a measured floor or a named instrument | **71** |
 | corpus bundles | **24** |
 | vacuous-green register | **30 instances** |

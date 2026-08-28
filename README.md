@@ -17,7 +17,7 @@ system.
 ## Track A results
 
 The last exit run was 25,000 seeds at commit `6c43023` with zero safety violations, run as eight
-contiguous shards that a test checks actually tile the seed space. Along the way the project found 42
+contiguous shards that a test checks actually tile the seed space. Along the way the project found 43
 defects, and every one of them still replays from a single seed. There is also a register of 30
 separate times a checking mechanism reported success while checking nothing, which turned out to be
 the most useful thing in the repo. The full write-up, including what the verification cannot see, is

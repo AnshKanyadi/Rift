@@ -2818,6 +2818,69 @@ the thing it guards; this one does not, and a weaker instrument described as a s
 repository's own worst failure mode.
 
 ---
+### BUG-043 — (harness) two writers on one log, and the reader failed silently rather than the writer
+
+| | |
+|---|---|
+| **Symptom** | `grep -n "=== LANE" lanes3.log` returned **nothing** while `tail` on the same file printed the lines. Every later read of that file was of a log two processes were writing at independent offsets. |
+| **Found by** | Ansh asking *"is it even running?"* — which sent me to `ps` instead of to the log, and `ps` is where the second job was. |
+| **Reproduce** | open a file with `>` in one shell, truncate it with `>` in another, write from both: the hole between the offsets is NUL, and BSD/GNU `grep` classifies the file as binary and suppresses output. |
+| **Invariant that caught it** | none. `grep` exits 0 finding nothing, which is the same exit and the same silence as a file that genuinely does not contain the pattern. |
+| **Mutant class** | none exists and none is added: the defect is in how a run was *observed*, not in the tree. What lands instead is the practice change below. |
+
+**What was actually running.** An orphaned job from an earlier session — `{ make mutant-covered; make
+power-mutants; } > lanes3.log` — had been alive for **10 hours 7 minutes**, unattached to any session,
+holding `lanes3.log` open. A later lane run truncated the same path and wrote from offset 0. The orphan
+then wrote at its own large offset, punching a **1,369-byte NUL hole** between them. Every other log in
+the same directory had zero NULs, so the file was not the tool's fault and not the disk's; it was two
+writers.
+
+> **A LOG WITH TWO WRITERS DOES NOT FAIL IN THE WRITER. IT FAILS IN THE READER, AND IT FAILS THE ONE
+> WAY A READER CANNOT DETECT: BY RETURNING NOTHING, SUCCESSFULLY.**
+
+**The signal was there and was dismissed.** The `grep`-returns-nothing anomaly was hit, noticed, called
+*"that's odd"*, and stepped past — twice — because `tail` still worked and the results still looked
+sane. A checking tool that returns *no matches* and a checking tool that has silently given up produce
+the identical observation, which is this repository's oldest theme arriving in the instrument used to
+read the repository.
+
+**And it violated a standing rule of this project, which is the part worth keeping.** The rule is *read
+run state from the process, never from a watcher or a launch*. Six lanes were reported from a file
+rather than from the thing that produced it. **Answering "is it even running?" with `ps` took one
+command and found both the answer and the defect; the log could not have found either.**
+
+**What was and was not damaged, checked rather than assumed.** Every reported result was
+re-established from its own evidence before this entry was written:
+
+| claim | verdict |
+|---|---|
+| `build lint test race blind` all 0 | **stands** — lines 3–124, contiguous from offset 0, written before the orphan's next write landed |
+| `power-refute`: 3 confirmed, 0 refuted, 0 failures | **stands** — the orphan's command never invokes `power-refute`; only this run could have produced it |
+| the `power-mutants` floor lines glimpsed scrolling past | **ambiguous between the two jobs** — and nothing was reported from them |
+| `lanes4.log`, `cppci.log`, `mc.log`, `mc1.log` | **stand** — separate paths, single writer, **0 NUL bytes each**, verified |
+
+Nothing reported was wrong. **That is luck, not method**, and the entry says so rather than closing on
+the happy number.
+
+**Its sibling is `BUG-033`, and the pair is the point.** There, a killed measurement driver left a
+mutant applied and three later floors were measured against a tree nobody had checked. Here, a killed
+session left a *job* running and six lanes were read from a file nobody had checked.
+
+> **THE INSTRUMENT USED TO OBSERVE A RUN IS PART OF THE RUN, AND IT IS THE PART NOBODY INSTRUMENTS.**
+
+**Fixed, in practice rather than in code.** A lane log is named per invocation (`$$` in the path) so
+two runs cannot share one; `ps` is the first check when a run's progress is in question, not the log;
+and an orphan check runs before starting long work, because a background job that outlives its session
+is invisible to everything except `ps` and competes for the machine the measurements are taken on. The
+orphan was consuming a full core against `power-mutants` while a chunked `mutant-covered` ran beside
+it — which is most of why the chunk looked stalled.
+
+**Its own output was not worth saving, and that was established before it was killed.** The truncation
+had already destroyed its first six hours irrecoverably; what survived was partial, interleaved, and
+stamped by the lane itself as `tree DIRTY at start: verdicts are against uncommitted state`. A
+NUL-stripped copy is kept as `lanes3.salvaged.log` for the record and is not a result.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its
