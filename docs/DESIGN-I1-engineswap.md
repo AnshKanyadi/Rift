@@ -270,7 +270,73 @@ durability* rather than *the device's*.
 
 ---
 
-## 11. State
+## 11. CORRECTION to §1: there are THREE off-interface methods, not two
 
-Ruled and recorded; implementation of D2(b) begins from here. The corpus has not been rerun and no
-sweep has been run on `riftcgo`.
+Found while enumerating the store-side contract for the implementation. §1's table listed
+`VisibleSeq()` and `Crash()`. The full set, derived by extracting every `*.db.Method` call in `store/`
+and `sim/toy/`:
+
+```
+12 Apply    5 Get    4 VisibleSeq    3 AdvanceDurable    2 NewIter    2 DurableSeq    2 Crash
+```
+
+**`AdvanceDurable(seq)` is the third, and it is the one that matters.** The design doc was written from
+a reading of the restart path and the crash path; the durability path was not enumerated, so the method
+that drives it was not seen. **`GF-44`'s own shape, four days old, in the document that records it** —
+a derivation that finds one pattern reports completeness over that pattern.
+
+---
+
+## 12. THE GAP D2(b) DOES NOT CLOSE, found in implementation and reported before building on it
+
+**`AdvanceDurable(seq)` advances the watermark to a *specific* sequence. `riftcgo` has no way to express
+that, and the C API cannot be asked for it.**
+
+Three measurements, each verifiable in one command:
+
+1. **The model advances to a prefix.** `engine/model/model.go:157` — *"the model's stand-in for an fsync
+   completing, and the only way the watermark moves."* It takes a `seq`.
+2. **The simulator schedules that sequence at APPLY time and fires it later.**
+   `store/node.go:631` and `store/machine.go:911`:
+   `s.At(at+SyncLatency, KindDurable, node, Stamp(epoch, seq))`. In the `SyncLatency` interval the node
+   applies more batches, so at fire time `tok.Value` is **below** the visible sequence. This is the
+   normal case, not an edge one.
+3. **`riftcgo.Sync()` covers everything, and the C API has no alternative.**
+   `rift_db_sync(rift_db*, uint64_t* watermark)` — **no prefix argument**, on a frozen boundary. Track B
+   states the semantic and their differential *asserts* it: *"a completed Sync must cover EVERYTHING
+   SUBMITTED"*, with `if w != ref.VisibleSeq() { fatal }`.
+
+**So on `riftcgo`, a scheduled fsync completion for sequence 5 also makes 6…10 durable.** The unsynced
+tail collapses to empty at every sync point, where on the model it does not.
+
+**What that does, stated exactly.** It is **not** a safety break. A replica still believes only
+`tok.Value` is durable, and believing *less* durable than reality is conservative — it can never
+produce an over-acknowledgement, which is the direction `BUG-005` failed in. **What it does is weaken
+the fault:** a crash on `riftcgo` loses strictly less than the same crash on the model.
+
+> **AND THAT IS THE THING THIS PROJECT DOES NOT DO.** `BUG-005` is the precedent — an injector softened
+> into something easier to satisfy — and the rule since has been that a checker or an injector is never
+> weakened to pass. This weakening would arrive through *granularity* rather than through the rollback
+> question `(b)` already answered, which is why `(b)`'s ruling did not catch it.
+
+**Two ways out, and the choice is Ansh's.**
+
+| | approach | cost |
+|---|---|---|
+| **B** | the harness copies the directory at **every Apply**, keyed by sequence, and on crash restores the copy matching the last *fired* `tok.Value` — so durability-for-crash-purposes is defined by the harness, exactly as the model defines it | a copy per Apply rather than per sync. **Unmeasured**; at sim scale it may be nothing or it may dominate. It also means crash recovery no longer starts from the engine's *own* durable point, which is a fidelity loss of a different kind |
+| **C** | call `Sync()` only at durability events and accept its full coverage: the unsynced window becomes *[last sync, now]* rather than *[tok.Value, now]* | free, and honest only if stated as an idealization. The injector still injects — crashes between syncs still lose writes — but it loses less than the model would, and the difference is not bounded by anything we measure |
+
+**I recommend B, measured first.** `(b)`'s ruling already accepted a per-sync copy; per-Apply is the
+same mechanism at a higher rate, and whether that rate is affordable is a number rather than an
+argument. If it is not affordable, **C with the idealization written into `DESIGN-A0` §7 beside the
+other two** is the honest fallback — but it should be chosen on a measurement, not reached for.
+
+**Nothing is implemented past the enumeration.** Reporting before building, because building on C
+silently is how an I1 reports green with the fault it exists to inject made smaller.
+
+---
+
+## 13. State
+
+Ruled, recorded, and stopped on §12. The corpus has not been rerun and no sweep has been run on
+`riftcgo`.
