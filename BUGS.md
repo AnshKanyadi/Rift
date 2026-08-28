@@ -61,6 +61,29 @@ the seed pass.
 **Not the largest work of the phase; the best.** Recorded here so a wrap-up written months later does
 not have to rediscover which findings carried weight.
 
+**0. `GF-40` — THE ONE TO LEAD WITH. Marked by Ansh at B5's sign-off: *"GF-40 is the finding and it
+belongs at the top of Track B's eventual wrap-up."***
+
+The first full run of the mutant catalogue since B3 found **fourteen classes that were documented,
+floored, counted, and unrunnable.** Their patches no longer applied; they had rotted across B3.5
+through B4.2 and nothing noticed for two phases, because the catalogue costs hours and is therefore
+run in `ONLY=` subsets — and every subset that does not name a rotted class is green.
+
+**Three independent checks looked straight at all fourteen and agreed they were fine.** `cpp-scan`
+asserts every class has a `FLOORS.txt` row; `FLOORS.txt` asserts every row carries a standing
+measurement; every report counted them. Each of those checks was added *because an earlier defect
+showed mutants can degrade silently.* All three range over the **record** of a mutant. None ranges
+over the mutant.
+
+> **A SET OF CHECKS THAT ALL VERIFY A THING'S DESCRIPTION WILL AGREE THAT IT IS FINE WHILE THE THING
+> ITSELF IS GONE.**
+
+**What closed it:** `make cpp-rot`, a dry-run apply of all 155 patches — **seconds against the
+catalogue's hours** — which would have caught all fourteen on the day each rotted. **What it does not
+close:** `BM16` would have applied cleanly and self-deadlocked, and a hang is neither a kill nor a
+survival. A patch that applies is not thereby a patch that asks its question. `HARNESS-013` one layer
+up, in the catalogue rather than the lane, where no watchdog helps.
+
 **1. `BUG-004`/`BUG-005` and `GF-22` — two defects whose symptoms cancelled.** Invisible to every test
 that asserts an **answer**, because the answer was right — arrived at by two errors that annihilate.
 Separated only because **a mutant survived**, asking a question a test cannot: *is this line
@@ -2160,17 +2183,66 @@ the number `155` was, for two phases, an overstatement nobody could have caught 
 
 > **EVERY CHECK ON THE CATALOGUE MEASURED ITS PAPERWORK. NONE MEASURED WHETHER IT COULD BE EXECUTED.**
 
-**And `BM16` shows the worse variant.** B5.3 added a scope guard whose destructor takes the same mutex
-`BM16` widens the scope of, so the *original* patch would have applied cleanly and **self-deadlocked**
-— a hang, which the runner reports as neither a kill nor a survival. **A mutant that rots into a
-different failure is worse than one that rots into no failure**: the second is refused by name; the
-first is scored. The re-aimed patch drops the re-lock so it once again changes exactly one thing.
+#### The broader form, which is not about mutants
+
+Fourteen classes were **documented, floored, counted, and unrunnable**, and three independent checks
+looked directly at them and agreed they were fine. That is not a fact about catalogues:
+
+> **A SET OF CHECKS THAT ALL VERIFY A THING'S *DESCRIPTION* WILL AGREE THAT IT IS FINE WHILE THE THING
+> ITSELF IS GONE. ADDING MORE OF THEM MAKES THE AGREEMENT STRONGER AND THE EVIDENCE NO BETTER.**
+
+The three checks here were **not redundant with each other** — one asserts a row exists, one asserts
+the row carries a measurement, one counts. Each was added after a different defect. All three range
+over the *record* of a mutant, and none over the mutant. Fourteen absences produced fourteen complete
+sets of paperwork, and the total number of checks was, if anything, evidence *against* looking.
+
+The question that separates the two kinds is short, and it is the one to ask of any registry, ledger,
+or manifest this project keeps: **what here would fail if the thing being described did not exist?**
+For `FLOORS.txt`, `DECIDERS.txt`, `HATCHES.txt` and the mutant catalogue, that question now has an
+answer only for the last one.
+
+#### `BM16` IS THE HARDER HALF, AND IT IS WHY THE FIX ABOVE IS NECESSARY AND NOT SUFFICIENT
+
+B5.3 added a scope guard to `Wal::Sync` whose destructor takes **the same mutex `BM16` widens the
+scope of**. The original patch would have applied here **perfectly cleanly** — `cpp-rot` would have
+passed it, and every piece of paperwork would have been right — and then **self-deadlocked.**
+
+> **A MUTANT THAT ROTS INTO NO FAILURE IS REFUSED BY NAME. ONE THAT ROTS INTO A DIFFERENT FAILURE IS
+> SCORED.**
+
+A `ROT` is loud: the runner names it, counts it, and fails. A hang is **neither a kill nor a
+survival** — the lane produces no verdict at all, and the class silently stops asking its question
+while every artifact about it stays correct.
+
+**This is `HARNESS-013`'s lesson arriving one layer up.** There, a *lane* hung for eleven and a half
+hours and looked exactly like progress, and the answer was a watchdog that turns a non-report into a
+`TIMEOUT`. Here it is the **patch** rather than the lane, and **no watchdog helps**: the run is not
+failing to finish, it is finishing while answering a question nobody asked. The only thing that
+catches it is the mutant's own **direction control** — the control lane going red where it must stay
+green — and that costs a full cold build, which is precisely the cost `cpp-rot` was built to avoid
+paying.
+
+> **THE CHEAP CHECK BOUNDS THE DAMAGE. IT DOES NOT CLOSE THE CLASS. A PATCH THAT APPLIES IS NOT
+> THEREBY A PATCH THAT ASKS ITS QUESTION.**
+
+That limit is recorded at `scripts/cpp-rot.sh`'s definition rather than only here, because it is the
+kind of thing a future reader will need at the moment they are deciding whether a green `cpp-rot` is
+enough.
+
+#### What closed it
 
 **The remedy is built rather than written down (`GF-23`), and it is cheap in exactly the way the thing
-it protects is not.** `make cpp-rot` dry-run-applies all 155 patches. It builds nothing and runs
-nothing; it takes **seconds**, where the catalogue takes **hours**. That asymmetry is the argument for
-it existing separately: *the expensive lane is the one that gets skipped, so the cheap half of what it
-proves should not live inside it.* It would have caught all fourteen on the day each one rotted.
+it protects is not.** `make cpp-rot` dry-run-applies all 155 patches. It applies nothing, builds
+nothing, and runs nothing — it asks `patch --dry-run` and no more. It takes **seconds** where the
+catalogue takes **hours**.
+
+**That asymmetry is the entire argument for it existing separately:** *the expensive lane is the one
+that gets skipped, so the cheap half of what it proves must not live inside it.* Fourteen classes
+rotted precisely because the only thing that could detect them cost hours.
+
+**It would have caught all fourteen on the day each one rotted** — `BM79` at `5ef23f5`, `BM55` at
+`71aafba`, `BM105` at `e70951a`, `BM87` at `cd2b227` — each as a one-line failure naming the class and
+the file whose code moved out from under it.
 
 **It is deliberately NOT in `CPP_LANES` yet.** It is red, by fourteen, for a debt that predates the
 branch waiting to merge — and putting a red in front of a merge for that is the exact pressure `GF-39`

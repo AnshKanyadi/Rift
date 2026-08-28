@@ -583,7 +583,16 @@ judgment work across two signed phases and it should not be done in front of a m
    whose control lane goes red is `BM16`'s worse variant — scored, and about something else.
 3. **Check each one's `FLOORS.txt` row still describes what it now blinds.** The rows were written
    against the old aim.
-4. **Then add `cpp-rot` to `CPP_LANES`**, at which point this class of debt cannot accumulate again.
+4. **Then add `cpp-rot` to `CPP_LANES`** — **in the commit that closes this entry, and not before.**
+   Ruled by Ansh at B5's sign-off. A lane that is red for a debt predating the branch waiting to merge
+   is `GF-39`'s wrong-moment pressure, and the fix for that is not to merge faster; it is to not put
+   the red there until the debt is gone. When it lands, this class of debt cannot accumulate again.
+
+**And it does not close the class by itself.** `cpp-rot` is necessary and not sufficient: a patch that
+applies is not thereby a patch that asks its question. `BM16` would have passed a dry-run apply and
+self-deadlocked. Only the mutant's own **direction control** catches that, and only when the mutant is
+actually run — so step 2 above is not a formality, and the full catalogue remains the only thing that
+proves a class is healthy.
 
 **Until then, every report of the catalogue must state the rotted count beside the killed count.** A
 report of "140 killed, 0 survived" that omits the fourteen is the same overstatement in a new place.
