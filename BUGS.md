@@ -2881,6 +2881,54 @@ stamped by the lane itself as `tree DIRTY at start: verdicts are against uncommi
 NUL-stripped copy is kept as `lanes3.salvaged.log` for the record and is not a result.
 
 ---
+### BUG-044 — (harness) a snapshot taken after an operation that deliberately does not touch the disk
+
+| | |
+|---|---|
+| **Symptom** | `TestACrashRollsBackToTheHarnessDurablePoint` failed with `key not found` **on the write it was asserting survived**. The rollback lost data that was below the harness's own durable point. |
+| **Found by** | the test written in the same commit as the mechanism, run before anything was built on it. |
+| **Reproduce** | snapshot a `riftcgo` directory immediately after `Apply` with no intervening `Sync`, crash, restore: the write is gone. |
+| **Invariant that caught it** | the directed test's own premise check, which had already confirmed the engine watermark was past the harness's durable point before it asserted anything about recovery. |
+| **Mutant class** | none added, and the reason is stated below: the class is *"the harness assumed a guarantee the contract explicitly withholds"*, which is not a line to mutate but a contract to re-read. |
+
+**What happened.** DESIGN-I1 D2(b) says a crash rolls the directory back to the last state the harness
+considers durable, so `simcgo.Apply` snapshotted the directory at every sequence `Apply` returned. But
+`Apply` **does not block on I/O** — `engine.Engine`'s own words: *"It never blocks on I/O… `sync=false`
+leaves it buffered."* At snapshot time the bytes were still in the WAL buffer and the directory did not
+contain them.
+
+> **A SNAPSHOT IS A CLAIM ABOUT WHAT IS ON DISK. TAKING IT AFTER AN OPERATION THAT DELIBERATELY DOES
+> NOT TOUCH THE DISK IS A CLAIM ABOUT NOTHING.**
+
+**Why this is more than a bug, and it is the entry's point.** Nothing was wrong with the engine. The
+non-blocking `Apply` is **correct and load-bearing** — it is what lets the simulator model an unsynced
+window at all, and removing it would remove the fault this phase exists to inject. The contract states
+it in the interface doc, unambiguously, in the sentence directly above the method.
+
+> **A GUARANTEE THE ENGINE PROVIDES CAN BE A TRAP FOR THE HARNESS BUILT AGAINST IT — and the harness
+> author is the one holding both halves.** The engine promises *"visible now, durable later"*; the
+> harness needed *"on disk now"* and read the first as the second. Neither side is wrong on its own
+> terms. The mistake exists only in the joint, and only one person is standing in it.
+
+**And the defect is what made the measurement honest, which is the part that would have been lost.**
+Had the test not caught it, B would have been benchmarked as *a directory copy* rather than as *an
+fsync plus a directory copy*:
+
+| what B would have measured | what B costs |
+|---|---|
+| copy only | ~2 ms per Apply |
+| **fsync + copy** | **4.803 ms per Apply, 24×** |
+
+The cheap version would have come in at roughly half the cost of the real one, on a decision made by
+comparing that cost against ~4,000 Applies per seed. **A wrong number that points the same way is
+still a wrong number, and this one pointed toward "affordable."** The correctness test decided the
+affordability question, which is not the job it was written for.
+
+**Fixed:** `simcgo.Apply` syncs before it snapshots, and the reason is recorded at the method rather
+than in the commit message, because the next person to write a harness against a non-blocking contract
+will reach for the same shortcut.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its
@@ -5241,6 +5289,21 @@ change, and what does it match on.
 patch's context statically and fails when a hunk anchors on prose. Milliseconds, and it would have
 fired the day the comment changed rather than at the next full catalogue run.
 
+**AND IT IS A CLASS RATHER THAN AN INCIDENT, which was measured the next day.** `tools/anchorcheck`
+read `sim/mutants/` only. Its comment said blind patches *"live elsewhere and are checked by their own
+lane."*
+
+> **THAT SENTENCE WAS TRUE AND IRRELEVANT.** `make blind` asks whether a patch is **killed**, not
+> whether it is still **anchored** — it reports a stopped-applying patch as `ROT` rather than
+> preventing it. **A true statement that answers a different question is the most durable kind of
+> wrong:** nothing about it ever looks false, so nothing prompts a re-read.
+
+Measured over the directory the rule was not reading: **9 of 20 blind patches were prose-anchored**,
+and `blind-riftcgo-wildcard` **rotted within a day of being written**, when the comment it matched on
+was rewritten by the same hand that had written the rule. **One incident is an anecdote; nine of twenty
+with one already rotted is a class.** All nine re-anchored with byte-identical proofs; the lane now
+reads both directories.
+
 **Its threshold is measured, and that is the part worth copying.** The obvious rule flags 47 of 71
 patches; `patch(1)`'s fuzz absorbs one or two all-prose lines and not three, measured on the toolchain
 the lanes actually use, so the rule is "three or more, or any interior" and it flagged 17 of 71. A threshold
@@ -5397,6 +5460,32 @@ the next reader can ask whether there is a third. This entry's own limit is reco
 a `const seeds` loop and the `assertOracleSilent` family, and a third idiom would be missed exactly the
 way the second was.
 
+### The pattern, named rather than counted: three recurrences in four days, two inside the mechanisms built to record or enforce it
+
+| # | where | the enumeration | what bounded it |
+|---|---|---|---|
+| 1 | `CARRY-FORWARD.md`'s sweep-cost table | eight covering tests, ~1,928 seeds | one sweeping **idiom** — a local `const seeds` loop |
+| 2 | `DESIGN-I1` §1, **the document recording this form** | two off-interface methods | two **paths** its author had in mind — restart and crash |
+| 3 | `tools/anchorcheck`, **the lane built to enforce `GF-41`** | one patch **directory** | where the author had been looking when the rule was written |
+
+> **THE COMMON SHAPE: AN ENUMERATION BOUNDED BY WHERE ITS AUTHOR LOOKED, PRESENTED AS AN ENUMERATION OF
+> THE POPULATION.**
+
+**And every one of the three had a cheap mechanical derivation available at the time**, which is what
+makes this a pattern with a remedy rather than an observation about fallibility:
+
+| # | what would have caught it | cost |
+|---|---|---|
+| 1 | grep every `assertOracleSilent(t, "…", N)` with its enclosing function | seconds |
+| 2 | `grep -ohE "\b(n\.db\|m\.db)\.[A-Z][A-Za-z]*" store/*.go sim/toy/*.go \| sort \| uniq -c` | seconds |
+| 3 | walk the directories containing `*.patch` rather than naming one | seconds |
+
+**Every one was written from what was in view instead.** That is the finding: not that the authors were
+careless, but that *reasoning produces a plausible list and stops*, while a derivation produces a list
+and can be asked what it searched. **Two of the three occurred inside artifacts built to record or
+enforce this exact rule**, four days apart, which settles whether knowing the form is sufficient
+protection against it.
+
 **And the derivation was wrong the first time.** A misplaced `?` in `assertOracleSilentWith?\(` made it
 report **one** sweep instead of thirteen. It was caught only because two scripts written minutes apart
 disagreed — one step from correcting a signed record with a broken script.
@@ -5521,6 +5610,19 @@ What it can do is be **read as narrow by whoever implements it**:
 That is what happened here, and it is the reason this entry records a near miss rather than a defect:
 the gap was found while enumerating the store's calls for the implementation, and reported before any
 of it was built on.
+
+**And that is a division of labour, so it is written down as one rather than rediscovered each time.**
+
+| role | sees | owes |
+|---|---|---|
+| **the architect** | the question, its stakes, the precedents it touches | a ruling on the axis asked about, and the reasons the alternatives were refused |
+| **the implementer** | every axis the ruling did not name, because implementation is where they surface | **reporting them before building on them**, not resolving them |
+
+The implementer does not get to pick between the axes a ruling left open — that is the architect's, and
+picking silently is how a ruling comes to mean something nobody decided. The architect cannot enumerate
+axes nobody has raised — `GF-45`'s bound, arriving at a decision instead of at an argument. **Neither
+half is a failing of the other, and the arrangement only works if the first person to see an unnamed
+axis says so at the moment they see it**, when it costs one message rather than a phase.
 
 ---
 
