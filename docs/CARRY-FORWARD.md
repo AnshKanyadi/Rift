@@ -763,6 +763,19 @@ place, `make mutants`' baseline — the 52 covering tests in one `go test` binar
 hours of monotonic time and died on its own timeout**: `panic: test timed out after 2h0m0s`. That is
 the baseline alone, before any of the 70 per-mutant runs.
 
+**TWO INDEPENDENT MEASURED NUMBERS, from two lanes, by different routes.** This is not an estimate that
+grew:
+
+| lane | what the eight cost it |
+|---|---|
+| `make mutants` | the baseline — 52 covering tests in one binary — exceeded **two hours of monotonic time** and died on its own timeout, before any of the 70 per-mutant runs |
+| `make mutant-covered` | **10 of 71 classes in 52 minutes**, projecting **6.1 h against a 6.0 h budget** |
+
+**`mutant-covered` pays more than `mutants` for the same eight**, and the reason tells whoever
+discharges this which lane recovers most: it runs every covering test **under coverage
+instrumentation**, so a sweep costs more there than it does anywhere else. Converting the eight
+recovers more from `mutant-covered` than from `mutants`, and both recover.
+
 > **So this obligation is not a tidiness item.** The lane is in the `ci` target and cannot pass at any
 > timeout anybody would put in CI, and the eight remaining sweeps are the whole of the reason. The
 > script's own sanctioned remedy is *more time, never shorter sweeps* — which is correct as far as it
@@ -811,3 +824,26 @@ changes the conditions the rate was measured under.
 error into a class. The remedy is the one this project already uses everywhere else: **measure the
 thing you are going to claim, under the conditions you are going to claim it in.** A suite time is
 measured by running the suite, once, and quoting that.
+
+
+---
+
+## `make power-mutants` is UNRUN at A7's close, with its cost and its blocker named
+
+**Not run.** Its cost is **~15 CPU-hours**, and it is queued behind `make mutant-covered`, which is
+itself blocked by the eight sweep-based covering tests above.
+
+**What is not affected by its absence:** every mutant's power DECLARATION is checked by
+`make power-decl`, which runs in milliseconds and is green at **71 of 71**, and `make power-refute-decl`
+is green. Those check that each declaration is internally consistent and that no class carries the
+retired bare opt-out. What `power-mutants` adds is the *re-measurement* of each floor and ceiling
+against today's shape.
+
+**What that means for the numbers in the record:** every floor quoted in this phase was measured when
+it was taken, and each says so and names its shape. What has not been done at A7's close is a sweep
+re-measuring all seventy-one **together**. A floor that has drifted since its own measurement would
+not be caught by anything that ran here — and §5d is the reason that matters, since a floor is a
+property of the class and the shape jointly.
+
+**Due:** with the eight-test conversion, since that is what makes the lane affordable enough to
+schedule at all.

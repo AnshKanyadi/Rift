@@ -1577,6 +1577,27 @@ with the *number* of sweeping tests. The Makefile's own header already says why:
 by the number of sweeping tests, not by any one bound.* At eight sweeps the answer is hours; the
 answer to the next eight is not a bigger number.
 
+#### The second refusal, which is the same move in a different shape
+
+`make mutant-covered` was projected from its own rate to blow its six-hour budget by about six
+minutes: **10 of 71 classes checked in 52 minutes, all `ok`, no `DEAD`.** The obvious way to make it
+pass is `ONLY="<everything except the eight>"`.
+
+> **That is constructing a pass by exclusion**, and it is the same move as the 8-hour timeout in a
+> different shape: **one buys a green with time, the other buys it with scope, and neither makes the
+> claim true.**
+
+Both are refused, and they are recorded together because a reader who sees only one of them will take
+it for a rule about timeouts.
+
+**Note what IS measured and what is projected**, because they are different kinds of statement:
+
+- **measured**: 10 of 71 checked, all `ok`, no `DEAD`; and every one of A7's own classes reports `ok`
+  under `ONLY`, individually, at seconds each;
+- **projected**: the budget overrun, from the lane's own observed rate.
+
+The per-class results are evidence. The overrun is an extrapolation, and it is labelled as one.
+
 #### And the difference this section exists to make
 
 > **A gate that cannot pass for a stated reason, recorded, is different from a gate quietly excluded —
