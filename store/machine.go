@@ -7,7 +7,6 @@ import (
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
-	"github.com/anshkanyadi/rift/engine/model"
 	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/kv"
@@ -28,7 +27,7 @@ import (
 // lying in the system's favour (DESIGN-A4 §2).
 type Node struct {
 	cfg   Config
-	db    *model.DB
+	db    *tracked
 	epoch *sim.EpochGuard
 
 	// replicas is a SORTED SLICE keyed by RangeID, never a map. This package is
@@ -58,7 +57,7 @@ func New(cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("store: node %d has no modelled fsync duration", cfg.ID)
 	}
 	m := &Node{
-		cfg: cfg, db: model.New(), epoch: sim.NewEpochGuard(),
+		cfg: cfg, db: cfg.Engine(), epoch: sim.NewEpochGuard(),
 		nextRange: RangeID(2 + cfg.Ordinal),
 	}
 	first := FirstRangeDescriptor()

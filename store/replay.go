@@ -69,7 +69,7 @@ func ReplayMachine(base []byte, entries []raft.Entry) (RangeDescriptor, hlc.Time
 type Replay struct {
 	desc RangeDescriptor
 	s    *kv.Store
-	db   *model.DB
+	db   Engine
 	b    *engine.Batch
 	next int
 
@@ -93,6 +93,12 @@ func NewReplay(base []byte) (*Replay, bool) {
 	if !ok {
 		return nil, false
 	}
+	// THE REPLAY STAYS ON THE MODEL, DELIBERATELY, even at I1 when the nodes run
+	// on the C++ engine. This reconstructs what the log says the state should be,
+	// and the snapshot-equivalence oracle compares a node's actual state against
+	// it. An oracle that reconstructs using the same engine it is checking is one
+	// indirection from asking the accused -- the shape BUGS.md's register keeps a
+	// numbered entry for.
 	db := model.New()
 	s, err := kv.NewStore(db, rangePrefix(desc.ID))
 	if err != nil {

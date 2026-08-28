@@ -24,7 +24,6 @@ import (
 
 	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/engine"
-	"github.com/anshkanyadi/rift/engine/model"
 	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/internal/provenance"
 	"github.com/anshkanyadi/rift/kv"
@@ -72,6 +71,15 @@ type Config struct {
 	SyncLatency clock.Instant
 
 	Transport sim.Transport
+
+	// NewEngine constructs this machine's storage. Nil means engine/model.
+	//
+	// I1 injects engine/simcgo here to run the stack on the C++ engine. The
+	// default stays the model on purpose: it is the reference every Track A
+	// number was measured on, and at I1 it becomes the CONTROL rather than a
+	// stepping stone -- a divergence between the two engines is only a finding
+	// because one of them is the engine the numbers came from.
+	NewEngine func() Engine
 
 	// Clock is this machine's physical clock. It is per MACHINE, not per range:
 	// one node has one oscillator, and modelling each range with its own would
@@ -182,7 +190,7 @@ type Replica struct {
 
 	cfg  Config
 	raft *raft.Raft
-	db   *model.DB
+	db   *tracked
 
 	// epoch guards against a completion from a dead incarnation reaching this
 	// live one. See sim.Epoch for the class and its three instances.
@@ -447,7 +455,7 @@ func newReplica(cfg Config) (*Replica, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Replica{cfg: cfg, raft: r, db: model.New(), epoch: sim.NewEpochGuard()}
+	n := &Replica{cfg: cfg, raft: r, db: cfg.Engine(), epoch: sim.NewEpochGuard()}
 	n.jitter()
 	return n, nil
 }
@@ -623,7 +631,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 			sb := engine.NewBatch()
 			sb.Set(n.keySnapshot(), encodeSnapshot(meta, rd.Snapshot.Data))
 			sb.DeleteRange(n.logPrefix(), n.logUpper())
-			if seq, err := n.db.Apply(sb, true); err == nil {
+			if seq, err := n.apply(sb, true); err == nil {
 				n.pending = append(n.pending, pendingWrite{
 					seq: seq, snapMark: rd.SnapMark, snap: &meta, snapVersions: vs, snapMarkTS: mark,
 					clearAllLog: true,
@@ -707,7 +715,7 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
 				w.entries = append(w.entries, rd.Entries...)
 				n.writtenLast = last
 			}
-			seq, err := n.db.Apply(b, true)
+			seq, err := n.apply(b, true)
 			if err == nil {
 				w.seq = seq
 				n.pending = append(n.pending, w)
@@ -1164,7 +1172,7 @@ func (n *Replica) flushApply(b *engine.Batch) {
 	if b.Empty() {
 		return
 	}
-	if _, err := n.db.Apply(b, false); err != nil {
+	if _, err := n.apply(b, false); err != nil {
 		panic(fmt.Sprintf("store: node %d cannot apply range %d's committed batch: %v",
 			n.cfg.ID, n.rng, err))
 	}
@@ -1379,7 +1387,7 @@ func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
 	// the check firing twice per run; comparing them here fires it on every
 	// completion, which took a planted defect's detection from seed 905 to the
 	// first seeds of the range.
-	if n.db.VisibleSeq() == n.db.DurableSeq() {
+	if n.db.visibleSeq() == n.db.DurableSeq() {
 		n.crossChecks++
 		st := n.readDurable().Unverified()
 		if err := sameDurableState(n.durHS, n.durSnap, n.durLog, st); err != nil {
@@ -1446,8 +1454,21 @@ func (n *Replica) fold(w pendingWrite) {
 // VISIBLE state; calling this while a write is in flight returns writes a crash
 // would take, and the one consumer that would be misled -- the ledger the
 // persist-before-reply oracle reads -- would be misled silently.
+// apply is the ONLY path from a replica to its engine, so the store's own
+// visible sequence cannot drift from what the engine last returned.
+//
+// VisibleSeq used to be asked of the engine. It is tracked here instead --
+// DESIGN-I1, Ansh: Apply already returns the sequence a batch became visible
+// at, so asking the engine to remember it is BUG-032's one-fact-two-places
+// shape. The cost of tracking is that a direct n.db.Apply call would bypass it,
+// which is why there are none and why TestEveryApplyGoesThroughTheHelper
+// refuses the next one.
+func (n *Replica) apply(b *engine.Batch, sync bool) (engine.SeqNum, error) {
+	return n.db.Apply(b, sync)
+}
+
 func (n *Replica) readDurable() provenance.Reported[recovered] {
-	if v, d := n.db.VisibleSeq(), n.db.DurableSeq(); v != d {
+	if v, d := n.db.visibleSeq(), n.db.DurableSeq(); v != d {
 		panic(fmt.Sprintf(
 			"store: node %d read the engine back with sequence %d visible and only %d durable; "+
 				"the result would report as persisted writes that a crash would take",
@@ -1536,7 +1557,7 @@ func (n *Replica) maybeSnapshot(at clock.Instant, s sim.Scheduler) {
 	b := engine.NewBatch()
 	b.Set(n.keySnapshot(), encodeSnapshot(meta, data))
 	b.DeleteRange(n.logPrefix(), n.logKey(applied+1))
-	seq, err := n.db.Apply(b, true)
+	seq, err := n.apply(b, true)
 	if err != nil {
 		return
 	}
@@ -1708,7 +1729,7 @@ func (n *Replica) adoptSnapshot(meta raft.SnapshotMeta, vs []kv.Record, mark hlc
 func (n *Replica) ingest(rs []kv.Record, mark hlc.Timestamp) {
 	b := engine.NewBatch()
 	n.mvcc.IngestRecordsInto(b, rs, mark)
-	if _, err := n.db.Apply(b, false); err != nil {
+	if _, err := n.apply(b, false); err != nil {
 		panic(fmt.Sprintf("store: node %d cannot ingest range %d's state: %v", n.cfg.ID, n.rng, err))
 	}
 
