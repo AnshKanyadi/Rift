@@ -847,3 +847,38 @@ property of the class and the shape jointly.
 
 **Due:** with the eight-test conversion, since that is what makes the lane affordable enough to
 schedule at all.
+
+---
+
+## OBLIGATION: `engine/riftcgo`'s determinism scope, decided at I1 by the pass
+
+**Opened at the A7/B5 merge, 2026-08-27. Due at I1, where the cgo lane exists and the C++ archive is
+a build dependency rather than an obstacle.**
+
+`engine/riftcgo` is named in `notAnalysed` with its reason: it cannot type-check without the C++
+static archive and `rift.h`, so no amount of tag forwarding reaches it from a Go-only lane. Its
+determinism scope is therefore **open**, and it is named as not-analysed rather than assumed clean.
+
+**Ansh's prediction, recorded so the answer can be checked against it:**
+
+> *"My prior is that the cgo wrapper is core-scope code with a hatch for the boundary rather than
+> orchestration, since it implements the frozen `Engine` interface and runs inside simulated runs at
+> I1."*
+
+**What settles it, and it is not the prediction.** Build the archive, forward the tag, run the pass,
+and read what it says. The two mechanisms it needs are already in place:
+`TestTagForwardingActuallyReachesTheLoader` proves `BuildFlags` reaches the loader, and
+`TestEveryBuildTaggedPackageIsAnalysedOrNamed` will stop accepting the `notAnalysed` entry the moment
+the package becomes loadable — because a named exemption is only honest while the reason holds.
+
+**Why the answer is not obvious either way.** If the prediction is right, the wrapper is core scope
+and its cgo boundary needs a per-line hatch in `HATCHES.txt`, which is a reviewed list rather than a
+package exclusion, per Amendment A5. If it is wrong — if the wrapper turns out to be adaptation that
+runs *around* simulated runs rather than inside them — it joins the by-name exclusion list beside
+`engine/differential`, exactly and never as a prefix. **The two outcomes require different work, which
+is the reason not to guess.**
+
+**Also owed at the merge, found while classifying:** `engine/differential`'s tests read a fixture
+corpus from `seeds/differential/format` (22 entries). The package and the corpus have to move
+together or its tests fail on a missing directory, which is a merge-completeness item rather than a
+defect.

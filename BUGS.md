@@ -2479,3 +2479,44 @@ after a handoff carried a section headed "state it, do not assume it" about one 
 beside it went unrun. Applying that rule to a ruling made about one test found three more the same
 day. **That is the rule paying out on the day it was written down**, which is the strongest evidence
 available that it was worth writing.
+
+### BUG-037 — (harness) the determinism pass accepted a flag it did not forward
+
+| | |
+|---|---|
+| **Symptom** | `determinismcheck -tags <tag> ./pkg/` produced output **byte-identical** to the run without the flag. Every package whose files carry a build tag was reported clean, having never been loaded. |
+| **Found by** | classifying Track B's `engine/riftcgo` against Track A's lane set before a merge, rather than after. |
+| **Reproduce** | a one-file package with `//go:build sometag` and an `os` import, inside core scope. |
+| **Invariant that caught it** | none. The lane's output for an unloaded package and for a clean package are the same output. |
+
+**The defect is in the pass, not in `riftcgo`.** `singlechecker.Main` registers `-tags` and does not
+forward it to `packages.Load`, so the loader uses default tags, finds no files, and reports
+`build constraints exclude all Go files` — which the driver treats as an error in the package and
+skips. Measured on a probe with a deliberate violation:
+
+```
+default tags            build constraints exclude all Go files   ->  no finding
+-tags=probetag          build constraints exclude all Go files   ->  no finding   (flag accepted, inert)
+GOFLAGS=-tags=probetag  the os import is reported
+```
+
+> **An analyzer that accepts a flag it does not forward reports clean because nothing was loaded, and
+> that is indistinguishable from clean.** The flag is worse than its absence: it looks like the
+> question was asked.
+
+**It generalises past `riftcgo`, which is why it is a defect and not a quirk.** Any future
+build-tagged package inherits it on the day it lands, silently, and the lane that would have caught
+its determinism violations is the lane that cannot see it.
+
+**The fix is two tests rather than a flag**, because the flag was never the problem:
+
+- **`TestTagForwardingActuallyReachesTheLoader`** asserts the premise first — a tagged package loads
+  **zero** files by default — and then that `BuildFlags` reaches the loader. §8.1b's two numbers
+  applied to a test's own setup: the zero is what makes the non-zero mean anything.
+- **`TestEveryBuildTaggedPackageIsAnalysedOrNamed`** walks the tree for build tags, loads each tagged
+  package with its tag, and requires every one to either analyse or appear **by exact import path** in
+  a `notAnalysed` map with its reason.
+
+**The same rule as `TestHatchRegistry`, one level up.** There, an exemption must appear in a
+checked-in list rather than merely existing. Here, a package must be analysed or *named* as not
+analysed. **Absent is not clean, and silence is not allowed to be the mechanism either way.**

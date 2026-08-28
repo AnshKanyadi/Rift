@@ -93,9 +93,26 @@ func TestEveryBuildTaggedPackageIsAnalysedOrNamed(t *testing.T) {
 	}
 }
 
-// TestTagForwardingActuallyReachesTheAnalyzer is the induction: without the tag
-// forwarded, a tagged package with an obvious violation produces nothing.
-func TestTagForwardingActuallyReachesTheAnalyzer(t *testing.T) {
+// TestTagForwardingActuallyReachesTheLoader is the induction, and it asserts its
+// own premise before asserting the property.
+//
+// # This is DESIGN-A7 §8.1b's two numbers, applied to a test's own setup
+//
+// The rule there is that an oracle must fire on its planted defect AND be silent
+// on a clean tree, because either number alone is satisfiable by an instrument
+// that is not discriminating. The same holds one level down, for a test that
+// checks a mechanism reaches something:
+//
+//	the "before" number -- a tagged package loads ZERO files by default -- is
+//	what makes the "after" number mean anything. Without it, a load that
+//	returns files proves nothing, because it might have returned them either
+//	way, and the assertion would be green over a premise that had quietly
+//	stopped holding.
+//
+// So the zero is asserted first, and it is asserted as a FAILURE rather than a
+// skip: if a default load ever starts seeing tagged files, this test says so
+// instead of continuing to pass while checking nothing (BUG-036).
+func TestTagForwardingActuallyReachesTheLoader(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "go.mod"), "module probe\n\ngo 1.24\n")
 	mustWrite(t, filepath.Join(dir, "p.go"),
