@@ -2611,7 +2611,11 @@ hunk's leading context end to end and asking whether it still applied:
 | **3** | **FAILS — `M77` exactly** |
 | any *interior* prose context line | FAILS at any length; fuzz trims edges only |
 
-Under the measured rule the catalogue flags **19 of 71**. A threshold picked to make a count small
+Under the measured rule the catalogue flagged **17 of 71**. (19 is the count for all-prose sides of
+*any* length, and it was briefly written into this entry as if it were the rule's number; corrected by
+re-deriving every figure from `HEAD~1`'s patches rather than copying it forward. `M70` and `M78` carry
+two-line prose sides and are deliberately not flagged, which is what the fuzz table is for.) A
+threshold picked to make a count small
 would be a weakened checker; this one is picked by what the tool in the lanes does, and `fuzzReach` is
 a named constant with the table behind it so re-measuring is the obvious move if the toolchain changes.
 
@@ -2803,6 +2807,15 @@ numbers now mean something different, and that is measured rather than read out 
 **Fixed:** the fourth path counts and names what it drops, the header line reports the population
 (`25 directories in seeds/: …`), and the totals must reconcile or the lane exits 2 — so a fifth drop
 path added later cannot be as silent as the fourth was.
+
+**Its induction is the weakest of the five landed this day, and that is said rather than hidden.** The
+reconciliation was induced by hand — counter removed, lane printed *"1 of 25 directories are
+unaccounted for"* — and the standing instrument is a **source pin**
+(`TestTheReproducesLaneAccountsForEveryDirectory`), not a re-run: the lane copies the whole tree once
+per bundle, which is not affordable in a push lane. The pin catches **deletion** of the arithmetic and
+would not catch a **wrong sum**. Every other fix landed today carries an instrument that re-executes
+the thing it guards; this one does not, and a weaker instrument described as a strong one is this
+repository's own worst failure mode.
 
 ---
 # Track B — the C++ storage engine
@@ -5167,7 +5180,7 @@ fired the day the comment changed rather than at the next full catalogue run.
 
 **Its threshold is measured, and that is the part worth copying.** The obvious rule flags 47 of 71
 patches; `patch(1)`'s fuzz absorbs one or two all-prose lines and not three, measured on the toolchain
-the lanes actually use, so the rule is "three or more, or any interior" and it flags 19. A threshold
+the lanes actually use, so the rule is "three or more, or any interior" and it flagged 17 of 71. A threshold
 picked to make a count small is a weakened checker. A threshold picked by what the tool does is a
 measurement, and it is re-taken when the tool changes.
 

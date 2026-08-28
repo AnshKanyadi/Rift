@@ -410,3 +410,44 @@ func TestAnUnregisteredDirectoryIsAnError(t *testing.T) {
 	}
 	t.Logf("seeds/differential holds %d entr(ies), checked by its own owners", len(sub))
 }
+
+// TestTheReproducesLaneAccountsForEveryDirectory refuses the removal of
+// BUG-042's totals reconciliation.
+//
+// # Why a source pin, and why it is being written down as the weaker option
+//
+// The reconciliation was induced by hand: the counter was removed and the lane
+// printed *"1 of 25 directories are unaccounted for."* That is a real induction
+// and its output is in BUG-042. What it is not is a STANDING one -- nothing
+// would notice the counter going away again, and every other fix landed this day
+// carries something that would.
+//
+// `scripts/corpus-reproduces.sh` copies the whole tree once per bundle, so a
+// self-test that exercises the loop is not cheap enough to sit in a push lane.
+// The pin is what is affordable: it does not re-run the arithmetic, it refuses
+// the removal of the arithmetic. **Stated plainly because a weaker instrument
+// described as a strong one is this repository's own worst failure mode**, and
+// the honest version is that this pin catches deletion and would not catch a
+// wrong sum.
+func TestTheReproducesLaneAccountsForEveryDirectory(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "corpus-reproduces.sh"))
+	if err != nil {
+		t.Fatalf("reading the lane: %v", err)
+	}
+	src := string(b)
+	for _, want := range []struct{ frag, why string }{
+		{"notbundle=$((notbundle + 1))",
+			"the fourth drop path must COUNT what it drops; three of four did and the fourth " +
+				"was how seeds/differential went past unseen"},
+		{"accounted=$((checked + skipped + notbundle))",
+			"the totals must reconcile against the population, or the counters describe what " +
+				"the loop felt like doing rather than what it saw"},
+		{"directories in seeds/",
+			"the summary must report the POPULATION, not just the checked count: a count taken " +
+				"when it happened to equal the population reads as a population forever after"},
+	} {
+		if !strings.Contains(src, want.frag) {
+			t.Errorf("scripts/corpus-reproduces.sh no longer contains %q.\n      %s", want.frag, want.why)
+		}
+	}
+}

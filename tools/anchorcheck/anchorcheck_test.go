@@ -71,7 +71,15 @@ import (
 //  2. **Any interior prose context line.** Between the first and last changed
 //     line, so fuzz cannot reach it at any length.
 //
-// Under that rule the catalogue flags **19 of 71**, all of shape (1).
+// Under that rule the catalogue flagged **17 of 71** when it landed, all of
+// shape (1). Two more patches (M70, M78) carry an all-prose side of TWO lines
+// and are deliberately NOT flagged: the table above is what says they are safe,
+// and they are the reason the threshold is a measurement rather than a taste.
+//
+// The count for all-prose sides of ANY length is 19. That number is not the
+// rule's, and it was briefly written down as if it were -- caught by re-deriving
+// every number in the record from the artifact rather than copying it forward,
+// which is the same discipline that fixed the found-by table.
 //
 // **The number that matters is the one that was measured.** A threshold picked to
 // make a count small would be a weakened checker; this one is picked by what the
