@@ -95,6 +95,33 @@ containing `O(|S|)`, two delimiters — and **caught by a mechanism rather than 
 `HARNESS-017`'s remedy had been built into `cpp-scan` rather than merely recorded. The shortest
 possible demonstration of the rule, arriving as its own evidence.
 
+**5. FOUR RIGS, FOUR REAL DEFECTS FOUND ON THE FIRST OUTING. This is the number the wrap-up should
+quote.** Marked at B5's close on Ansh's instruction, because it stopped being a run of luck somewhere
+around the third one.
+
+| rig | first outing | what it found |
+|---|---|---|
+| the **kill-point sweep** | its first swept regime | the three `HARNESS-006`-class classifier defects, each of which blamed the engine for the harness |
+| the **crash-consistency rig** | its first sweep across the write path | `BUG-001`, a database that had crashed once and refused to open ever again |
+| the **B4 differential** | its first outing, `compact` seed 6, a **clean** run with no kill | `BUG-006`, a table the engine wrote and could never open again — plus three defects in *itself* first |
+| the **B5.2 parity suite** | the first run of its first version | `BUG-007`, a value larger than the block buffer unreadable through the wrapper |
+
+**WHAT THE PATTERN ACTUALLY SAYS, and it is not that the rigs are good.** Every one of these defects
+was present in code that had already passed a lane. They were not found by running the existing
+instruments harder; they were found by asking a question **nobody had asked once**. A first outing is
+the only moment an instrument is guaranteed to be asking something new — after that it is regression
+coverage, and its yield falls to whatever the next edit breaks.
+
+> **THE YIELD IS IN THE QUESTION, NOT THE INSTRUMENT. A NEW RIG'S FIRST RUN IS THE HIGHEST-VALUE RUN
+> IT WILL EVER HAVE, AND A PHASE THAT ADDS NO NEW QUESTION IS A PHASE THAT WILL FIND NOTHING NO MATTER
+> HOW LONG ITS LANES RUN.**
+
+The operational reading for I1 and I2: budget for the first run of every new instrument to **fail**,
+and treat a new rig that comes up green on its first outing as a claim about the rig — `B4` §8's
+expectation, now with four data points behind it. It has also gone the other way once, which is why
+the claim is about the *question* and not the rig: the differential found **three defects in itself**
+before it found one in the engine, and `GF-29`/`GF-30` are that lesson.
+
 ---
 
 ## Entries
@@ -524,6 +551,30 @@ data intact and unreachable.
 | **Mutant class** | **`BM116`** (the wrapper) and **`BM115`** (the boundary's half), both added in the same PR as the fix |
 | **Fix commit** | this one |
 
+**THE COMMENT IS THE ENTRY, NOT THE BUFFER.** The first version of `fill()` carried this, three lines
+above the bug:
+
+> *"Sized so an ordinary pair never round-trips twice. A short buffer is CORRECT — the C side holds the
+> pair rather than dropping it — so this is a performance choice and not a correctness one, which is the
+> only reason a guess is acceptable here."*
+
+**Every clause is true of the boundary. None of it was true of the code beneath it.** The comment
+describes a caller that grows; the code was a caller that gives up. And the reasoning it offers — *a
+guess at the buffer size is acceptable because the failure mode is benign* — is precisely what made
+the undersized buffer read as deliberate rather than unfinished. The comment did not merely fail to
+describe the code; **it supplied an argument for the code being right.**
+
+> **A CLAIM TRUE OF ONE SIDE OF A BOUNDARY AND FALSE OF THE CODE BENEATH IT, IN A LANGUAGE THE OTHER
+> SIDE'S COMPILER CANNOT SEE, IS `GF-11` AT ITS WORST CASE: NO TYPE, NO TEST FILE, AND NO REVIEWER
+> HOLDING BOTH HALVES AT ONCE.**
+
+That is the full statement of why this one was invisible. In the C++ engine, a comment that overstates
+its code is still read beside that code by someone who can also see the caller. Here the two halves of
+one contract live in **different languages**: no compiler spans them, no type spans them, no single
+file spans them, and the reviewer who knows the C side's holding behaviour is not the reviewer reading
+the Go loop. The C++ suite passed. The Go build passed. **The property they jointly promise was
+checked by neither** until a test crossed the boundary with a value big enough to matter.
+
 **Symptom.** `iter.Error()` returns `riftcgo: buffer too small` and iteration stops. Every key below the
 large value is returned correctly; the large one and *everything after it* is silently absent, because a
 cursor that errors is a cursor that ends. A caller checking `Error()` sees a failure it cannot act on;
@@ -534,25 +585,9 @@ consuming anything*, precisely so a caller can grow and retry without losing its
 documented contract and the C++ side implements it exactly. The wrapper's `fill()` treated the status
 as fatal — it never grew.
 
-**THE COMMENT IS THE ENTRY.** The first version of `fill()` carried this, three lines above the bug:
-
-> *"Sized so an ordinary pair never round-trips twice. A short buffer is CORRECT — the C side holds the
-> pair rather than dropping it — so this is a performance choice and not a correctness one, which is the
-> only reason a guess is acceptable here."*
-
-Every clause is true **of the boundary**. None of it was true of the code beneath it. The comment
-describes a caller that grows; the code was a caller that gives up. And the reasoning it offers — *a
-guess at the buffer size is acceptable because the failure mode is benign* — is exactly the reasoning
-that made the undersized buffer look deliberate rather than unfinished.
-
-> **A COMMENT ASSERTING A PROPERTY THE CODE BESIDE IT DOES NOT IMPLEMENT IS INDISTINGUISHABLE, TO A
-> READER, FROM A COMMENT DESCRIBING ONE. THE EYE SUPPLIES THE MISSING HALF.**
-
-This is `GF-11`'s shape moved one boundary out, and it is worse here than in the C++ engine for a
-structural reason: **the two halves of this contract are in different languages**, so no compiler, no
-type, and no single test file spans them. The C++ suite passed. The Go build passed. The property they
-jointly promise was checked by neither until a test crossed the boundary with a value big enough to
-matter.
+**WHAT CAUGHT IT: A RIG ON ITS FIRST OUTING, FOR THE FOURTH TIME IN THIS PROJECT.** The parity suite
+was written in the same step as the wrapper and failed on the first run of its first version. That is
+now a pattern with a count, and it is recorded as such in the wrap-up section above.
 
 **THE FIX WAS TO BOTH SIDES, AND THE SECOND HALF IS THE MORE USEFUL ONE.** The wrapper now grows and
 retries. But a caller told only *"too small"* has to **guess** how much to grow by, and a guess that is
@@ -1923,6 +1958,25 @@ mutant was the only thing in the repo that ran the lane in a state a developer n
 
 **Operationally, for I1 and I2:** a lane's recipe must build everything its tests refuse to run
 without. Grep for `Skipf` in anything a lane runs and check the recipe produces what each one names.
+Done at B5's close: two artifact-dependent skips exist in the tree, both now built by the lanes that
+run them; the rest are `-short` guards.
+
+#### PROMOTED at B5's close — this is the vacuous-green class in its LANE-DEPENDENCY form, and it is new
+
+Vacuous green has appeared in this project three times before, and each time the lane was running the
+right test in the wrong *state*: `HARNESS-002`, a warm build directory; `BM21`, which survived until
+the directory was made cold; `GF-16`, a workload that could not reach a mutant's precondition. **This
+one is different in kind: the lane was not running the test at all.**
+
+> **THE THREE EARLIER INSTANCES WERE A CHECK THAT COULD NOT FAIL. THIS ONE IS A CHECK THAT WAS NEVER
+> INVOKED — AND THE TWO ARE INDISTINGUISHABLE FROM OUTSIDE, BECAUSE A LANE REPORTS AN EXIT CODE AND
+> NOT A COUNT OF QUESTIONS ASKED.**
+
+`GF-37`'s three instances belong here, under the same heading, because they are the same failure
+reaching the measurement side: an instrument silently configured by its surroundings — a `Debug`
+build, a single unreplicated run, a `SIGPIPE`'d pipeline whose `grep` exited 0. In every one of the
+four, **the artifact produced looked exactly like a correct one**, and in every one the only thing
+that noticed was something that knew what the answer should roughly be.
 
 ---
 
@@ -1998,6 +2052,77 @@ evidence was an outcome nobody could otherwise explain.
 
 The counter now counts applies. It is one more variable and it is the variable the action is actually
 periodic in.
+
+---
+
+### GF-39 — two tracks with separate lane sets accumulate an unbounded debt payable in one instant
+
+**Raised at B5.2, promoted out of it by Ansh at B5's close as the finding with the most downstream
+value in the phase.**
+
+`make determinism` was **red**, and had been **since B4**. `engine/differential` sits under the
+`engine/...` core pattern — which is what puts `engine/model` in scope — and was never classified.
+Nothing noticed for two phases.
+
+**Nothing was broken. That is the point.** The judge was correct, its own lane (`cpp-diff`) was green,
+every C++ lane was green, and the package did exactly what it was designed to do. What had happened is
+that **Track B runs `CPP_LANES` and Track A runs `ci`**, the two sets are disjoint, and Track B had
+been adding **Go packages** for two phases.
+
+> **TRACK A'S LANE SET WOULD HAVE MET EVERY GO PACKAGE TRACK B HAS EVER WRITTEN FOR THE FIRST TIME
+> **AT MERGE**, ALL AT ONCE, ON A DAY DEDICATED TO SOMETHING ELSE.**
+
+**The general form:**
+
+> **TWO TRACKS WITH SEPARATE LANE SETS DO NOT DIVERGE GRADUALLY. THEY ACCUMULATE A DEBT THAT IS
+> INVISIBLE WHILE IT GROWS, BOUNDED BY NOTHING, AND PAYABLE IN A SINGLE INSTANT — THE MERGE.**
+
+**And the merge is the worst possible moment to discover it**, for three reasons that compound:
+
+1. **Attribution is gone.** Nineteen files land together. A red lane names a symptom, and the commit
+   that caused it is somewhere in two phases of work.
+2. **The pressure is wrong.** A merge is a moment for integrating finished work, not for making
+   scope decisions — and *"is `engine/differential` core scope?"* is a scope decision under `[A5]`,
+   which is exactly the kind that should be made deliberately and recorded.
+3. **The cheap fix is available and wrong.** With a merge blocked and a lane red, the fastest route
+   is a package exclusion — and `A5` bans package exclusions specifically because they are what
+   somebody reaches for under exactly this pressure.
+
+**The remedy is not "run more lanes"; it is that the debt must be paid continuously.** Every Track B
+step that adds a Go artifact runs Track A's lane set on it in that step. Cost: minutes. The
+alternative is not a larger cost later — it is an **unbounded** one, since nothing caps how much
+unclassified work can accumulate between merges.
+
+**Confirmed at B5's close, on Ansh's instruction, that nothing else is outstanding.** Every Go file
+Track B has added — nineteen, across `engine/differential/`, `engine/riftcgo/`, and
+`tools/determinismcheck/` — was enumerated against `main`, and Track A's full push lane
+(`build lint test race blind smoke mutants`, including the three lanes Track B had never run) is green
+on `rift-b`.
+
+**The classification itself, recorded because it is a scope decision and not a fix.** Both packages
+are **exclusions** by `scope.go`'s own test — *"a package that needs a goroutine is an exclusion; a
+package that needs one `time.Now` is a hatch"* — and `sync` is unhatchable in core scope:
+
+- `engine/differential` is a **judge**. Nothing in it executes during a simulated run; it reads
+  artifact files a finished run left behind. That is `sim/checker`'s situation exactly and it gets
+  `sim/checker`'s answer. **Its independence is why it cannot be in core:** reading bytes neither
+  engine handed it is the whole mechanism by which it is a second opinion rather than a mirror.
+- `engine/riftcgo` needs `sync` for its durability callbacks and `unsafe` by construction — a cgo
+  boundary *is* pointer identity and layout, which is what core scope exists to keep out. And it is
+  the constitution's own scoping rather than a hole: *"deterministic-replay guarantees are scoped to
+  sim runs on `engine/model`."*
+
+**The build-tag half, and the distinction is exact.** `riftcgo` cannot link without the C++ archive,
+so it carries a tag and Track A's `make test` skips it. A tag removes a package from `./...`
+entirely — so it could sit unanalyzed forever with every lane green.
+
+> **A LOAD GATE CATCHES A PACKAGE THAT FAILS TO LOAD. IT DOES NOT CATCH ONE THAT WAS NEVER OFFERED.
+> BOTH FAILURES PRODUCE THE SAME SILENCE.**
+
+`TestHatchRegistry` now asserts **by name** that the package was among those loaded, and the
+determinism pass loads with the tag (it only typechecks, which needs no archive — that is what the
+`${SRCDIR}` `CFLAGS` bought). Induced: dropping the tag from the test's `BuildFlags` fires the
+assertion.
 
 ---
 

@@ -216,36 +216,60 @@ not**. Per B3's precedent the numbers live there and this document keeps the dec
 **Written at B5.5's close, before sign-off, because a design document that records only its decisions
 and not their fate is a record of intentions.**
 
-### 10.1 `B5-D6` — the differential through cgo. **DEPARTED.**
+### 10.1 `B5-D6` — the differential through cgo. **DELIVERED DIFFERENTLY.** Ruled by Ansh, 2026-08-27.
 
 §6 asked for **byte-identical artifacts** from a cgo-path run and a native run at the same seed. That
-is not reachable, and the reason is structural rather than incidental:
+is not what landed, and Ansh ruled the outcome correct rather than the criterion missed.
+
+**Why byte-identity is unreachable, and the reason is structural rather than incidental:**
 
 > **`rift_db_open` takes a PATH.** The C boundary cannot be handed a `TestEnv`, and *every*
 > differential schedule — including the clean control — runs on one. A cgo run therefore cannot be
 > given the same faults, cannot be killed at the same ordinal, and cannot produce the same artifact.
 
-**Two ways to close that gap were available and both were declined**, with reasons:
+#### The two remedies, declined twice — by the session, and then by Ansh on the same reasoning
 
-| option | why not |
+**(a) A test-only `rift_db_open_on_env`.**
+
+> *"A test-only `rift_db_open_on_env` adds a production entry point that exists for a test — the
+> measurement hook in the interface both engines implement, which you refused at B3.7b and were right
+> to."* — Ansh
+
+It is `B3.7b`'s question arriving at a different interface. The C boundary is the surface B5 exists to
+keep narrow; an entry point on it whose only caller is a test is permanent, is available to every
+future caller, and is justified by nothing a shipping embedder needs.
+
+**(b) A Go artifact encoder.**
+
+> *"A third implementation of the artifact encoder buys byte-identity by adding a third thing that can
+> disagree."* — Ansh
+
+The format has **two** implementations because Ansh weighed that cost and paid it deliberately, for
+independence. A third is not more independence; it is one more thing to keep in step, bought to make a
+comparison come out even.
+
+#### What landed
+
+The C++ engine, reached **through cgo**, compared against `engine/model` on the differential's own
+workloads — 3 regimes × 6 seeds × 200 seeded operations, with the operations read from real
+`rift_diff` artifacts' `SUBMISSION` sections, so the two runs **cannot** have submitted different
+things. With no kill, the recovery **range** the contract permits does not apply, and the comparison
+is **exact after every batch**.
+
+#### WHAT IS AND IS NOT CLAIMED — stated plainly, per the ruling
+
+| | |
 |---|---|
-| a test-only `rift_db_open_on_env` | permanent boundary surface whose only caller is a test, on the one interface B5 exists to keep narrow |
-| a Go artifact **encoder** | a third implementation of a format whose *two* implementations Ansh weighed and paid for individually |
+| **NOT claimed** | that the cgo path produces **identical artifacts** |
+| **Claimed** | that the cgo path produces **identical state** |
+| **NOT claimed** | that the cgo path is verified **under faults**. Nothing in B5 tests that; `CF-6` carries it to I1 |
 
-**What landed instead.** The C++ engine, reached through cgo, is compared against `engine/model` on
-the differential's own workloads — 3 regimes × 6 seeds × 200 seeded operations, with the operations
-read from real `rift_diff` artifacts' `SUBMISSION` sections so the two runs *cannot* have submitted
-different things. With no kill, the recovery **range** the contract permits does not apply and the
-comparison is **exact after every batch**, which is a stronger form of agreement than a recovered-state
-check rather than a weaker one.
-
-**What it does not cover, stated so it is never read as covered:** *a fault schedule crossing the
-boundary.* Nothing in B5 tests that, and the test says so at the top of its own file.
+> *"What landed [...] is a weaker claim than byte-identity and a real one."* — Ansh
 
 **It was measured rather than assumed to have teeth.** `BM114` reddens it and it names the batch —
 `compact/4 after seq 307 (3 ops)` — where `cpp-diff` reports a recovered-state disagreement at the
-end. `BM120` floors it (GF-26): snapshots that pin nothing, a defect **no other lane in this repo can
-see**, because every other snapshot test reads its snapshot immediately and a snapshot that pins
+end. `BM120` floors it (`GF-26`): snapshots that pin nothing, a defect **no other lane in this repo
+can see**, because every other snapshot test reads its snapshot immediately and a snapshot that pins
 nothing passes all of them.
 
 ### 10.2 `B5-D4` — `kBusy`. **DISCHARGED AS RULED, and the quantity was not the obvious one.**
@@ -258,11 +282,31 @@ it is worth keeping in this document because it is a fact about the engine and n
 > threshold charged against `buffered_` alone reports **no backlog** exactly while the poller is
 > behind — the one moment backpressure means anything.
 
-So it is charged against **buffered + in-flight**, which is identically the harness's
-`submitted − drained`, and *that identity* is what lets the predicate be stated without asking the
-engine anything. `BM117` is that defect; it passes every sequential test, and the window is reachable
-only from **inside** a `Sync` — entered through the promotion hook rather than a second thread, so the
-rig stays single-threaded and the moment is a place rather than a race.
+**THE IDENTITY IS THE RESULT, and it is what to write down:**
+
+> **`buffered_bytes_ + in_flight_bytes_`  ≡  `submitted − drained`**
+>
+> The left side is the engine's account of what it has taken and not yet made durable. The right side
+> is the harness's account of what it handed over and what its own `Sync` calls have covered. **They
+> are the same number computed from two disjoint sets of facts** — and *that* is what lets §7.6.1's
+> predicate be stated in both directions without asking the engine anything. A threshold on
+> `buffered_` alone is not merely less accurate; it is not equal to anything the harness can compute,
+> so no bidirectional predicate exists over it at all.
+
+`BM117` is that defect. It passes every sequential test: withhold the poller and `buffered_` alone
+crosses the threshold, so the patched engine answers correctly.
+
+**Reaching the window is B1.9a's move, one layer up, and it should be read as the same one.**
+`FaultController::AfterEffect` exists because §7.4's in-flight element — *"a `Sync` can complete on
+the device with the kill preempting its return"* — cannot be expressed by an injector that runs
+*before* the effect; it runs after the implementation and before the Status reaches the caller, and it
+consumes no ordinal because **it is the second half of one Env call, not a second call.** The
+backpressure window is the identical shape: it exists strictly between a `Sync`'s effect and its
+return, and the promotion hook is where the rig gets in. Both could have been reached with a second
+thread. Neither is.
+
+> **A MOMENT THAT LIVES BETWEEN AN EFFECT AND ITS RETURN IS A PLACE, AND A RIG SHOULD ENTER IT AS ONE.
+> A SECOND THREAD TURNS THE SAME MOMENT INTO A RACE — REACHED SOMETIMES, ASSERTED NEVER.**
 
 ### 10.3 `B5-D7` — the numbers. **IN `BENCHMARKS.md`, per B3's precedent.**
 
