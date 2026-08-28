@@ -35,6 +35,22 @@ import (
 // ONE ENUM, ONE MEANING: the C codes are Status::Code's values, held together
 // by a static_assert on the C++ side. This function is the only place a code
 // becomes a Go error, so a new code cannot arrive with two meanings.
+// THE FROZEN INTERFACE, ASSERTED AT COMPILE TIME AND NOT BY A TEST.
+//
+// Nothing in this package required these until now: the parity and benchmark
+// suites happen to hold a *DB in an engine.Engine, which is an implicit
+// assertion in a _test.go file behind a build tag -- so a signature drift would
+// have been caught by whichever test ran first, reported as that test failing,
+// and NOT caught at all by anything that did not run.
+//
+// A0.5 froze this interface. A package whose whole purpose is to implement it
+// should say so where the compiler reads it.
+var (
+	_ engine.Engine   = (*DB)(nil)
+	_ engine.Iterator = (*iter)(nil)
+	_ engine.Snapshot = (*snapshot)(nil)
+)
+
 // ErrBusy is backpressure: the write was NOT applied, and the caller should
 // drain before retrying.
 //

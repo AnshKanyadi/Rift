@@ -215,6 +215,28 @@ cpp-cgo: ## B5: the Go wrapper over the C boundary, against engine/model
 	CGO_LDFLAGS="-L$(CURDIR)/$(CPP_BUILD)/test -lrift_capi -lrift_engine" \
 	$(GO) test -tags rift_cgo ./engine/riftcgo/ -count=1
 
+.PHONY: cpp-bench
+cpp-bench: ## B5.5: the numbers -- model, C++ native, C++ through cgo, in one table
+	@# A SEPARATE, RELEASE BUILD DIRECTORY, AND IT IS NOT A DETAIL.
+	@# Every other lane here builds Debug, which is right for them: assertions
+	@# on, optimiser off, a failure that says where it was. The first table
+	@# taken from that directory reported ~4 microseconds for a single memtable
+	@# Set and a readrandom cost that did not move with batch size -- numbers
+	@# that describe the compiler's -O0 output and nothing about this engine.
+	@#
+	@#   A BENCHMARK FROM A DEBUG BUILD IS NOT A SLOW NUMBER. IT IS NOT A NUMBER.
+	@#
+	@# It is a separate directory rather than a flag on the shared one so that
+	@# nothing else silently starts running Release: the sweep's kill-point
+	@# counts and every floor in FLOORS.txt are measured against Debug builds,
+	@# and a lane that quietly changed build type underneath them would move
+	@# denominators nobody was watching.
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/bench -DRIFT_SANITIZER=none -DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(CPP_BUILD)/bench --target rift_bench rift_capi -j $(WORKERS)
+	RIFT_BENCH=1 RIFT_BENCH_BIN=$(CURDIR)/$(CPP_BUILD)/bench/rift_bench \
+	CGO_LDFLAGS="-L$(CURDIR)/$(CPP_BUILD)/bench -lrift_capi -lrift_engine" \
+	$(GO) test -tags rift_cgo ./engine/riftcgo/ -run TestBenchmarkTable -v -count=1 -timeout 40m
+
 .PHONY: cpp-amp
 cpp-amp: ## B3.7b: compaction amplification -- the measurement that decides B3-D3
 	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none

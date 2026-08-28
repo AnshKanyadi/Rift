@@ -1926,6 +1926,81 @@ without. Grep for `Skipf` in anything a lane runs and check the recipe produces 
 
 ---
 
+### GF-37 — an instrument inherits the configuration of the lane that built it, and says nothing about it
+
+**Raised at B5.5**, twice in one afternoon, in opposite directions.
+
+**First: the build type.** The benchmark was built into `engine-cpp/build/test`, because that is where
+every other Track B binary lives and the harness simply reused the path. That directory is configured
+`Debug` — correct for every lane that uses it, assertions on and optimiser off. The table it produced
+reported ~4 µs for a single memtable `Set` and a `readrandom` cost that **did not move with batch
+size**, which is not a slow engine; it is a description of `-O0`.
+
+> **A BENCHMARK FROM A DEBUG BUILD IS NOT A SLOW NUMBER. IT IS NOT A NUMBER.**
+
+**Second: the run count.** The first tables reported boundary costs of **−23%** and **−16%** — the cgo
+column beating the native one, which cannot happen, because the cgo column does everything the native
+column does and *then* crosses a boundary. **The impossible number was the only reason the variance
+was noticed.** Had the noise landed at +8% instead of −23%, it would have been published as a finding
+and nothing in the table would have contradicted it.
+
+**The two share a shape.** A measurement carries no record of the conditions it was taken under. A
+correctness test that runs under the wrong configuration usually *fails*; a benchmark under the wrong
+configuration **succeeds and prints a number**, and the number looks exactly like a right one. Every
+signal that something was wrong here came from a reader knowing what the number should roughly be —
+which is not a mechanism, and does not survive the first measurement of something unfamiliar.
+
+**Mechanically, and it is what `BENCHMARKS.md` now requires:** the build type, the statistic, the run
+count and the machine are part of the result and are printed beside it. The bench lane uses its **own
+Release directory** rather than a flag on the shared one, deliberately — the sweep's kill-point counts
+and every floor in `FLOORS.txt` are measured against `Debug` builds, and a lane that quietly changed
+build type underneath them would move denominators nobody was watching.
+
+**And the third instance, in the shell, the same day:** the first full table was taken with
+`make cpp-bench | head -26`. `head` closed the pipe, `make` died of `SIGPIPE`, `grep` exited 0, and
+the run reported success with two thirds of its rows missing. **A pipeline's exit status is its last
+command's.** Same shape once more: the instrument was configured by its surroundings and reported
+nothing about it.
+
+---
+
+### GF-38 — a periodic action guarded by a second condition fires only where the two coincide
+
+**Raised at B5.5**, and it killed the same process twice for two different reasons.
+
+`engine/model` copies its whole entry slice per apply and retains every version until durability
+advances — correct for a reference engine, since a crash dropping `pending` *is* the mechanism. A
+benchmark that never advanced it held 50,000 versions of up to 50,000 entries and was OOM-killed.
+
+The fix drained periodically:
+
+```go
+if in == batch {
+    seq, _ := e.Apply(b, false)
+    if i%1024 == 0 { drain(seq) }   // <-- inside the batch-boundary branch
+}
+```
+
+`i` is the **operation** index; the branch runs on **apply** boundaries. At `batch == 1` every
+operation is an apply and the drain fires every 1024. At `batch == 8`, `i % 1024 == 0` requires
+`i ∈ {0, 1024, 2048…}` and the branch requires `(i+1) % 8 == 0` — **the two never coincide.** At
+`batch == 64`, never either. The drain existed, read correctly, was tested at `batch == 1`, and was
+dead everywhere else. The process died again, at a different row, from the identical cause.
+
+> **A PERIODIC ACTION NESTED INSIDE A CONDITIONAL MUST COUNT THE THING THAT ACTUALLY HAPPENS, NOT THE
+> THING BEING ITERATED. `every N iterations` INSIDE `if (rare)` MEANS `every N iterations THAT ARE
+> ALSO rare` — WHICH IS OFTEN NEVER.**
+
+**It is `GF-16` in the code rather than in a test.** There, a workload could not reach a mutant's
+precondition and the mutant survived. Here, a guard could not reach its own action and the action
+never ran. Both are a condition that reads as satisfiable and is not, and in both cases the only
+evidence was an outcome nobody could otherwise explain.
+
+The counter now counts applies. It is one more variable and it is the variable the action is actually
+periodic in.
+
+---
+
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**
