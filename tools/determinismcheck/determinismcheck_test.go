@@ -206,7 +206,25 @@ func TestScopeTable(t *testing.T) {
 
 		// Excluded by name: the real-mode adapters that need what the rules
 		// forbid, and which do not run inside a simulated run.
-		{mod + "engine/real", scopeOff},
+		//
+		// engine/real and engine/pump/poller USED TO BE PINNED HERE, reserved
+		// under two candidate names for DR-11's poller. B1-Q11 ruled at B5 that
+		// the poller is part of the HARNESS and not the engine's contract, so
+		// neither package will ever exist and both reservations went. What
+		// arrived instead is riftcgo -- an Engine implementation over the C
+		// boundary, excluded for `sync` and `unsafe`, neither hatchable.
+		{mod + "engine/riftcgo", scopeOff},
+		{mod + "engine/differential", scopeOff},
+		// AND THE EXCLUSIONS MUST NOT REACH ONE PACKAGE FURTHER, which for
+		// these two is the whole risk: they sit directly beneath engine/...,
+		// the pattern that puts engine/model in scope. Four rows, because two
+		// ways of over-reaching exist and a wildcard commits both: a sibling
+		// whose name merely starts with the excluded one, and a genuine
+		// subpackage. Neither is excluded here.
+		{mod + "engine/riftcgonot", scopeCore},
+		{mod + "engine/differentialish", scopeCore},
+		{mod + "engine/riftcgo/inner", scopeCore},
+		{mod + "engine/differential/inner", scopeCore},
 		// Both polarities pinned explicitly. Collection runs during a simulated
 		// run and is in scope with no exclusion and no hatches; only the
 		// package that imports porcupine and runs afterwards is excluded, and
@@ -214,13 +232,6 @@ func TestScopeTable(t *testing.T) {
 		{mod + "sim/checker", scopeOff},
 		{mod + "sim/hunt", scopeOff},        // the hunt driver is orchestration
 		{mod + "sim/hunt/inner", scopeCore}, // named exactly: no wildcard adopts a subpackage
-
-		// The differential judge, both polarities. It shells out and reads
-		// artifacts off disk and runs after a rig run rather than during a
-		// simulated one, so it is excluded -- and the exclusion stops at the
-		// package, so a future subpackage arrives checked.
-		{mod + "engine/differential", scopeOff},
-		{mod + "engine/differential/inner", scopeCore},
 
 		// The materialization/orchestration polarity, pinned in both directions.
 		//
@@ -235,7 +246,6 @@ func TestScopeTable(t *testing.T) {
 		// cluster driver, which needs sim/checker and a wall clock.
 		{mod + "sim/toy", scopeCore},
 		{mod + "sim/plan", scopeCore},
-		{mod + "engine/pump/poller", scopeOff},
 
 		// The real-mode driver polarity, pinned in both directions. node/ holds
 		// one goroutine per node, real timers and a mailbox channel, none of

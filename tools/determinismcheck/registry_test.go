@@ -85,6 +85,23 @@ func TestHatchRegistry(t *testing.T) {
 		registryFile, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
 }
 
+// requireLoaded fails unless every named package is among those loaded. Adding
+// a build tag to a package in this repo means adding it here.
+func requireLoaded(t *testing.T, pkgs []*packages.Package, want ...string) {
+	t.Helper()
+	have := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		have[normalize(p.PkgPath)] = true
+	}
+	for _, w := range want {
+		if !have[w] {
+			t.Fatalf("%s was not loaded, so the pass never saw it.\n"+
+				"A build-tagged package must be reachable from this test's "+
+				"BuildFlags, or its determinism scope is unenforced and silent.", w)
+		}
+	}
+}
+
 // runOverTree drives the analyzer by hand rather than through analysistest,
 // which only knows how to run against testdata. Assembling the Pass is the
 // whole of what a driver does for an analyzer with no facts.
@@ -97,6 +114,11 @@ func runOverTree(t *testing.T, root string) []string {
 			packages.NeedSyntax | packages.NeedTypesInfo,
 		Dir:   root,
 		Tests: true,
+		// -tags rift_cgo, because engine/riftcgo carries that tag and would
+		// otherwise not be in ./... at all. Loading only TYPECHECKS, which
+		// needs no C++ archive; see engine/riftcgo/doc.go for why the tag
+		// exists and why its hole is closed here.
+		BuildFlags: []string{"-tags", "rift_cgo"},
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
@@ -108,6 +130,16 @@ func runOverTree(t *testing.T, root string) []string {
 	if len(pkgs) == 0 {
 		t.Fatal("loaded no packages, which means this test proves nothing")
 	}
+	requireLoaded(t, pkgs,
+		// EVERY BUILD-TAGGED PACKAGE IN THE REPO, BY NAME. A tag removes a
+		// package from ./... , so a tagged package can go unanalyzed forever
+		// with every lane green -- the pass would simply never be handed it,
+		// and "no diagnostics" is indistinguishable from "never looked".
+		//
+		// This is the load gate above applied one level up. That gate catches a
+		// package that fails to load; this one catches a package that was never
+		// offered. Both failures produce the same silence.
+		"github.com/anshkanyadi/rift/engine/riftcgo")
 
 	seen := make(map[string]bool)
 	var diags []string

@@ -17,6 +17,7 @@ trace.out
 
 # CMake / C++ (Track B)
 engine-cpp/build/
+engine-cpp/build-*/
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json

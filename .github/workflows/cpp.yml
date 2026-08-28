@@ -1,35 +1,107 @@
 # Track B lanes. The C++ engine's own tests run directly under sanitizers, not
 # through cgo -- ASan and UBSan see the engine, not the boundary.
+#
+# THIS WORKFLOW HAS NEVER EXECUTED. There is no remote and CI has never run for
+# this repository, so every lane below is evidence of nothing until it does.
+# What IS evidence is that each `make` target here was run by hand on macOS at
+# B1.0/B1.1 and was seen to go both green and red -- see the commit messages for
+# what was induced. Track A records this as RISK-1: a lane too expensive for a
+# git hook currently has no executor at all, and three lanes have been found red
+# after running unattended. Treat the first real run of this file as a lane
+# under test, not as a lane reporting.
+#
+# Two things here are specifically unverified, over and above "CI has not run":
+#
+#   * `unshare -rn`. cpp-ci's isolation wrapper prefers it on Linux and falls
+#     back to sandbox-exec on macOS. Only the macOS branch has been executed.
+#     The wrapper refuses to run at all if it cannot prove it isolated, so the
+#     failure mode is a red lane and not a false green.
+#
+#   * gcc. DESIGN-B1 section 9.1 requires clang AND gcc both pinned, because a
+#     version should be a decision rather than an accident of what is installed.
+#     The gcc job below has never compiled this code; -fno-exceptions -fno-rtti
+#     with -Werror is where the two toolchains are most likely to disagree.
 name: cpp
 
 on:
   push:
-    paths: ['engine-cpp/**', '.github/workflows/cpp.yml', 'Makefile']
+    paths:
+      - 'engine-cpp/**'
+      - 'third_party/**'
+      - 'scripts/cpp-*.sh'
+      - 'scripts/verify-vendored-gtest.sh'
+      - '.github/workflows/cpp.yml'
+      - 'Makefile'
   pull_request:
-    paths: ['engine-cpp/**', '.github/workflows/cpp.yml', 'Makefile']
+    paths:
+      - 'engine-cpp/**'
+      - 'third_party/**'
+      - 'scripts/cpp-*.sh'
+      - 'scripts/verify-vendored-gtest.sh'
+      - '.github/workflows/cpp.yml'
+      - 'Makefile'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  unit:
-    name: unit (stub)
+  # Cheapest lane, first: if the vendored tree is not the tree we recorded,
+  # nothing below is about the code we think it is.
+  vendor:
+    name: vendored-tree integrity (offline)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make cpp-vendor-check
+
+  lanes:
+    name: ${{ matrix.lane }} (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [cpp-test, cpp-asan, cpp-ubsan, cpp-tsan]
+        cc: [clang, gcc]
+    env:
+      CC: ${{ matrix.cc == 'clang' && 'clang' || 'gcc' }}
+      CXX: ${{ matrix.cc == 'clang' && 'clang++' || 'g++' }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ${CXX} --version
+      - run: make ${{ matrix.lane }}
+
+  # DESIGN-B1 section 9.3: the macOS lane is not convenience. It is the first
+  # cross-platform evidence for the Env seam -- the first time PosixEnv runs
+  # against a kernel whose fsync, rename and directory semantics differ from the
+  # one it was written on. At B1.1 there is no PosixEnv yet, so what it proves
+  # today is narrower: that the build and the four lanes are not accidentally
+  # Linux-shaped.
+  macos:
+    name: cpp-test (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: make cpp-test
 
-  asan:
-    name: AddressSanitizer (stub)
+  # The whole lane set with networking disabled. This is the test of "a stranger
+  # reproduces every number from a clean clone with one script" under the
+  # conditions a stranger might have. The wrapper proves the isolation isolated
+  # before trusting it, and reports INVALID rather than green if it did not.
+  offline:
+    name: cpp-ci (networking disabled)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make cpp-asan
+      - run: make cpp-ci
 
-  ubsan:
-    name: UndefinedBehaviorSanitizer (stub)
+  # Amendment A2's standing obligation, C++ side. Every patch must redden the
+  # lane it names, and each carries a control that separates "the lane caught
+  # it" from "the patch broke the build". A surviving mutant means the rig is
+  # too weak and the phase is not done, regardless of what the clean runs say.
+  mutants:
+    name: mutant catalogue + direction controls
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make cpp-ubsan
+      - run: make cpp-mutants

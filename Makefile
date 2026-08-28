@@ -10,6 +10,24 @@ TOOLING_ONLY := ./scripts/tooling-only.sh
 BLIND        := ./scripts/blind-analyzer.sh
 MUTANTS      := ./scripts/mutants.sh
 POWERMUTANTS := ./scripts/power-mutants.sh
+
+# ---- Track B (C++ engine). DESIGN-B1 section 9.3.
+CMAKE        ?= cmake
+CPP_SRC      := engine-cpp
+CPP_BUILD    ?= engine-cpp/build
+CPP_BUILD_CI := engine-cpp/build-ci
+VENDOR_CHECK := ./scripts/cpp-vendor-check.sh
+NO_NETWORK   := ./scripts/cpp-no-network.sh
+CPP_ROT      := scripts/cpp-rot.sh
+CPP_MUTANTS  := ./scripts/cpp-mutants.sh
+CPP_SCAN     := ./scripts/cpp-scan.sh
+CPP_CAMPAIGN := ./scripts/cpp-campaign.sh
+CPP_SCAN_BLIND := ./scripts/cpp-scan-blind.sh
+COLD_CACHE   := ./scripts/cpp-cold-cache.sh
+# The lane set `make cpp-ci` runs under network isolation. It grows as
+# lanes un-stub; every member must be runnable by hand, because nothing
+# runs it for us.
+CPP_LANES    := cpp-vendor-check cpp-scan cpp-scan-blind cpp-vendor-build cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-sweep cpp-diff cpp-cgo
 WORKERS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 SMOKE_SEEDS ?= 500
@@ -161,7 +179,10 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 
 .PHONY: determinism
 determinism: ## Custom vet pass: no time.Now, no global rand, no map range, mailbox rule
-	$(GO) run ./tools/determinismcheck/cmd/determinismcheck ./...
+# -tags rift_cgo, so the cgo engine is LOADED AND ANALYZED rather than vanishing
+# from ./... -- see engine/riftcgo/doc.go. The pass only typechecks, so this
+# needs no C++ build; TestHatchRegistry asserts the package was actually seen.
+	$(GO) run ./tools/determinismcheck/cmd/determinismcheck -tags rift_cgo ./...
 
 .PHONY: tooling-only
 tooling-only: ## Assert golang.org/x/tools never enters a shipping binary (DESIGN-A0 Q4)
@@ -255,7 +276,210 @@ lane-coverage: ## Every lane in the `ci` target actually runs in .github/workflo
 lint: vet fmt-check determinism tooling-only hatches hygiene ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants mutant-covered lane-coverage ## Everything the push lane runs
+ci: build lint test race blind power assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
+# cpp-ci joins at the I1 merge. Before it, the two tracks had two lane sets and
+# `make ci` ran one of them -- which is the lane-dependency shape: a target that
+# exists and is never reached is a lane nobody runs and everybody counts.
+
+# ------------------------------------------------------------- Track B lanes
+#
+# GoogleTest is vendored whole at a pinned commit, not fetched. A build step
+# that reaches the network fails in exactly the situation where "reproduces
+# from a clean clone" matters most, which is a stranger checking our work.
+# DESIGN-B1 section 9.2.
+
+.PHONY: cpp-vendor-check
+cpp-vendor-check: ## Vendored GoogleTest matches its recorded tree hash (offline)
+	@$(VENDOR_CHECK)
+
+.PHONY: cpp-vendor-build
+cpp-vendor-build: ## Vendored GoogleTest configures and builds, with no network
+	@printf '\n  vendored framework build\n'
+	@printf '  ----------------------------------------------------------\n'
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/vendor -DCMAKE_BUILD_TYPE=Debug
+	$(CMAKE) --build $(CPP_BUILD)/vendor --target gtest_main -j $(WORKERS)
+
+.PHONY: cpp-lane-set
+cpp-lane-set: $(CPP_LANES) ## Every Track B lane, in order, without isolation
+
+.PHONY: cpp-ci
+cpp-ci: ## The whole Track B lane set with networking disabled, and proof it was
+	@# COLD BUILD DIR, DELIBERATELY. A warm one carries whatever a previous
+	@# networked run downloaded -- a populated FetchContent cache above all --
+	@# and the lane then passes under isolation for the one reason that has
+	@# nothing to do with the claim. BM21 survived this lane until the build
+	@# directory was made cold; the mutant was right and the lane was wrong.
+	@# NO rm -rf HERE. The cold-cache check must be about a state this
+	@# recipe did not create, or it asserts the absence of something it
+	@# just deleted -- which is green forever, including in the exact
+	@# state HARNESS-002 occurred in. A successful run removes its own
+	@# build tree at the end; a failed one leaves it to be looked at.
+	@$(COLD_CACHE) $(CPP_BUILD_CI) before
+	@$(NO_NETWORK) $(MAKE) cpp-lane-set CPP_BUILD=$(CPP_BUILD_CI)
+	@$(COLD_CACHE) $(CPP_BUILD_CI) after
+
+.PHONY: cpp-campaign
+cpp-campaign: ## A floor under every planted flaw class; fails when one drops below it
+	@# Not a member of CPP_LANES: it rebuilds the sweep once per class and costs
+	@# minutes. Run it when the sweep, the workload or a mutant changes -- those
+	@# are exactly the edits that move detection power without moving any lane.
+	@#     make cpp-campaign MEASURE=--measure   prints instead of asserting
+	@$(CPP_CAMPAIGN) $(MEASURE)
+
+.PHONY: cpp-mutants
+cpp-mutants: ## Track B mutant catalogue: each patch must redden the lane it names
+	@# COST, MEASURED, BECAUSE NOTHING ELSE RUNS THIS. There is no CI here, so a
+	@# lane's wall-clock is a fact about whether it gets run at all -- Track A
+	@# records that as RISK-1. The full catalogue is minutes, not seconds, because
+	@# each patch needs a control run and a covering run and both build from cold.
+	@#
+	@# To work on one mutant without paying for all of them:
+	@#     make cpp-mutants ONLY="BM4-missing-dir-sync BM9-apply-does-io"
+	@# The baseline gate still runs for every lane those patches name, so a subset
+	@# run is a smaller experiment and not a weaker one.
+	@$(CPP_MUTANTS) engine-cpp/mutants $(ONLY)
+
+
+# Four lanes, four separate build directories, four separate reasons to go red.
+# Each asserts AT COMPILE TIME that it has the sanitizer it claims -- and
+# cpp-test asserts it has none, because it is the uninstrumented control that
+# makes a red in the other three attributable. See
+# engine-cpp/test/sanitizer_lane_test.cc; a lane that lost its -fsanitize flag
+# fails to build rather than passing quietly.
+
+.PHONY: cpp-scan
+cpp-scan: ## Env surface: one wrapper, one Do*, one CallSite -- names, not just counts
+	@$(CPP_SCAN)
+
+.PHONY: cpp-scan-blind
+cpp-scan-blind: ## Blind one scope-scan rule at a time; each must stop firing on its fixture
+	@$(CPP_SCAN_BLIND)
+
+.PHONY: cpp-sweep
+cpp-sweep: ## The kill-point sweep: every Env call, killed before and after its effect
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_sweep -j $(WORKERS)
+# BOTH REGIMES, ALWAYS. The default regime never flushes -- its threshold is
+# four megabytes and the workload writes six keys -- so a lane that ran only it
+# would visit no kill point on the flush path at all, and every gate B2 put
+# there would be green for the reason that nothing reached it. They are run
+# separately and their numbers are never aggregated (section 8.4).
+	$(CPP_BUILD)/test/rift_sweep default
+	$(CPP_BUILD)/test/rift_sweep flush
+# AND COMPACTION, ADDED AT B3.7 AS ITS OWN REGIME RATHER THAN BY GROWING
+# `flush`. Reaching the L0 trigger needs four flushes -- about four times the
+# flush regime's whole workload -- and folding that in would have multiplied its
+# kill-point count, which is the DENOMINATOR OF EVERY RATE in FLOORS.txt, and
+# diluted every B2 class measured against it. A separate regime leaves the other
+# two byte-identical, so no floor moves (section 8.2a).
+	$(CPP_BUILD)/test/rift_sweep compact
+
+.PHONY: cpp-diff
+cpp-diff: ## B4: the differential harness -- the C++ engine against engine/model
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_diff -j $(WORKERS)
+# THE GO JUDGE RUNS THE COMPARISON. It reads artifacts and never links the C++
+# engine, so this lane is two processes by construction rather than by
+# discipline -- see docs/DESIGN-B4-verification.md section 4.
+	$(GO) test ./engine/differential/ -count=1
+
+.PHONY: cpp-cgo
+cpp-cgo: ## B5: the Go wrapper over the C boundary, against engine/model
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+# rift_diff IS BUILT HERE TOO, and its absence is why BM120 survived. The
+# cgo differential takes its workloads from real rift_diff artifacts and SKIPS
+# when the binary is missing -- and a skip inside a passing `go test` is a
+# green lane. The mutant runner deletes engine-cpp/build in the copied tree, so
+# every cgo-differential mutant was being scored against a test that never ran.
+#
+#   A LANE THAT DEPENDS ON AN ARTIFACT IT DOES NOT BUILD REPORTS THE ABSENCE OF
+#   THE ARTIFACT AS SUCCESS.
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_capi rift_diff -j $(WORKERS)
+# ONLY THE ARCHIVE PATH IS HERE. The header's location is package-relative and
+# lives in the source via ${SRCDIR}, so this package TYPECHECKS with no C++ build
+# present -- which is what lets `make determinism` load the whole tree without a
+# C++ toolchain. The archive is a build artifact whose directory this recipe
+# chooses, so it is the one thing the lane has to say.
+	CGO_LDFLAGS="-L$(CURDIR)/$(CPP_BUILD)/test -lrift_capi -lrift_engine" \
+	$(GO) test -tags rift_cgo ./engine/riftcgo/ -count=1
+
+.PHONY: cpp-rot
+cpp-rot: ## Every mutant patch still applies -- seconds, where the catalogue is hours
+	@# DELIBERATELY NOT IN CPP_LANES YET. It currently reports the 14 classes
+	@# that rotted across B3.5-B4.2, found when B5's close ran the full
+	@# catalogue for the first time since B3. Adding it to the lane set before
+	@# those are re-aimed would put a red in front of a merge for a debt that
+	@# predates the branch being merged -- which is the pressure GF-39 says is
+	@# the wrong moment to make this kind of decision under. It joins the lane
+	@# set when Ansh rules on the fourteen.
+	@$(CPP_ROT)
+
+.PHONY: cpp-bench
+cpp-bench: ## B5.5: the numbers -- model, C++ native, C++ through cgo, in one table
+	@# A SEPARATE, RELEASE BUILD DIRECTORY, AND IT IS NOT A DETAIL.
+	@# Every other lane here builds Debug, which is right for them: assertions
+	@# on, optimiser off, a failure that says where it was. The first table
+	@# taken from that directory reported ~4 microseconds for a single memtable
+	@# Set and a readrandom cost that did not move with batch size -- numbers
+	@# that describe the compiler's -O0 output and nothing about this engine.
+	@#
+	@#   A BENCHMARK FROM A DEBUG BUILD IS NOT A SLOW NUMBER. IT IS NOT A NUMBER.
+	@#
+	@# It is a separate directory rather than a flag on the shared one so that
+	@# nothing else silently starts running Release: the sweep's kill-point
+	@# counts and every floor in FLOORS.txt are measured against Debug builds,
+	@# and a lane that quietly changed build type underneath them would move
+	@# denominators nobody was watching.
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/bench -DRIFT_SANITIZER=none -DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(CPP_BUILD)/bench --target rift_bench rift_capi -j $(WORKERS)
+	RIFT_BENCH=1 RIFT_BENCH_BIN=$(CURDIR)/$(CPP_BUILD)/bench/rift_bench \
+	CGO_LDFLAGS="-L$(CURDIR)/$(CPP_BUILD)/bench -lrift_capi -lrift_engine" \
+	$(GO) test -tags rift_cgo ./engine/riftcgo/ -run TestBenchmarkTable -v -count=1 -timeout 40m
+
+.PHONY: cpp-amp
+cpp-amp: ## B3.7b: compaction amplification -- the measurement that decides B3-D3
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_amp -j $(WORKERS)
+	$(CPP_BUILD)/test/rift_amp
+
+.PHONY: cpp-build
+cpp-build: ## Build every C++ target and run nothing -- the control for "did the patch compile?"
+	@# Not a member of CPP_LANES: cpp-test subsumes it. It exists so a mutant can
+	@# declare a control that separates "the lane caught the defect" from "the
+	@# patch broke the build", which are different results that look identical in
+	@# an exit code.
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test -j $(WORKERS)
+
+.PHONY: cpp-test
+cpp-test: ## C++ unit suite, uninstrumented -- the control the other three need
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_engine_test rift_tsan_harness -j $(WORKERS)
+	$(CPP_BUILD)/test/rift_engine_test
+	@# The TSan harness is BUILT here and deliberately NOT RUN. Building it
+	@# makes cpp-test a real control for the TSan canary -- the race patch
+	@# compiles, so cpp-tsan's red is the race and not a broken build.
+	@# Running it here would defeat that: an unlocked counter across four
+	@# threads produces a wrong total often enough that cpp-test would go
+	@# red too, and the control would be gone.
+
+.PHONY: cpp-asan
+cpp-asan: ## C++ unit suite under AddressSanitizer
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/asan -DRIFT_SANITIZER=address
+	$(CMAKE) --build $(CPP_BUILD)/asan --target rift_engine_test -j $(WORKERS)
+	ASAN_OPTIONS=abort_on_error=0:detect_leaks=0 $(CPP_BUILD)/asan/rift_engine_test
+
+.PHONY: cpp-ubsan
+cpp-ubsan: ## C++ unit suite under UndefinedBehaviorSanitizer
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/ubsan -DRIFT_SANITIZER=undefined
+	$(CMAKE) --build $(CPP_BUILD)/ubsan --target rift_engine_test -j $(WORKERS)
+	UBSAN_OPTIONS=print_stacktrace=1 $(CPP_BUILD)/ubsan/rift_engine_test
+
+.PHONY: cpp-tsan
+cpp-tsan: ## ThreadSanitizer over the dedicated multi-threaded harness, not the unit suite
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/tsan -DRIFT_SANITIZER=thread
+	$(CMAKE) --build $(CPP_BUILD)/tsan --target rift_tsan_harness -j $(WORKERS)
+	TSAN_OPTIONS=halt_on_error=1 $(CPP_BUILD)/tsan/rift_tsan_harness
 
 # ---------------------------------------------------------------- stub lanes
 
@@ -306,18 +530,6 @@ race-curve: ## Measure what RACE_SEEDS actually needs to be (50, 100, 200)
 bench: ## [STUB->B5/I2] Benchmark smoke with regression tracking
 	@$(STUB) bench B5/I2 "no benchmark number is published until it reproduces by script"
 
-.PHONY: cpp-test
-cpp-test: ## [STUB->B1] C++ engine unit tests
-	@$(STUB) cpp-test B1 "CMake + GoogleTest in engine-cpp/ (Track B)"
-
-.PHONY: cpp-asan
-cpp-asan: ## [STUB->B1] C++ engine tests under AddressSanitizer
-	@$(STUB) cpp-asan B1 "Track B"
-
-.PHONY: cpp-ubsan
-cpp-ubsan: ## [STUB->B1] C++ engine tests under UndefinedBehaviorSanitizer
-	@$(STUB) cpp-ubsan B1 "Track B"
-
 .PHONY: killpoints
 killpoints: ## [STUB->B4] Crash-consistency kill-point sweep across the write path
 	@$(STUB) killpoints B4 "Track B"
@@ -335,8 +547,10 @@ lanes: ## Show which lanes are real and which are still stubs
 	@echo "       provenance corpus"
 	@echo "       smoke soak"
 	@echo "       mutants"
-	@echo "STUB : (none in A0)"
-	@echo "       bench(B5/I2) cpp-test(B1) cpp-asan(B1) cpp-ubsan(B1)"
+	@echo "       cpp-vendor-check cpp-vendor-build cpp-ci cpp-mutants"
+	@echo "       cpp-test cpp-asan cpp-ubsan cpp-tsan cpp-scan cpp-scan-blind cpp-sweep"
+	@echo "       cpp-campaign cpp-build cpp-diff cpp-cgo"
+	@echo "STUB : bench(I2)"
 	@echo "       killpoints(B4) differential(B4)"
 	@echo
 	@echo "A stub lane passes trivially and proves nothing."

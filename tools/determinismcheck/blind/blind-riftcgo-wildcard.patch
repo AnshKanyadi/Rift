@@ -1,0 +1,15 @@
+# id: blind-riftcgo-wildcard
+# covering-test: TestScopeTable
+# expect: killed
+# blinds: the exactness of the cgo-engine exclusion. A separate patch from blind-differential-wildcard rather than one standing for both, because a mutant is a claim about where a defect lives and these are two different lines. Both entries arrived from Track B wildcarded and both were narrowed at the merge; each needs its own patch or the narrowing of one is defended and the narrowing of the other is merely believed
+--- a/tools/determinismcheck/scope.go
++++ b/tools/determinismcheck/scope.go
+@@ -115,7 +115,7 @@
+ 	// disagrees with that prior and Ansh ratified the argument. Whichever the
+ 	// pass says, one of the two was wrong about this package, and I1's report
+ 	// says which.
+-	"github.com/anshkanyadi/rift/engine/riftcgo",
++	"github.com/anshkanyadi/rift/engine/riftcgo/...",
+ 
+ 	// The B4 differential judge. Nothing in it executes during a simulated
+ 	// run: it reads artifact FILES that a finished run left behind, and its

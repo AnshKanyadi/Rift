@@ -48,7 +48,7 @@ inconclusive is never counted as a pass.**
 
 ---
 
-## 3. What was found: 35 defects, every one reproducing from a seed
+## 3. What was found: 37 defects, every one reproducing from a seed
 
 `BUGS.md` carries, for each: the symptom, the seed or kill point, the root cause, the fix, **the
 invariant that caught it**, which mutant class would have caught it, and what it would have caused in
@@ -68,7 +68,7 @@ the fix.
 | the rebalance oracle | 1 | **BUG-016** |
 | a plain sweep, the first after a feature landed | 1 | **BUG-010** |
 | inspection while diagnosing a different defect | 1 | **BUG-012** |
-| **the harness checking itself, or somebody reading its own record** | 6 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035** |
+| **the harness checking itself, or somebody reading its own record** | 8 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035**; **BUG-036** — four tests that skipped when their precondition was unmet, so a green depended on the data; **BUG-037** — the determinism pass accepted a `-tags` flag it never forwarded, and reported clean over a package it had loaded no files from |
 | **an enumeration** — listing a property and asking whether it still held | 1 | **BUG-028** |
 | **a false accusation**, chased down instead of tuned away | 1 | **BUG-032** |
 
@@ -80,7 +80,12 @@ Three numbers were in play while writing this section:
 |---|---|---|
 | **36** | `grep -c '^### BUG-'` | **wrong** — `BUGS.md` carries a `BUG-NNN` template heading, and a count counted it |
 | **33** | the categories, assigned from memory | **wrong** — it did not sum to any population at all |
-| **35** | every entry's own *"Found by"* line, extracted | **right** |
+| **35** | every entry's own *"Found by"* line, extracted | **right** at the time it was written |
+
+It became **37** two days later, when `BUG-036` and `BUG-037` landed at the pre-merge classification
+— and the number moved *here* only because the same extraction was re-run rather than because anybody
+remembered to update a sentence. A count written down once is a proxy for the artifact from the moment
+the artifact changes.
 
 The one that is right is the one **derived from the artifact** rather than from a count over it or a
 recollection of it. That is the same rule three of this project's standing rules are (§6): *read the
@@ -235,7 +240,7 @@ before the first, `git diff` before the second, `ps -o time=` before the third.
 | | |
 |---|---|
 | phases signed | **A0 – A7** |
-| defects found, all reproducing from a seed | **35** |
+| defects found, all reproducing from a seed | **37** |
 | mutant classes, each with a covering test and a measured floor or a named instrument | **71** |
 | corpus bundles | **24** |
 | vacuous-green register | **27 instances** |

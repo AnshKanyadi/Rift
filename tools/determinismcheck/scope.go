@@ -67,35 +67,73 @@ var defaultCore = []string{
 // needs a goroutine is therefore an exclusion; a package that needs one
 // time.Now is a hatch.
 var defaultExclude = []string{
-	// DR-11's poller, which adapts the C++ engine's blocking Sync() to the
-	// async durability contract. Whichever of these two names A0.5 and B5
-	// settle on, the other line goes.
+	// DR-11's poller was reserved here under two candidate names, "whichever
+	// of these two names A0.5 and B5 settle on, the other line goes."
 	//
-	// # What happens if neither name is ever claimed
+	// BOTH WENT. B1-Q11, ruled at B5: the poller is part of the HARNESS, not
+	// the engine's contract -- a production embedder supplies its own. So
+	// there is no engine/real and no engine/pump, and a reservation for a
+	// package that will never exist is a hole in the boundary held open for
+	// nothing. What actually arrived is the cgo adapter below, which is a
+	// different thing: an Engine implementation, not a poller.
 	//
-	// These are the only entries here for packages that do not exist, and an
-	// exclusion for a package that never arrives is a permanent hole nobody is
-	// watching: the day somebody creates engine/real for an unrelated reason, it
-	// arrives already exempt from every rule, silently, having never been
-	// argued for. That is the opposite of the default this table is built on,
-	// where an unclassified package defaults *in*.
+	// BOTH ENTRIES BELOW ARE EXACT, never a prefix. They arrived from Track B
+	// wildcarded; the wildcard is what blind-hunt-wildcard and
+	// blind-differential-wildcard exist to kill, and these two sit directly
+	// beneath engine/, the pattern that puts engine/model in scope, so a
+	// wildcard here is the highest-consequence version of that mistake.
 	//
-	// The enforcement story, so the hole cannot outlive its reason:
+	// THE CGO ENGINE. An exclusion rather than a hatch, by this table's own
+	// test: it needs `sync` for its durability callbacks, and no hatch
+	// sanctions sync in core scope. `unsafe` is the second reason and the more
+	// fundamental one -- a cgo boundary is pointer identity and layout by
+	// construction, which is exactly what core scope exists to keep out.
 	//
-	//  1. Both lines are a **B5 exit item**. B5 is where the cgo wrapper lands
-	//     and settles the name; the unclaimed line is deleted in that same PR,
-	//     not in a follow-up, on the same rule as A2's "the mutant lands with
-	//     the fix".
-	//  2. Until then they are inert by construction. scopeFor matches on package
-	//     path, and a path that names no package matches nothing, so today these
-	//     two lines change no diagnostic on any file in the tree. The
-	//     TestScopeTable rows below pin that: they assert the exclusion is exact
-	//     rather than a prefix, so neither line can adopt a sibling.
-	//  3. If B5 arrives and claims neither name, both lines are deleted rather
-	//     than kept "just in case". A speculative exemption is a decision nobody
-	//     made.
-	"github.com/anshkanyadi/rift/engine/real/...",
-	"github.com/anshkanyadi/rift/engine/pump/...",
+	// AND IT IS THE CONSTITUTION'S OWN SCOPING, not a hole: "deterministic-
+	// replay guarantees are scoped to sim runs on engine/model; C++ engine
+	// correctness comes from the Env fault rig, differential tests, corpus
+	// reruns in verification mode, and real chaos." Replay identity is defined
+	// on the model. This package is checked by cpp-cgo and by the differential,
+	// which are the instruments that claim apply to it.
+	//
+	// PROVISIONAL, and the mark is the point. Ansh at I1: "an argued property
+	// and a measured one are different objects, and riftcgo is the first
+	// package in either track whose scope was decided by reasoning alone." The
+	// argument above stands and is better than the prediction it replaced; what
+	// has not happened is the PASS running against this package with the C++
+	// archive built, which is the only thing that can agree or disagree with
+	// it. That runs at I1. If it agrees the note comes off and the argument is
+	// vindicated by measurement; if it disagrees we have learned something
+	// worth more than the exclusion.
+	//
+	// AND THE PREDICTION IS RECORDED BESIDE IT, so the answer can be checked
+	// against what was guessed rather than quietly replacing it. Ansh, at the
+	// classification: "My prior is that the cgo wrapper is core-scope code with
+	// a hatch for the boundary rather than orchestration, since it implements
+	// the frozen Engine interface and runs inside simulated runs at I1 -- but
+	// that is a prediction and the pass should decide it." The argument above
+	// disagrees with that prior and Ansh ratified the argument. Whichever the
+	// pass says, one of the two was wrong about this package, and I1's report
+	// says which.
+	"github.com/anshkanyadi/rift/engine/riftcgo",
+
+	// The B4 differential judge. Nothing in it executes during a simulated
+	// run: it reads artifact FILES that a finished run left behind, and its
+	// end-to-end test spawns the C++ writer with os/exec. That is
+	// sim/checker's situation exactly, and it gets sim/checker's answer.
+	//
+	// THE JUDGE'S INDEPENDENCE IS WHY IT CANNOT BE IN CORE. It must reach the
+	// filesystem, because reading bytes neither engine handed it is the whole
+	// mechanism by which it is a second opinion rather than a mirror.
+	//
+	// And the exclusion is about this package's right to SHELL OUT AND READ
+	// FILES. It is not a licence to iterate a map: a judge whose output order
+	// depends on map iteration reports the same divergences in a different
+	// order on two runs of the same artifact, and its output cannot be diffed.
+	// That is a determinism leak whichever scope the package sits in, and
+	// compare() routes through internal/sorted for that reason rather than
+	// being excused here.
+	"github.com/anshkanyadi/rift/engine/differential",
 
 	// The hunt driver. Orchestration by Amendment A5's own text, which names
 	// hunters alongside real-mode drivers and cmd/. Named exactly, never as a
@@ -112,20 +150,6 @@ var defaultExclude = []string{
 	// node/ is a driver, and the sim.Node it drives is the same type the
 	// simulator's loop drives, with no build tag and no branch on mode.
 	"github.com/anshkanyadi/rift/node/...",
-
-	// The differential judge (Track B, landing at the merge). It judges one run
-	// of the differential rig: it shells out to the rig, reads its artifacts
-	// off disk, and reports. Amendment A5's orchestration definition without
-	// stretching it -- nothing in this package executes during a simulated run.
-	//
-	// Named exactly, never as a prefix, for the reason sim/hunt gives above.
-	// The exclusion is about this package's right to SHELL OUT AND READ FILES.
-	// It is not a licence to iterate a map: a judge whose output order depends
-	// on map iteration reports the same divergences in a different order on two
-	// runs of the same artifact, and its output cannot be diffed. That is a
-	// determinism leak whichever scope the package sits in, and it is fixed in
-	// the package rather than excused here.
-	"github.com/anshkanyadi/rift/engine/differential",
 
 	// The end-of-run checkers. History *collection* runs in-sim and stays
 	// dependency-free inside the boundary; porcupine runs after the run is

@@ -214,6 +214,18 @@ jobs:
       # lane stops being run without anybody deciding to stop running it.
       - run: make lane-coverage
 
+  cpp-ci:
+    name: the Track B lane set, under network isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Joined at the I1 merge. Until then the two tracks had two lane sets and
+      # `make ci` ran one of them: cpp-ci existed, was runnable, and was reached
+      # by nothing -- which is the same shape the lane-coverage job above exists
+      # to catch, arriving one level up. The merge is when a debt like that comes
+      # due, and `make lane-coverage` reported it the moment cpp-ci joined `ci`.
+      - run: make cpp-ci
+
   provenance:
     name: oracle input provenance
     runs-on: ubuntu-latest

@@ -1,15 +1,15 @@
 # id: blind-differential-wildcard
 # covering-test: TestScopeTable
 # expect: killed
-# blinds: the exactness of the differential-judge exclusion, letting a wildcard silently adopt every future subpackage of an orchestration package. Same shape as blind-hunt-wildcard and planted for the same reason: an over-broad exclusion is a hole that reports green, and this one arrives with a package merged from another track, which is where a boundary is least likely to be re-derived
+# blinds: the exactness of the differential-judge exclusion, letting a wildcard silently adopt every future subpackage of an orchestration package. Same shape as blind-hunt-wildcard and planted for the same reason: an over-broad exclusion is a hole that reports green, and this one guards a package merged from another track, which is where a boundary is least likely to be re-derived. It ROTted at the merge -- it patched Track A's comment block, which the merge replaced with Track B's better argument -- and the blind lane caught that, which is the point of a lane that distinguishes ROT from SURVIVED
 --- a/tools/determinismcheck/scope.go
 +++ b/tools/determinismcheck/scope.go
-@@ -125,7 +125,7 @@
- 	// runs of the same artifact, and its output cannot be diffed. That is a
- 	// determinism leak whichever scope the package sits in, and it is fixed in
- 	// the package rather than excused here.
+@@ -123,7 +123,7 @@
+ 	// That is a determinism leak whichever scope the package sits in, and
+ 	// compare() routes through internal/sorted for that reason rather than
+ 	// being excused here.
 -	"github.com/anshkanyadi/rift/engine/differential",
 +	"github.com/anshkanyadi/rift/engine/differential/...",
  
- 	// The end-of-run checkers. History *collection* runs in-sim and stays
- 	// dependency-free inside the boundary; porcupine runs after the run is
+ 	// The hunt driver. Orchestration by Amendment A5's own text, which names
+ 	// hunters alongside real-mode drivers and cmd/. Named exactly, never as a
