@@ -1,143 +1,127 @@
 # Rift
 
-A distributed, transactional, MVCC key-value database: from-scratch multi-group Raft in Go over a
-from-scratch C++ LSM storage engine, verified by deterministic simulation and a continuous soak farm.
+A distributed, transactional, MVCC key-value database. The distributed layer is from-scratch
+multi-group Raft in Go. Underneath it is a from-scratch C++ LSM storage engine. Both are checked by
+deterministic simulation rather than by hand testing.
 
-> **Status: A0 (harness and interfaces), in progress.** Nothing below is claimed as working yet.
-> This file states only what is true today, and every number is a bracketed placeholder until it can
-> be reproduced from a clean clone by script. See [SOAK.md](SOAK.md) and
-> [BENCHMARKS.md](BENCHMARKS.md) for the ledgers those numbers must come from.
+## Status
 
----
+Track A (the Go distributed layer) is finished. Phases A0 through A7 are signed: the simulator and
+its fault injectors, single-group Raft, snapshots and pre-vote and leadership transfer, single-node
+membership changes, multi-raft with range splits, MVCC over hybrid logical clocks, Percolator-style
+transactions, and read index.
+
+Track B (the C++ engine) is at B5. Integration is I1 and I2, which is where the two tracks become one
+system.
+
+## Track A results
+
+The last exit run was 25,000 seeds at commit `6c43023` with zero safety violations, run as eight
+contiguous shards that a test checks actually tile the seed space. Along the way the project found 35
+defects, and every one of them still replays from a single seed. There is also a register of 27
+separate times a checking mechanism reported success while checking nothing, which turned out to be
+the most useful thing in the repo. The full write-up, including what the verification cannot see, is
+in [docs/TRACK-A.md](docs/TRACK-A.md).
 
 ## How it is verified
 
-This section is above the feature list on purpose. The interesting claim about this project is not
-that it implements Raft; it is that the implementation is checked by something that can actually
-catch it being wrong.
+This part matters more than the feature list. Implementing Raft is not the hard bit. Knowing whether
+your implementation is wrong is.
 
-**Deterministic simulation.** The distributed layer runs on a single-threaded, event-driven
-simulator with a virtual clock. There are no goroutines, channels, locks, wall-clock reads, or
-network and filesystem calls in any package that executes during a run — a custom vet pass
-(`tools/determinismcheck`) rejects them at build time, including `range` over a map and the go1.23
-iterator forms that look nothing like one. Its escape hatch requires a written reason, refuses to
-sanction concurrency at all, and every use is listed in [HATCHES.txt](HATCHES.txt), which a test
-diffs against the tree. The pass is itself mutation-tested: `make blind` blinds one rule at a time
-and requires the rule's own test to fail. Same seed, same trace, byte for byte.
+**Deterministic simulation.** The whole distributed layer runs on one thread, on an event loop, with a
+virtual clock. No goroutines, channels, locks, wall-clock reads, or real network and disk calls in any
+package that runs during a simulation. A custom vet pass (`tools/determinismcheck`) turns those into
+build failures, including `range` over a map. Exemptions need a written reason and are listed in
+[HATCHES.txt](HATCHES.txt), which a test diffs against the tree. The vet pass is itself mutation
+tested by `make blind`. Same seed, same trace, every time.
 
-**Faults are the default, not a special mode.** Message drop, delay, duplication, reordering,
-symmetric and asymmetric partitions, crashes, restarts, GC-style pauses, loss of unsynced writes, and
-per-node clock drift and jumps bounded by `maxOffset`. Every injector counts its fires, and a run in
-which an enabled injector never fired **fails** — a chaos suite that did not do anything is a chaos
-suite that proved nothing.
+**Faults are on by default.** Dropped, delayed, duplicated and reordered messages, symmetric and
+asymmetric partitions, crashes, restarts, pauses, lost unsynced writes, and per-node clock drift and
+jumps inside `maxOffset`. Every injector counts how often it fired, and a run where an enabled
+injector never fired is a failure, because a chaos test that did nothing proves nothing.
 
-**Every failure replays.** A seed materializes a *plan*: a complete, human-readable, serializable
-description of the run. Plans carry keyed-PRF parameters rather than sequential RNG state, so a plan
-reproduces its run with no live randomness at all — enforced by a poisoned RNG that panics if any
-sequential draw is taken during plan execution. Seeds reproduce at the commit that produced them;
-plans reproduce at any commit. Both are stored in [`seeds/`](seeds/).
+**Everything replays.** A seed produces a plan, which is a readable, serializable description of the
+entire run. Plans carry keyed-PRF parameters instead of RNG state, so replaying takes no live
+randomness at all. Seeds reproduce at the commit that found them, and plans reproduce at any commit.
+Both live in [`seeds/`](seeds/).
 
-**The harness is calibrated against known bugs.** A green test suite proves the harness *runs*, not
-that it *catches*. `sim/mutants/*.patch` holds deliberately broken implementations — acknowledge
-before fsync, acknowledge before replicating, apply a retried request twice, iterate a map, read the
-wall clock, serve a stale read, restart from non-durable state — each applied to a scratch worktree
-and each with a budget in seeds. (Patches rather than committed source: two of them must not
-compile, which is the point of them.) A mutant
-that survives its budget means the harness is too weak and the phase is not done. CI records
-**kill-time per mutant**, so harness sensitivity is a monitored number rather than a belief. Every
-entry in [BUGS.md](BUGS.md) names the mutant class that would have caught it; when none exists, a new
-mutant lands in the same commit as the fix.
+**The harness is tested against known bugs.** A passing test suite tells you the harness runs, not
+that it catches anything. `sim/mutants/` holds 71 deliberately broken versions of the code: acknowledge
+before fsync, serve a stale read, apply a retried request twice, and so on. Each has a covering test
+that has to kill it, and a measured detection rate. If a mutant survives, the harness is too weak and
+the phase is not done. Every entry in [BUGS.md](BUGS.md) names the mutant class that would have caught
+it, and if none existed, a new one lands with the fix.
 
-**Checkers are never loosened.** Linearizability checking is bounded, so a check that hits its
-timeout is reported as *inconclusive* — never as a pass — and inconclusive results get their own
-column in [SOAK.md](SOAK.md). When that rate rises, the response is to make the problem smaller
-(shorter history windows, harder per-key partitioning), never to make the oracle weaker.
+**Checkers do not get loosened.** Linearizability checking is bounded, so a check that runs out of
+budget is reported as inconclusive and never as a pass. Inconclusive results get their own column in
+[SOAK.md](SOAK.md). If that rate goes up, the fix is to make the problem smaller, not the checker
+weaker.
 
-**What the simulator does not model** is written down, not discovered later: computation is
-instantaneous unless slowness is explicitly injected; the network is per-link i.i.d. latency with no
-congestion model; deterministic replay is scoped to sim runs on `engine/model`; Byzantine faults are
-out of scope. The full list is
-[DESIGN-A0 §7](docs/DESIGN-A0-simulator.md#7-known-idealizations-these-go-in-readmes-verification-scope-section).
+**What the simulator does not model** is written down rather than left to be discovered: computation
+is instant unless slowness is injected, the network has no congestion model, replay determinism is
+scoped to the Go reference engine, and Byzantine faults are out of scope. Full list in
+[DESIGN-A0 §7](docs/DESIGN-A0-simulator.md).
 
-**Current verification totals:** see [SOAK.md](SOAK.md). No claim is made here that the ledger does
-not back.
+## What it does
 
----
+- From-scratch Raft: elections, replication, persistence, snapshots, pre-vote, leadership transfer,
+  single-node membership changes with learner catch-up
+- Multi-raft: one Raft group per range, size-threshold splitting, manual replica movement
+- Distributed transactions over MVCC: Percolator-style 2PC, snapshot isolation, hybrid logical clocks
+  with uncertainty intervals
+- Linearizable reads via read index, including follower reads
+- C++ LSM engine behind a batched cgo interface (Track B, in progress)
 
-## What it is
-
-*(Each item lands with a design doc, an exit criterion signed off by the architect, and a test lane.
-Unchecked means not built. Scope deliberately outside v1 — joint consensus, parallel commits, leader
-leases, automatic balancing — is in [STRETCH.md](STRETCH.md) with the reasoning preserved, and is
-never claimed here.)*
-
-- [ ] From-scratch Raft: elections, log replication, persistence, snapshots, pre-vote, leadership
-      transfer, single-node membership changes with learner catch-up
-- [ ] Multi-raft: one Raft group per range, dynamic size-threshold splitting, manual replica movement
-- [ ] Distributed transactions over MVCC: Percolator-style 2PC, snapshot isolation, hybrid logical
-      clocks with uncertainty intervals
-- [ ] Linearizable reads via read index
-- [ ] From-scratch C++ LSM engine: skiplist memtable, WAL, SSTables with bloom filters and block
-      index, leveled compaction, MANIFEST, behind a batch-oriented cgo interface
+Joint consensus, parallel commits, leader leases and automatic load balancing are deliberately out of
+scope for v1. The reasoning is in [STRETCH.md](STRETCH.md) and none of them is claimed anywhere.
 
 ## Layout
 
 | path | what |
 |---|---|
-| `raft/` | pure consensus state machine — `Step`/`Tick` in, `Ready` out. No I/O, no clock, no goroutines. |
-| `store/` | multi-raft node: many groups over one transport, persist/apply loops, splits |
+| `raft/` | the consensus state machine. `Step` and `Tick` in, a `Ready` struct out. No I/O, no clock, no goroutines. |
+| `store/` | multi-raft node: many groups over one transport, persist and apply loops, splits |
 | `kv/` | MVCC and transactions |
 | `router/` | client library, range cache, transaction coordinator |
-| `clock/` | hybrid logical clock with `maxOffset`; sim and real implementations |
-| `balancer/` | load-based rebalancing |
-| `engine/` | storage interface both engines implement; `engine/model` is the deterministic Go reference |
-| `engine-cpp/` | the C++ LSM engine plus cgo bindings (Track B) |
-| `sim/` | event-loop simulator, fault injectors, checkers, toy protocol and mutants |
-| `cmd/simctl/` | `run` / `replay` / `hunt` / `minimize` |
-| `internal/rng/` | project-owned PCG64 with pinned test vectors and named sub-streams |
-| `internal/sorted/` | the only map iteration in the repo, so key order is never an accident |
-| `tools/determinismcheck/` | the vet pass that makes the determinism rules build failures |
-| `bench/`, `chaos/`, `soak/` | load generators, real-mode chaos, the soak-farm runner |
+| `clock/` | hybrid logical clock with `maxOffset` |
+| `engine/` | the storage interface both engines implement. `engine/model` is the Go reference. |
+| `engine-cpp/` | the C++ LSM engine and its cgo bindings |
+| `sim/` | event loop, fault injectors, checkers, and the mutant patches |
+| `raftcheck/` | the safety oracles, which read a ledger of observed events and nothing else |
+| `cmd/simctl/` | `run`, `replay`, `hunt` |
+| `internal/rng/` | a project-owned PCG64 with pinned test vectors |
+| `tools/` | the vet passes and the lane pins |
 
 ## Building
 
 ```sh
-make help      # every lane, and which are real vs. still stubs
-make hooks     # install the pre-push hook that runs the every-change lanes
-make test      # Go unit tests (seed searches bounded; full coverage is soak and the exit run)
-make race      # Go unit tests under -race
-make lint      # vet, formatting, the determinism pass, tooling-only dependencies
-make blind     # mutation-test the determinism pass itself
-make smoke     # 500-seed simulator smoke
+make help      # every lane, and which are real vs still stubs
+make test      # unit tests, seed searches bounded
+make race      # unit tests under -race
+make lint      # vet, formatting, the determinism pass
+make smoke     # 500-seed smoke run
 make ci        # everything the push lane runs
+make exit-run  # 25,000 seeds across contiguous shards
 ```
 
-Three tiers, and the boundary between them is cost rather than importance:
+Lanes come in three tiers, split by cost rather than importance. Every-change lanes run from the
+pre-push hook. Nightly lanes are the full-range covering tests and the 10,000-seed soak.
+Solo lanes need the machine to themselves and take hours, which is the exit run and the mutant power
+floors.
 
-| tier | lanes | how it runs |
-|---|---|---|
-| **every change** | `make ci` — build, lint, lane coverage, bundle seeds, assertions, provenance, test (`-short`), corpus, corpus reproduction, blind, power, smoke, mutants, race | the pre-push hook runs the fast half; the rest wait on a remote |
-| **nightly** | `make covering` (the covering tests at full seed ranges), the 10,000-seed soak, the differential engine lane, the crash-consistency sweep | not yet scheduled — there is no remote |
-| **solo** | `make solo` and `make exit-run` — the unthrottled collector, mutant power floors, the race curve, and the 25,000-seed exit run | hours each, and none of them may share a machine |
-
-`make lane-coverage` requires every lane named in the `ci` target to actually
-appear in `.github/workflows/ci.yml`. Two of them did not, for a phase — a lane
-that is not run is not a lane.
-
-Go is pinned by `go.mod`'s `toolchain` directive and CI runs exactly that version.
+Go version is pinned by `go.mod`.
 
 ## Documents
 
-- [CLAUDE.md](CLAUDE.md) — the project constitution and its amendment log
-- [docs/](docs/) — one design doc per phase: candidates, tradeoffs, the decision, and the rejected
-  alternatives with reasons
-- [BUGS.md](BUGS.md) — every bug found, with its seed or kill point, root cause, and the invariant
-  and mutant class that caught it
-- [SOAK.md](SOAK.md) — the cumulative verification ledger
-- [STRETCH.md](STRETCH.md) — what is deliberately outside v1, and why. Never claimed
-- [HATCHES.txt](HATCHES.txt) — every determinism exemption in the repo, with its reason
-- [BENCHMARKS.md](BENCHMARKS.md) — methodology first, numbers second, both engines
+- [docs/TRACK-A.md](docs/TRACK-A.md) is the place to start. It covers what was built, what was found,
+  and what the verification cannot see.
+- [CLAUDE.md](CLAUDE.md) is the project constitution and its amendment log
+- [docs/](docs/) has one design doc per phase, with the rejected alternatives and why
+- [BUGS.md](BUGS.md) has every defect, its seed, its root cause, and the invariant that caught it
+- [SOAK.md](SOAK.md) is the cumulative verification ledger
+- [STRETCH.md](STRETCH.md) is what is deliberately out of scope
+- [BENCHMARKS.md](BENCHMARKS.md) is methodology first, numbers second
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

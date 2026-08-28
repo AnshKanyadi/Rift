@@ -322,6 +322,21 @@ were wrong identically and therefore agreed.
 
 ---
 
+## 8.5 One thing that did not go wrong
+
+**The `Engine` interface was frozen at A0.5, before a single line of Raft existed, and seven phases
+were built against it without reopening it.** Two changes were argued for along the way and both were
+refused; one was ruled to ride with a later change that needed the interface opened anyway, and that
+change never became necessary either.
+
+That is not a claim about foresight. It is evidence about where the line was drawn: **a freeze that
+survives the phases it was written for is a freeze drawn in the right place**, and a freeze that has
+to be reopened three times was a guess. The same holds for the two deferrals this track ran under: the
+Dec-1 timestamp-oracle fallback was pre-authorised and never invoked, and the leader-lease deferral
+held shut for the whole of A7 including the phase where leases would have been the convenient answer.
+
+---
+
 ## 9. How to check any of this yourself
 
 ```
