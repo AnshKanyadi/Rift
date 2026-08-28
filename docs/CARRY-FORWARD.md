@@ -1103,8 +1103,18 @@ qualifier stays on the claim, at the claim, in `DESIGN-A0` §7 and wherever the 
 
 ## CLOSED at I1, 2026-08-28: `engine/riftcgo`'s determinism scope, decided by the pass
 
-**Result: the exclusion stands. Track B's argument is vindicated by measurement; Ansh's prior is
-refuted, and not by preference — by construction.**
+**Result: the exclusion stands — and it stands for reasons NEITHER ARGUMENT REACHED, which is why this
+entry closes with a number rather than with a winner.**
+
+**Ansh's prior was wrong, recorded as wrong at his instruction.** He predicted *"core-scope code with a
+hatch for the boundary rather than orchestration."* That route is unavailable rather than merely worse,
+for two reasons given below, and neither was visible from the source he was reasoning about.
+
+**Track B's argument was right in conclusion and incomplete in evidence.** It named `sync` and `unsafe`
+from the source. The pass added `syscall` and `runtime/cgo` from a file nobody wrote — and the
+unhatchable one is in that half. **Adopting Track B's argument as vindicated would record the right
+answer with the wrong reason**, which is how the next scope question gets decided badly. See `BUGS.md`
+**GF-45**.
 
 The archive was built (`librift_capi.a`, `librift_engine.a`) and the pass was run against the package
 with its exclusion removed:
@@ -1133,9 +1143,17 @@ it."* The pass decided it. **The prediction was wrong-shaped, exactly as its aut
 the reason is one neither party had in view: three of the eight findings are in generated code, and
 generated code cannot be hatched by a mechanism keyed on source paths.
 
-> **AN ARGUED PROPERTY AND A MEASURED ONE ARE DIFFERENT OBJECTS.** Both parties reasoned about `sync`
-> and `unsafe`, which are visible in the source. Neither reasoned about `syscall` and `runtime/cgo`,
-> which are not — and the unhatchable one is in the half nobody could see by reading.
+> **AN ARGUED PROPERTY AND A MEASURED ONE ARE DIFFERENT OBJECTS — and the gap between them here was
+> not care, it was *reach*.** Both parties reasoned about `sync` and `unsafe`, which are visible in the
+> source. Neither reasoned about `syscall` and `runtime/cgo`, which are not. **The reason to measure
+> rather than argue is not that arguments are sloppy; it is that they are bounded by what the arguer
+> can see.**
+
+**And the deciding fact outlives this package.** `HATCHES.txt` is keyed `path:line`; every hatch in this
+repository assumes a stable path. A generated artifact has none. **Any future package carrying
+generated code meets the same wall, and the answer is the same: exclusion or nothing** — forced by the
+registry's key, so *"write a better argument for a hatch"* is not an available move. That is recorded in
+`scope.go`'s own comment, at the site, so the next person meets it rather than re-deriving it.
 
 The provisional marker is off `scope.go` and the measurement is recorded in its place.
 

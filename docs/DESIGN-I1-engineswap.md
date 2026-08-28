@@ -235,14 +235,19 @@ CF-6 names in its own text.
 | the **cgo-generated** file | **3** — `unsafe`, `syscall`, `runtime/cgo` |
 | test files | 29 |
 
-**Track B named `sync` and `unsafe`; the pass adds `syscall` and `runtime/cgo`, in a file nobody
-wrote.** And the hatch route Ansh's prior assumed is unavailable rather than unattractive: `sync` is
-unhatchable by A5's own words, and `HATCHES.txt` is keyed `path:line` while the generated file lives at
-a go-build content hash that changes with every edit, Go version and machine — **the key a hatch needs
-does not exist.**
+**Neither argument reached the reason.** Track B said `sync` and `unsafe`, from the source: right in
+conclusion, incomplete in evidence. Ansh predicted core scope with a hatch at the boundary: wrong. The
+pass added `syscall` and `runtime/cgo` **from a file nobody wrote**, and the decisive finding is in
+that half.
 
-> **Both parties reasoned about what is visible in the source. Neither reasoned about `syscall` and
-> `runtime/cgo`, which are not — and the unhatchable one is in the half nobody could see by reading.**
+The hatch route is unavailable rather than unattractive: `sync` is unhatchable by A5's own text, and
+`HATCHES.txt` is keyed `path:line` while the generated file lives at a go-build content hash that
+changes with every edit, Go version and machine — **a hatch needs an address and there is none.** That
+is a fact about this project's mechanisms: any future package carrying generated code meets the same
+wall, **exclusion or nothing**, forced by the registry's key.
+
+> **THE REASON TO MEASURE RATHER THAN ARGUE IS NOT THAT ARGUMENTS ARE SLOPPY. IT IS THAT THEY ARE
+> BOUNDED BY WHAT THE ARGUER CAN SEE.** (`BUGS.md` GF-45.)
 
 Recorded in `scope.go` in place of the provisional marker, and in `CARRY-FORWARD.md` as closed.
 

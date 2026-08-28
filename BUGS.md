@@ -5420,6 +5420,66 @@ expensive"* was re-pointed for the same reason: **a tripwire on the second-large
 while the largest stands.**
 
 ---
+### GF-45 — an argument about what a package contains is bounded by what its authors wrote, and a language with code generation has a second half reasoning cannot reach
+
+**Raised at I1, 2026-08-28, when the determinism pass ran against `engine/riftcgo` with the C++ archive
+built and settled a scope question that two people had argued from the source.**
+
+**Two positions were on the record, and both were reasoned carefully.**
+
+| | position | outcome |
+|---|---|---|
+| Track B | exclude it: it needs `sync` for durability callbacks and `unsafe` by construction, *"a cgo boundary is pointer identity and layout"* | **right in conclusion, incomplete in evidence** |
+| Ansh | *"the cgo wrapper is core-scope code with a hatch for the boundary rather than orchestration, since it implements the frozen `Engine` interface and runs inside simulated runs at I1 — but that is a prediction and the pass should decide it"* | **wrong, and recorded as wrong at his instruction** |
+
+**What the pass found:**
+
+```
+engine.go, iter.go        5 findings: 4x unsafe, 1x sync
+the cgo-GENERATED file    3 findings: unsafe, syscall, runtime/cgo
+```
+
+**Both parties reasoned about the source. Two of the eight findings are in a file nobody wrote** — and
+the decisive one is among them.
+
+> **AN ARGUMENT ABOUT WHAT A PACKAGE CONTAINS IS AN ARGUMENT ABOUT WHAT ITS AUTHORS WROTE. A LANGUAGE
+> WITH CODE GENERATION HAS A SECOND HALF THAT REASONING CANNOT REACH — NOT BECAUSE THE REASONER WAS
+> CARELESS, BUT BECAUSE THE TEXT WAS NOT THERE TO BE READ.**
+
+**And that sharpens why this project measures.**
+
+> **THE REASON TO MEASURE RATHER THAN ARGUE IS NOT THAT ARGUMENTS ARE SLOPPY. IT IS THAT THEY ARE
+> BOUNDED BY WHAT THE ARGUER CAN SEE.**
+
+Track B's argument was not weak. It was *complete over the source*, which is the whole of what an
+argument can be complete over. The pass is not smarter; it simply reads a file that exists only after
+the toolchain has run.
+
+**The structural half, which outlives this package.** The finding that decided it was not the *count*
+of imports but the *addressability* of one file:
+
+> `HATCHES.txt` is keyed `path:line`. The cgo-generated file lives at a go-build content hash —
+> `~/Library/Caches/go-build/41/41630ef…-d` — that changes with any edit to the package, any Go
+> version, any machine. **A hatch needs an address and there is none.**
+
+So the choice was never between a good hatch and a good exclusion. **There was one option.** Combined
+with Amendment A5's *"concurrency primitives are unhatchable in core scope"*, which refuses the `sync`
+finding before any weighing begins, the hatch route was closed twice over.
+
+> **EVERY HATCH IN THIS REPOSITORY ASSUMES A STABLE PATH. ANY FUTURE PACKAGE CARRYING GENERATED CODE
+> MEETS THE SAME WALL, AND THE ANSWER IS THE SAME: EXCLUSION OR NOTHING.** The choice is forced by the
+> registry's key, so *"write a better argument for a hatch"* is not an available move.
+
+Recorded in `scope.go`'s own comment rather than only here, because the next person to hit it should
+meet the answer at the site rather than re-derive it.
+
+**Its sibling is `GF-44`**, raised the same week: a derivation that finds one pattern reports
+completeness over that pattern, not over the population. `GF-44` is about an instrument that searched
+for one idiom; this is about a *person* who read one half of a package. **The same failure, once in a
+script and once in a mind, and neither reported any doubt** — which is why the standing answer in both
+cases is to state the limit of the method inside the artifact the method produced.
+
+---
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**

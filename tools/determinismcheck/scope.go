@@ -96,34 +96,41 @@ var defaultExclude = []string{
 	// on the model. This package is checked by cpp-cgo and by the differential,
 	// which are the instruments that claim apply to it.
 	//
-	// SETTLED BY THE PASS, 2026-08-28, with the archive built. It was
-	// provisional until then because an argued property and a measured one are
-	// different objects, and this was the first package in either track whose
-	// scope was decided by reasoning alone. The pass has now run against it and
-	// the argument above is vindicated -- and extended, because the pass found
-	// two things the argument did not name.
+	// SETTLED BY THE PASS, 2026-08-28, with the archive built -- and settled for
+	// reasons NEITHER ARGUMENT REACHED, which is the part worth carrying forward.
 	//
 	//	package files (engine.go, iter.go)   5 findings: 4x unsafe, 1x sync
 	//	the cgo-GENERATED file               3 findings: unsafe, syscall, runtime/cgo
 	//
-	// AND THE HATCH ROUTE IS NOT MERELY WORSE, IT IS UNAVAILABLE. Ansh's prior
-	// was that this is core-scope code with a hatch for the boundary. Two facts
-	// close that off, and neither is a matter of taste:
+	// Track B argued for exclusion from `sync` and `unsafe`: right in conclusion,
+	// incomplete in evidence. Ansh predicted core scope with a hatch at the
+	// boundary: wrong, and wrong for a reason his prior could not have contained.
+	// Both reasoned from the source. Two of the eight findings are in a file
+	// nobody wrote.
 	//
-	//  1. `sync` is unhatchable by Amendment A5's own words -- "concurrency
-	//     primitives are unhatchable in core scope" -- so one of the five is
-	//     refused before anything is weighed.
-	//  2. HATCHES.txt is keyed `path:line`, and the cgo-generated file HAS NO
-	//     REPO PATH. It lives at a go-build content hash
+	// THE HATCH ROUTE IS UNAVAILABLE, NOT MERELY WORSE. Two facts, neither a
+	// matter of taste:
+	//
+	//  1. `sync` is unhatchable by Amendment A5's own text -- "concurrency
+	//     primitives are unhatchable in core scope" -- so one finding is refused
+	//     before any weighing starts.
+	//  2. HATCHES.txt is keyed `path:line`. THE GENERATED FILE HAS NO STABLE
+	//     ADDRESS: it lives at a go-build content hash
 	//     (~/Library/Caches/go-build/41/41630ef...-d) that changes with any edit
-	//     to this package, with the Go version, and with the machine. **The key
-	//     a hatch needs does not exist.** Three of the eight findings are in
-	//     that file, including `syscall` and `runtime/cgo`.
+	//     to this package, any Go version, any machine. A hatch needs an address
+	//     and there is none.
 	//
-	// So the exclusion is not the convenient answer, it is the only available
-	// one, and the measurement says so rather than the argument. The prediction
-	// and the outcome are both on the record: BUGS.md GF-44's neighbours and
-	// docs/CARRY-FORWARD.md's riftcgo obligation, now closed.
+	// AND (2) IS A FACT ABOUT THIS PROJECT'S MECHANISMS, NOT ABOUT THIS PACKAGE.
+	// Every hatch in this repository assumes a stable path, because that is what
+	// a per-line registry can key on. A generated artifact breaks the assumption
+	// outright. So any future package carrying generated code meets the same
+	// wall, and the answer is the same one: **exclusion or nothing.** The next
+	// person to hit it should meet that here rather than re-derive it -- and
+	// should note that the choice is forced by the registry's key, so "write a
+	// better argument for a hatch" is not an available move.
+	//
+	// The general form is BUGS.md GF-45. The prediction and the outcome are both
+	// on the record, in docs/CARRY-FORWARD.md, closed with the number.
 	"github.com/anshkanyadi/rift/engine/riftcgo",
 
 	// The B4 differential judge. Nothing in it executes during a simulated
