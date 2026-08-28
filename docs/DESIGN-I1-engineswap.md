@@ -1,7 +1,22 @@
 # DESIGN-I1 — running Track A's stack on the C++ engine
 
-**Status: proposed. Waiting on Ansh.** Per CLAUDE.md, a phase starts with candidates and a decision,
-not with code. Nothing in this document has been implemented.
+**Status: RULED by Ansh, 2026-08-28. Implementing D2(b).** The candidates and their tradeoffs are kept
+below as written, because the rejected alternatives and their reasons are the point of this file.
+
+| question | ruling |
+|---|---|
+| the crash | **D2**, harness-owned close/discard/reopen, **frozen interface untouched** |
+| the unsynced tail | **(b)**, harness-side directory copy per sync point |
+| `VisibleSeq()` | **the store tracks it from what `Apply` returned.** It does not move onto the interface |
+| determinism | claimed **"across processes on one build"**, with the cross-toolchain limit named where the claim is, and carried as an obligation rather than taken into I1's scope |
+
+**Why D1 was refused, in Ansh's terms:** putting `Crash()` on the frozen interface makes *a real engine
+implement a simulator concept* — the interface would then describe the harness rather than the storage
+contract. Seven phases were built against that freeze and both changes argued for since were refused;
+this one is not different in kind.
+
+**Why D3 was refused:** *"a design that swaps the engine somewhere the faults do not reach is a swap
+that proves the boundary compiles."*
 
 ---
 
@@ -209,6 +224,48 @@ CF-6 names in its own text.
 3. **Whether the determinism claim is stated as "across processes on one build"** until a second
    toolchain exists, or whether adding a second toolchain is in I1's scope.
 
-**Nothing is implemented and nothing is measured beyond §2.** The corpus has not been rerun, no sweep
-has been run on `riftcgo`, and the pass has not been run against `riftcgo` with the archive built —
-that last one is cheap and unblocked, and can be done the moment the shape is ruled.
+## 9. The scope pass, run 2026-08-28 with the archive built — the one measurement I1 has taken so far
+
+**The exclusion stands, and the argument for it is now measured rather than argued.** Archive built
+(`librift_capi.a`, `librift_engine.a`), exclusion removed, pass run over `./engine/riftcgo/`:
+
+| where | findings |
+|---|---|
+| `engine.go`, `iter.go` | **5** — 4× `unsafe`, 1× `sync` |
+| the **cgo-generated** file | **3** — `unsafe`, `syscall`, `runtime/cgo` |
+| test files | 29 |
+
+**Track B named `sync` and `unsafe`; the pass adds `syscall` and `runtime/cgo`, in a file nobody
+wrote.** And the hatch route Ansh's prior assumed is unavailable rather than unattractive: `sync` is
+unhatchable by A5's own words, and `HATCHES.txt` is keyed `path:line` while the generated file lives at
+a go-build content hash that changes with every edit, Go version and machine — **the key a hatch needs
+does not exist.**
+
+> **Both parties reasoned about what is visible in the source. Neither reasoned about `syscall` and
+> `runtime/cgo`, which are not — and the unhatchable one is in the half nobody could see by reading.**
+
+Recorded in `scope.go` in place of the provisional marker, and in `CARRY-FORWARD.md` as closed.
+
+---
+
+## 10. `(b)`'s cost, stated as an idealization rather than as a footnote
+
+Per Ansh's ruling, this is now `DESIGN-A0` §7 item 3's first sub-item:
+
+> **A simulated crash on the C++ engine recovers from a state the HARNESS constructed, not from a state
+> a kernel left.** The harness copies a node's directory at each successful sync point and restores it
+> on crash, because `rift_db_open` takes a path and cannot be handed a `TestEnv`. What is verified is
+> recovery from a directory the harness rolled back; a real power loss leaves a directory no harness
+> writes — partial sectors, reordered metadata, a rename that landed while its data did not.
+
+Those live in Track B's Env fault rig, where the injection is at the syscall and the recovery is the
+engine's own. **The two halves are complementary and neither subsumes the other.** I1's claim is
+bounded by that line: the fault schedule crosses the cgo boundary carrying *the harness's model of
+durability* rather than *the device's*.
+
+---
+
+## 11. State
+
+Ruled and recorded; implementation of D2(b) begins from here. The corpus has not been rerun and no
+sweep has been run on `riftcgo`.

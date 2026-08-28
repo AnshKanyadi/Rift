@@ -1062,6 +1062,85 @@ process; this is not a mechanical rewrite.
 
 ---
 
+---
+
+## OBLIGATION: cross-toolchain determinism is unmeasured, and the measurement is named
+
+**Opened at I1, 2026-08-28, on Ansh's ruling. Deliberately NOT in I1's scope.**
+
+**The claim I1 makes:** the same seed produces the same trace hash across separate process invocations
+with the C++ engine underneath — **on one build**.
+
+**What that is not evidence about.** Two processes on one machine share a compiler, a target
+architecture and an optimization level. Everything measured before I1 was a **source-level** absence of
+nondeterminism — zero `unordered_map`, `unordered_set`, `std::rand`, `std::random`, `time(`,
+`std::chrono`, `getpid`, `std::thread` in `engine-cpp/src`, with directory order defended by parsed
+file number and `TestEnv` reverse-sorting on purpose to catch reliance on it. **None of that is
+evidence about what two toolchains do to one source.**
+
+**This is the FMA class, and it is the class this project has already been bitten by once.**
+`DESIGN-A0.4` Q4: `skew = off + slope*(t-start)` is exactly the multiply-add arm64 fuses into `FMADD`
+and amd64 without FMA does not, so the same seed could produce clock readings differing in the last
+bit — *"that would not have shown up in any test on one machine; it would have shown up as an
+unreproducible soak failure months later, which is the failure mode this project exists to avoid."*
+The Go side was fixed by making the arithmetic integral. **The C++ engine has never been compiled by a
+second compiler and had its output compared.**
+
+**What would measure it, stated so this is an obligation rather than a worry:**
+
+> **The same seed, under a second compiler — or under the same compiler at a different optimization
+> level — producing the same trace hash.** Either is sufficient; the second is cheaper and catches the
+> same class, because `-O0` versus `-O2` is precisely where a compiler's freedom to reassociate and
+> fuse shows up.
+
+**And the cheapest route is already available.** **GitHub's runners are amd64 and this machine is
+arm64.** A remote CI run comparing a trace hash against the local one is a cross-architecture,
+cross-toolchain comparison for the price of a workflow — which makes this the rare obligation whose
+measurement costs less than the argument about whether to take it.
+
+**Due:** before any claim of determinism that is not qualified by *"on one build"*. Until then the
+qualifier stays on the claim, at the claim, in `DESIGN-A0` §7 and wherever the number is quoted.
+
+## CLOSED at I1, 2026-08-28: `engine/riftcgo`'s determinism scope, decided by the pass
+
+**Result: the exclusion stands. Track B's argument is vindicated by measurement; Ansh's prior is
+refuted, and not by preference — by construction.**
+
+The archive was built (`librift_capi.a`, `librift_engine.a`) and the pass was run against the package
+with its exclusion removed:
+
+| where | findings |
+|---|---|
+| package files — `engine.go`, `iter.go` | **5**: 4× `unsafe`, 1× `sync` |
+| the **cgo-generated** file | **3**: `unsafe`, `syscall`, `runtime/cgo` |
+| test files | 29 (`os`, `os/exec`, `path/filepath`, `time.Now`, `time.Since`, `float64`) |
+
+**Track B named `sync` and `unsafe`. The pass adds `syscall` and `runtime/cgo`** — both in a file
+nobody wrote.
+
+**Why the hatch route is unavailable rather than unattractive**, which is what settles it:
+
+1. **`sync` is unhatchable by Amendment A5's own words** — *"concurrency primitives are unhatchable in
+   core scope"*. One of the five is refused before anything is weighed.
+2. **`HATCHES.txt` is keyed `path:line`, and the cgo-generated file has no repo path.** It lives at a
+   go-build content hash — `~/Library/Caches/go-build/41/41630ef…-d` — that changes with any edit to
+   the package, with the Go version, and with the machine. **The key a hatch needs does not exist.**
+
+**Ansh's prediction, recorded when it was made so it could be checked:** *"the cgo wrapper is core-scope
+code with a hatch for the boundary rather than orchestration, since it implements the frozen `Engine`
+interface and runs inside simulated runs at I1 — but that is a prediction and the pass should decide
+it."* The pass decided it. **The prediction was wrong-shaped, exactly as its author allowed for**, and
+the reason is one neither party had in view: three of the eight findings are in generated code, and
+generated code cannot be hatched by a mechanism keyed on source paths.
+
+> **AN ARGUED PROPERTY AND A MEASURED ONE ARE DIFFERENT OBJECTS.** Both parties reasoned about `sync`
+> and `unsafe`, which are visible in the source. Neither reasoned about `syscall` and `runtime/cgo`,
+> which are not — and the unhatchable one is in the half nobody could see by reading.
+
+The provisional marker is off `scope.go` and the measurement is recorded in its place.
+
+---
+
 ## OBLIGATION: `engine/riftcgo`'s determinism scope, decided at I1 by the pass
 
 **Opened at the A7/B5 merge, 2026-08-27. Due at I1, where the cgo lane exists and the C++ archive is

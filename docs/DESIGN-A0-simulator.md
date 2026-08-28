@@ -1210,6 +1210,21 @@ Stated up front so no claim is ever broader than the evidence:
 3. **Deterministic replay is scoped to sim runs on `engine/model`** (CLAUDE.md already says this).
    The C++ engine's correctness comes from the Env rig, differential tests, corpus reruns in
    verification mode, and real chaos.
+   - **`[I1]` A simulated crash on the C++ engine recovers from a state the HARNESS constructed, not
+     from a state a kernel left.** DESIGN-I1 ruling D2(b): the harness copies a node's directory at
+     each successful sync point and restores that copy on crash, because `rift_db_open` takes a path
+     and cannot be handed a `TestEnv`, so the sim has no other way to know which bytes were durable.
+     **The consequence, stated plainly: what is verified is recovery from a directory the harness
+     rolled back, and a real power loss leaves a directory no harness writes** — partial sectors,
+     reordered metadata, a rename that landed while its data did not. Those live in Track B's Env
+     fault rig, where the injection is at the syscall and the recovery is the engine's own. **The two
+     halves are complementary and neither subsumes the other**, and I1's claim is bounded by this
+     line: the fault schedule crosses the cgo boundary, and it crosses it carrying the harness's model
+     of durability rather than the device's.
+   - **`[I1]` Determinism through the boundary is demonstrated ACROSS PROCESSES ON ONE BUILD.** Two
+     runs in two processes on one machine share a compiler, so identical trace hashes are evidence
+     about the source and not about the toolchain. **Cross-toolchain determinism is unmeasured.** See
+     the obligation in `docs/CARRY-FORWARD.md`; the measurement that would settle it is named there.
 4. **Byzantine faults, disk bit-rot outside injected torn writes, and malicious clients are out of
    scope.** Crash-stop plus omission plus timing only.
 5. **Linearizability checking is bounded**: porcupine runs with a history cap and a timeout, and a

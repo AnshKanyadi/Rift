@@ -96,25 +96,34 @@ var defaultExclude = []string{
 	// on the model. This package is checked by cpp-cgo and by the differential,
 	// which are the instruments that claim apply to it.
 	//
-	// PROVISIONAL, and the mark is the point. Ansh at I1: "an argued property
-	// and a measured one are different objects, and riftcgo is the first
-	// package in either track whose scope was decided by reasoning alone." The
-	// argument above stands and is better than the prediction it replaced; what
-	// has not happened is the PASS running against this package with the C++
-	// archive built, which is the only thing that can agree or disagree with
-	// it. That runs at I1. If it agrees the note comes off and the argument is
-	// vindicated by measurement; if it disagrees we have learned something
-	// worth more than the exclusion.
+	// SETTLED BY THE PASS, 2026-08-28, with the archive built. It was
+	// provisional until then because an argued property and a measured one are
+	// different objects, and this was the first package in either track whose
+	// scope was decided by reasoning alone. The pass has now run against it and
+	// the argument above is vindicated -- and extended, because the pass found
+	// two things the argument did not name.
 	//
-	// AND THE PREDICTION IS RECORDED BESIDE IT, so the answer can be checked
-	// against what was guessed rather than quietly replacing it. Ansh, at the
-	// classification: "My prior is that the cgo wrapper is core-scope code with
-	// a hatch for the boundary rather than orchestration, since it implements
-	// the frozen Engine interface and runs inside simulated runs at I1 -- but
-	// that is a prediction and the pass should decide it." The argument above
-	// disagrees with that prior and Ansh ratified the argument. Whichever the
-	// pass says, one of the two was wrong about this package, and I1's report
-	// says which.
+	//	package files (engine.go, iter.go)   5 findings: 4x unsafe, 1x sync
+	//	the cgo-GENERATED file               3 findings: unsafe, syscall, runtime/cgo
+	//
+	// AND THE HATCH ROUTE IS NOT MERELY WORSE, IT IS UNAVAILABLE. Ansh's prior
+	// was that this is core-scope code with a hatch for the boundary. Two facts
+	// close that off, and neither is a matter of taste:
+	//
+	//  1. `sync` is unhatchable by Amendment A5's own words -- "concurrency
+	//     primitives are unhatchable in core scope" -- so one of the five is
+	//     refused before anything is weighed.
+	//  2. HATCHES.txt is keyed `path:line`, and the cgo-generated file HAS NO
+	//     REPO PATH. It lives at a go-build content hash
+	//     (~/Library/Caches/go-build/41/41630ef...-d) that changes with any edit
+	//     to this package, with the Go version, and with the machine. **The key
+	//     a hatch needs does not exist.** Three of the eight findings are in
+	//     that file, including `syscall` and `runtime/cgo`.
+	//
+	// So the exclusion is not the convenient answer, it is the only available
+	// one, and the measurement says so rather than the argument. The prediction
+	// and the outcome are both on the record: BUGS.md GF-44's neighbours and
+	// docs/CARRY-FORWARD.md's riftcgo obligation, now closed.
 	"github.com/anshkanyadi/rift/engine/riftcgo",
 
 	// The B4 differential judge. Nothing in it executes during a simulated
