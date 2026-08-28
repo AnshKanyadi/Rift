@@ -5,9 +5,27 @@
 # power-covered-by: TestASnapshotInstallAdvancesTheAppliedIndex -- a DIRECTED test. The sweep measured 0 of 800 under A7 shape and 1 of 600 under a7-nosplit, because splitting hides the class; the directed test installs the snapshot itself and does not depend on a shape at all, which is 5d's remedy taken to its conclusion rather than recorded
 # power-refutation: this class named TestRaftExitCriteria when it was declared -- a 10,000-seed sweep, 19 hours per invocation at the exit run's measured 6.9 s/seed. Seven mutants named it, so make mutants asked for six days of machine time for that covering test alone, and make mutants is in the ci target. Declaring a sweep as a covering test is the disease this phase diagnosed twice and then reproduced four times while writing the general form
 # mutates: installing a snapshot no longer advances this replica's `applied`, so the state machine moves forward and the number that says where it is does not. raft's own appliedIdx IS advanced on install, so this restores a shadowed fact maintained on one path and not the other -- the same family as a census counter incremented both in a caller and in the function extracted out of it, except that this one reads LOW. Low is not harmless: serveReadyReads waits on it, so a read the snapshot already covers waits for a committed entry that may never arrive on a quiet range; and the ledger records it as AppliedAt, so read-index-answers-match-the-log replays the committed log to a position BELOW the node's real state and reports a correct answer as stale. It is killed by that oracle -- as a FALSE ACCUSATION of a correct answer, which is the shape this class always takes and the reason it went three phases unnoticed: nothing in the tree compared a node's claimed position against its actual state, and the oracle that could compare them derived both sides from the same understated number until BUG-028's fix made the model read the latest version instead
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/node.go
 +++ b/store/node.go
-@@ -637,10 +637,6 @@
+@@ -640,40 +640,36 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
+ 			n.desc = desc
+ 			// # The state machine has reached the snapshot's index, and
+ 			// # `applied` is the only thing that says so
+ 			//
+ 			// `n.applied` was written in exactly ONE place -- the committed-entry
+ 			// branch -- so installing a snapshot moved the state machine forward
+ 			// and left this number behind. raft's own `appliedIdx` IS advanced on
+ 			// install, so the two were a shadowed fact updated on one path and
+ 			// not the other, which is the same family as the census counter that
+ 			// was incremented in a caller and in the function it was extracted
+ 			// into.
+ 			//
+ 			// It reads LOW, and low is not harmless here. `serveReadyReads` waits
+ 			// on it, so reads that the snapshot already answers wait for an entry
+ 			// that may never arrive on a quiet range; and the ledger records it
  			// as `AppliedAt`, so the differential oracle replays the log to a
  			// position BELOW the node's real state and accuses a correct answer
  			// of being stale. Seed 36 is that false accusation.
@@ -18,3 +36,18 @@
  			n.snapshotsApplied++
  			n.cfg.Ledger.RecordSnapshot(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.SnapshotRecord{
  				Index: meta.Index, Term: meta.Term, Digest: digest(rd.Snapshot.Data),
+ 			}), at)
+ 		}
+ 
+ 		if rd.HardState != nil || len(rd.Entries) > 0 {
+ 			wroteMark = true
+ 			b := engine.NewBatch()
+ 			w := pendingWrite{mark: rd.Mark}
+ 
+ 			// A snapshot install replaces the state machine wholesale, so the
+ 			// whole log goes with it in the same atomic batch. Leaving any of it
+ 			// behind would give recovery a prefix from one history and a tail
+ 			// from another, which is BUG-008 with a snapshot in place of a
+ 			// truncation.
+ 			if rd.HardState != nil {
+ 				hs := *rd.HardState

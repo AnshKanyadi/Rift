@@ -72,10 +72,41 @@ printf '  ----------------------------------------------------------------\n'
 failed=0
 checked=0
 skipped=0
+notbundle=0
+dirs=0
+
+# # EVERY DROP PATH IS COUNTED, and one of them was not
+#
+# This loop leaves early in four places. Three of them incremented a counter and
+# printed a line. The fourth -- `[ -f "$d/meta.json" ] || continue` -- did
+# neither, so a directory without a meta.json was dropped in complete silence:
+# not checked, not skipped, not printed, not in any total.
+#
+# It cost nothing until the A7/B5 merge put `seeds/differential/` on that path.
+# Then the lane printed **"20 bundles checked, 4 skipped"** against a seeds/ that
+# holds **25** directories, and the two numbers still summed to 24 because they
+# had summed to the population back when 24 WAS the population.
+#
+# > **A COUNT TAKEN WHEN IT HAPPENED TO EQUAL THE POPULATION READS AS A
+# > POPULATION FOREVER AFTER.**
+#
+# That is the found-by table's shape in a lane: a summary that does not add up to
+# its own population, in a project whose whole argument is that verification must
+# not be vacuous. The remedy is not to check the directory here -- it belongs to
+# another owner, and cmd/simctl/corpus_test.go's registry says which -- it is to
+# COUNT it, name it, and make the totals reconcile or fail.
 
 for d in "$SEEDS"/*/; do
-  [ -f "$d/meta.json" ] || continue
   name=$(basename "$d")
+  dirs=$((dirs + 1))
+  if [ ! -f "$d/meta.json" ]; then
+    notbundle=$((notbundle + 1))
+    printf '   other    %-12s not a bundle (no meta.json). Registered in corpus_test.go and
+' "$name"
+    printf '                         checked by its owner; counted here so the totals reconcile.
+'
+    continue
+  fi
   # # A bundle may name a SET, because a defect need not be atomic
   #
   # The arrangement is *the bundle carries the schedule, the mutant carries the
@@ -151,7 +182,20 @@ print(' '.join(s))")
 done
 
 printf '  ----------------------------------------------------------------\n'
-printf '   %d bundles checked, %d skipped, %d failures\n\n' "$checked" "$skipped" "$failed"
+printf '   %d directories in seeds/: %d checked, %d skipped, %d not bundles, %d failures\n' \
+  "$dirs" "$checked" "$skipped" "$notbundle" "$failed"
+
+# THE TOTALS MUST RECONCILE. Without this the counters are a description of what
+# the loop felt like doing rather than an account of what it saw, and a fifth
+# drop path added later would be as silent as the fourth one was.
+accounted=$((checked + skipped + notbundle))
+if [ "$accounted" -ne "$dirs" ]; then
+  printf '\n  %d of %d directories are unaccounted for. A drop path in this loop does not\n' \
+    "$((dirs - accounted))" "$dirs"
+  printf '  count what it drops, which is how seeds/differential went past unseen.\n\n'
+  exit 2
+fi
+printf '\n'
 
 if [ "$checked" -eq 0 ]; then
   printf '  No bundle carries a mutant. This lane proved nothing.\n\n'

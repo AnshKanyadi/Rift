@@ -696,11 +696,30 @@ ranges appear underneath. Three candidates, cheapest first:
    shapes returned nothing while the precondition fired sixteen times, so more seeds buy more of the
    precondition and none of the consequence.
 
-**And the covering test cannot be used to check any of this as it stands.**
-`TestSplitInheritsTheConfigurationAtItsIndex` is a 1,000-seed serial sweep, over an hour, and
-`scripts/mutant-covered.sh` has no per-mutant filter — so the code-position axis costs a full suite
-run to ask. **A covering test nobody can afford to run inside a phase is not a covering test**, and a
-lane with no filter turns one question into sixty.
+**BOTH BLOCKERS BELOW ARE NOW GONE, and the paragraph stood for a day after they went.** Corrected
+2026-08-27 at the A7/B5 merge, when the lane was run and the entry was read beside it.
+
+> ~~*And the covering test cannot be used to check any of this as it stands.*
+> `TestSplitInheritsTheConfigurationAtItsIndex` *is a 1,000-seed serial sweep, over an hour, and*
+> `scripts/mutant-covered.sh` *has no per-mutant filter — so the code-position axis costs a full
+> suite run to ask.*~~
+
+- **M46's covering test is directed now.** `TestASplitDoesNotInheritAnUnappliedConfiguration`,
+  `store/splitconf_test.go:39` — which is *this entry's own option 1*, "a directed test that arranges
+  both halves… this is what `M46` should be floored against." It was written during A7's eight-test
+  conversion and this entry was not told. The old sweep still exists at `sim/hunt/oracles_test.go:525`
+  and is no longer `M46`'s declared covering test.
+- **`scripts/mutant-covered.sh` has `ONLY`.** Space-separated, documented in the Makefile help.
+
+**What is still true is the part that matters:** `seeds/BUG-015` is STALE — it replays identically
+with `M46` applied — and the next step is a workload change rather than more seeds. The measurement
+above stands. **What changed is that it is now cheap to ask**, which is precisely what the struck
+paragraph said it was not.
+
+**And this entry is the third instance in one day of a class worth naming.** A `notAnalysed` entry
+whose reason had gone false; a `corpus-reproduces` count that no longer equalled its population; this
+blocker paragraph. See `BUGS.md` **GF-42**, and the `BLOCKER` declaration below, which is the cheap
+mechanism that would have caught this one.
 
 **Track A does not exit while `corpus-reproduces` is red.**
 
@@ -847,6 +866,17 @@ property of the class and the shape jointly.
 
 **Due:** with the eight-test conversion, since that is what makes the lane affordable enough to
 schedule at all.
+
+<!-- BLOCKER
+     what: make power-mutants is queued behind the eight remaining sweep-based covering tests
+     stale-when: ! grep -rqs "func TestFailoverDoesNotManufactureViolations(" sim/hunt/
+-->
+
+**The blocker above is declared machine-checkably**, and `tools/blockercheck` re-asks it on every
+push. It names one of the eight — `TestFailoverDoesNotManufactureViolations`, the 1,000-seed one and
+the most expensive — as the tripwire: when that test stops being a sweep in `sim/hunt/`, the lane says
+so and this entry gets rewritten rather than quietly continuing to claim a cost it no longer has.
+That is `GF-42`'s mechanism, and this is its first live subject.
 
 ---
 

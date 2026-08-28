@@ -6,9 +6,23 @@
 # power-detector: sweep
 # power-measured: sweep-detected at 60 seeds, on one criterion: no read answer from a pre-restart incarnation was ever rejected across the whole sweep. StaleIncarnation goes 9 to 15 per fifty seeds on the clean tree to a FLAT ZERO under the mutant, in every shard measured. Confirmed at 200 seeds in four shards of fifty -- the criterion fires in all four and the clean tree has sweepfail=0 in all four -- and at 60 in two shards of thirty, where the only other failure is the inconclusive-rate threshold that BOTH trees cross at that sample size and which therefore is not a difference. The PER-SEED rate is 0 of 200 before and after, which is why it carried an opt-out saying a floor would need a 24-hour sweep: its detector is an aggregate non-vacuity assertion and a rate cannot see one. This class was FOUND by the power probe's structural fix (DESIGN-A6 sections 35.1, 42) -- the second class the fix found after M68, and the first that had already been written off. TestBUG024 still names seed 10303 directly and is still the covering test
 # mutates: BUG-024. A transaction that restarts above an uncertain commit takes a new start timestamp and re-reads; the reads it issued BEFORE the restart are still in flight and their answers arrive afterwards carrying the old snapshot. Without this check they land in the new snapshot's read set and the transfer computes its writes from two different instants, which conserves nothing -- in whichever direction the two snapshots happen to differ
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go
-@@ -521,10 +521,6 @@
+@@ -518,32 +518,28 @@ func (c *coordinator) applied(cmd store.TxnCommand, r store.TxnResult, at clock.
+ 	case cmd.Op == store.OpTxnGet && t.phase == phaseRead:
+ 		// # An answer belongs to the incarnation that asked for it
+ 		//
+ 		// A transaction that restarts above an uncertain commit takes a NEW
+ 		// start timestamp and re-reads. The reads it issued before the restart
+ 		// are still in flight, and their answers arrive afterwards carrying the
+ 		// OLD snapshot. Nothing here checked, so those values landed in the new
+ 		// snapshot's read set and the transfer computed its writes from two
+ 		// different instants — which conserves nothing, in whichever direction
+ 		// the two snapshots happen to differ.
+ 		//
  		// That is BUG-024, and it is BUG-020's family: an answer accepted for the
  		// wrong incarnation. The epoch guard in `store` exists for the same shape
  		// one layer down, which is where the phrase comes from.
@@ -19,3 +33,14 @@
  		if !t.ceiling.IsSet() && r.Ceiling.IsSet() {
  			t.ceiling = r.Ceiling
  		}
+ 		switch {
+ 		case r.Locked:
+ 			// # Reader-side lock discovery: the door Percolator actually uses
+ 			//
+ 			// The competing transaction is whichever one touches the key next,
+ 			// and this is it. The resolver's read timestamp is the READER'S
+ 			// OWN, so a resolver decides an expiry against the timestamp it is
+ 			// reading at rather than against a clock -- which is what makes two
+ 			// replicas applying the same resolve entry reach the same verdict
+ 			// (kv.ResolveLock, DESIGN-A6 section 8 row one).
+ 			if t.resolves[cmd.Key] >= maxResolves {

@@ -122,7 +122,16 @@ for patch in "$PATCHDIR"/*.patch; do
   copy_tree "$work"
 
   if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
-    printf '   ROT      %s: patch no longer applies; the code moved and the mutation did not\n' "$id"
+    # WHICH KIND OF ROT, because the remedies differ and one sentence for both
+    # sent a reader after a behavioural change that never happened (M77).
+    kind=$(sh "$ROOT/scripts/patch-rot-kind.sh" "$abs" "$ROOT" 2>/dev/null || echo STRUCTURAL)
+    if [ "$kind" = ANCHOR ]; then
+      printf '   ROT      %s: ANCHOR DRIFT -- the mutation site is intact and the PROSE around it\n' "$id"
+      printf '                        moved. Re-anchor the patch; nothing about the code is wrong.\n'
+    else
+      printf '   ROT      %s: STRUCTURAL DRIFT -- the code this patch matched is gone. Regenerate\n' "$id"
+      printf '                        it, and first ask whether the class still has a site at all.\n'
+    fi
     rotted=$((rotted + 1))
     continue
   fi

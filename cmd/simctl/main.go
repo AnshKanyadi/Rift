@@ -941,6 +941,20 @@ func cmdHunt(args []string) int {
 		}
 	}
 	if !c.FoundAViolation {
+		// # "no violation found", NOT "all seeds passed", and the words matter
+		//
+		// This exits 0 while inconclusives may be nonzero, and Amendment A4 is
+		// the reason that is correct rather than a hole. A4 forbids BANKING an
+		// inconclusive as a pass: counting it toward a claim, quoting it in a
+		// total, letting it stand in for a seed that was checked. A hunt banks
+		// nothing. It is a search, its success condition is "no violation was
+		// found", and the inconclusive count is printed on its own line beside
+		// the violation count -- which is the form A4 requires of the public
+		// claim itself.
+		//
+		// The sentence below is the one thing that must not drift. "All seeds
+		// passed" would be exactly the banking A4 prohibits, asserted by a
+		// program rather than by a person.
 		fmt.Println("no violation found")
 		return 0
 	}

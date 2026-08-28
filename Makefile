@@ -179,10 +179,24 @@ tidy-check: ## Fail if go.mod/go.sum are not tidy
 
 .PHONY: determinism
 determinism: ## Custom vet pass: no time.Now, no global rand, no map range, mailbox rule
-# -tags rift_cgo, so the cgo engine is LOADED AND ANALYZED rather than vanishing
-# from ./... -- see engine/riftcgo/doc.go. The pass only typechecks, so this
-# needs no C++ build; TestHatchRegistry asserts the package was actually seen.
-	$(GO) run ./tools/determinismcheck/cmd/determinismcheck -tags rift_cgo ./...
+# GOFLAGS, NOT -tags. This line used to read `determinismcheck -tags rift_cgo`,
+# with a comment saying the cgo engine was therefore LOADED AND ANALYZED. It was
+# not. `singlechecker.Main` registers -tags and does not forward it to the
+# loader, which is BUG-037 -- so the flag was accepted, dropped, and the package
+# stayed absent from ./... entirely. Measured at the merge:
+#
+#   determinismcheck -tags rift_cgo ./engine/riftcgo/   build constraints exclude all Go files
+#   determinismcheck -tags rift_cgo ./...               SILENT: exit 0, zero mentions
+#   GOFLAGS=-tags=rift_cgo determinismcheck ./...       loads clean
+#
+# The `./...` form is the dangerous one: a tagged package is not in the list at
+# all, so there is no error to notice. The lane was green over a package it had
+# never opened. GOFLAGS reaches the loader because it reaches `go list`.
+#
+# The pass only typechecks, which needs no C++ archive -- also measured, since
+# `notAnalysed` claimed the opposite: `go build -tags rift_cgo ./engine/riftcgo/`
+# succeeds with no archive anywhere in the tree.
+	GOFLAGS=-tags=rift_cgo $(GO) run ./tools/determinismcheck/cmd/determinismcheck ./...
 
 .PHONY: tooling-only
 tooling-only: ## Assert golang.org/x/tools never enters a shipping binary (DESIGN-A0 Q4)
@@ -211,6 +225,15 @@ bundle-seeds: ## BUGS.md's stated bundle seed matches the bundle it points at
 .PHONY: corpus-reproduces
 corpus-reproduces: ## Every bundle still EXERCISES its defect: apply its mutant, replay, require a difference
 	sh scripts/corpus-reproduces.sh
+
+.PHONY: anchors
+anchors: ## Every mutant patch anchors on CODE, not on prose that a comment edit can move
+	$(GO) test -count=1 ./tools/anchorcheck/
+	@sh scripts/patch-rot-kind.sh --self-test
+
+.PHONY: blockers
+blockers: ## Re-ask every CARRY-FORWARD blocker that declares a machine-checkable condition
+	$(GO) test -count=1 ./tools/blockercheck/
 
 .PHONY: assertions
 assertions: ## Every declared every-run assertion mechanism must actually be invoked
@@ -276,7 +299,7 @@ lane-coverage: ## Every lane in the `ci` target actually runs in .github/workflo
 lint: vet fmt-check determinism tooling-only hatches hygiene ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
+ci: build lint test race blind power anchors blockers assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
 # cpp-ci joins at the I1 merge. Before it, the two tracks had two lane sets and
 # `make ci` ran one of them -- which is the lane-dependency shape: a target that
 # exists and is never reached is a lane nobody runs and everybody counts.
@@ -484,7 +507,26 @@ cpp-tsan: ## ThreadSanitizer over the dedicated multi-threaded harness, not the 
 # ---------------------------------------------------------------- stub lanes
 
 .PHONY: smoke
-smoke: ## $(SMOKE_SEEDS)-seed simulator smoke: the correct toy, all checkers on
+smoke: ## $(SMOKE_SEEDS)-seed smoke: green means NO VIOLATION FOUND, not all-seeds-passed
+# # WHAT GREEN MEANS HERE, stated because it was not
+#
+# This lane gates on VIOLATIONS. It exits 0 while carrying inconclusives, and the
+# most recent run did exactly that: `0 violation, 1 inconclusive, 0 harness
+# errors` out of 500 seeds, exit 0.
+#
+# That is consistent with Amendment A4 and it is worth saying why, since the
+# opposite reading is available. A4 forbids BANKING an inconclusive as a pass --
+# counting it toward a claim, quoting it in a total, letting it stand in for a
+# seed that was checked. This lane banks nothing: it is a SEARCH for a violation,
+# it prints the inconclusive count on its own line beside the violation count,
+# which is the form A4 requires of the public claim, and the word it prints when
+# it succeeds is `no violation found` rather than `all seeds passed`.
+#
+# **What A4 does require and nothing here does yet: watch the RATE.** A4 says a
+# rising inconclusive rate is the signal to shrink history windows or partition
+# harder per key, and never to loosen the checker. Nobody tracks the rate. One
+# in 500 is where it stands the day this was written, recorded so a later reader
+# has a number to compare against rather than an impression.
 	$(GO) run ./cmd/simctl hunt --from 0 --to $(SMOKE_SEEDS) --workers $(WORKERS)
 
 .PHONY: exit-run

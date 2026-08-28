@@ -5,9 +5,23 @@
 # power-covered-by: TestASplitDoesNotInheritAnUnappliedConfiguration -- a DIRECTED test, and the exemption is earned by a measurement rather than by the sentence. This class needs TWO independent things to coincide: a replica applying a split while holding a configuration entry appended ABOVE the split index and applied by nobody, and the range that split produces then being handed a membership change. A sweep buys the first and hopes for the second. Measured: the precondition occurred 8 times in 200 seeds under A7 shape and 25 in 200 under a4, and detection was ZERO AT THE SEEDS WHERE IT FIRED -- 0 of 400 under current, 0 of 200 under a4, and 0 at seeds 23 and 1 specifically. A null at a seed known to meet the precondition is a different object from a null over a range: it is the class failing where it should fire rather than failing to arrive. The directed test arranges both halves and kills this patch in 0.3s with a verdict naming the defect -- born voters=[1 2] against a log that says voters=[1 2 3] at the split index. It also carries its own VACUITY guard: it fails if the tail it arranged is not divergent, which caught a construction error before the assertion could pass over nothing
 # power-refutation: the sweep is not the instrument and 600 seeds across two shapes say so with the precondition counted rather than assumed. The previous covering test, TestSplitInheritsTheConfigurationAtItsIndex, was a 1,000-seed SERIAL sweep taking over an hour -- a covering test nobody can afford to run inside a phase is not a covering test, and its cost is why this declaration carried a pre-no-op measurement for a whole phase
 # mutates: a range born from a split inherits the ACTIVE configuration, which is effective on append and is not a function of the applied prefix. Two replicas applying the same split entry with different appended tails give the new range two different birth configurations, and the one that starts behind reads the next membership entry as an illegal transition (BUG-015)
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/machine.go
 +++ b/store/machine.go
-@@ -581,7 +581,7 @@
+@@ -878,29 +878,29 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
+ 
+ 	// The right range starts from a snapshot at index zero carrying its derived
+ 	// state and the configuration it inherits. A range born with no log and no
+ 	// snapshot would recover into an empty state machine and have nothing to
+ 	// rebuild from.
+ 	// # The inherited configuration is taken AT the split's index
+ 	//
+ 	// `Configuration()` is the ACTIVE configuration, effective on append. It is
+ 	// not a function of the applied prefix, so two replicas applying this same
+ 	// entry with different appended tails would give the new range two different
+ 	// birth configurations -- and the one that started behind refuses the next
  	// membership entry as an illegal transition (BUG-015). Everything a split
  	// derives has to be derived at the split's position, which is the sentence
  	// this whole phase keeps rediscovering.
@@ -16,3 +30,14 @@
  	if confErr != nil {
  		panic(fmt.Sprintf("store: node %d cannot state range %d's configuration at the split it is applying: %v",
  			m.cfg.ID, left.rng, confErr))
+ 	}
+ 	snapMeta := raft.SnapshotMeta{Index: 0, Term: 0, Conf: conf}
+ 	data := encodeMachine(spec.Right, mark, rightVs)
+ 
+ 	// Only the RIGHT range's descriptor is written, and it is a discovery
+ 	// record: it tells a restarting machine that this range exists here. The
+ 	// left's is deliberately not written, because a descriptor on disk is not
+ 	// aligned with any index and the left's extent has to be (see the switch in
+ 	// Replica.restart, and BUG-011).
+ 	b := engine.NewBatch()
+ 	b.Set(keyDescOf(spec.Right.ID), encodeDesc(spec.Right))

@@ -5,9 +5,28 @@
 # power-unreachable: census identity, 300 seeds, 76 fields -- the sweep cannot produce this schedule. Raft's figure-8 rule serialises it: a new leader must commit an entry of its own before it can commit the previous term's split, and committing it means applying it, which moves the extent before a second split can be proposed from it. Zero firings in 300 A4 seeds, recorded in DESIGN-A4 section 10 as an unexercised path rather than as evidence. The guard is induced directly instead, which is what a floor could not have told us. RE-MEASURED under current at A6's close with the repaired probe, and UPGRADED: 0 of 300 per-seed, sweepfail=0, and the accumulated census is BYTE-IDENTICAL to the unmutated tree's across all four shards -- 0 of 76 fields move. That is a stronger claim than the old 'zero firings', which was a detection claim and therefore compatible with the defect happening unnoticed, as M62 turned out to be. Same disposition and same instrument as M66 and M30: UNREACHED and proved (DESIGN-A6 section 42). NO OTHER DETECTOR: census identity is the strongest instrument this harness has -- if no field the harness counts moves, there is nothing for any detector to see, and a rate or a sweep verdict is a strictly weaker view of the same run. Re-asked by the refutation pass at 30 seeds and still byte-identical, which re-asks the claim rather than restating it
 # power-refute-claim: census-identical
 # mutates: the extent guard requires ALL THREE mismatches instead of any one, so a split superseded by an earlier one is applied anyway. A split superseded by an earlier one then moves the left range's End BACKWARDS past the first cut and mints a range overlapping the one already there, so two ranges claim the same keys and their replicas disagree about which entry is at index one of a range born twice
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/machine.go
 +++ b/store/machine.go
-@@ -517,8 +517,8 @@
+@@ -789,40 +789,40 @@ func (m *Node) RequestTransfer(target raft.NodeID) bool {
+ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at clock.Instant, s sim.Scheduler) {
+ 	// # A split entry names the extent it was computed against, and it has to match
+ 	//
+ 	// Two leaders can each propose a split from the same descriptor: the first
+ 	// proposes, loses leadership before its entry commits, and the second
+ 	// proposes from the extent it can still see. Both entries can end up
+ 	// committed, at different indices -- and applying the second would move the
+ 	// left range's end BACK past the first split, so two ranges would claim the
+ 	// same keys and their replicas would disagree about which entry is at index
+ 	// one.
+ 	//
+ 	// That is what the epoch is for. A split is applied only if it was computed
+ 	// against exactly this descriptor: same start, same end, and an epoch one
+ 	// step ahead. Anything else is a spec the range has moved past, and it is
+ 	// skipped rather than applied -- the range simply does not split at that
+ 	// entry, which the next threshold crossing will propose again.
  	//
  	// Found by state machine safety on the first A4 sweep: two nodes applying
  	// different commands at index 1 of a range born from a split.
@@ -18,3 +37,19 @@
  		!bytes.Equal(spec.Right.End, left.desc.End) {
  		left.staleSplits++
  		return
+ 	}
+ 	// # The left half happens every time; only the right half is idempotent
+ 	//
+ 	// The first version skipped BOTH when the right range already existed. That
+ 	// is right for creating the range -- re-deriving its state would destroy
+ 	// everything it has done since -- and wrong for the left, whose keys are
+ 	// still sitting where they were.
+ 	//
+ 	// A node that recovers from a snapshot taken before the split and re-applies
+ 	// the split from its log finds the right range already on disk, takes the
+ 	// early return, and keeps serving keys it does not own. Its state machine
+ 	// then diverges from every replica that applied the split once. Snapshot
+ 	// equivalence caught it: two nodes recording different digests for the same
+ 	// index of the same range, on 178 of 300 seeds.
+ 	//
+ 	// So the left's keys move and its descriptor advances unconditionally, and

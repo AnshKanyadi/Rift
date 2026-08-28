@@ -5,14 +5,18 @@
 # power-covered-by: TestASnapshotReadKeepsItsLogEntry -- a DIRECTED test that drives BOTH sides of D-A7-5's boundary through onClient: a plain read must take the read-index path, and a read naming a remembered timestamp must not. The plain half is the contrast that keeps the assertion from passing over a path nothing took, which is this register's commonest entry
 # power-refutation: this class named TestRaftExitCriteria, a 10,000-seed sweep costing 19 hours per invocation at the exit run's measured 6.9 s/seed. Seven mutants named it, so make mutants -- which is in the ci target -- asked for six days for that one covering test, and its baseline timed out and reported INVALID. A covering test built on a sweep stops covering when the workload moves and does it silently; this one is directed and cannot
 # mutates: D-A7-5's BOUNDARY, planted as a defect. A read naming a timestamp is served by read index instead of by a log entry, so it stages no read mark. Ansh, ruling 11: 'the mutant is the design decision itself planted as a defect -- a snapshot read served by read index. That makes the boundary between the two read paths something the suite kills rather than something the code remembers.' The failure is BUG-022 returning as a design consequence rather than as a patch: PrewriteInto's third first-committer-wins guard consults a record that does not exist, reads it as 'nobody has looked', and a commit lands below an answer the database already gave. Silent -- no error, no divergence, no structural invariant violated: a well-formed database with money missing from it, on a schedule with no faults in it. It is killed by the bank's CONSERVATION check rather than by any structural oracle, which is what BUG-022 actually looked like
+# re-anchored: 2026-08-27. THIS IS THE PATCH THE RULE WAS WRITTEN FOR. It anchored on three
+#   comment lines; A7 rewrote that comment -- the Ruling-4 text about a path kept for what it
+#   MEASURES -- and the mutant stopped applying while the line it mutates stayed byte-identical.
+#   Re-anchored by NARROWING to -U2 rather than widening: the prose above this site runs for 36
+#   consecutive lines, so widening would only have anchored on more of it. Two prose lines are
+#   inside what fuzz absorbs, measured. The mutation is unchanged and proved byte-identical.
 --- a/store/node.go
 +++ b/store/node.go
-@@ -508,7 +508,7 @@
- 	// D-A7-4, ruled: BOTH paths stay for the phase. The replicated path is the
- 	// differential oracle's other half, and a differential between them is the
- 	// only instrument that can catch a stale read no client observed.
+@@ -559,5 +559,5 @@ func (n *Replica) onClient(req Request, arrivedAt clock.Instant) {
+ 	// future reader who removes it as unused removes the instrument that catches
+ 	// the class this phase spent itself on.
 -	if n.cfg.ReadIndex && req.Op == "get" && !req.ReadTS.IsSet() && req.Txn == nil {
 +	if n.cfg.ReadIndex && req.Op == "get" && req.Txn == nil {
  		n.readSeq++
  		ctx := encodeReadCtx(n.cfg.ID, n.readSeq)
- 		if err := n.raft.ReadIndex(ctx); err != nil {

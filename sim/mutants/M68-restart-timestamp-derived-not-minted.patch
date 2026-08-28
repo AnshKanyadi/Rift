@@ -6,9 +6,18 @@
 # power-detector: sweep
 # power-measured: sweep-detected at 60 seeds, two criteria: 52 start timestamps carrying another node's tag and 65 restarts that did not clear the commit they restarted on. It measured 0 of 1 and then 0 of 60 as a RATE, and both zeros were the instrument: this class's detector is an aggregate assertion and the probe consulted none of them until A6's close. ForeignTagStarts and StaleRestarts were also collected by every shard of the exit run and asserted nowhere, which is why the criteria had to be added before this could be measured at all (DESIGN-A6 sections 31, 35.1)
 # mutates: BUG-021's SECOND half, and the reason the fix is one decision rather than two. A restarting transaction adopts RestartAt directly instead of minting above it. RestartAt is the observed commit's successor -- Logical plus one -- and Logical's low bits are the node tag, so the restarted transaction is identified by a number from another node's sequence. A tree carrying only the first half of the fix looks complete until a restart lands on a foreign tag
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/sim/hunt/bank.go
 +++ b/sim/hunt/bank.go
-@@ -439,7 +439,7 @@
+@@ -434,19 +434,19 @@ func (c *coordinator) prewrite(t *transfer, at clock.Instant, s sim.Scheduler) {
+ func (c *coordinator) restartAbove(t *transfer, ts hlc.Timestamp, at clock.Instant, s sim.Scheduler) {
+ 	// # The new start timestamp is MINTED above the bound, not the bound itself
+ 	//
+ 	// `ts` is the observed commit's successor, so it carries the tag of whichever
+ 	// node minted that commit. Adopting it as this transaction's start would give
+ 	// the transaction another node's identity and reopen BUG-021 one level out --
  	// the half of option A that is easy to leave out, because a partial
  	// implementation looks exactly like a complete one until a restart lands on a
  	// foreign tag.
@@ -17,3 +26,9 @@
  	if !ok {
  		c.abandon(t)
  		return
+ 	}
+ 	t.restarts++
+ 	c.restarts++
+ 	t.startTS = minted
+ 	// # The ledger learns the new start timestamp, and this is not bookkeeping
+ 	//

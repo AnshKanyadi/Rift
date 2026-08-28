@@ -176,6 +176,37 @@ jobs:
       # every-run assertion to have fired at least once.
       - run: make assertions
 
+  anchors:
+    name: mutant patches anchor on code, not prose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # M77 was disarmed by an edit that changed no behaviour: its hunk anchored
+      # on three comment lines and A7 rewrote the comment. In a repository whose
+      # comments carry the arguments, that is a standing disarming mechanism
+      # rather than an incident, and the only lane that would have caught it
+      # costs hours. This one is static and costs milliseconds.
+      - run: make anchors
+
+  blockers:
+    name: CARRY-FORWARD blockers are re-asked
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # An obligation's blocker is the only part of it nobody rereads: the task
+      # is why you open the entry and the blocker is why you close it again.
+      # Three obligations were found in one day carrying reasons that had gone
+      # false. This re-asks the ones that can be expressed as a condition.
+      - run: make blockers
+
   bundle-seeds:
     name: BUGS.md's seeds match the bundles
     runs-on: ubuntu-latest

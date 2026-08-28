@@ -7,9 +7,27 @@
 # power-ceiling: 10
 # power-measured: 180 of 300, first at seed 2, under current at commit A5-close; was 143 of 300, first at seed 2, at commit 6e716d5+A5-open
 # mutates: a follower that installs a snapshot adopts its keys and keeps its own extent. It is then a state machine that has split holding an extent that has not, so it refuses the next split entry for naming an extent it cannot see (BUG-013)
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/node.go
 +++ b/store/node.go
-@@ -618,8 +618,9 @@
+@@ -621,38 +621,39 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
+ 				Index: rd.Snapshot.Index, Term: rd.Snapshot.Term, Conf: rd.Snapshot.Conf,
+ 			}
+ 			sb := engine.NewBatch()
+ 			sb.Set(n.keySnapshot(), encodeSnapshot(meta, rd.Snapshot.Data))
+ 			sb.DeleteRange(n.logPrefix(), n.logUpper())
+ 			if seq, err := n.db.Apply(sb, true); err == nil {
+ 				n.pending = append(n.pending, pendingWrite{
+ 					seq: seq, snapMark: rd.SnapMark, snap: &meta, snapVersions: vs, snapMarkTS: mark,
+ 					clearAllLog: true,
+ 				})
+ 				s.At(at+n.cfg.SyncLatency, sim.KindDurable, sim.NodeID(n.cfg.Ordinal),
+ 					sim.Stamp(n.epoch.Current(), seq))
+ 			}
+ 			n.writtenLast = meta.Index
+ 			// The extent arrives WITH the state it describes. Keeping the old
  			// one here is BUG-013: the node adopts a state machine that has
  			// split and an extent that has not, then refuses the split entry
  			// that would reconcile them.
@@ -21,3 +39,18 @@
  			// # The state machine has reached the snapshot's index, and
  			// # `applied` is the only thing that says so
  			//
+ 			// `n.applied` was written in exactly ONE place -- the committed-entry
+ 			// branch -- so installing a snapshot moved the state machine forward
+ 			// and left this number behind. raft's own `appliedIdx` IS advanced on
+ 			// install, so the two were a shadowed fact updated on one path and
+ 			// not the other, which is the same family as the census counter that
+ 			// was incremented in a caller and in the function it was extracted
+ 			// into.
+ 			//
+ 			// It reads LOW, and low is not harmless here. `serveReadyReads` waits
+ 			// on it, so reads that the snapshot already answers wait for an entry
+ 			// that may never arrive on a quiet range; and the ledger records it
+ 			// as `AppliedAt`, so the differential oracle replays the log to a
+ 			// position BELOW the node's real state and accuses a correct answer
+ 			// of being stale. Seed 36 is that false accusation.
+ 			if meta.Index > n.applied {

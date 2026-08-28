@@ -35,16 +35,34 @@ import (
 // notAnalysed lists packages this lane knowingly does not analyse, by exact
 // import path, each with the reason.
 //
-// A package earns a line here only when it cannot be loaded at all, not when it
-// is merely inconvenient. "Needs an artifact this lane does not build" is the
-// only accepted reason so far, and it is the cgo wrapper's: the package cannot
-// type-check without the C++ archive and its generated header, so no amount of
-// tag forwarding reaches it from a Go-only lane.
-var notAnalysed = map[string]string{
-	"github.com/anshkanyadi/rift/engine/riftcgo": "cgo wrapper: cannot type-check without the C++ " +
-		"static archive and rift.h, which this lane does not build. Offered by the cgo lane " +
-		"instead, and its determinism scope is decided there rather than assumed here.",
-}
+// A package earns a line here only when it cannot be LOADED at all, not when it
+// is merely inconvenient, and the entry is checked against the tree rather than
+// believed: TestEveryBuildTaggedPackageIsAnalysedOrNamed fails on any entry
+// whose package does load.
+//
+// # It is empty, and it is empty because the one entry it held was false
+//
+// `engine/riftcgo` sat here from the A7/B5 merge with the reason *"cannot
+// type-check without the C++ static archive and rift.h, which this lane does not
+// build."* Measured at the merge: `go build -tags rift_cgo ./engine/riftcgo/`
+// succeeds with no archive anywhere in the tree, and registry_test.go's own
+// loader has been loading the package successfully the whole time, fifty lines
+// away.
+//
+// **And the entry was UNREACHABLE, which is why its falsity was undetectable.**
+// The loop below `continue`s on `len(p.Syntax) > 0` -- loaded and analysable --
+// before it ever consults this map. riftcgo loads, so the lookup never happened.
+// Induced: the test passed with no "not analysed, by name" line in `-v` output
+// and no mention of riftcgo at all.
+//
+// `CARRY-FORWARD.md` claimed this test *"will stop accepting the notAnalysed
+// entry the moment the package becomes loadable -- because a named exemption is
+// only honest while the reason holds."* There was no such rejection. That is
+// `blind-unused-hatch`'s rule one level up, in a file that had no such rule.
+// **It has one now**, and it is what makes this map safe to be empty: an empty
+// list with a live rejection is a claim; an empty list with nothing checking it
+// is only an absence.
+var notAnalysed = map[string]string{}
 
 // TestEveryBuildTaggedPackageIsAnalysedOrNamed walks the tree for build tags,
 // loads each tagged package WITH its tag, and requires it to either analyse or
@@ -78,7 +96,10 @@ func TestEveryBuildTaggedPackageIsAnalysedOrNamed(t *testing.T) {
 				continue // not a tagged package, or not this tag's
 			}
 			if len(p.Syntax) > 0 {
-				continue // loaded and analysable
+				// LOADED. Before moving on: if something claims this package
+				// cannot be loaded, that claim is now false and says so.
+				checkStale(t, notAnalysed, p.PkgPath)
+				continue
 			}
 			if why, named := notAnalysed[p.PkgPath]; named {
 				t.Logf("  %s: not analysed, by name -- %s", p.PkgPath, why)
@@ -182,4 +203,55 @@ func buildTagsInTree(t *testing.T, root string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// checkStale is the rejection CARRY-FORWARD said already existed.
+//
+// A named exemption is only honest while its reason holds, and the reason here
+// is always the same one: *this package cannot be loaded*. The moment it loads,
+// the entry is a false statement sitting in a checked-in list, and nothing else
+// in this file would ever look at it -- the caller reaches the map only on the
+// not-loaded path, so a stale entry is not merely wrong, it is unreachable.
+//
+// **That is what makes it the unused-hatch rule rather than a typo check.** The
+// determinism pass already refuses a hatch that no longer suppresses anything
+// (blind-unused-hatch), for exactly this reason: an exemption nobody re-asks
+// rots into a permission nobody granted.
+func checkStale(t *testing.T, list map[string]string, loaded string) {
+	t.Helper()
+	if why, named := list[loaded]; named {
+		t.Errorf("%s is named in notAnalysed, and it LOADS.\n"+
+			"      Its recorded reason is now false:\n"+
+			"        %q\n"+
+			"      Delete the entry. A named exemption is only honest while its reason\n"+
+			"      holds, and an entry for a package that loads is never even consulted\n"+
+			"      by the loop above -- so nothing would have contradicted it.", loaded, why)
+	}
+}
+
+// TestAStaleNotAnalysedEntryIsRejected is the induction, and it exists because
+// notAnalysed is EMPTY.
+//
+// An empty list with a live rejection is a claim. An empty list with nothing
+// exercising the rejection is an absence wearing a rule's clothes -- which is
+// the vacuity this repository keeps a register of. So the rejection is fired
+// here against a package that certainly loads.
+func TestAStaleNotAnalysedEntryIsRejected(t *testing.T) {
+	const loads = "github.com/anshkanyadi/rift/internal/sorted"
+	stale := map[string]string{loads: "a reason that stopped being true"}
+
+	fake := &testing.T{}
+	checkStale(fake, stale, loads)
+	if !fake.Failed() {
+		t.Fatal("an entry naming a package that LOADS was accepted. That is exactly the state " +
+			"engine/riftcgo sat in from the merge until it was measured, and the state " +
+			"CARRY-FORWARD.md described as impossible.")
+	}
+
+	clean := &testing.T{}
+	checkStale(clean, map[string]string{}, loads)
+	if clean.Failed() {
+		t.Fatal("the rejection fired with an empty list, so it is not discriminating: " +
+			"both numbers are required, per DESIGN-A7 section 8.1b")
+	}
 }

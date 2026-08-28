@@ -71,6 +71,80 @@ func (b bundleDir) mutantSet() []string {
 	return append(out, b.meta.Mutants...)
 }
 
+// nonBundleCorpora registers directories under seeds/ that are NOT Track A
+// bundles: what kind of corpus each is, and who checks it.
+//
+// # The finding this exists for
+//
+// At the A7/B5 merge, `seeds/differential/` arrived with Track B's 22 format
+// entries and this lane went red: it treated every directory under seeds/ as a
+// Track A bundle, which was true when it was written and stopped being true the
+// moment the two tracks became one tree. GF-39's debt, paid in the instant.
+//
+// **Three lanes walk seeds/ and they disagreed about what a non-bundle directory
+// means**, which is the real finding:
+//
+//	corpus_test.go (here)     errors            <- the only right answer
+//	corpus-reproduces.sh      skipped SILENTLY  <- fixed, see its counters
+//	bundle-seeds.sh           never looks       <- it iterates seeds/BUG-*/ only
+//
+// The cheap fix -- skip the name -- is the wrong one. A bare `if name ==
+// "differential" { continue }` is a hole with a comment on it. **A registered
+// directory declares its kind and its owner; an unregistered one is an error;
+// and the registry is asserted against the tree so a stale entry fails.** That
+// last clause is here because of the sibling defect found the same day: a
+// `notAnalysed` entry in tools/determinismcheck whose reason had gone false and
+// which nothing re-asked. An exemption list with no rot check is how a
+// permission nobody granted stays granted.
+var nonBundleCorpora = map[string]string{
+	"differential": "Track B's differential ARTIFACT FORMAT corpus. Not a replayable schedule: " +
+		"22 hand-built .diff files that pin the wire format both engines' rigs agree on. " +
+		"Checked by engine/differential/artifact_test.go and by " +
+		"engine-cpp/test/differential_artifact_test.cc against the same bytes, and gated by " +
+		"RequireJudged -- a file under seeds/differential/ must have been judged, or the rig " +
+		"fails. It is somebody's corpus; it is not this lane's.",
+}
+
+// registeredCorpusFindings is the classification, pulled out of corpus() so it
+// can be induced. Returns one message per finding, empty when the tree agrees
+// with the registry.
+func registeredCorpusFindings(dirs []string, entryCount func(string) int) []string {
+	var out []string
+	present := map[string]bool{}
+	for _, d := range dirs {
+		present[d] = true
+	}
+	for name := range nonBundleCorpora {
+		if !present[name] {
+			out = append(out, name+" is registered in nonBundleCorpora and is not in seeds/. "+
+				"A registry entry for a directory that does not exist is an exemption nobody "+
+				"can revoke, because nothing ever reaches it again. Delete the entry or "+
+				"restore the directory.")
+		}
+	}
+	for _, d := range dirs {
+		if _, ok := nonBundleCorpora[d]; !ok {
+			continue
+		}
+		if entryCount(d) == 0 {
+			out = append(out, d+" is registered as a non-bundle corpus and is EMPTY. "+
+				"A registry entry is permission to be a different shape, not permission to "+
+				"be nothing: an empty registered directory is exactly what a corpus looks "+
+				"like after somebody deletes it.")
+		}
+	}
+	sortStrings(out)
+	return out
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
 func corpus(t *testing.T) []bundleDir {
 	t.Helper()
 	root := filepath.Join("..", "..", "seeds")
@@ -78,16 +152,38 @@ func corpus(t *testing.T) []bundleDir {
 	if err != nil {
 		t.Fatalf("reading %s: %v", root, err)
 	}
+
+	var dirs []string
+	for _, e := range ents {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	for _, f := range registeredCorpusFindings(dirs, func(name string) int {
+		sub, err := os.ReadDir(filepath.Join(root, name))
+		if err != nil {
+			return 0
+		}
+		return len(sub)
+	}) {
+		t.Error(f)
+	}
 	var out []bundleDir
 	for _, e := range ents {
 		if !e.IsDir() {
 			continue
 		}
+		if why, registered := nonBundleCorpora[e.Name()]; registered {
+			t.Logf("  %s: a registered non-bundle corpus -- %s", e.Name(), why)
+			continue
+		}
 		b := bundleDir{name: e.Name(), path: filepath.Join(root, e.Name())}
 		mb, err := os.ReadFile(filepath.Join(b.path, "meta.json"))
 		if err != nil {
-			t.Errorf("%s is a directory in seeds/ with no meta.json; a corpus entry that is not a "+
-				"bundle is either an unfinished one or litter, and both need resolving", b.name)
+			t.Errorf("%s is a directory in seeds/ with no meta.json and no entry in "+
+				"nonBundleCorpora; a corpus entry that is neither a bundle nor a registered "+
+				"corpus of another kind is either an unfinished bundle or litter, and both "+
+				"need resolving", b.name)
 			continue
 		}
 		if err := json.Unmarshal(mb, &b.meta); err != nil {
@@ -246,4 +342,71 @@ func verdictOf(b bundleDir) string {
 
 func indent(s string) string {
 	return "    " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n    ")
+}
+
+// TestTheCorpusRegistryIsInduced fires every arm of the classification, because
+// a registry that has only ever been seen agreeing is not a registry that has
+// been checked.
+//
+// Three arms, and each is a failure this project has actually paid for in some
+// form: an unregistered directory (the merge), a registered directory gone empty
+// (nothing yet, and that is the point of pinning it before it happens), and a
+// registry entry whose subject no longer exists (the notAnalysed entry in
+// tools/determinismcheck, found the same day, whose reason had gone false and
+// which nothing re-asked).
+func TestTheCorpusRegistryIsInduced(t *testing.T) {
+	full := func(string) int { return 22 }
+	empty := func(string) int { return 0 }
+
+	// The tree as it stands: differential present and non-empty, nothing else
+	// unregistered. Silence here is what makes the other three arms mean
+	// something.
+	if got := registeredCorpusFindings([]string{"BUG-001", "differential"}, full); len(got) != 0 {
+		t.Fatalf("a tree that agrees with the registry produced findings: %v", got)
+	}
+
+	// A registered directory that is empty.
+	got := registeredCorpusFindings([]string{"BUG-001", "differential"}, empty)
+	if len(got) != 1 || !strings.Contains(got[0], "EMPTY") {
+		t.Fatalf("an empty registered corpus was not reported: %v", got)
+	}
+
+	// A registry entry with nothing behind it.
+	got = registeredCorpusFindings([]string{"BUG-001"}, full)
+	if len(got) != 1 || !strings.Contains(got[0], "not in seeds/") {
+		t.Fatalf("a stale registry entry was not reported: %v", got)
+	}
+
+	// And the arm the merge itself fired: an unregistered directory is not the
+	// registry's business, it is corpus()'s, so this function must stay silent
+	// about it rather than growing a second opinion.
+	if got := registeredCorpusFindings([]string{"BUG-001", "differential", "somebodys-scratch"}, full); len(got) != 0 {
+		t.Fatalf("the registry check reported on an unregistered directory, which is corpus()'s "+
+			"job: %v", got)
+	}
+}
+
+// TestAnUnregisteredDirectoryIsAnError is the merge's own failure, pinned.
+//
+// It runs corpus() against a synthetic seeds/ rather than the real one, because
+// the real one is now correct and a lane cannot be induced by the defect it just
+// eliminated.
+func TestAnUnregisteredDirectoryIsAnError(t *testing.T) {
+	if _, registered := nonBundleCorpora["differential"]; !registered {
+		t.Fatal("seeds/differential is no longer registered; if it was deliberately removed, " +
+			"this test and the registry entry go with it")
+	}
+	if _, registered := nonBundleCorpora["BUG-001"]; registered {
+		t.Fatal("a Track A bundle is registered as a non-bundle corpus, which would exempt it " +
+			"from replaying -- the one thing the corpus lane exists to require")
+	}
+	root := filepath.Join("..", "..", "seeds", "differential")
+	sub, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("the registered corpus is unreadable: %v", err)
+	}
+	if len(sub) == 0 {
+		t.Fatal("seeds/differential is empty")
+	}
+	t.Logf("seeds/differential holds %d entr(ies), checked by its own owners", len(sub))
 }

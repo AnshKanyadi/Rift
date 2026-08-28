@@ -205,7 +205,11 @@ measure_one() {
   work="$scratch/w-$id"
   copy_tree "$work"
   if ! (cd "$work" && patch -p1 --silent --forward < "$abs" 2>/dev/null); then
-    printf 'ROT\n' > "$out"; rm -rf "$work"; return 0
+    # ROT-ANCHOR or ROT-STRUCTURAL. One sentence for both causes was false for
+    # M77 at the A7/B5 merge: its target line was byte-identical and the comment
+    # above it had been rewritten. See scripts/patch-rot-kind.sh.
+    printf 'ROT-%s\n' "$(sh "$ROOT/scripts/patch-rot-kind.sh" "$abs" "$ROOT" 2>/dev/null || echo STRUCTURAL)" > "$out"
+    rm -rf "$work"; return 0
   fi
   # # patch(1) exiting 0 is NOT proof the mutation is present
   #
@@ -336,6 +340,16 @@ elif [ -n "$sys_list" ]; then
       printf '             would have CONFIRMED this claim against a clean tree.\n'
       failed=$((failed + 1)); continue
     fi
+    case $status in
+      ROT-ANCHOR)
+        printf '   ROT       %-44s ANCHOR DRIFT: the mutation site is intact and the\n' "$id"
+        printf '             %-44s PROSE around it moved. Re-anchor; the code is fine.\n' ''
+        failed=$((failed + 1)); continue ;;
+      ROT-STRUCTURAL)
+        printf '   ROT       %-44s STRUCTURAL DRIFT: the code this patch matched is\n' "$id"
+        printf '             %-44s gone. Regenerate, and ask if the class still has a site.\n' ''
+        failed=$((failed + 1)); continue ;;
+    esac
     if [ "$status" != OK ]; then
       printf '   %-9s %-44s the probe produced no measurement\n' "$status" "$id"
       failed=$((failed + 1)); continue

@@ -5,9 +5,25 @@
 # power-covered-by: TestASnapshottedPrefixRefusesAnAppendFromZero -- a DIRECTED test, and the exemption is earned by measurement rather than by the sentence. The PRECONDITION is an append from index 1 carrying entries arriving at a node whose prefix is ALREADY in a snapshot, and counted with the ordering rather than assumed it reads: A7 shape 1 in 200 seeds (5,051 such appends, one meeting the ordering, at seed 155); a3 0 of 200; a2 0 of 200. The previous declaration floored this class under a2 -- a shape in which the precondition does not occur at all -- and cited 2 of 3000 at commit A5-close, before the term-start no-op moved every trace. Re-measured at HEAD: 0 of 3000 under a2. The class did not become safe and it did not become unreachable; the floor was pointed at a shape that cannot produce it. The directed test gives the node a snapshot itself and cannot drift, and it kills this patch by the original symptom: a panic from truncateFrom, "an entry this node was told was committed is being overwritten"
 # power-refutation: the sweep is not the instrument, and the previous covering test proves the point rather than the class -- TestSnapshotPrefixIsNotOverwritten is a 3,000-seed A2 sweep that PASSES with this patch applied at HEAD, so the mutant survived its own covering test for a phase. A covering test built on a sweep stops covering when the workload moves, and it does it silently
 # mutates: a node whose applied prefix is already in a snapshot accepts an append starting at index 1, because the consistency check treats PrevLogIndex 0 as agreeable to everybody. It then overwrites entries it has already applied and told the cluster were committed
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/raft/raft.go
 +++ b/raft/raft.go
-@@ -1887,7 +1887,7 @@
+@@ -3029,33 +3029,33 @@ func (r *Raft) matches(idx Index, term Term) bool {
+ 	if idx == 0 {
+ 		// "Append from the very beginning" is only agreeable to a node that HAS
+ 		// a beginning. Once a prefix is in a snapshot, accepting an append at
+ 		// index 1 means overwriting entries this node has already applied --
+ 		// and it is not a hypothetical: a leader whose view of this follower has
+ 		// been reset sends exactly this, and the follower's own commit index is
+ 		// already past it.
+ 		//
+ 		// Found at 10k by the assertion BUG-007 corrected: "node 3 truncated to
+ 		// 1 with commit index 6". The old form of that assertion, which fired on
+ 		// the durable watermark instead of the commit index, would have caught a
+ 		// legal truncation here and missed this one.
+ 		//
  		// Rejecting is safe and self-correcting: the reject carries lastIndex as
  		// its hint, so the leader jumps forward, finds the follower is past its
  		// own log, and sends a snapshot.
@@ -16,3 +32,16 @@
  	}
  	if idx > r.lastIndex() {
  		return false
+ 	}
+ 	if idx < r.snapIndex {
+ 		// The entry is behind our snapshot: part of a prefix already applied,
+ 		// which this node cannot re-verify and must not pretend to. Refusing is
+ 		// safe -- the reject carries lastIndex as its hint, so a leader that is
+ 		// this far behind our state jumps forward in one round rather than
+ 		// walking backwards into a log that no longer exists.
+ 		return false
+ 	}
+ 	return r.termAt(idx) == term
+ }
+ 
+ // logIsUpToDate implements the candidate-log check: a later term wins, and at

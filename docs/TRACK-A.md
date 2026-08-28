@@ -48,7 +48,7 @@ inconclusive is never counted as a pass.**
 
 ---
 
-## 3. What was found: 37 defects, every one reproducing from a seed
+## 3. What was found: 42 defects, every one reproducing from a seed
 
 `BUGS.md` carries, for each: the symptom, the seed or kill point, the root cause, the fix, **the
 invariant that caught it**, which mutant class would have caught it, and what it would have caused in
@@ -68,7 +68,7 @@ the fix.
 | the rebalance oracle | 1 | **BUG-016** |
 | a plain sweep, the first after a feature landed | 1 | **BUG-010** |
 | inspection while diagnosing a different defect | 1 | **BUG-012** |
-| **the harness checking itself, or somebody reading its own record** | 8 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035**; **BUG-036** — four tests that skipped when their precondition was unmet, so a green depended on the data; **BUG-037** — the determinism pass accepted a `-tags` flag it never forwarded, and reported clean over a package it had loaded no files from |
+| **the harness checking itself, or somebody reading its own record** | 13 | **BUG-029**, **BUG-031**, **BUG-033**, **BUG-035**; **BUG-036** — four tests that skipped when their precondition was unmet, so a green depended on the data; **BUG-037** — the determinism pass accepted a `-tags` flag it never forwarded, and reported clean over a package it had loaded no files from; and five at the Track A / Track B merge (**BUG-038**..**BUG-042**), where the two tracks' lane sets met for the first time |
 | **an enumeration** — listing a property and asking whether it still held | 1 | **BUG-028** |
 | **a false accusation**, chased down instead of tuned away | 1 | **BUG-032** |
 
@@ -132,7 +132,7 @@ live since the feature shipped, invisible to every sweep, and found by nobody re
 
 ---
 
-## 4. The register: 27 instances of verification that verified nothing
+## 4. The register: 30 instances of verification that verified nothing
 
 The most productive artifact in this repository is a numbered list of times a checking mechanism
 reported success while checking nothing. Most of the standing rules came out of it.
@@ -154,6 +154,13 @@ the exemption is what turns the measurement off.
 **#26 — two tests written for this exact failure mode, both vacuous.** Written by someone who had
 spent that day documenting twenty-five prior instances, to assert two properties that had just been
 ruled on. Both passed under the exact mutation each existed to catch. **One command found both.**
+
+**#28, #29, #30 — all three at the merge, and all three in mechanisms that were reporting success.**
+The determinism lane exited 0 having never loaded `engine/riftcgo`, because it passed `-tags` to a
+tool that accepts the flag and drops it. Its `notAnalysed` exemption list named that same package with
+a reason that had gone false, in an entry the code could never reach. And `corpus-reproduces` printed
+*"20 checked, 4 skipped"* against 25 directories, its two numbers still summing to what the population
+used to be. See `BUG-040` and `BUG-042`.
 
 **#27 — a checker wired into something that never calls it.** A7's differential oracle was appended to
 a list of step-oracles. That list is driven by a function that calls one method, and this oracle's
@@ -240,10 +247,10 @@ before the first, `git diff` before the second, `ps -o time=` before the third.
 | | |
 |---|---|
 | phases signed | **A0 – A7** |
-| defects found, all reproducing from a seed | **37** |
+| defects found, all reproducing from a seed | **42** |
 | mutant classes, each with a covering test and a measured floor or a named instrument | **71** |
 | corpus bundles | **24** |
-| vacuous-green register | **27 instances** |
+| vacuous-green register | **30 instances** |
 | A6 exit run | 25,000 seeds — pass 24,903, violations **0**, inconclusive 97 |
 | A7 exit run | 25,000 seeds — pass 24,900, violations **0**, inconclusive 100, errors 0 |
 

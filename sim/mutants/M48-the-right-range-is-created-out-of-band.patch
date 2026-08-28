@@ -7,9 +7,28 @@
 # power-ceiling: 10
 # power-measured: 298 of 300, first at seed 0, under current at commit A5-close; was 235 of 300, first at seed 0, at commit 6e716d5+A5-open
 # mutates: the leader creates the right-hand range out of band as well as by applying the entry, which is candidate design (1) in DESIGN-A4 section 4 -- the one the design rejected for having no agreed point at which the split happened. Caught on 276 of 300 seeds, and caught as a STATE DIVERGENCE rather than as an orphan range: the out-of-band range's birth state is derived at a different moment from every other replica's, so snapshot equivalence reaches it long before anything notices that a range exists which no committed log created. That is why split-partition's orphan clause is induced directly instead (raftcheck/splitpartition_test.go)
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/machine.go
 +++ b/store/machine.go
-@@ -592,6 +592,9 @@
+@@ -789,38 +789,41 @@ func (m *Node) RequestTransfer(target raft.NodeID) bool {
+ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at clock.Instant, s sim.Scheduler) {
+ 	// # A split entry names the extent it was computed against, and it has to match
+ 	//
+ 	// Two leaders can each propose a split from the same descriptor: the first
+ 	// proposes, loses leadership before its entry commits, and the second
+ 	// proposes from the extent it can still see. Both entries can end up
+ 	// committed, at different indices -- and applying the second would move the
+ 	// left range's end BACK past the first split, so two ranges would claim the
+ 	// same keys and their replicas would disagree about which entry is at index
+ 	// one.
+ 	//
+ 	// That is what the epoch is for. A split is applied only if it was computed
+ 	// against exactly this descriptor: same start, same end, and an epoch one
+ 	// step ahead. Anything else is a spec the range has moved past, and it is
+ 	// skipped rather than applied -- the range simply does not split at that
+ 	// entry, which the next threshold crossing will propose again.
  	//
  	// Found by state machine safety on the first A4 sweep: two nodes applying
  	// different commands at index 1 of a range born from a split.
@@ -19,8 +38,40 @@
  	if spec.Left.Epoch != left.desc.Epoch+1 ||
  		!bytes.Equal(spec.Left.Start, left.desc.Start) ||
  		!bytes.Equal(spec.Right.End, left.desc.End) {
-@@ -696,6 +699,38 @@
- 	m.splits++
+ 		left.staleSplits++
+ 		return
+ 	}
+ 	// # The left half happens every time; only the right half is idempotent
+ 	//
+ 	// The first version skipped BOTH when the right range already existed. That
+ 	// is right for creating the range -- re-deriving its state would destroy
+ 	// everything it has done since -- and wrong for the left, whose keys are
+ 	// still sitting where they were.
+ 	//
+ 	// A node that recovers from a snapshot taken before the split and re-applies
+ 	// the split from its log finds the right range already on disk, takes the
+ 	// early return, and keeps serving keys it does not own. Its state machine
+ 	// then diverges from every replica that applied the split once. Snapshot
+ 	// equivalence caught it: two nodes recording different digests for the same
+ 	// index of the same range, on 178 of 300 seeds.
+@@ -934,30 +937,62 @@ func (m *Node) applySplit(left *Replica, spec SplitSpec, index raft.Index, at cl
+ 
+ // reNamespace rewrites a record's engine key from one range's namespace into
+ // another's.
+ //
+ // A record's engine key embeds the namespace, so a record moving between ranges
+ // has to be re-addressed. Doing it here rather than storing namespace-relative
+ // keys is deliberate: the engine key is what the store actually writes, and a
+ // record that carried a relative key would be one decode away from landing in
+ // the wrong range every time somebody forgot.
+ func reNamespace(r kv.Record, from, to []byte) kv.Record {
+ 	if len(r.Key) < len(from) {
+ 		return r
+ 	}
+ 	out := make([]byte, 0, len(to)+len(r.Key)-len(from))
+ 	out = append(out, to...)
+ 	out = append(out, r.Key[len(from):]...)
+ 	return kv.Record{Key: out, Value: r.Value}
  }
  
 +// proposedSplit is the rejected design from DESIGN-A4 section 4: the leader
@@ -58,3 +109,11 @@
  // nextRangeID mints an identifier for a new range.
  //
  // Stepped by the number of machines from a per-machine seed, so two machines
+ // proposing splits at the same moment cannot mint the same number. It only
+ // matters for the PROPOSER: the identifier travels in the split entry, and every
+ // other replica uses the one the proposer chose rather than minting its own.
+ func (m *Node) nextRangeID() RangeID {
+ 	id := m.nextRange
+ 	m.nextRange += RangeID(m.cfg.Nodes)
+ 	return id
+ }

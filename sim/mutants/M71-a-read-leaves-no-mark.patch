@@ -7,9 +7,23 @@
 # power-ceiling: 120
 # power-measured: 22 of 600, first at seed 30, under CURRENT -- which at A7 means read index ON and a third of plain reads addressed to one replica. RE-DERIVED at A7 and the reason is a finding rather than a refresh. Under A6's shape this class measured 0 OF 200 against a declared floor of 1, which the gating lane reported as DROPPED and SLOWED -- and it was neither dead nor unreachable: it was killed at seed 266 within the hour, by hand, on the re-pinned BUG-022 bundle. The class was alive and the WINDOW was wrong, which is A2's kill-time regression exactly: the rate held and the first detecting seed had moved past the declared ceiling. That is the CEILING's first independent catch -- without it a live class reads as unreachable and is a short step from being opted out, which is the M56 shape arriving through a floor instead of through a sentence. A7's shape then moves it back inside the window (first at 30), so the numbers here are stated WITH their shape: a floor without its shape is DESIGN-A5 section 11b's power-config drift again. Floored at half the measured rate and ceilinged at four times the first detecting seed, the margins M62 carries
 # mutates: BUG-022's RECORDING half. A snapshot read no longer stages the key's read mark, so PrewriteInto's third guard has nothing to consult and reads silently as "nobody has looked". The guard is still there and still correct; it is simply never true. This is the half that looks complete from the guard's side, which is why it gets its own mutant
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/replay.go
 +++ b/store/replay.go
-@@ -221,7 +221,6 @@
+@@ -257,29 +257,28 @@ func applyTxnTo(s *kv.Store, b *engine.Batch, c TxnCommand, desc RangeDescriptor
+ 	case OpTxnGet:
+ 		// # A snapshot read stages its MARK, and nothing else
+ 		//
+ 		// It changed nothing until BUG-022. What it now stages is not a version
+ 		// and not an answer: it is the record that this range has been asked
+ 		// about this key at this timestamp, which is what PrewriteInto's third
+ 		// guard consults. The read's ANSWER is still the proposer's alone and
+ 		// still stages nothing, so the asymmetry Replica.readTxn rests on is
+ 		// unchanged.
+ 		//
+ 		// It is here, in the shared apply path, for the reason everything else
  		// is: the driver and the replay run the same code, so the mark is a
  		// function of the log on both sides rather than a fact one of them
  		// remembers.
@@ -17,3 +31,14 @@
  
  	case OpResolveStatus:
  		// The primary's range decides. If the owner is undecided and past its
+ 		// deadline, the decision is MADE here, by writing a rollback record --
+ 		// which is what "the TTL is expiry, not permission" means: nobody
+ 		// concludes the owner is dead, somebody makes it dead, through the log
+ 		// (DESIGN-A6 section 5).
+ 		// The command is addressed to the PRIMARY key, so the lock this builds
+ 		// names itself as its own primary. That is not a coincidence to be
+ 		// preserved by care -- D-A6-9 splits resolution into two commands so the
+ 		// deciding half lands on the primary's range, and this is that half.
+ 		l := kv.Lock{Primary: []byte(c.Key), StartTS: c.StartTS, Deadline: c.Deadline}
+ 		r, _, err := s.ResolveLock(l, c.ExpireAt, true)
+ 		if err != nil || r != kv.ResolveBack {

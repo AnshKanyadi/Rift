@@ -4,9 +4,14 @@
 # expect: killed
 # power-covered-by: floors.go dirty-read -- as M1 -- floored in sim/hunt/floors.go. The raft sweep never runs sim/toy, so a raft-probe number for this class would read zero for a reason that has nothing to do with the claim -- a CONFIRMATION as worthless as a false refutation, and harder to notice because it points the right way. The refutation pass follows the redirection instead: it checks the floor is in floors.go and runs the lane the floors live in
 # mutates: reads are served from engine-visible state instead of committed state
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/sim/toy/toy.go
 +++ b/sim/toy/toy.go
-@@ -510,7 +510,7 @@
+@@ -508,11 +508,11 @@ func (n *Node) onClient(ev sim.Event, s sim.Scheduler) {
+ 	if req.Op == "get" {
+ 		// From the committed view, never from the engine's visible state: the
  		// difference is a write this replica is still holding speculatively,
  		// and letting a client see one is a read of something that can still
  		// un-happen. FlawDirtyRead is that bug, kept reachable.
@@ -15,3 +20,5 @@
  			val, err := n.db.Get([]byte(req.Key))
  			if err != nil {
  				n.hist.End(req.HistIdx, ev.At, sim.RespOK, "")
+ 				return
+ 			}

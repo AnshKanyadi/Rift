@@ -13,9 +13,25 @@
 # argument list, which only evaluates when state machine safety has already failed. `make mutant-covered`
 # therefore reported this class DEAD forever, asking for a covering test that breaks the invariant
 # (DESIGN-A6 sections 36, 36.4). The message is cosmetic to the class; the condition IS the class.
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/raft/raft.go
 +++ b/raft/raft.go
-@@ -1142,7 +1142,7 @@
+@@ -2887,33 +2887,33 @@ func (r *Raft) truncateFrom(i Index) {
+ 	}
+ 	// # What may never be truncated is COMMITTED, not durable
+ 	//
+ 	// The assertion that stood here refused any truncation at or below the
+ 	// durable watermark, on the reasoning that the driver would then have
+ 	// acknowledged an entry that later vanished. That is a stronger claim than
+ 	// Raft makes, and it is false: §5.3 has a follower delete a conflicting
+ 	// entry and everything after it, and those entries are routinely already on
+ 	// disk. A follower's persisted suffix being overwritten by a new leader is
+ 	// the protocol working. What Raft guarantees is that a COMMITTED entry is
+ 	// never overwritten, because the up-to-date check keeps a candidate missing
+ 	// one from ever winning.
+ 	//
  	// The false assertion sat here unreachable for as long as tail.persisted
  	// never moved -- which is the same defect twice: a claim nothing exercised,
  	// guarding a watermark nothing advanced.
@@ -24,3 +40,16 @@
  		panic(fmt.Sprintf(
  			"raft: node %d truncated to %d with commit index %d; an entry this node was told "+
  				"was committed is being overwritten, which is state machine safety failing",
+ 			r.id, i, r.commitIndex))
+ 	}
+ 
+ 	if i <= r.snapIndex {
+ 		panic(fmt.Sprintf(
+ 			"raft: node %d truncated to %d with a snapshot at %d; the entries being discarded are "+
+ 				"already in the snapshot, which means an applied prefix is being rewritten",
+ 			r.id, i, r.snapIndex))
+ 	}
+ 	p, ok := r.pos(i)
+ 	if !ok {
+ 		panic(fmt.Sprintf("raft: node %d truncated to %d, which its log does not hold", r.id, i))
+ 	}

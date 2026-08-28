@@ -5,9 +5,14 @@
 # power-covered-by: TestEmptyHistoryIsInconclusiveNeverPass -- breaks the oracle FRAMEWORK, not the system under test; a sweep of the system cannot see it and its covering test is deterministic. And the exemption's evidence is a measurement rather than the sentence: this class is KILLED by the covering test named above, in about a second, verified by the refutation pass running the mutant lane over the framework group (8 killed, 0 mismatched, 0 rotted). A deterministic kill in one second is a STRONGER statement than a rate floor over thirty seeds, which is the point the split label exists to make: this class is exempt because it is covered BETTER, not because nobody looked
 # power-refutation: the probe reads a verdict this patch computes. Both hunks suppress a floor whose only observable effect is the Inconclusive count, and that count is written by the mutated lines, so a difference measured here is the mutation reporting on itself. A sound instrument would judge vacuity from a number the mutation does not compute: decided-and-total operations per run carried in the census, recorded where the history is ASSEMBLED rather than where it is scored, plus an exit criterion that no run banked a pass below the floor. That is buildable and does not exist; until it does, TestEmptyHistoryIsInconclusiveNeverPass is the only judge independent of the mutation.
 # mutates: the operation floor is ignored, so a checker that consumed nothing reports pass
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/sim/oracle.go
 +++ b/sim/oracle.go
-@@ -251,7 +251,7 @@
+@@ -249,11 +249,11 @@ func CheckAll(c *Counters, h *History, checkers ...EndChecker) []Report {
+ 
+ 		// The floor counts DECIDED operations. Counting recorded ones asks
  		// whether the harness produced traffic; counting decided ones asks
  		// whether the run produced evidence, and only the second is what a
  		// verdict rests on.
@@ -16,9 +21,13 @@
  			reports = append(reports, Report{
  				Checker: c.Name(),
  				Verdict: VerdictInconclusive,
+ 				Detail: fmt.Sprintf(
+ 					"%d of %d operations were decided, below this checker's floor of %d; it concluded "+
 --- a/sim/checker/porcupine.go
 +++ b/sim/checker/porcupine.go
-@@ -150,7 +150,7 @@
+@@ -148,11 +148,11 @@ func (c *Linearizability) Check(h *sim.History) sim.Report {
+ 			}
+ 		}
  		_ = info
  	}
  
@@ -27,3 +36,5 @@
  		return sim.Report{
  			Verdict:  sim.VerdictInconclusive,
  			Detail:   fmt.Sprintf("only %d checkable operations, below the floor of %d", consumed, c.Floor),
+ 			Consumed: consumed,
+ 		}

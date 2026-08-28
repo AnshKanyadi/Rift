@@ -7,9 +7,15 @@
 # power-ceiling: 120
 # power-measured: 22 of 600, first at seed 30, under CURRENT -- which at A7 means read index ON and a third of plain reads addressed to one replica. RE-DERIVED at A7 and the reason is a finding rather than a refresh. Under A6's shape this class measured 0 OF 200 against a declared floor of 1, which the gating lane reported as DROPPED and SLOWED -- and it was neither dead nor unreachable: it was killed at seed 266 within the hour, by hand, on the re-pinned BUG-022 bundle. The class was alive and the WINDOW was wrong, which is A2's kill-time regression exactly: the rate held and the first detecting seed had moved past the declared ceiling. That is the CEILING's first independent catch -- without it a live class reads as unreachable and is a short step from being opted out, which is the M56 shape arriving through a floor instead of through a sentence. A7's shape then moves it back inside the window (first at 30), so the numbers here are stated WITH their shape: a floor without its shape is DESIGN-A5 section 11b's power-config drift again. Floored at half the measured rate and ceilinged at four times the first detecting seed, the margins M62 carries
 # mutates: BUG-022's ENFORCING half. The mark is still recorded on every read and nothing consults it, so a transaction may prewrite a key somebody has already been answered a question about from above its snapshot -- and its commit lands underneath that answer. This is the half that looks complete from the recording side
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/kv/txn.go
 +++ b/kv/txn.go
-@@ -120,9 +120,6 @@
+@@ -117,15 +117,12 @@ func (s *Store) PrewriteInto(b *engine.Batch, key []byte, l Lock, value []byte)
+ 	}
+ 	// The third guard, BUG-022. It is a call rather than an inline check for the
+ 	// reason M70's floor is: the fact this enforces is "a prewrite that loses to
  	// a reader is refused", and the mutant that matters removes the CALL. An
  	// inline block would put the mutation on an error line no test can reach,
  	// and the coverage lane would then report a live path dead.
@@ -19,3 +25,6 @@
  
  	b.Set(LockKey(s.ns, key), encodeLock(l))
  	b.Set(EncodeKey(s.ns, key, l.StartTS), value)
+ 	s.prewrites++
+ 	return nil
+ }

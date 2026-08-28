@@ -80,8 +80,19 @@ person to add an entry has to look up which block they are in. `B` says which tr
 defect in the id itself, and it cannot be misread as a continuation of one sequence.
 
 Track B's entries were renumbered at the merge and their internal cross-references rewritten in the
-same commit. Where a Track B entry cites `BUG-023` or `BUG-032` it means **Track A's**, deliberately:
-those are the two places Track B found Track A had already met the same class.
+same commit — 43 inside the entries and 29 more in Track B's design docs, `.txt` registers, mutant
+headers and C++ comments, which is the half that rots. Where a Track B entry cites `BUG-023` or
+`BUG-032` it means **Track A's**, deliberately: those are the two places Track B found Track A had
+already met the same class. The four `Track A's BUG-005` comments in `engine-cpp/` are cross-references
+too, and say so in the text.
+
+**The `GF-` sequence is NOT split, and that is deliberate.** All of `GF-1` .. `GF-40` were raised in
+Track B, because Track B kept the register; Track A's general forms lived as prose in
+`docs/TRACK-A.md` and the design docs, unnumbered. From `GF-41` the sequence is the repository's. A
+general form is a claim about how this project works rather than about one track's code — `GF-42` was
+raised from three instances in two tracks and one shared document — so splitting it by track would
+mean numbering the same lesson twice. Bug ids split because a bug happens in a place; general forms do
+not, because a general form is what survives the place.
 
 ## Template
 
@@ -2544,6 +2555,256 @@ analysed. **Absent is not clean, and silence is not allowed to be the mechanism 
 ---
 ---
 
+### BUG-038 — (harness) a mutant was disarmed by an edit that changed no behaviour
+
+| | |
+|---|---|
+| **Symptom** | `M77-a-snapshot-read-is-served-by-read-index` reported **ROT** — *patch no longer applies*. The line it mutates was byte-identical to the day it was written, and still is. |
+| **Found by** | `make power-refute`, run for the first time at the A7/B5 merge. `A7-HANDOFF.md` §5.5 carried it **unrun**, and `make ci` includes it, so `make ci` had not completed since A7's fix commits landed. |
+| **Reproduce** | `sh scripts/patch-rot-kind.sh --self-test` plants the shape. The historical hunk is pinned verbatim in `tools/anchorcheck`'s `TestTheRuleWouldHaveCaughtM77`. |
+| **Invariant that caught it** | none existed. `make anchors` is the one that exists now. |
+| **Mutant class** | new: `tools/anchorcheck`. There was no class for this, because the defect is in what a patch **matches on** rather than in any line of shipped code. |
+
+**What actually happened.** `M77`'s hunk anchored on three comment lines:
+
+```
+ // D-A7-4, ruled: BOTH paths stay for the phase. The replicated path is the
+ // differential oracle's other half, and a differential between them is the
+ // only instrument that can catch a stale read no client observed.
+-if n.cfg.ReadIndex && req.Op == "get" && !req.ReadTS.IsSet() && req.Txn == nil {
+```
+
+A7 rewrote that comment. **The mutated line and all three trailing context lines are byte-identical
+in the tree today**; the prose above them is not, and the mutant stopped applying.
+
+**THE IRONY IS EXACT AND IS RECORDED STRAIGHT.** The comment that disarmed it is the Ruling-4 text
+Ansh asked for during A7 — *"a path kept for what it MEASURES rather than for what it SERVES looks
+dead to anyone counting callers"* — written into `store/node.go` so a future reader would not delete
+the replicated read path as unused. **Sharpening the argument disarmed the instrument that guards the
+argument's subject.** Nothing was wrong with the edit. Nothing was wrong with the code. The lane that
+would have said so costs hours and had not been run.
+
+> **A MUTANT ANCHORED ON COMMENT LINES IS DISARMED BY PROSE EDITS THAT CHANGE NO BEHAVIOUR.**
+
+**And A7 learned the sibling of this one axis over.** `M80`'s lesson was that a patch must not
+**mutate** comment lines, because coverage never marks them and `mutant-covered` could therefore never
+answer for it. This is the same mistake on the **matching** side rather than the changing side.
+
+> **A RULE ABOUT WHAT A PATCH MAY REPLACE DID NOT GENERALISE TO WHAT IT MAY ANCHOR ON.**
+
+That is the wrap-up's own siblings rule paying out again: the fix for `M80` was written against the
+instance, and its sibling sat one axis away for a month. See **GF-41**.
+
+**The remedy is mechanical, because the cause is constant.** In a repository whose comments carry the
+arguments, prose edits happen every day. `make anchors` reads every patch's context and fails when a
+hunk anchors on prose. Static, milliseconds, and it would have fired the day the comment changed.
+
+**The threshold is measured, not asserted, and the measurement is the argument.** The obvious rule —
+*no comment in any context line* — flags **47 of 71** patches, because `patch(1)` has fuzz. So fuzz was
+measured on the toolchain the lanes actually use (`patch 2.0-12u11-Apple`), by rewriting the prose of a
+hunk's leading context end to end and asking whether it still applied:
+
+| leading all-prose context lines | result |
+|---|---|
+| 1 | applies (fuzz absorbs) |
+| 2 | applies (fuzz absorbs) |
+| **3** | **FAILS — `M77` exactly** |
+| any *interior* prose context line | FAILS at any length; fuzz trims edges only |
+
+Under the measured rule the catalogue flags **19 of 71**. A threshold picked to make a count small
+would be a weakened checker; this one is picked by what the tool in the lanes does, and `fuzzReach` is
+a named constant with the table behind it so re-measuring is the obvious move if the toolchain changes.
+
+**One further measurement constrained the remedy.** `patch 2.0-12u11-Apple` **refuses a hunk with zero
+leading context**, even a trivially correct one on a five-line file; `git apply` accepts the same hunk.
+So "trim the prose block to nothing and let the other side carry the anchor" is unavailable here, and
+the lane does not advise it. `M77` is re-anchored by **narrowing to `-U2`** instead — its prose runs
+for **36 consecutive lines**, so widening would only have anchored on more prose.
+
+**All 17 flagged patches were re-anchored with an equivalence proof, not by inspection.** Each old and
+new patch was applied to clean copies and the results required to be byte-identical: re-anchoring
+changes where a patch matches, never what it does. 15 widened (`-U5` to `-U19`), 1 narrowed (`M77`), 1
+regenerated (`M79`). All 71 patches apply, and both re-pointed mutations compile.
+
+**A defect in the lane itself, found because two implementations of one rule disagreed.** The first
+parser did not end a hunk at a `--- a/` file header, so a multi-file patch's first file kept
+accumulating the second file's lines — and `M45`'s trailing comment was reported as an **interior**
+one, under the wrong file's extension. It was found only because the migration script and the Go lane
+were written separately and compared. Fixed in both, and the interior count went from 1 to 0.
+
+---
+
+### BUG-039 — (harness) one diagnosis for two causes, and it was false for the one it was printed for
+
+| | |
+|---|---|
+| **Symptom** | `power-refute` and `mutants.sh` printed, for every failed patch: *"patch no longer applies; the code moved and the mutation did not."* For `M77` the code had not moved. |
+| **Found by** | reading the two ROT lines from the same run beside the tree, rather than acting on them. |
+| **Reproduce** | `sh scripts/patch-rot-kind.sh --self-test` — one planted rot of each kind, required to be told apart. |
+| **Invariant that caught it** | none. A wrong explanation and a right one are the same exit code. |
+| **Mutant class** | `TestBothRotSitesTellTheTwoCausesApart` in `tools/anchorcheck` refuses a return to one message. |
+
+**The same run produced both causes, which is what made the collapse visible.** `M77` was **anchor
+drift**: mutation site intact, prose moved. `M79` was **structural drift**: `pendingRead` genuinely
+gained a field — `issuedAt clock.Instant`, from `BUG-035` — between `key string` and the `anyReplica`
+comment, so hunk 1 of 3 could not match. Same message, opposite situations.
+
+**The remedies differ, which is why the message mattered.** Anchor drift means re-anchor and stop
+thinking about it; nothing in the code is wrong. Structural drift means regenerate — and first ask
+whether the class still has a site at all, since a mutant whose site vanished may have nothing left to
+claim. **A reader acting on the printed sentence would have gone looking for a behavioural change to
+`M77` that never happened.**
+
+> **A VERDICT IS EVIDENCE ABOUT A THING ONLY IF IT DESCRIBES WHAT HAPPENED TO THAT THING.** This
+> project applies that to planted defects — a kill counts only if the verdict names the defect
+> planted. It applies identically to a lane explaining its own failure.
+
+**The discriminator is cheap.** Anchor drift iff every **non-comment** line the hunk matched on is
+still present in the file **and** at least one comment context line is not: *the code is all still
+there and the prose is not*. Anything else is structural, and structural is the default, because it is
+the answer that makes someone look at the code.
+
+---
+
+### BUG-040 — (harness) two lanes were green over a package neither had ever opened, and each track reached the false claim by a different route
+
+| | |
+|---|---|
+| **Symptom** | `make determinism` exited **0** having never loaded `engine/riftcgo`. Separately, `tools/determinismcheck`'s `notAnalysed` map named that package with a reason that was false, in an entry nothing ever consulted. |
+| **Found by** | running Track A's full lane set against the merged tree, then reading each artifact's claim against a measurement instead of against the other artifact. |
+| **Reproduce** | `determinismcheck -tags rift_cgo ./engine/riftcgo/` → `build constraints exclude all Go files`. Over `./...` → silence. `go build -tags rift_cgo ./engine/riftcgo/` with no archive → succeeds. |
+| **Invariant that caught it** | none. Both failures produce the same silence, which is `GF-39`'s own sentence. |
+| **Mutant class** | `TestAStaleNotAnalysedEntryIsRejected`, plus the end-to-end induction that restores the deleted entry and requires the lane to fail. |
+
+**Track B's half.** `Makefile`'s `determinism` lane read `determinismcheck -tags rift_cgo ./...` under
+a comment asserting *"the cgo engine is LOADED AND ANALYZED rather than vanishing from `./...`"*. It
+vanished. `singlechecker.Main` accepts `-tags` and drops it, which is `BUG-037` — whose **fix was two
+tests**, and this lane still carried the flag that does nothing. Measured:
+
+```
+determinismcheck -tags rift_cgo ./engine/riftcgo/   build constraints exclude all Go files
+determinismcheck -tags rift_cgo ./...               SILENT: exit 0, zero mentions of riftcgo
+GOFLAGS=-tags=rift_cgo determinismcheck ./...       loads clean
+```
+
+The `./...` form is the dangerous one: a tagged package is not in the list at all, so there is no error
+to notice. The comment's **last** clause was true — `registry_test.go` passes the tag through
+`packages.Config.BuildFlags`, which does reach the loader — so the **test** had been analysing the
+package all along while the **lane** never had.
+
+**Track A's half, pointing the opposite way.** `notAnalysed` named `riftcgo` because it *"cannot
+type-check without the C++ static archive and rift.h."* It builds without one, measured with no archive
+anywhere in the tree — and `registry_test.go`, fifty lines away, had been proving that on every run.
+
+**And the entry was UNREACHABLE, which is why its falsity was undetectable.** The loop `continue`s on
+`len(p.Syntax) > 0` — loaded and analysable — before it ever consults the map. Induced: the test passes
+with no `not analysed, by name` line in `-v` output and no mention of `riftcgo` at all.
+
+**`CARRY-FORWARD.md` claimed the rejection already existed:** *"will stop accepting the `notAnalysed`
+entry the moment the package becomes loadable — because a named exemption is only honest while the
+reason holds."* There was none. That is `blind-unused-hatch`'s rule one level up, in a file that had no
+such rule. It has one now, and it is what makes the map safe to be **empty**: an empty list with a live
+rejection is a claim; an empty list with nothing checking it is only an absence.
+
+**This is `GF-39`'s second concrete instance, and it is a worse shape than the first.**
+
+> **TWO TRACKS ARRIVED AT FALSE CLAIMS ABOUT THE SAME PACKAGE BY DIFFERENT ROUTES, AND NEITHER WAS
+> DETECTABLE FROM ITS OWN SIDE.** Track B claimed the lane saw a package it could not see. Track A
+> claimed the package could not be seen at all. Each track's claim was checkable only with the other
+> track's artifact in the same tree, which is precisely the state that did not exist until the merge.
+
+The first instance was an auto-merge pinning a table true on neither branch. This one needed no merge
+mechanics at all: both claims were false on their own branches, and there was no vantage point from
+which to notice.
+
+**Fixed:** `GOFLAGS=-tags=rift_cgo` in the lane (measured to reach the loader), the `notAnalysed` entry
+**deleted** rather than corrected, and the rejection added and induced both ways.
+
+**Still open by design:** `engine/riftcgo`'s scope stays **provisional** in `scope.go`. The lane now
+loads the package; the package is excluded; so the pass still applies no rule to it. What settles that
+is I1, with the archive built — and the measurement above changes only the cost, not the schedule: the
+pass never needed the archive, so the obstacle that entry named was never there.
+
+---
+
+### BUG-041 — (harness) a corpus lane whose premise was true when it was written
+
+| | |
+|---|---|
+| **Symptom** | `make test`, `make race` and `make corpus` red on the merged tree. `differential is a directory in seeds/ with no meta.json`. All 24 Track A bundles replayed. |
+| **Found by** | Track A's full lane set on the merged tree — the moment `GF-39` names. |
+| **Reproduce** | `TestTheCorpusRegistryIsInduced` fires all four arms against a synthetic tree. |
+| **Invariant that caught it** | the corpus lane itself, correctly: an unclassified directory under `seeds/` **is** a finding. |
+| **Mutant class** | the four induction arms, plus `TestAnUnregisteredDirectoryIsAnError`. |
+
+`corpus()` treated every directory under `seeds/` as a Track A bundle. That was true the day it was
+written and stopped being true when `seeds/differential/`'s 22 format entries arrived with the merge.
+
+**The finding is not the red. It is that three lanes walk `seeds/` and disagreed about what a
+non-bundle directory means:**
+
+| lane | what it did with `seeds/differential/` |
+|---|---|
+| `cmd/simctl/corpus_test.go` | **errored** — the only right answer |
+| `scripts/corpus-reproduces.sh` | **skipped it silently** — see `BUG-042` |
+| `scripts/bundle-seeds.sh` | never looked; it iterates `seeds/BUG-*/` |
+
+**The cheap fix is the wrong one.** `if name == "differential" { continue }` is a hole with a comment
+on it. What landed is a registry: a directory declares its **kind** and its **owner**, an unregistered
+one is an error, and **the registry is asserted against the tree so a stale entry fails**. That last
+clause is here because of `BUG-040`, found the same day: an exemption list with no rot check is how a
+permission nobody granted stays granted. A registered directory must also be **non-empty** — a registry
+entry is permission to be a different shape, not permission to be nothing.
+
+**THE OBLIGATION PREDICTED A MERGE ITEM HERE AND PREDICTED IT BACKWARDS.** `CARRY-FORWARD.md`, written
+while classifying Track B's artifacts:
+
+> *"`engine/differential`'s tests read a fixture corpus from `seeds/differential/format` (22 entries).
+> The package and the corpus have to move together or its tests fail on a missing directory, which is a
+> merge-completeness item rather than a defect."*
+
+They moved together. That failure did not occur. `engine/differential` passes in `make test`. **The lane
+that went red was Track A's corpus lane, policing the directory the fixtures landed in** — which the
+obligation could not see, because it was written from the package's side.
+
+> **AN OBLIGATION WRITTEN FROM ONE VANTAGE PREDICTS THE FAILURES VISIBLE FROM THAT VANTAGE.** The
+> author asked "what does this package need?" and answered correctly. Nobody asked "what already owns
+> the place this is going?"
+
+---
+
+### BUG-042 — (harness) three of four drop paths counted what they dropped
+
+| | |
+|---|---|
+| **Symptom** | `scripts/corpus-reproduces.sh` printed *"20 bundles checked, 4 skipped"* against a `seeds/` holding **25** directories. The 25th was not checked, not skipped, not printed, and not in any total. |
+| **Found by** | reading the script while its known-red run was in flight, then confirming against its own output. |
+| **Reproduce** | remove `notbundle=$((notbundle + 1))` and run the lane: *"1 of 25 directories are unaccounted for."* |
+| **Invariant that caught it** | none, and the counters existed precisely to be that invariant. |
+| **Mutant class** | the totals reconciliation itself: `checked + skipped + notbundle == dirs`, or exit 2. |
+
+The loop leaves early in four places. Three incremented a counter and printed a line. The fourth —
+`[ -f "$d/meta.json" ] || continue` — did neither.
+
+**It cost nothing until the merge put a directory on that path**, and then the two numbers still summed
+to 24, because they had summed to the population back when 24 **was** the population.
+
+> **A COUNT TAKEN WHEN IT HAPPENED TO EQUAL THE POPULATION READS AS A POPULATION FOREVER AFTER.**
+
+That is the found-by table's shape in a lane — a summary that does not add up to its own population, in
+a project whose entire argument is that verification must not be vacuous.
+
+**And the framing correction is part of the finding.** `corpus-reproduces` was red on this run, and it
+would have been wrong to report that as a discovery: `CARRY-FORWARD.md` already recorded *"20 checked,
+4 skipped, 1 failure, and the failure is `seeds/BUG-015`"*, ending *"Track A does not exit while
+`corpus-reproduces` is red."* The run **reproduced a recorded red**. What was new is that the same
+numbers now mean something different, and that is measured rather than read out of the code.
+
+**Fixed:** the fourth path counts and names what it drops, the header line reports the population
+(`25 directories in seeds/: …`), and the totals must reconcile or the lane exits 2 — so a fifth drop
+path added later cannot be as silent as the fourth was.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its
@@ -4872,6 +5133,86 @@ identifies as the wrong moment to make this kind of decision. Carried as `CF-7`.
 
 ---
 
+### GF-41 — a mutant anchored on comment lines is disarmed by prose edits that change no behaviour
+
+**Raised at the A7/B5 merge from `BUG-038`, and promoted because the cause is not an incident.**
+
+`M77` stopped applying. Its mutated line was byte-identical, its trailing context was byte-identical,
+and three comment lines above it had been rewritten. The mutant was disarmed by an edit that changed
+no behaviour at all.
+
+> **IN A REPOSITORY WHOSE COMMENTS CARRY THE ARGUMENTS, PROSE EDITS ARE CONSTANT. THAT MAKES THIS A
+> STANDING DISARMING MECHANISM RATHER THAN AN INCIDENT: EVERY TIME AN ARGUMENT IS SHARPENED, SOME
+> PATCH SOMEWHERE SILENTLY STOPS APPLYING, AND NOTHING SAYS SO UNTIL A LANE NOBODY CAN AFFORD TO RUN
+> GETS RUN.**
+
+**The irony is the argument.** The comment that disarmed `M77` is the Ruling-4 text about a path kept
+for what it *measures* rather than for what it *serves* — written precisely so a future reader would
+not delete the replicated read path as unused. Sharpening the argument disarmed the instrument
+guarding the argument's subject.
+
+**And it is a sibling of a lesson already learned, one axis over.** `M80` taught that a patch must not
+**mutate** comment lines, because coverage never marks them. `M77` is the same mistake on the
+**matching** side.
+
+> **A RULE ABOUT WHAT A PATCH MAY REPLACE DID NOT GENERALISE TO WHAT IT MAY ANCHOR ON.**
+
+The `M80` fix was written against its instance rather than against its class, and the sibling sat one
+axis away for a month. Every rule about a patch now gets asked in both directions: what does it
+change, and what does it match on.
+
+**Mechanised, because a standing mechanism needs a standing check.** `make anchors` reads every
+patch's context statically and fails when a hunk anchors on prose. Milliseconds, and it would have
+fired the day the comment changed rather than at the next full catalogue run.
+
+**Its threshold is measured, and that is the part worth copying.** The obvious rule flags 47 of 71
+patches; `patch(1)`'s fuzz absorbs one or two all-prose lines and not three, measured on the toolchain
+the lanes actually use, so the rule is "three or more, or any interior" and it flags 19. A threshold
+picked to make a count small is a weakened checker. A threshold picked by what the tool does is a
+measurement, and it is re-taken when the tool changes.
+
+---
+
+### GF-42 — an obligation records why it is blocked, nothing re-asks the blocker, and the reason rots while the obligation stands
+
+**Raised at the A7/B5 merge, from three instances in one day.**
+
+| where | the reason it recorded | what was true |
+|---|---|---|
+| `tools/determinismcheck` `notAnalysed` | `riftcgo` *"cannot type-check without the C++ static archive"* | it builds without one — and the entry was **unreachable**, so nothing could contradict it |
+| `scripts/corpus-reproduces.sh` | *"20 bundles checked, 4 skipped"* | it summed to the population when written; the population grew |
+| `CARRY-FORWARD.md` `BUG-015` | *"the covering test cannot be used to check any of this as it stands"* | both named blockers were gone — the covering test is directed now and `mutant-covered` has `ONLY` |
+
+> **AN OBLIGATION'S BLOCKER IS A CLAIM ABOUT THE WORLD, AND IT IS THE ONLY PART OF AN OBLIGATION
+> NOBODY REREADS: THE TASK IS WHY YOU OPEN THE ENTRY, AND THE BLOCKER IS WHY YOU CLOSE IT AGAIN.**
+
+The task gets reread constantly — it is why anyone opens the entry. The blocker is read once, believed,
+and used as the reason to stop reading. So a stale blocker does not merely sit there: it actively
+turns readers away from work that has become cheap.
+
+**All three were found by a person reading records beside lanes, not by any lane.** That is the
+argument for a mechanism rather than for more care.
+
+**The mechanism, and it is deliberately the cheapest thing that works.** An entry may declare:
+
+```
+<!-- BLOCKER
+     what: one line naming what is blocked
+     stale-when: <shell command>
+-->
+```
+
+`make blockers` runs each condition from the repo root. **Exit 0 means the blocker has lifted** and the
+lane fails, naming the entry. It does not try to check every blocker: one whose lifting is not a
+machine-checkable condition carries no declaration and the lane is silent about it. **That limit is
+stated rather than papered over** — what this buys is that the blockers somebody *could* express get
+re-asked on every push, at the cost of one `grep` each.
+
+**Its first live subject is honest about the cost it names:** `make power-mutants` is queued behind the
+eight remaining sweep-based covering tests, and the declaration names the most expensive of them as a
+tripwire. Verified still blocked; induced by renaming the tripwire and requiring the lane to fail.
+
+---
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**

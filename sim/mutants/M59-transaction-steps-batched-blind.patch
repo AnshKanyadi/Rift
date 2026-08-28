@@ -7,9 +7,27 @@
 # power-ceiling: 10
 # power-measured: 273 of 300, first at seed 0, under current at commit 9c0c900+A6
 # mutates: transaction steps in one Ready are staged into one batch and written once at the end, so a step cannot see the effects of the steps above it. Every step READS the engine before it writes -- a prewrite asks whether the key is locked, a resolve reads the lock and the primary's record -- so two prewrites of one key in one batch both succeed and the second overwrites the first's lock. Two transactions own one key and neither knows (BUG-018). The replica's state then depends on how many entries happened to arrive together, which is not a function of the log
+# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
+#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
+#   one were applied to clean copies and the results are byte-identical.
 --- a/store/node.go
 +++ b/store/node.go
-@@ -637,10 +637,8 @@
+@@ -806,39 +806,37 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
+ 						if owned {
+ 							// # Every step reads the engine, so every step is
+ 							// # flushed on both sides of itself
+ 							//
+ 							// A prewrite asks whether the key is locked and
+ 							// whether a newer commit exists; a resolve reads the
+ 							// lock and the primary's record. All of that is an
+ 							// ENGINE read, so a step staged into a batch and not
+ 							// yet written is a step the next one cannot see.
+ 							//
+ 							// Batching a whole Ready therefore made the steps in
+ 							// it blind to each other: two prewrites of one key
+ 							// both succeeded and the second overwrote the first's
+ 							// lock, so two transactions owned a key and neither
+ 							// knew (BUG-018). The replica's state then depended
  							// on how many entries happened to arrive together --
  							// which is not a function of the log, and is exactly
  							// what snapshot equivalence is for.
@@ -19,3 +37,18 @@
  							n.answerTxn(e, c, res, at, s)
  						}
  						k = c.Key
+ 						op = "txn"
+ 					}
+ 
+ 				case isSplitCommand(e.Data):
+ 					if noop {
+ 						n.noopReachedArm++
+ 					}
+ 					// A split is a command to the state machine like any other,
+ 					// and raft has no business knowing what a range is.
+ 					//
+ 					// # The staged writes are flushed FIRST, and the order is
+ 					// # not a preference
+ 					//
+ 					// A split reads the range's whole version set and rewrites
+ 					// it. Writes staged earlier in this same Ready are still in
