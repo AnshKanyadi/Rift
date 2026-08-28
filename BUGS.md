@@ -1892,6 +1892,40 @@ anything.
 
 ---
 
+### GF-36 — a lane that depends on an artifact it does not build reports the absence as success
+
+**Raised by `BM120`'s survival**, B5.4, and the survival was worth more than the mutant.
+
+`BM120` makes snapshots pin nothing. It is aimed at the cgo differential, which takes its workloads
+from real `rift_diff` artifacts and — correctly, and with a comment saying so — **skips** when that
+binary is absent. The `cpp-cgo` lane built `rift_capi` and not `rift_diff`. The mutant runner deletes
+`engine-cpp/build` in the copied tree. So the test skipped, `go test` reported `ok`, the lane went
+green, and the mutant survived.
+
+> **A SKIP INSIDE A PASSING TEST BINARY IS A GREEN LANE. THE TEST KNEW IT HAD NOT RUN AND SAID SO; THE
+> LANE HAD NO WAY TO HEAR IT.**
+
+**The skip was right and the lane was wrong**, which is the part worth keeping. Every instinct on
+finding this points at the skip — make it a failure, make it loud, make it conditional. All of that
+would break a Go-only checkout for no reason. The defect is that a lane declared a dependency in a
+comment and not in its recipe.
+
+**And the failure mode is silent in the direction that matters.** A lane that cannot run its check
+looks *exactly* like a lane whose check passed — same exit code, same absence of output, less time.
+Nothing about a green `cpp-cgo` distinguished "the boundary agrees with the model across 18 seeded
+workloads" from "the boundary was never asked."
+
+**What found it was the mutant, and only the mutant.** Every human-facing signal said the lane was
+fine: it was green on the real tree, where the binary happens to exist because some other lane built
+it. The class of bug — *a lane passing for a reason unrelated to its claim* — is `HARNESS-002`'s (a
+warm build directory) and `BM21`'s. Both were also found by a mutant surviving, and in all three the
+mutant was the only thing in the repo that ran the lane in a state a developer never sees.
+
+**Operationally, for I1 and I2:** a lane's recipe must build everything its tests refuse to run
+without. Grep for `Skipf` in anything a lane runs and check the recipe produces what each one names.
+
+---
+
 ### GF-32 — a doc written before its code can specify a mechanism the code makes unnecessary
 
 **Raised by `B5-D2`, B5.0 — the phase's first finding, and it is not a doc erratum.**

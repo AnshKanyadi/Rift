@@ -198,7 +198,15 @@ cpp-diff: ## B4: the differential harness -- the C++ engine against engine/model
 .PHONY: cpp-cgo
 cpp-cgo: ## B5: the Go wrapper over the C boundary, against engine/model
 	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
-	$(CMAKE) --build $(CPP_BUILD)/test --target rift_capi -j $(WORKERS)
+# rift_diff IS BUILT HERE TOO, and its absence is why BM120 survived. The
+# cgo differential takes its workloads from real rift_diff artifacts and SKIPS
+# when the binary is missing -- and a skip inside a passing `go test` is a
+# green lane. The mutant runner deletes engine-cpp/build in the copied tree, so
+# every cgo-differential mutant was being scored against a test that never ran.
+#
+#   A LANE THAT DEPENDS ON AN ARTIFACT IT DOES NOT BUILD REPORTS THE ABSENCE OF
+#   THE ARTIFACT AS SUCCESS.
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_capi rift_diff -j $(WORKERS)
 # ONLY THE ARCHIVE PATH IS HERE. The header's location is package-relative and
 # lives in the source via ${SRCDIR}, so this package TYPECHECKS with no C++ build
 # present -- which is what lets `make determinism` load the whole tree without a
