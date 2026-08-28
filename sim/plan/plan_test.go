@@ -231,10 +231,53 @@ func TestDeletingAFaultEntryPerturbsOnlyItself(t *testing.T) {
 	cfg.Partitions = 0
 	cfg.Holds = 0
 
-	p, err := plan.Materialize(31337, cfg)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
+	// # The fixture GUARANTEES a node-0 fault, and a search that fails is a
+	// # failure rather than a skip
+	//
+	// This used to materialize one fixed seed and `t.Skip` when that seed
+	// happened to produce no node-0 fault. **A skip that depends on data is a
+	// green that depends on data**: the seed is deterministic, so the skip was
+	// either always taken or never taken -- and which one it was is a property of
+	// a generator that has moved repeatedly in this project. A7's term-start
+	// no-op moved every trace at once. The day the draw shifted, this test would
+	// have gone on reporting success while checking nothing, and nothing would
+	// have said so.
+	//
+	// Measured before changing it: seed 31337 carried 4 fault entries, 2 of them
+	// on node 0, so the skip was LATENT rather than active. The test was running.
+	// That is the honest version and it is the more useful one -- this is a green
+	// that WOULD have come to depend on data, caught before it did, and the same
+	// class as a floor recorded without its shape.
+	//
+	// So the seed is SEARCHED for rather than assumed, and exhausting the search
+	// is a failure. That is the same rule the corpus lane uses: a search that
+	// finds nothing is a finding, not a pass.
+	const searchBudget = 500
+	var p *plan.Plan
+	var chosen uint64
+	for seed := uint64(0); seed < searchBudget; seed++ {
+		cand, err := plan.Materialize(seed, cfg)
+		if err != nil {
+			t.Fatalf("materialize seed %d: %v", seed, err)
+		}
+		for _, e := range cand.Faults.Entries {
+			if e.Node == 0 {
+				p, chosen = cand, seed
+				break
+			}
+		}
+		if p != nil {
+			break
+		}
 	}
+	if p == nil {
+		t.Fatalf("no seed below %d produced a fault entry on node 0, so this test has nothing to "+
+			"delete and the property it exists to check would go unchecked.\n"+
+			"  It used to SKIP here. A skip reports success for a run that examined nothing, and "+
+			"this one would have started skipping silently the first time the fault generator's "+
+			"draws moved.", searchBudget)
+	}
+	t.Logf("seed %d: %d fault entries, at least one on node 0", chosen, len(p.Faults.Entries))
 
 	deliveries := func(pp *plan.Plan) []string {
 		nodes, es := nodesFor(pp)
@@ -264,8 +307,13 @@ func TestDeletingAFaultEntryPerturbsOnlyItself(t *testing.T) {
 			trimmed.Faults.Entries = append(trimmed.Faults.Entries, e)
 		}
 	}
+	// The search above guarantees this, so an equal length here means the search
+	// predicate and the trim disagree about what a node-0 entry is -- which is a
+	// defect in this test, and it says so rather than skipping.
 	if len(trimmed.Faults.Entries) == len(p.Faults.Entries) {
-		t.Skip("this seed produced no node-0 faults to delete")
+		t.Fatalf("seed %d was selected for having a node-0 fault entry and trimming removed none "+
+			"of its %d entries; the search predicate and the trim disagree",
+			chosen, len(p.Faults.Entries))
 	}
 
 	after := deliveries(&trimmed)
