@@ -46,8 +46,23 @@ type Transport struct {
 
 	mu      sync.Mutex
 	dropped uint64 // sends discarded because a peer's queue was full or absent
-	sent    uint64
+	sent    uint64 // envelopes handed to a peer's queue
+	wire    uint64 // BYTES ACTUALLY WRITTEN TO A SOCKET
+	recv    uint64 // bytes read off a socket
 }
+
+// wireBytes and recvBytes are the counters that prove the cluster is REAL.
+//
+// A queued send proves a client called Send. Only BYTES ON A SOCKET prove a
+// process talked to another process -- and I2's whole claim is that these are
+// separate processes over a network. BUG-046 is the measured instance of what
+// the alternative looks like: a run reporting a byte-identical trace hash from
+// an engine it never opened, indistinguishable from success by every other
+// signal.
+//
+//	A CLUSTER THAT RUNS IN ONE PROCESS WITH A LOOPBACK THAT NEVER LEAVES
+//	USERSPACE REPORTS A CLEAN HISTORY AND LOOKS EXACTLY LIKE SUCCESS. The
+//	counters go in before the first green, not after it.
 
 type peer struct {
 	addr string
@@ -98,10 +113,26 @@ func (t *Transport) Send(e sim.Envelope) {
 
 // Counters reports what this transport did. A chaos run gates on these: a run
 // that sent nothing is indistinguishable from a clean one by every other means.
-func (t *Transport) Counters() (sent, dropped uint64) {
+func (t *Transport) Counters() (sent, dropped, wireBytes uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.sent, t.dropped
+	return t.sent, t.dropped, t.wire
+}
+
+// AddRecv records bytes read off a socket. Listen's caller reports them,
+// because the listener is not owned by any one Transport.
+func (t *Transport) AddRecv(n uint64) {
+	t.mu.Lock()
+	t.recv += n
+	t.mu.Unlock()
+}
+
+// RecvBytes is the receiving half of the reality check. Sent bytes prove
+// somebody wrote; received bytes prove somebody else read.
+func (t *Transport) RecvBytes() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.recv
 }
 
 func (t *Transport) count(p *uint64) {
@@ -137,6 +168,10 @@ func (t *Transport) pump(p *peer) {
 			if err := riftnet.WriteFrame(conn, e); err != nil {
 				_ = conn.Close()
 				conn = nil
+			} else {
+				t.mu.Lock()
+				t.wire += uint64(e.Size())
+				t.mu.Unlock()
 			}
 		}
 	}

@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -53,12 +54,31 @@ type Node struct {
 	up     bool
 	kills  int
 	starts int
+	pid    int
+}
+
+// PID is this node's operating-system process id, or 0 when it is down.
+//
+// It is exposed because I2's claim is SEPARATE PROCESSES, and the only proof of
+// that is distinct pids that are not this process's. A cluster of goroutines
+// would satisfy every other counter here.
+func (n *Node) PID() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.up {
+		return 0
+	}
+	return n.pid
 }
 
 // Supervisor owns the cluster's processes.
 type Supervisor struct {
 	bin   string
 	nodes []*Node
+	extra func(*Node) []string // per-node arguments beyond the common three
+
+	stderrMu sync.Mutex
+	stderr   strings.Builder
 
 	mu     sync.Mutex
 	counts Counters
@@ -78,6 +98,19 @@ func New(bin string, nodes []*Node) *Supervisor {
 	return &Supervisor{bin: bin, nodes: nodes}
 }
 
+// NewWithArgs adds per-node arguments -- peer lists, chiefly.
+func NewWithArgs(bin string, nodes []*Node, extra func(*Node) []string) *Supervisor {
+	return &Supervisor{bin: bin, nodes: nodes, extra: extra}
+}
+
+// Stderr is everything the nodes wrote. A node's own exit counters arrive this
+// way, and they are the only evidence available after it is gone.
+func (s *Supervisor) Stderr() string {
+	s.stderrMu.Lock()
+	defer s.stderrMu.Unlock()
+	return s.stderr.String()
+}
+
 // Start launches every node.
 func (s *Supervisor) Start() error {
 	for _, n := range s.nodes {
@@ -92,13 +125,13 @@ func (s *Supervisor) startOne(n *Node) error {
 	if err := os.MkdirAll(n.Dir, 0o755); err != nil {
 		return err
 	}
-	cmd := exec.Command(s.bin,
-		"--id", fmt.Sprint(n.ID),
-		"--addr", n.Addr,
-		"--dir", n.Dir,
-	)
+	args := []string{"--id", fmt.Sprint(n.ID), "--addr", n.Addr, "--dir", n.Dir}
+	if s.extra != nil {
+		args = append(args, s.extra(n)...)
+	}
+	cmd := exec.Command(s.bin, args...)
 	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = &teeStderr{s: s}
 	// SETPGID so a kill reaches the child and nothing else. Without it a
 	// signal aimed at the group would reach the harness, and a chaos runner
 	// that kills itself is a failure mode with a very confusing report.
@@ -108,6 +141,7 @@ func (s *Supervisor) startOne(n *Node) error {
 	}
 	n.mu.Lock()
 	n.cmd, n.up = cmd, true
+	n.pid = cmd.Process.Pid
 	n.starts++
 	n.mu.Unlock()
 
@@ -189,4 +223,46 @@ func (s *Supervisor) Counters() Counters {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.counts
+}
+
+// Reality is the evidence that this cluster is what the phase claims: separate
+// operating-system processes, not goroutines wearing the same interface.
+//
+// I1 supplied the measured instance of the alternative. BUG-046: a run reported
+// a byte-identical trace hash having never opened the engine, and nothing in the
+// verdict distinguished it from success. The equivalent here is a "cluster" in
+// one process with an in-memory transport, which would produce a clean history
+// and satisfy every checker.
+//
+//	THE COUNTERS GO IN BEFORE THE FIRST GREEN, NOT AFTER IT.
+type Reality struct {
+	PIDs     []int // one per live node
+	Distinct int   // how many are distinct and not this process's
+	Self     int
+}
+
+// Reality reports the process evidence.
+func (s *Supervisor) Reality() Reality {
+	r := Reality{Self: os.Getpid()}
+	seen := map[int]bool{}
+	for _, n := range s.nodes {
+		p := n.PID()
+		r.PIDs = append(r.PIDs, p)
+		if p != 0 && p != r.Self && !seen[p] {
+			seen[p] = true
+		}
+	}
+	r.Distinct = len(seen)
+	return r
+}
+
+// teeStderr copies a node's stderr to this process's and retains it, so exit
+// counters survive the node that printed them.
+type teeStderr struct{ s *Supervisor }
+
+func (t *teeStderr) Write(p []byte) (int, error) {
+	t.s.stderrMu.Lock()
+	t.s.stderr.Write(p)
+	t.s.stderrMu.Unlock()
+	return os.Stderr.Write(p)
 }

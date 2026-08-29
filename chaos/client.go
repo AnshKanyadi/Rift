@@ -23,8 +23,24 @@ import (
 //	report a violation that is an artifact of the measurement.
 //
 // So every instant here comes from ONE clock -- the client's -- and node clocks
-// never touch the history. The cluster's own skew is the system under test, not
-// the instrument.
+// never touch the history.
+//
+//	THE CLUSTER'S SKEW IS THE SYSTEM UNDER TEST, NOT THE MEASUREMENT.
+//
+// # AND THIS IS ORACLE INDEPENDENCE, APPLIED TO THE TIMEBASE
+//
+// That rule has always been about the DATA an oracle reads: the vacuous-green
+// register's eighth entry is "the oracle asked the accused", where a durability
+// checker compared a node's claims against the engine's own view of what it
+// held. This is the same rule one axis over.
+//
+//	AN ORACLE THAT TAKES ITS TIMEBASE FROM THE SYSTEM IT IS CHECKING IS ASKING
+//	THE ACCUSED WHAT TIME IT IS.
+//
+// In a run whose whole subject is clock skew, a history stitched from per-node
+// clocks produces violations that are artifacts of the instrument -- and they
+// look exactly like the finding the phase is hunting for, which is the worst
+// possible way to be wrong.
 //
 // # An unknown outcome is RECORDED, never dropped
 //
@@ -68,9 +84,15 @@ func (c *Client) Begin(op, key, value string) int {
 
 // End records a response.
 //
-// kind must be a real outcome. sim.RespUnset is refused here rather than
-// written, because History.Validate rejects it later and a forgotten field
-// should fail at the call site where it can still be attributed.
+// kind must be a real outcome. sim.RespUnset is refused HERE rather than left to
+// History.Validate, and the placement is the point.
+//
+//	A CHECK THAT FIRES FAR FROM THE MISTAKE REPORTS A SYMPTOM WITHOUT A SUSPECT.
+//
+// Validate would reject it too -- at the END of a chaos run, as an invalid
+// history with no author, after the cluster is gone and the operation that
+// forgot its outcome is one of tens of thousands. Failing at the call site costs
+// a panic and names the caller.
 func (c *Client) End(handle int, kind sim.ResponseKind, value string) {
 	if kind == sim.RespUnset {
 		panic("chaos: an operation was ended with RespUnset; a forgotten outcome must not read as a decision")
