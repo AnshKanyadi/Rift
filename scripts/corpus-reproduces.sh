@@ -61,6 +61,7 @@
 set -eu
 
 GO=${GO:-go}
+GOTAGS=${GOTAGS:-}
 SEEDS=${1:-seeds}
 ROOT=$(pwd)
 scratch=$(mktemp -d)
@@ -147,7 +148,16 @@ print(' '.join(s))")
   label=$(for one in $mutant; do basename "$one"; done | paste -sd+ -)
 
   checked=$((checked + 1))
-  out=$(cd "$work" && $GO run ./cmd/simctl replay --bundle "$d" 2>&1 || true)
+  # ENGINE, optional and empty by default, so this lane's behaviour is unchanged
+  # unless a caller asks for a different one. I1 runs it with ENGINE=cgo to meet
+  # its first exit criterion: every bundle must reproduce its FINDING against the
+  # real engine, which is a stronger statement than a matching trace -- a bundle
+  # whose defect is fixed matches and reports nothing.
+  eng=""
+  if [ -n "${ENGINE:-}" ] && [ "${ENGINE}" != "model" ]; then
+    eng="--engine ${ENGINE} --engine-root ${work}/engine-root"
+  fi
+  out=$(cd "$work" && $GO run $GOTAGS ./cmd/simctl replay --bundle "$d" $eng 2>&1 || true)
   # # The finding has to be one the MUTANT produced
   #
   # Matching "a finding is present" is not enough, and passing a bundle on that

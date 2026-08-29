@@ -637,7 +637,33 @@ func reportStrippedVerdict(recorded, got Meta) int {
 // exactly the traffic the recorded run did.
 // newEngine is the storage the RUN uses, passed beside the plan because a plan
 // is data and cannot carry a function. Nil means engine/model.
+// execute runs the plan and then checks the engine was actually used.
+//
+// # WRAPPED RATHER THAN APPENDED, and the first attempt is why
+//
+// The check first went inside `case workloadRaft`, so a toy bundle replayed
+// with --engine cgo silently used the model and reported MATCH. Moving it after
+// the switch did not work either: every case RETURNS, so the code after the
+// switch is unreachable and the check simply stopped running -- which showed up
+// as the raft footprint line vanishing from output that had printed it minutes
+// before.
+//
+//	THE CHECK BUILT TO CATCH BUG-046 HAD BUG-046'S OWN HOLE TWICE: once by
+//	guarding one of three paths, once by being placed where no path reaches. A
+//	wrapper cannot have either, because there is nowhere for a return to go
+//	around it.
+//
+// Caught both times by reading what the mechanism DID -- the corpus rerun
+// printing a footprint per bundle rather than trusting exit=0, and then the
+// footprint line's absence -- rather than by reading the verdict.
 func execute(p *plan.Plan, meta *Meta, hist **sim.History, newEngine func(node int) store.Engine) error {
+	if err := executeInner(p, meta, hist, newEngine); err != nil {
+		return err
+	}
+	return assertEngineWasUsed(meta.Workload)
+}
+
+func executeInner(p *plan.Plan, meta *Meta, hist **sim.History, newEngine func(node int) store.Engine) error {
 	tr := sim.NewTrace(0)
 
 	switch meta.Workload {
@@ -693,9 +719,6 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History, newEngine func(node i
 		//	HASH IS THE MOST CONVINCING FORM IT COULD POSSIBLY TAKE.
 		opt.NewEngine = newEngine
 		res, err := hunt.RunRaftWith(p, opt, tr)
-		if verr := assertEngineWasUsed(); verr != nil {
-			return verr
-		}
 		if err != nil {
 			return err
 		}
@@ -841,10 +864,7 @@ func report(m Meta) {
 		// byte-identical trace hash on --engine cgo having never opened the
 		// engine, and every checker passed. A trace hash is an answer; this is
 		// the mechanism. GF-25 -- they are two instruments, not one.
-		if engineRootUsed != "" {
-			n, b := engineFootprint(engineRootUsed)
-			fmt.Printf("engine   root=%s files=%d bytes=%d\n", engineRootUsed, n, b)
-		}
+
 	}
 	if m.Violation != nil {
 		fmt.Printf("VIOLATION %s\n", describeViolation(m.Violation))
@@ -1114,12 +1134,26 @@ func engineFootprint(root string) (files int, bytes int64) {
 //
 //	A NON-VACUITY COUNTER EARNS ITS PLACE WHEN THERE IS A MEASURED INSTANCE OF
 //	WHAT ITS ABSENCE LOOKS LIKE. There is one, and this is it.
-func assertEngineWasUsed() error {
+func assertEngineWasUsed(workload string) error {
+	if engineRootUsed != "" && workload != workloadRaft {
+		// NAMED REFUSAL RATHER THAN A GENERIC "wrote nothing". The toy is A0's
+		// harness fixture and holds its own engine.model directly; I1's scope
+		// is Track A's STACK. Saying "it wrote nothing" would be true and would
+		// send the reader looking for a defect. This says which it is.
+		return fmt.Errorf("simctl: the %q workload runs on engine/model by construction and does "+
+			"not honour --engine; it is A0's harness fixture rather than part of the stack I1 "+
+			"swaps. Replay it without --engine, or wire sim/toy the way store/ was wired", workload)
+	}
 	if engineRootUsed == "" {
 		return nil // the reference engine is in memory and writes nothing
 	}
 	n, b := engineFootprint(engineRootUsed)
 	if b > 0 {
+		// REPORTED HERE RATHER THAN AT THE CALLER, so that every path which
+		// asserts also records. The first version printed in report(), which
+		// the replay path does not call -- so a corpus rerun would have
+		// asserted the engine was used and told nobody what it wrote.
+		fmt.Printf("engine   files=%d bytes=%d root=%s\n", n, b, engineRootUsed)
 		return nil
 	}
 	return fmt.Errorf("simctl: a non-default engine was named and it wrote NOTHING: %s holds "+
