@@ -261,6 +261,36 @@ before the first, `git diff` before the second, `ps -o time=` before the third.
 *This section is in the same document as the claims, on purpose. A document that states what it cannot
 claim is the one worth trusting on what it does.*
 
+### 8.0 Every number above was taken against an engine that cannot express a whole class of defect
+
+**Measured at I1, and it belongs at the top of this section because it bounds everything in the
+document.** Every Track A number — the 25,000-seed exit run, every power floor, every bundle, every
+signed phase — was taken with `engine/model` underneath.
+
+I1 put the C++ engine under the same stack for the first time. Five defects surfaced within hours, and
+**three of them could not have existed on the model at all:**
+
+- an engine opened per range and abandoned — **a throwaway allocation is free** on a struct, and there
+  is no handle to leak;
+- a directory inherited between sweep seeds — **a model engine has no past**; `model.New()` is empty by
+  construction;
+- durability callbacks lost across a crash (`BUG-047`) — **a model crash is a method call on a live
+  object**, so there is no reopen for a registration to be lost across.
+
+> **THE MODEL DOES NOT MERELY FAIL TO EXHIBIT THESE DEFECTS. IT MAKES THEM UNEXPRESSIBLE.** They were
+> not under-tested for six phases. They were untestable, and no seed count would have changed that: a
+> sweep can be widened, but nothing reaches a defect whose precondition cannot occur.
+
+**What this does not mean.** `engine/model` is not weak and is not retired. It is the control that made
+every number above mean something, and at I1 it classified both inconclusives as inherited in ~1.5
+seconds each. The honest statement is narrower and more useful than *"a model might miss things"*:
+
+> **A REFERENCE IMPLEMENTATION VERIFIES SEMANTICS. IT CANNOT VERIFY WHAT IS TRUE OF THE RESOURCE
+> RATHER THAN OF THE SEMANTICS** — files, handles, processes, and the past.
+
+See `BUGS.md` **GF-49**. Read every claim in this document as scoped to the semantic half until I1's
+own numbers are quoted beside it.
+
 ### 8.1 A signed phase is signed against a fault mix, not against the world
 
 **This is the most important sentence here, and it has two measured demonstrations.**

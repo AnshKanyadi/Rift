@@ -2963,6 +2963,33 @@ will reach for the same shortcut.
 known, recently, by the person who broke it — one of them had *just been quoted in the ruling being
 implemented*. What failed was not memory of the rule but its arrival at the moment it applied.
 
+#### The fourth instance, and the interval is the datum
+
+At I1, a shell one-liner was written to check a build:
+
+```sh
+go vet -tags rift_cgo ./sim/hunt/ 2>&1 | grep -v "^ld:" | head -2; echo "vet clean"
+```
+
+**A `;`, not an `&&`.** *"vet clean"* printed over a package that did not compile, and two sweep chunks
+were launched against it and died in seconds.
+
+That is the same defect as the `DETERMINISTIC ACROSS PROCESSES ON ONE BUILD` line printed over three
+failed subtests — **and it was committed two hours after that one was recorded as a general form and a
+guard was written for it.**
+
+| instance | interval from recording the rule |
+|---|---|
+| `BUG-032`'s shape reintroduced in `store` | ten lines below the ruling quoting it |
+| `gatepin`'s comment ignored, pin written in core scope | same day |
+| the unguarded `DETERMINISTIC` summary | — (this is the one recorded) |
+| **the `; echo "vet clean"` line** | **~2 hours** |
+
+> **THE INTERVAL IS THE DATUM.** A rule forgotten after a month is a memory problem and has obvious
+> remedies. A rule broken two hours after being written down, by the person who wrote it, in the same
+> session, is not — and it is the whole argument for mechanisms over discipline, which now has four
+> instances behind it in one day.
+
 > **THIS IS THE WHOLE ARGUMENT FOR MECHANISMS OVER DISCIPLINE, AND IT NOW HAS FOUR INSTANCES BEHIND IT
 > IN ONE DAY.** Discipline is a claim about what someone will remember while thinking about something
 > else. Every one of these was caught in seconds by something that was not remembering anything.
@@ -3125,6 +3152,31 @@ asserted the callback **fires at all** before asserting what it reports.
 > **A CHECK THAT ASSERTS ONLY THE VALUE CANNOT DISTINGUISH A WRONG ANSWER FROM NO ANSWER.** CF-6.2's
 > first assertion is that something happened; the second is what. Written the other way round, this
 > defect would have read as a pass.
+
+#### CF-6's vindication, stated plainly
+
+I1 crashed this wrapper **thousands of times per run**. It exercised this exact path on every one of
+them. **Every run completed, every trace matched the model's, every checker passed.**
+
+> **A PHASE THAT CLOSED CF-6 INCIDENTALLY WOULD HAVE REPORTED IT CLOSED.** The corpus replayed, the
+> sweep ran clean over 300 seeds, the fresh-process gate matched to the byte. Nothing in any of it
+> would have said that durability notifications stop after a crash, because nothing in any of it asked.
+
+CF-6, written at B5.4 before this wrapper existed, refused exactly that: *"'it happens incidentally' is
+how a gap stays open while looking closed"*, and named **three checks that must actually be checked**.
+Three directed tests are the only reason this was found.
+
+**And the check caught it pointing the opposite way from CF-6's own wording.** CF-6.2 asks that the
+reported watermark be *"the engine's and not a value the wrapper remembered across the crash"* — the
+failure anticipated was **remembering too much**. What happened was the opposite: the wrapper
+remembered *nothing*, because the object holding the memory had been replaced. The check caught it
+because its first assertion is that the callback **fires at all**, before anything about what it
+reports.
+
+> **A CHECK THAT ASSERTS ONLY THE VALUE CANNOT DISTINGUISH A WRONG ANSWER FROM NO ANSWER.**
+
+That ordering was not foresight — it was written that way because a test needs a premise before it has
+a property. **The premise is what caught the defect the property was aimed at.**
 
 **Fixed:** `simcgo` owns the callback list and re-registers it on the reopened engine.
 
@@ -5940,6 +5992,111 @@ and means nothing of the sort, because a bundle whose defect is fixed replays id
 > **A DISTINCTION THAT HAS CHANGED THE ANSWER THREE TIMES, IN THREE PHASES, ON THREE DIFFERENT
 > MECHANISMS, IS NOT A FORMALITY.** It has never once been the case that the loose criterion and the
 > strict one agreed and the extra work was wasted.
+
+---
+### GF-49 — a reference implementation does not merely fail to exhibit a class of defect; it makes the class unexpressible
+
+**Raised at I1's close, 2026-08-29, and it is the phase's most valuable result — above every defect it
+found, because it says what six phases of green could not have said.**
+
+I1 ran Track A's stack on the C++ engine for the first time. **Five defects surfaced within hours.
+Three of them could not have existed on `engine/model` at all:**
+
+| defect | why the model cannot express it |
+|---|---|
+| `newReplica` opened a real database per range and abandoned it | a model engine is a struct. **A throwaway allocation is free**, and there is no handle to leak and no directory to orphan |
+| one engine root shared across a sweep, so each seed inherited the previous seed's data | a model engine **has no past**. `model.New()` is empty by construction; a directory is not |
+| `BUG-047`: a crash replaced the engine and the durability callbacks went with it | a model crash is a method call on a live object. **There is no reopen**, so there is nothing for a registration to be lost across |
+
+> **THE MODEL DOES NOT MERELY FAIL TO EXHIBIT THESE DEFECTS. IT MAKES THEM UNEXPRESSIBLE.** A model
+> engine has no files, no handles and no past. Every one of these three is a statement about
+> *resources that persist and are re-acquired*, and the reference implementation has no such resources
+> to make a statement about.
+
+**That is the difference between a gap in coverage and a gap in the language of the test.** A sweep can
+be widened; a seed count can be raised; a workload can be taught a new operation. **None of that
+reaches a defect whose precondition cannot occur in the model at all.** The three above were not
+under-tested for six phases — they were untestable, and 25,000 exit-run seeds would not have moved
+that number.
+
+**And it is measured rather than argued.** The claim is not *"a model might miss things"*, which is
+unfalsifiable and useless. It is: here are three specific defects, here is why each one's precondition
+is absent from `engine/model` by construction, and here is the phase in which each surfaced — the first
+one where a real engine was underneath.
+
+**What it does NOT say, and the distinction is the whole value of the model.** `engine/model` is not
+weak and is not retired. Every Track A safety property was measured against it, it is the control that
+makes an I1 divergence a *finding* rather than an observation, and the two inconclusives I1 found were
+classified as inherited in ~1.5 seconds each by running them on it. **A reference implementation is a
+statement about semantics, and semantics is exactly what it is good for.**
+
+> **WHAT A REFERENCE IMPLEMENTATION CANNOT VERIFY IS EVERYTHING THAT IS TRUE OF THE RESOURCE RATHER
+> THAN OF THE SEMANTICS.** Files, handles, processes, and the past. The correct response is not to
+> distrust the model; it is to know which half of the claim it carries, and to run the other half
+> against the real thing before believing it.
+
+**Recorded in `docs/TRACK-A.md`'s limits section as well as here**, because every Track A number was
+taken against an engine that could not express this class, and a reader of those numbers is entitled to
+know it at the number rather than in a bug ledger.
+
+---
+### GF-50 — three observations that agree are a coincidence until one is sought that disagrees
+
+**Raised at I1's close, 2026-08-29, from a mechanism I invented, named, wrote into a carried record,
+used to justify a ratified disposition, repeated twice — and then refuted with one observation.**
+
+**What was claimed.** Background jobs kept being stopped. Three kills, at **59m**, **1h35m53s** and
+**30m04s**. I called it *"the runtime's per-job duration ceiling"*, wrote it into
+`docs/CARRY-FORWARD.md` as the mechanism behind `make mutant-covered` being unrunnable, sized sweep
+chunks against it, and stated it twice in reports.
+
+**What refuted it.** One kill at **4m35s**.
+
+| | durations |
+|---|---|
+| completed | 3m, 17m04s, ~25m, 30m49s, 31m15s, 33m27s |
+| killed | **4m35s**, 30m04s, 59m00s, 1h35m53s |
+
+**The ranges overlap.** A job completed at 33m27s and one was killed at 4m35s, so *"long jobs get
+killed"* is not what is happening.
+
+> **THREE OBSERVATIONS THAT AGREE ARE A COINCIDENCE UNTIL ONE IS SOUGHT THAT DISAGREES.** All three
+> kills were long. Nothing about them was wrong. What was wrong was treating "every case I have seen
+> has property P" as "P is the mechanism", without ever asking what a case *without* P would look
+> like — which was one line of arithmetic away the whole time, because the completions were in the
+> same log.
+
+**What survived and what did not**, separated because a retraction that takes the conclusion with the
+mechanism is as careless as the original claim:
+
+| | state |
+|---|---|
+| `make mutant-covered` cannot complete here | **stands** — on its own measurements: two runs, 14 of 71 and then fewer, both stopped |
+| the disposition Ansh ratified from it | **stands** — it rested on the lane's cost and its stoppages, not on why |
+| *"the runtime's per-job duration ceiling"* | **retracted** — the cause is **undetermined**, and both records now say so |
+
+**The correction is cheap and the belief was not.** It cost one table. The belief had already been
+written into a carried record, cited in a ruling, and used to size four separate runs.
+
+#### The second hypothesis, and it is here on purpose
+
+Immediately after the retraction, a pattern suggested itself: **both kills had struck jobs launched by
+a Bash call that did something else first** — a `grep` of the previous chunk's log, *then* the launch.
+The chunks that completed were launched by calls that only launched.
+
+Two supporting cases. It was recorded **as a hypothesis**, with the note that the very next relaunch
+was also a combined call, so it would be tested immediately either way.
+
+**It completed. The hypothesis is refuted, and that is the entry.**
+
+> **RAISING A HYPOTHESIS, NAMING THE OBSERVATION THAT WOULD REFUTE IT, AND REPORTING THE REFUTATION IN
+> THE NEXT AVAILABLE RUN IS EXACTLY THE HANDLING THE FIRST ONE SHOULD HAVE HAD.** The difference is
+> not care or intelligence. It is that the second was stated as a claim about the world with a named
+> test, and the first was stated as a fact.
+
+Both are in one entry deliberately: **the correction taking effect on the next occasion, rather than
+being promised.** The first hypothesis cost a paragraph in a carried record and four mis-sized runs.
+The second cost one sentence and was settled for free by work already scheduled.
 
 ---
 ### GF-44's first recurrence, inside its own document, four days after it was written
