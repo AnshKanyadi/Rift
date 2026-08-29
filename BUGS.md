@@ -3089,6 +3089,46 @@ honour `--engine`; it is A0's harness fixture rather than part of the stack I1 s
 > DEFECT.**
 
 ---
+### BUG-047 — (harness) a crash replaced the engine and the durability callbacks went with it
+
+| | |
+|---|---|
+| **Symptom** | After a simulated crash, `OnDurable` never fired again. A restarted node would never learn any write was durable. |
+| **Found by** | **CF-6.2's directed check**, written at I1 because CF-6 insists incidental exposure is not closure. |
+| **Reproduce** | `TestCF6_2_OnDurableReportsTheEnginesWatermarkNotARememberedOne`: register a callback, crash, apply, advance durability — the callback list is empty. |
+| **Invariant that caught it** | none existed. The failure has no error, no panic and no wrong value. |
+| **Mutant class** | remove the re-registration loop in `simcgo.Crash`; covered by CF-6.2's test, which asserts both that the callback fires again **and** that what it reports is not a pre-crash high-water mark. |
+
+**The mechanism.** `simcgo.Crash()` closes the C++ DB, rolls the directory back, and calls
+`riftcgo.Open` for a **new** `*riftcgo.DB`. Callbacks registered through `OnDurable` lived on the old
+object and were not carried over.
+
+> **A CRASH REPLACES THE ENGINE. ANYTHING REGISTERED ON THE OLD ONE IS GONE — AND WHAT IS GONE IS
+> SILENT.** There is no error, no panic, and no missing value. There is a callback that stops being
+> called, which is indistinguishable from a callback whose condition never recurs.
+
+**Why the sweep could not have found it, and this is CF-6's own argument arriving as evidence.** I1's
+raft workload crashes this wrapper thousands of times per run and **exercised this exact path on every
+one of them.** The runs completed, the traces matched, the checkers passed. Exercising a path is not
+checking what it did.
+
+> CF-6, written at B5.4 before any of this existed: *"'it happens incidentally' is how a gap stays open
+> while looking closed."* **It was open, it looked closed, and the thing that opened it was written
+> two hours before the check that found it.**
+
+**And the test found it pointing the other way from CF-6's wording.** CF-6.2 asks that the reported
+watermark be *"the engine's and not a value the wrapper remembered across the crash"* — the failure
+mode anticipated was **remembering too much**. What happened was the opposite: the wrapper remembered
+*nothing*, because the object holding the memory was discarded. The check caught it anyway, because it
+asserted the callback **fires at all** before asserting what it reports.
+
+> **A CHECK THAT ASSERTS ONLY THE VALUE CANNOT DISTINGUISH A WRONG ANSWER FROM NO ANSWER.** CF-6.2's
+> first assertion is that something happened; the second is what. Written the other way round, this
+> defect would have read as a pass.
+
+**Fixed:** `simcgo` owns the callback list and re-registers it on the reopened engine.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its

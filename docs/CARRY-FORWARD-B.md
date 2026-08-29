@@ -504,6 +504,33 @@ its files, and the count sees it without a special case.
 
 ---
 
+## CLOSED at I1, 2026-08-28: CF-6 — the fault schedule that has never crossed the cgo boundary
+
+**All three checks are checked, by directed tests, and one of them FAILED.**
+
+| check | result |
+|---|---|
+| 1. a crash mid-`Apply` leaves no Go-side state claiming a sequence the engine never took | **pass** — `TestCF6_1_CrashMidApplyLeavesNoGoSideClaim` |
+| 2. `OnDurable` reports the engine's watermark, not one remembered across the crash | **FAILED — `BUG-047`** |
+| 3. an iterator held across a crash is not read as live | **pass** — `TestCF6_3_AnIteratorHeldAcrossACrashIsNotReadAsLive` |
+
+**`BUG-047`: a crash replaced the engine and the durability callbacks went with it.** After a crash
+`OnDurable` never fired again, so a restarted node would never learn any write was durable. No error,
+no panic, no wrong value — a callback that stops being called.
+
+**And this entry's central warning is now evidence rather than an argument.** CF-6 said *"'it happens
+incidentally' is how a gap stays open while looking closed."* I1's raft workload crashes the wrapper
+thousands of times per run and exercised this path on every one of them. **The runs completed, the
+traces matched, every checker passed.** The defect surfaced only when a test asked what the path did.
+
+> **THE PHASE THAT WAS SUPPOSED TO CLOSE THIS GAP FOR FREE WOULD HAVE LEFT IT OPEN, AND WOULD HAVE
+> REPORTED IT CLOSED**, on the strength of a corpus that replayed and a sweep that ran. CF-6's demand
+> for three named checks rather than incidental coverage is the only reason it did not.
+
+**Original entry follows, retained.**
+
+---
+
 ## CF-6 — the fault schedule that has never crossed the cgo boundary
 
 **Opened at B5.4. Comes due at I1.**

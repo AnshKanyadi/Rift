@@ -147,7 +147,7 @@ func maxVersionTimestamp(ns []byte, rs []kv.Record) hlc.Timestamp {
 }
 
 func (m *Node) newReplicaFor(d RangeDescriptor) (*Replica, error) {
-	r, err := newReplica(m.cfg)
+	r, err := newReplica(m.cfg, m.db)
 	if err != nil {
 		return nil, err
 	}

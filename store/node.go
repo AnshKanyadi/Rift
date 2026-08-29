@@ -439,7 +439,17 @@ type clientOp struct {
 }
 
 // newReplica builds one group's driver.
-func newReplica(cfg Config) (*Replica, error) {
+// newReplica TAKES the engine rather than creating one.
+//
+// It used to call cfg.Engine(), and newReplicaFor immediately overwrote the
+// result with the machine's: `r.db, r.epoch, r.machine = m.db, m.epoch, m`. On
+// engine/model that was a harmless throwaway -- an in-memory struct, allocated
+// and dropped. On the C++ engine it OPENS A REAL DATABASE PER RANGE and
+// abandons it, leaking a handle and a directory every time a range is created.
+//
+//	A THROWAWAY ALLOCATION IS FREE ON A MODEL AND A LEAK ON A REAL ENGINE, and
+//	the model is what made it invisible for the whole of Track A.
+func newReplica(cfg Config, db *tracked) (*Replica, error) {
 	if cfg.Transport == nil || cfg.Ledger == nil {
 		return nil, fmt.Errorf("store: node %d needs a transport and a ledger", cfg.ID)
 	}
@@ -455,7 +465,7 @@ func newReplica(cfg Config) (*Replica, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Replica{cfg: cfg, raft: r, db: cfg.Engine(), epoch: sim.NewEpochGuard()}
+	n := &Replica{cfg: cfg, raft: r, db: db, epoch: sim.NewEpochGuard()}
 	n.jitter()
 	return n, nil
 }

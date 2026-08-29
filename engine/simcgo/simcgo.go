@@ -63,6 +63,24 @@ type DB struct {
 	applied engine.SeqNum // the highest sequence Apply has returned
 	durable engine.SeqNum // the highest sequence the HARNESS considers durable
 	kept    []engine.SeqNum
+
+	// onDurable is held HERE, not only on the wrapped engine.
+	//
+	// CF-6.2 asks that after a restart the watermark OnDurable reports is the
+	// engine's and not a value the wrapper remembered across the crash. The
+	// first version failed it in the opposite direction and worse: Crash()
+	// replaces the wrapped *riftcgo.DB with a freshly opened one, which carries
+	// NO callbacks, so durability notifications simply stopped. A restarted node
+	// would never learn its writes were durable.
+	//
+	//	A CRASH REPLACES THE ENGINE. ANYTHING REGISTERED ON THE OLD ONE IS GONE,
+	//	AND WHAT IS GONE IS SILENT -- there is no error, no panic, and no missing
+	//	value; there is a callback that stops being called.
+	//
+	// Found by CF-6.2's directed check, which is the entry's whole point: the
+	// I1 sweep crashes this wrapper thousands of times and exercised this path
+	// on every one of them without ever asking what it did.
+	onDurable []func(engine.SeqNum)
 }
 
 // Open creates a database under root/live with its snapshot store beside it.
@@ -197,7 +215,18 @@ func (d *DB) Crash() {
 		panic("simcgo: reopening after the crash: " + err.Error())
 	}
 	d.DB = inner
+	// RE-REGISTER, because the callbacks belonged to the engine that just died.
+	for _, f := range d.onDurable {
+		d.DB.OnDurable(f)
+	}
 	d.applied = d.durable
+}
+
+// OnDurable registers a callback and REMEMBERS it, so a crash can re-register
+// it on the reopened engine. See the field's comment for what CF-6.2 caught.
+func (d *DB) OnDurable(f func(engine.SeqNum)) {
+	d.onDurable = append(d.onDurable, f)
+	d.DB.OnDurable(f)
 }
 
 func (d *DB) Close() error { return d.DB.Close() }
