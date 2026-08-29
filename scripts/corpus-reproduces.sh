@@ -74,6 +74,7 @@ failed=0
 checked=0
 skipped=0
 notbundle=0
+rotted=0
 dirs=0
 
 # # EVERY DROP PATH IS COUNTED, and one of them was not
@@ -137,11 +138,13 @@ print(' '.join(s))")
   done
   if [ -n "$rot" ]; then
     printf '   ROT      %-12s %s no longer applies\n' "$name" "$rot"
+    rotted=$((rotted + 1))
     failed=$((failed + 1))
     continue
   fi
   if ! (cd "$work" && $GO build ./... 2>/dev/null); then
     printf '   ROT      %-12s the tree does not build with %s\n' "$name" "$mutant"
+    rotted=$((rotted + 1))
     failed=$((failed + 1))
     continue
   fi
@@ -192,13 +195,22 @@ print(' '.join(s))")
 done
 
 printf '  ----------------------------------------------------------------\n'
-printf '   %d directories in seeds/: %d checked, %d skipped, %d not bundles, %d failures\n' \
-  "$dirs" "$checked" "$skipped" "$notbundle" "$failed"
+printf '   %d directories in seeds/: %d checked, %d skipped, %d rotted, %d not bundles, %d failures\n' \
+  "$dirs" "$checked" "$skipped" "$rotted" "$notbundle" "$failed"
 
 # THE TOTALS MUST RECONCILE. Without this the counters are a description of what
 # the loop felt like doing rather than an account of what it saw, and a fifth
 # drop path added later would be as silent as the fourth one was.
-accounted=$((checked + skipped + notbundle))
+# `rotted` is its own bucket, and it exists because the reconciliation caught its
+# absence. BUG-042 fixed the meta.json drop path and left the two ROT paths
+# incrementing `failed` and nothing accounted -- so a rotted bundle was counted
+# as a failure and vanished from the population. The check fired on I1's first
+# strict-criterion run: "1 of 25 directories are unaccounted for", M44 missing.
+#
+#   THE FIX FOR AN UNCOUNTED DROP PATH HAD AN UNCOUNTED DROP PATH. The
+#   reconciliation is what makes that survivable: a counter can be forgotten,
+#   but a total that must equal the population cannot be forgotten quietly.
+accounted=$((checked + skipped + notbundle + rotted))
 if [ "$accounted" -ne "$dirs" ]; then
   printf '\n  %d of %d directories are unaccounted for. A drop path in this loop does not\n' \
     "$((dirs - accounted))" "$dirs"

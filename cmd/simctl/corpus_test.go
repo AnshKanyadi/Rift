@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -439,7 +440,7 @@ func TestTheReproducesLaneAccountsForEveryDirectory(t *testing.T) {
 		{"notbundle=$((notbundle + 1))",
 			"the fourth drop path must COUNT what it drops; three of four did and the fourth " +
 				"was how seeds/differential went past unseen"},
-		{"accounted=$((checked + skipped + notbundle))",
+		{"accounted=$((",
 			"the totals must reconcile against the population, or the counters describe what " +
 				"the loop felt like doing rather than what it saw"},
 		{"directories in seeds/",
@@ -450,4 +451,59 @@ func TestTheReproducesLaneAccountsForEveryDirectory(t *testing.T) {
 			t.Errorf("scripts/corpus-reproduces.sh no longer contains %q.\n      %s", want.frag, want.why)
 		}
 	}
+}
+
+// TestEveryCounterInTheReproducesLaneIsAccountedFor derives the buckets instead
+// of pinning the expression.
+//
+// # Why derived and not literal
+//
+// The first version pinned `accounted=$((checked + skipped + notbundle))`
+// verbatim. That is a literal, and a literal has to be edited every time a
+// bucket is added -- so it cannot catch the thing it exists for. It did not:
+// BUG-042 fixed one uncounted drop path and left the two ROT paths
+// incrementing `failed` and nothing accounted, and the miss surfaced only when
+// I1's strict-criterion run printed "1 of 25 directories are unaccounted for".
+//
+//	THE FIX FOR AN UNCOUNTED DROP PATH HAD AN UNCOUNTED DROP PATH, and a pin on
+//	the fix's exact text could not see it.
+//
+// So this reads every `name=$((name + 1))` in the script and requires each to
+// appear in the reconciliation, minus the two that are deliberately not
+// buckets: `failed` counts outcomes rather than directories, and `dirs` IS the
+// population being reconciled against.
+func TestEveryCounterInTheReproducesLaneIsAccountedFor(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "corpus-reproduces.sh"))
+	if err != nil {
+		t.Fatalf("reading the lane: %v", err)
+	}
+	src := string(b)
+
+	notBuckets := map[string]bool{"failed": true, "dirs": true}
+	inc := regexp.MustCompile(`(\w+)=\$\(\((\w+) \+ 1\)\)`)
+	var buckets []string
+	for _, m := range inc.FindAllStringSubmatch(src, -1) {
+		if m[1] == m[2] && !notBuckets[m[1]] {
+			buckets = append(buckets, m[1])
+		}
+	}
+	if len(buckets) == 0 {
+		t.Fatal("no counters found, so this test is checking nothing")
+	}
+
+	acc := regexp.MustCompile(`accounted=\$\(\(([^)]*)\)\)`).FindStringSubmatch(src)
+	if acc == nil {
+		t.Fatal("no reconciliation found: the lane must add its buckets up and compare to the population")
+	}
+	seen := map[string]bool{}
+	for _, name := range buckets {
+		if !strings.Contains(acc[1], name) {
+			t.Errorf("counter %q is incremented but is NOT in the reconciliation %q.\n"+
+				"      A drop path that counts itself into a bucket nothing sums is invisible "+
+				"in exactly the way an uncounted one is -- see BUG-042 and its own recurrence.",
+				name, strings.TrimSpace(acc[1]))
+		}
+		seen[name] = true
+	}
+	t.Logf("buckets reconciled: %v", buckets)
 }

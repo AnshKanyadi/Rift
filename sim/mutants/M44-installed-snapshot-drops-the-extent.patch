@@ -10,15 +10,19 @@
 # re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
 #   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
 #   one were applied to clean copies and the results are byte-identical.
+# re-anchored: 2026-08-28. STRUCTURAL drift caused by I1's own wiring -- store/node.go's
+#   n.db.Apply became n.apply when the stack moved onto store.Engine, and this hunk's context
+#   held that call. Not anchor drift: scripts/patch-rot-kind.sh says STRUCTURAL, and the patch
+#   applies cleanly at 8a95e01^ and not after. Mutation unchanged and proved so.
 --- a/store/node.go
 +++ b/store/node.go
-@@ -621,38 +621,39 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
+@@ -629,38 +629,39 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {
  				Index: rd.Snapshot.Index, Term: rd.Snapshot.Term, Conf: rd.Snapshot.Conf,
  			}
  			sb := engine.NewBatch()
  			sb.Set(n.keySnapshot(), encodeSnapshot(meta, rd.Snapshot.Data))
  			sb.DeleteRange(n.logPrefix(), n.logUpper())
- 			if seq, err := n.db.Apply(sb, true); err == nil {
+ 			if seq, err := n.apply(sb, true); err == nil {
  				n.pending = append(n.pending, pendingWrite{
  					seq: seq, snapMark: rd.SnapMark, snap: &meta, snapVersions: vs, snapMarkTS: mark,
  					clearAllLog: true,
