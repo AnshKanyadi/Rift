@@ -998,8 +998,19 @@ complete on this machine… That is the same disposition `make mutants` got and 
 | `ONLY=` chunk of 10 | `M23`…`M31` | **terminated at 59m**, 2 of 10 done (`M24`, `M25`), both `ok` |
 | `make cpp-ci`, for contrast | 11 C++ lanes | **completed**, ~25 minutes, exit 0 |
 
-**The cause is not the lane's total cost. It is the runtime's per-job ceiling, and the ceiling is
-variable** — 59 minutes in one case, 1h36m in another, with a 25-minute job completing reliably.
+**The cause is that background jobs are sometimes stopped from outside, and CORRECTED 2026-08-28: it
+is not a duration ceiling.** That was the first explanation and it is refuted. A later job was killed
+at **4m35s** while others completed at 17m, 25m, 31m and 33m:
+
+| | durations |
+|---|---|
+| **completed** | 3m, 17m04s, ~25m, 30m49s, 31m15s, 33m27s |
+| **killed** | 4m35s, 30m04s, 59m00s, 1h35m53s |
+
+**The ranges overlap.** A job has completed at 33m and been killed at 4m35s, so *"long jobs get
+killed"* is not what is happening, and sizing work against a duration is sizing it against a refuted
+hypothesis. The cause is **undetermined** and is recorded as undetermined rather than given a
+plausible-sounding name.
 
 > **A LANE WHOSE COST EXCEEDS THE RUNTIME CEILING IS NOT AN EXPENSIVE LANE. IT IS AN UNRUNNABLE ONE,
 > AND THE TWO LOOK IDENTICAL IN A BUDGET.**

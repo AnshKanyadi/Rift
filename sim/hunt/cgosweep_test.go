@@ -124,9 +124,26 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 	// The hook's signature is `func(seed uint64, done, total int)` and carries
 	// no verdict, so this cannot be fixed from the caller. Widening it to pass
 	// the running census is a change to A7's signed work and is PROPOSED rather
-	// than made. The interim remedy is smaller chunks: the runtime's per-job
-	// ceiling is variable -- kills observed at 30m, 59m and 96m -- so a chunk
-	// sized against the largest observation is one that will eventually be cut.
+	// than made.
+	//
+	// # THE CAUSE OF THE KILLS IS UNDETERMINED, and the first explanation was wrong
+	//
+	// This comment first said "the runtime's per-job ceiling is variable -- kills
+	// observed at 30m, 59m and 96m". A later chunk was killed at **4m35s**,
+	// which refutes duration as the variable. Tabulated:
+	//
+	//	COMPLETED   3m, 17m04s, ~25m, 30m49s, 31m15s, 33m27s
+	//	KILLED      4m35s, 30m04s, 59m00s, 1h35m53s
+	//
+	//	THE RANGES OVERLAP. A job has completed at 33m and been killed at 4m35s,
+	//	so "long jobs get killed" is not what is happening, and sizing chunks
+	//	against a duration is sizing them against a hypothesis that is refuted.
+	//
+	// What is known: jobs are sometimes stopped by something outside this
+	// process, no orphan survives, and the loss is total because the census
+	// prints only at the end. **That is the part worth engineering against**,
+	// and it is what makes the hook proposal worth more than any chunk size:
+	// a partial result survives a kill whose cause nobody has identified.
 	c, err := hunt.SweepRaftWithProgress(from, to, opt, func(seed uint64, done, total int) {
 		if done == 1 || done%10 == 0 || done == total {
 			t.Logf("  seed %d: %d/%d done in %v", seed, done, total, time.Since(start).Round(time.Second))
