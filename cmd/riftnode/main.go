@@ -28,12 +28,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/anshkanyadi/rift/clock"
 	"github.com/anshkanyadi/rift/net/tcp"
+	"github.com/anshkanyadi/rift/node"
+	"github.com/anshkanyadi/rift/raft"
+	"github.com/anshkanyadi/rift/raftcheck"
 	"github.com/anshkanyadi/rift/sim"
+	"github.com/anshkanyadi/rift/store"
 )
 
 func main() {
@@ -61,16 +67,76 @@ func main() {
 	tr := tcp.New(sim.NodeID(*id), addrs)
 	defer tr.Close()
 
+	// THE STORE, THE ENGINE AND THE DRIVER, wired by TYPE rather than by
+	// arrangement. store.Node implements sim.Node; node.Driver drives a
+	// sim.Node; tcp.Transport implements sim.Transport. Nothing here adapts one
+	// to another, which is node/'s own claim -- "the toy that runs under a
+	// thousand seeded schedules is byte-for-byte the toy that runs here" -- and
+	// this is the first time it has been asked of the real stack.
+	peerIDs := make([]raft.NodeID, 0, len(addrs)+1)
+	for pid := range addrs {
+		peerIDs = append(peerIDs, raft.NodeID(pid))
+	}
+	peerIDs = append(peerIDs, raft.NodeID(*id))
+	sort.Slice(peerIDs, func(i, j int) bool { return peerIDs[i] < peerIDs[j] })
+
+	clk := clock.NewReal(maxOffset)
+	hist := &sim.History{}
+	st, err := store.New(store.Config{
+		ID: raft.NodeID(*id), Peers: peerIDs, Ordinal: *id - 1,
+		Nodes:     len(peerIDs),
+		Election:  10,
+		Heartbeat: 3,
+		Transport: tr,
+		Clock:     clk,
+		// SYNC LATENCY IS A SIMULATOR CONCEPT, and real mode must still answer
+		// for it. In sim it is how long an fsync is MODELLED to take; here the
+		// fsync is real and happens inside AdvanceDurable, so this is only the
+		// delay before the store asks for it.
+		//
+		// Small and non-zero: zero would ask for durability in the same instant
+		// as the write and erase the unsynced window entirely, which is the
+		// fault the whole phase is built to inject.
+		SyncLatency: clock.Instant(2 * time.Millisecond),
+		Ledger:      raftcheck.NewLedger(len(peerIDs)),
+		// The node's OWN history, which is discarded. The authoritative history
+		// is the CLIENT's, in the client's process, on the client's clock --
+		// one monotonic source, which is why the two cannot be the same object.
+		History:   hist,
+		NewEngine: engineFor(*dir),
+		PreVote:   true,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "riftnode: store: %v\n", err)
+		os.Exit(1)
+	}
+
+	drv, err := node.New(sim.NodeID(*id), st, clk, mailboxDepth)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "riftnode: driver: %v\n", err)
+		os.Exit(1)
+	}
+	if err := drv.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "riftnode: driver start: %v\n", err)
+		os.Exit(1)
+	}
+	defer drv.Stop()
+
 	// The listener hands every frame to the mailbox. It is NOT allowed to touch node
 	// state: Amendment A1's rule is that every cross-goroutine interaction
 	// enters through the mailbox, and this goroutine is as cross as they come.
-	var received uint64 // atomic: written by accept goroutines, read by the counter writer
+	var received uint64     // atomic: written by accept goroutines, read by the counter writer
+	var drvRef *node.Driver // set below; the listener starts before the driver exists
 	ln, err := tcp.Listen(*addr, func(e sim.Envelope) {
 		atomic.AddUint64(&received, uint64(e.Size()))
-		// The mailbox post goes here once the store is wired. Counting the
-		// bytes first is deliberate: a node that receives and drops is still a
-		// node that received, and the reality counter must not depend on what
-		// the protocol did next.
+		// INTO THE MAILBOX, never into node state. Amendment A1: every
+		// cross-goroutine interaction enters through the mailbox, and this
+		// accept goroutine is as cross as they come.
+		//
+		// Counting the bytes BEFORE the post is deliberate: a node that
+		// receives and drops is still a node that received, and the reality
+		// counter must not depend on what the protocol did next.
+		drvRef.Post(sim.Event{Kind: sim.KindDeliver, Node: sim.NodeID(*id), Payload: e})
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "riftnode: listen %s: %v\n", *addr, err)
@@ -78,8 +144,13 @@ func main() {
 	}
 	defer ln.Close()
 
-	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d\n",
-		*id, *addr, *dir, len(addrs))
+	drvRef = drv
+
+	// THE ENGINE IS NAMED IN THE OUTPUT. A result is about whichever engine
+	// produced it, and a reader who cannot tell which will assume the one the
+	// phase claims.
+	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s\n",
+		*id, *addr, *dir, len(addrs), EngineName)
 	// A readiness marker the supervisor can wait on. Waiting on a sleep instead
 	// is how a test becomes flaky on a loaded machine, and how a cluster that
 	// never came up reports as one that came up slowly.
@@ -206,3 +277,14 @@ func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64) {
 // the race detector has one place to complain about if this ever becomes a
 // contended field rather than a monotonically-increasing one.
 func atomicLoad(p *uint64) uint64 { return atomic.LoadUint64(p) }
+
+const (
+	// maxOffset is the clock-skew bound this node advertises. Real mode does not
+	// get to assume zero: A5's uncertainty machinery reads it, and a node
+	// claiming perfect clocks would make every uncertainty interval empty.
+	maxOffset = 250 * time.Millisecond
+
+	// mailboxDepth bounds the driver's queue. Deep enough that a burst does not
+	// drop, shallow enough that a wedged node does not accumulate unboundedly.
+	mailboxDepth = 1024
+)

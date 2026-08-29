@@ -6191,6 +6191,31 @@ mechanism is as careless as the original claim:
 **The correction is cheap and the belief was not.** It cost one table. The belief had already been
 written into a carried record, cited in a ruling, and used to size four separate runs.
 
+#### Second instance, at I2: the wire-symmetry claim
+
+The first end-to-end cluster reported **1794 bytes out, 1794 in**, and I wrote that equal counts are a
+round trip and an asymmetry would be its own finding. Two later runs:
+
+| run | out | in |
+|---|---|---|
+| first | 1794 | 1794 |
+| second | 1850 | 1794 |
+| third | 1005 | 1018 |
+
+**Asymmetric in both directions. The equality was luck**, and one observation had been enough to state
+a rule about the network.
+
+**Replaced with a bound derived from the flush cadence** rather than from the sample: counters are
+written every 100 ms by each node independently, so the gap is bounded by
+`n(n−1) × 2 frames × ~29 B` ≈ **696 bytes** at n=3. Measured gaps across three runs: **94, 66, 95** —
+comfortably inside, and now falsifiable. A gap far outside it, especially `out ≫ in`, is bytes claimed
+written that nobody read.
+
+> **BOTH TIMES THE CORRECTION CAME FROM TAKING MORE MEASUREMENTS RATHER THAN FROM REASONING HARDER,
+> AND BOTH TIMES THE FIRST OBSERVATION WAS THE ONE THAT FELT CONCLUSIVE.** Three long kills felt like
+> a duration ceiling. A perfect 1794/1794 felt like a round trip. Neither feeling survived a fourth
+> data point, and in both cases the fourth was cheap to get and nobody had gone to get it.
+
 #### The second hypothesis, and it is here on purpose
 
 Immediately after the retraction, a pattern suggested itself: **both kills had struck jobs launched by

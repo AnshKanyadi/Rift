@@ -201,8 +201,16 @@ func parseExitCounters(t *testing.T, nodes []*chaos.Node) (sent, wire, recv uint
 	return sent, wire, recv
 }
 
-// TestTheChaosLaneRunsBeforeAnyBenchmark is the chaos lane itself: a cluster,
-// kills on a schedule, restarts, and the gate.
+// TestTheClusterSurvivesKillsIsACOMPOSITIONTEST, not a chaos run that passed.
+//
+//	IT CHECKS NOTHING ABOUT WHAT THE CLUSTER COMPUTED. riftnode does not yet
+//	wire the store, so there is no history and no checker consumed anything. It
+//	is the harness proving it can start, kill and restart processes that talk to
+//	each other -- real, necessary, and not the claim I2 exists to make.
+//
+// It is labelled that way here so nobody later reads a passing chaos test in
+// this file as a safety result. The real chaos lane is the one whose verdict
+// list is non-empty.
 //
 // # It runs BEFORE the benchmarks, and the order is the gate
 //
@@ -212,7 +220,7 @@ func parseExitCounters(t *testing.T, nodes []*chaos.Node) (sent, wire, recv uint
 //	A NUMBER TAKEN BEFORE ITS PRECONDITION IS CHECKED IS A NUMBER THAT WILL BE
 //	QUOTED REGARDLESS OF WHAT THE CHECK SAYS. Once it exists, deleting it takes
 //	a decision, and the decision is made by whoever wants the number.
-func TestTheChaosLaneRunsBeforeAnyBenchmark(t *testing.T) {
+func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts real processes and kills them")
 	}
