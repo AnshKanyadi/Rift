@@ -200,3 +200,129 @@ func parseExitCounters(t *testing.T, nodes []*chaos.Node) (sent, wire, recv uint
 	}
 	return sent, wire, recv
 }
+
+// TestTheChaosLaneRunsBeforeAnyBenchmark is the chaos lane itself: a cluster,
+// kills on a schedule, restarts, and the gate.
+//
+// # It runs BEFORE the benchmarks, and the order is the gate
+//
+// The safety gate says the benchmark section does not run if a violation
+// appears. Running benchmarks first inverts it:
+//
+//	A NUMBER TAKEN BEFORE ITS PRECONDITION IS CHECKED IS A NUMBER THAT WILL BE
+//	QUOTED REGARDLESS OF WHAT THE CHECK SAYS. Once it exists, deleting it takes
+//	a decision, and the decision is made by whoever wants the number.
+func TestTheChaosLaneRunsBeforeAnyBenchmark(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts real processes and kills them")
+	}
+	bin := buildNode(t)
+	root := t.TempDir()
+
+	const n = 3
+	ports := freePorts(t, n)
+	var nodes []*chaos.Node
+	var peerParts []string
+	for i := 1; i <= n; i++ {
+		peerParts = append(peerParts, fmt.Sprintf("%d=127.0.0.1:%d", i, ports[i-1]))
+		nodes = append(nodes, &chaos.Node{
+			ID: i, Addr: fmt.Sprintf("127.0.0.1:%d", ports[i-1]),
+			Dir: filepath.Join(root, fmt.Sprintf("n%d", i)),
+		})
+	}
+	s := chaos.NewWithArgs(bin, nodes, func(nd *chaos.Node) []string {
+		var others []string
+		for _, p := range peerParts {
+			if !strings.HasPrefix(p, strconv.Itoa(nd.ID)+"=") {
+				others = append(others, p)
+			}
+		}
+		return []string{"--peers", strings.Join(others, ",")}
+	})
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	for _, nd := range nodes {
+		waitFor(t, filepath.Join(nd.Dir, "ready"))
+	}
+
+	// The fault schedule, recorded AS IT IS INFLICTED. A violation here has no
+	// reproduction, so what was done to the cluster is the whole of its context.
+	var faults []chaos.Fault
+	const rounds = 4
+	for r := 0; r < rounds; r++ {
+		victim := nodes[r%n]
+		if err := s.Kill(victim); err != nil {
+			t.Fatal(err)
+		}
+		faults = append(faults, chaos.Fault{At: time.Now(), Kind: "kill", Node: victim.ID})
+		time.Sleep(150 * time.Millisecond)
+		if err := s.Restart(victim); err != nil {
+			t.Fatal(err)
+		}
+		faults = append(faults, chaos.Fault{At: time.Now(), Kind: "restart", Node: victim.ID})
+		waitFor(t, filepath.Join(victim.Dir, "ready"))
+		time.Sleep(150 * time.Millisecond)
+	}
+	s.StopAll()
+	time.Sleep(300 * time.Millisecond)
+
+	sent, wire, recv := parseExitCounters(t, nodes)
+	run := chaos.Run{
+		Counters: s.Counters(),
+		Ops:      chaos.OpCounters{Issued: int(sent), Completed: int(sent), Keys: n},
+		Faults:   faults,
+		// No client verdicts yet: riftnode does not wire the store, so there is
+		// no history for a checker to read. Reported as absent rather than as
+		// clean -- an empty verdict list is not a passing one.
+		Verdicts: nil,
+	}
+	g := run.Gate(rounds, 1)
+
+	var b strings.Builder
+	run.Report(&b, g)
+	t.Log("\n" + b.String())
+	// THE ASYMMETRY BOUND, DERIVED -- and the equality claim it replaces was
+	// wrong.
+	//
+	// The first end-to-end run reported out=1794 in=1794 and I called equal
+	// counts a round trip. Two later runs gave out=1850/in=1794 and
+	// out=1005/in=1018 -- asymmetric in BOTH directions. The equality was luck.
+	//
+	// Counters are sampled every 100ms and written by each node independently,
+	// so whichever side's last sample landed later reads higher. The bound
+	// follows from the sampling rate rather than from a hope:
+	//
+	//	heartbeat  every 50ms, to (n-1) peers
+	//	sampling   every 100ms
+	//	slack      n nodes x (n-1) peers x 2 frames x ~29 bytes  ~= 350 bytes at n=3
+	//
+	// What is meaningful is that BOTH are non-zero -- bytes moved in both
+	// directions -- and that the gap is inside the sampling slack. A gap far
+	// outside it, especially out >> in, would be the finding: bytes claimed
+	// written that nobody read.
+	slack := uint64(n * (n - 1) * 2 * 29 * 2)
+	gap := wire - recv
+	if recv > wire {
+		gap = recv - wire
+	}
+	t.Logf("wire: out=%d in=%d gap=%d (sampling slack %d)", wire, recv, gap, slack)
+	if wire == 0 || recv == 0 {
+		t.Errorf("one direction carried nothing: out=%d in=%d", wire, recv)
+	}
+	if gap > slack {
+		t.Errorf("out=%d in=%d differ by %d, beyond the %d-byte sampling slack.\n"+
+			"      Inside the slack this is two independent 100ms samples disagreeing about when "+
+			"they were taken. Outside it, something wrote bytes nobody read", wire, recv, gap, slack)
+	}
+
+	if len(g.Failures) > 0 {
+		t.Fatalf("the chaos gate failed, so no benchmark number may be taken: %v", g.Failures)
+	}
+	if len(run.Verdicts) == 0 {
+		t.Log("NOTE: zero checker verdicts. The cluster survived the fault schedule, and NOTHING " +
+			"was checked about what it computed -- riftnode does not yet wire the store. This is " +
+			"a liveness result, not a safety one, and it must not be quoted as the latter.")
+	}
+}

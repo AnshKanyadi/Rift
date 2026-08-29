@@ -6364,6 +6364,49 @@ that the database survives thousands of kills, and every one of them would be a 
 headline claim would be true of a fault nobody is worried about.**
 
 ---
+### GF-54 — a guarantee that is correct and load-bearing destroys the thing the harness built on top of it needs
+
+**Raised at I2 with three instances in one week, each in a different layer, each with the guarantee
+entirely correct.**
+
+| the guarantee | correct because | what it destroyed |
+|---|---|---|
+| **`Apply` never blocks on I/O** (`engine.Engine`) | it is what lets the simulator model an unsynced window at all — removing it removes the fault the phase injects | a snapshot taken after `Apply` captured a directory the data had not reached. `BUG-044`: *a snapshot is a claim about what is on disk, and taking it after an operation that deliberately does not touch the disk is a claim about nothing* |
+| **null means unbounded** (`rift.cc`) | *"there is no way to pass 'unbounded' as bytes, so the distinction has to live in the pointer"* | `Set(key, nil)` became a rejected argument. `BUG-B008` |
+| **`SIGKILL` means kill** (`chaos/`) | a graceful shutdown flushes, and a flushed node has lost nothing — the whole reason I2 runs separate processes | a killed node reports nothing about having been killed. Three real pids, zero wire bytes, because every node died before it could say what it had done |
+
+> **THE SHAPE: THE HARNESS NEEDS THE THING TO BE OBSERVABLE, AND THE GUARANTEE'S WHOLE CONTENT IS THAT
+> IT IS NOT.**
+
+The third is the purest statement of it. **The property that makes `SIGKILL` worth using is exactly the
+property that erases the evidence it was used.** A signal a process can handle is a signal that leaves
+a trace; one it cannot handle leaves none, and those are the same fact said twice.
+
+**And none of the three is a defect in the guarantee.** Each is documented at its definition, each is
+load-bearing, and weakening any of them would weaken the phase that depends on it. **The defect is
+always in the joint**, and the joint is always owned by whoever is building on top.
+
+#### The general remedy, and it is the same in all three
+
+> **THE OBSERVATION LIVES OUTSIDE THE THING BEING KILLED, OR IT DOES NOT SURVIVE.**
+
+| instance | where the observation moved to |
+|---|---|
+| non-blocking `Apply` | a `Sync` *before* the snapshot — the harness stops asking the disk a question the contract says it may not answer yet |
+| null-means-unbounded | a *separate mapping* for keys and values, so the bound case keeps its meaning and the value case never asks for one |
+| `SIGKILL` | counters written to disk **during** the run, every 100ms, by write-and-rename — outside the process, before the kill |
+
+**The failure mode is always the same: putting the observation inside the thing whose destruction is
+being observed.** A node reporting its own death, a snapshot asking a buffer what is on disk, a value
+asking a pointer whether it is bounded. In each case the observer and the observed are the same object,
+and the guarantee is what separates them.
+
+**This is `GF-49`'s neighbour rather than its instance.** `GF-49` is about a substitute that cannot
+express a class. This is about a real thing whose correctness makes a class unobservable — the model
+could not express a lost handle; a killed process cannot report anything at all. **One is a limitation
+of the stand-in, the other is a consequence of the real thing being real.**
+
+---
 ### GF-44's first recurrence, inside its own document, four days after it was written
 
 **Recorded here rather than as a new form, because it is `GF-44` exactly.**
