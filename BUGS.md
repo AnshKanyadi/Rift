@@ -2862,6 +2862,18 @@ re-established from its own evidence before this entry was written:
 Nothing reported was wrong. **That is luck, not method**, and the entry says so rather than closing on
 the happy number.
 
+**AND ONE OF THIS WEEK'S INSTRUMENTS PAID FOR ITSELF, which is worth stating plainly because
+instrument-building can become self-perpetuating.** At I1, `BUG-013` came back `ROT` and the question
+was which of three causes it was — the C++ engine, the wiring, or a bundle whose finding was
+model-specific. `scripts/patch-rot-kind.sh`, built two days earlier for `BUG-039`, answered
+**STRUCTURAL** in one command, and a check against `8a95e01^` confirmed it: the patch applies before
+the I1 wiring and not after. **That is a question that would otherwise have been guessed at**, and the
+guess would have been "the engine", because the engine is what changed most conspicuously that day.
+
+The cause was the wiring, and specifically mine: `n.db.Apply` became `n.apply` when the stack moved
+onto `store.Engine`. One command, one right answer, on the first occasion the instrument was needed for
+something other than its own induction.
+
 **Its sibling is `BUG-033`, and the pair is the point.** There, a killed measurement driver left a
 mutant applied and three later floors were measured against a tree nobody had checked. Here, a killed
 session left a *job* running and six lanes were read from a file nobody had checked.
@@ -3044,6 +3056,37 @@ load-bearing for bounds and meaningless for a value.
 asserted above zero whenever a non-default engine was named. **A counter exists because there is now a
 measured instance of what its absence looks like**, which is the only argument for a counter this
 project accepts.
+
+#### And the counter had this entry's own hole, twice, within an hour of being written
+
+**First: it guarded one of three workloads.** `assertEngineWasUsed` was called inside `case
+workloadRaft`. The toy and none paths skipped it — and those are exactly the paths where the engine is
+never wired. `TOY-001` and `TOY-002` replayed with `--engine cgo`, used the model, and reported `MATCH`.
+
+**Second: moved after the switch, it became unreachable.** Every case returns, so the code after the
+switch never runs. The check silently stopped executing, and the only visible symptom was the footprint
+line vanishing from output that had printed it minutes earlier.
+
+> **THE MECHANISM BUILT TO CATCH "THE ENGINE WAS NEVER USED" WAS ITSELF NEVER USED — TWICE, WITHIN AN
+> HOUR, IN TWO STRUCTURALLY DIFFERENT WAYS.** Once by covering a subset of paths, once by sitting where
+> no path arrives. A check has two ways to be absent and they look nothing alike from the code.
+
+**Both were found by reading what the mechanism DID — the per-bundle footprint, then its absence —
+never the verdict.** Both times the verdict was `MATCH` and `exit=0`.
+
+**The wrapper is the fix and the reason belongs at the code:** `execute` calls `executeInner` and then
+asserts.
+
+> **THERE IS NOWHERE FOR A RETURN TO GO AROUND IT.** A call placed *inside* control flow inherits every
+> branch's ability to skip it. A wrapper has no branches.
+
+**And the toy REFUSES rather than reporting a true, misleading number.** *"A non-default engine was
+named and it wrote nothing"* would have been accurate and would have sent a reader hunting a defect
+that does not exist. Instead: *"the `toy` workload runs on engine/model by construction and does not
+honour `--engine`; it is A0's harness fixture rather than part of the stack I1 swaps."*
+
+> **A FIXTURE THAT IS OUT OF SCOPE SHOULD SAY WHICH IT IS, NOT PRODUCE A TRUE NUMBER THAT IMPLIES A
+> DEFECT.**
 
 ---
 # Track B — the C++ storage engine
@@ -5797,6 +5840,68 @@ axis says so at the moment they see it**, when it costs one message rather than 
 
 ---
 
+### GF-47 — a pinned literal is not a check; a derived population is
+
+**Raised at I1, 2026-08-28, when a pin written to protect `BUG-042`'s fix turned out to be incapable of
+catching `BUG-042`'s recurrence.**
+
+`TestTheReproducesLaneAccountsForEveryDirectory` pinned the exact string:
+
+```
+accounted=$((checked + skipped + notbundle))
+```
+
+That is a **literal**. It fails when the line changes and passes when it does not — so it has to be
+edited every time a bucket is added, **which is precisely the moment it was supposed to speak.** When
+the two `ROT` paths were found incrementing `failed` and nothing accounted, the fix was to add a
+`rotted` bucket, and the pin's response was to fail because its string had moved. It reported the
+edit, not the omission.
+
+> **A PINNED LITERAL ASSERTS THAT A LINE HAS NOT CHANGED. A CHECK ASSERTS THAT A PROPERTY STILL HOLDS.
+> WHEN THE PROPERTY IS "EVERY BUCKET IS SUMMED", PINNING THE SUM IS ASSERTING THE ANSWER INSTEAD OF
+> DERIVING IT — AND THE ANSWER IS THE THING THAT IS SUPPOSED TO BE ALLOWED TO CHANGE.**
+
+**The derived form** reads every `name=$((name + 1))` out of the script and requires each to appear in
+the reconciliation, excluding the two that are deliberately not buckets — `failed` counts outcomes,
+`dirs` *is* the population. A new bucket is then covered the moment it is written, by nobody.
+
+**This repository has several pinned literals and they are not all wrong.** `tools/gatepin` pins DR-8's
+gate enumeration, and that is correct: the property *is* "this exact list, unchanged without a ruling",
+so the literal and the property coincide. The distinction is not literal-versus-derived as a style:
+
+> **PIN A LITERAL WHEN THE TEXT IS THE PROPERTY. DERIVE WHEN THE TEXT IS ONE INSTANCE OF THE PROPERTY.**
+> Ask what should happen when someone legitimately extends the thing. If the answer is "a ruling", pin
+> it. If the answer is "it should just keep working", pinning guarantees it will not.
+
+**Its sibling is `GF-44`**, and the relationship is exact: `GF-44` is a derivation whose search was too
+narrow; this is a check that did not derive at all. Both report completeness over the wrong set.
+
+---
+
+### GF-48 — a criterion that has changed the answer three times is not a formality
+
+**Raised at I1 from the corpus rerun, and recorded because the strict-versus-loose distinction has now
+paid out three separate times in three phases.**
+
+| when | the loose criterion said | the strict one found |
+|---|---|---|
+| **A5** | `make corpus` **green in 102 seconds** | *"three bundles silently no longer carrying their findings"* |
+| **A6/BUG-022** | the bundle diverged, so it reproduced | **WEAK** — *diverges under `M71` but produces NO FINDING* |
+| **I1** | **24 of 24 traces MATCH** on the C++ engine | the criterion is that the **finding returns**, and a fixed bundle matches by design |
+
+**At I1 it was `repro=0` that gave it away**, on every raft bundle — a number that reads like a failure
+and means nothing of the sort, because a bundle whose defect is fixed replays identically and *says so*:
+*"this schedule's defect is fixed; to see the finding, reintroduce it."*
+
+> **CAUGHT BY READING WHAT A NUMBER MEANT RATHER THAN WHAT IT SAID.** 24 of 24 MATCH was true, was the
+> strongest number available, and was not the criterion. Reporting it as the criterion met would not
+> have been a lie; it would have been a weaker claim wearing a stronger one's clothes.
+
+> **A DISTINCTION THAT HAS CHANGED THE ANSWER THREE TIMES, IN THREE PHASES, ON THREE DIFFERENT
+> MECHANISMS, IS NOT A FORMALITY.** It has never once been the case that the loose criterion and the
+> strict one agreed and the extra work was wasted.
+
+---
 ### GF-44's first recurrence, inside its own document, four days after it was written
 
 **Recorded here rather than as a new form, because it is `GF-44` exactly.**
