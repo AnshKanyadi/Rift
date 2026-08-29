@@ -107,6 +107,26 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 	}
 
 	start := time.Now()
+	// A KILLED CHUNK LOSES EVERYTHING IT FOUND, and that is recorded here
+	// because it cost thirty minutes and cannot be fixed from this side.
+	//
+	// SweepRaftWithProgress's hook exists because "a shard writes its census on
+	// completion and nothing before it, so a running shard and a hung one look
+	// identical from outside". That fixed LIVENESS. It did not fix RESULT
+	// PRESERVATION: chunk [150,225) was killed by the runtime at 60 of 75 seeds
+	// having printed sixty progress lines and no verdicts, and every one of
+	// those sixty results was unrecoverable.
+	//
+	//	A PROGRESS INDICATOR THAT REPORTS ONLY HOW FAR A RUN GOT TURNS A KILLED
+	//	RUN INTO A TOTAL LOSS. ONE THAT REPORTS WHAT IT HAS FOUND SO FAR TURNS
+	//	THE SAME KILL INTO A PARTIAL RESULT.
+	//
+	// The hook's signature is `func(seed uint64, done, total int)` and carries
+	// no verdict, so this cannot be fixed from the caller. Widening it to pass
+	// the running census is a change to A7's signed work and is PROPOSED rather
+	// than made. The interim remedy is smaller chunks: the runtime's per-job
+	// ceiling is variable -- kills observed at 30m, 59m and 96m -- so a chunk
+	// sized against the largest observation is one that will eventually be cut.
 	c, err := hunt.SweepRaftWithProgress(from, to, opt, func(seed uint64, done, total int) {
 		if done == 1 || done%10 == 0 || done == total {
 			t.Logf("  seed %d: %d/%d done in %v", seed, done, total, time.Since(start).Round(time.Second))
