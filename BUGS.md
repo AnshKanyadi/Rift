@@ -6145,6 +6145,70 @@ by value — and the test says so rather than letting an assertion the language 
 a check.
 
 ---
+### GF-52 — a declared threshold can fail in two opposite directions, and a guess written down early is still a guess
+
+**Raised at I2's design, 2026-08-29, when deriving four pre-declared thresholds changed two of them —
+and the two were wrong in opposite directions, which is what makes the pair worth recording rather
+than either alone.**
+
+| | the guess | what derivation gave | the failure mode |
+|---|---|---|---|
+| chaos throughput | ~~≥ 50% of steady state~~ | **≥ (K−2.5E)/K**, = 75% at E=1s | **too loose** |
+| cgo boundary cost | ~~> 25% absolute is a finding~~ | **no regression beyond +5 points** vs B5's signed figures | **too tight** |
+
+**Too loose.** At `E = 1s`, 50% passes a cluster recovering in five seconds — two to three times worse
+than its own timing parameters predict — and reports success.
+
+> **A THRESHOLD LOOSER THAN THE DESIGN'S OWN PREDICTION CANNOT FAIL ANYTHING THE DESIGN WOULD CALL
+> BROKEN.** It is not a weak check. It is not a check.
+
+**Too tight.** An absolute 25% is already exceeded by numbers B5 measured and Ansh signed: **+33% at 8
+pairs, +111% at 1**.
+
+> **A THRESHOLD THAT FAILS THE CURRENTLY-SIGNED STATE IS NOT A THRESHOLD, IT IS A BUG IN THE
+> THRESHOLD** — and its fate on first contact is to be *"fixed"* on the spot, **which retroactively
+> makes the declaration worthless.** The ritual of declaring in advance survives; the protection does
+> not.
+
+**Both were picked from intuition. Both would have produced a comfortable first result** — one by
+passing a broken system, one by being quietly relaxed. **The derivation caught both**, and neither was
+visible by inspection: 50% and 25% are perfectly reasonable-looking numbers.
+
+> **DECLARING IN ADVANCE IS ONLY WORTH SOMETHING IF THE DECLARATION IS DERIVED. A GUESS WRITTEN DOWN
+> EARLY IS STILL A GUESS**, and writing it down early makes it *harder* to question, because it now
+> carries the authority of having been declared.
+
+#### The third amendment is a different fault: a category error in the metric
+
+Threshold 3 was ~~*"chaos p99 within 10× of steady-state p99"*~~. Derived:
+
+```
+operations caught by a leader change wait out recovery R
+fraction affected = R/K ≈ 15–25%,  far above the 1% p99 asks about
+therefore p99(chaos) ≈ R ≈ 1.5–2.5E,  not a multiple of p99(steady)
+```
+
+Steady-state p99 measures the write path. Chaos p99 measures **how long a leader election takes.**
+
+> **A THRESHOLD CAN BE WRONG BY COMPARING TWO QUANTITIES THAT DO NOT ANSWER THE SAME QUESTION, AND NO
+> AMOUNT OF TUNING FIXES THAT.** The ratio is not a bad number; it is not a number about anything.
+> 10× would have failed a healthy cluster; 500× would have passed a broken one; every value in between
+> is equally meaningless.
+
+The corrected form states the bound **against the quantity that determines it** — `p99 ≤ 3E`,
+`p999 ≤ 5E` — which is the general remedy: **name the thing the metric actually depends on, and bound
+it against that.**
+
+#### And one operational detail worth keeping, from Threshold 1
+
+`R ≥ K` is reported **specifically as the cluster never reaching steady state between kills**, never as
+low throughput.
+
+> **A PERMANENT-RECOVERY CONDITION THAT REPORTS AS A THROUGHPUT NUMBER IS A DIAGNOSIS POINTING AT THE
+> WRONG COMPONENT.** The reader goes looking at the write path, the engine, the batch size — and the
+> answer is that the cluster is never up. This project has paid for that shape before.
+
+---
 ### GF-44's first recurrence, inside its own document, four days after it was written
 
 **Recorded here rather than as a new form, because it is `GF-44` exactly.**

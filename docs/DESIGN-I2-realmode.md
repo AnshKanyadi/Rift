@@ -59,6 +59,40 @@ needing judgement.
 
 > **A CHAOS RED IS NEVER CLOSED BY RE-RUNNING UNTIL IT GOES AWAY.**
 
+### What a chaos GREEN means, and what it does not
+
+**Stated before the first run, because the usual recourse does not exist here.** Every green in this
+project so far has been backed by a seed: a run that passed can be re-run, and a run that failed can be
+handed to anyone with one command. **The first chaos run is the first time this system has run with no
+deterministic replay behind it.**
+
+> **A CHAOS GREEN IS A STATEMENT THAT NOTHING WAS OBSERVED. IT IS NOT A STATEMENT THAT NOTHING IS
+> THERE.**
+
+That distinction exists everywhere in verification and is usually softened by the ability to look
+again. Here there is nothing to look again *at*: the schedule was the operating system's, the timing
+was the network's, and neither is recoverable. A second run is a **different experiment**, not a
+repetition — so it cannot confirm the first and cannot refute it.
+
+**What a chaos green therefore supports, and what it does not:**
+
+| | |
+|---|---|
+| **supports** | "under this fault schedule, on this hardware, for this duration, no invariant was observed to fail, and the counters show the faults landed" |
+| **does not support** | "the system is correct under chaos" — a claim about all schedules, from evidence about one |
+| **does not support** | "this result reproduces" — nothing about it reproduces, by construction |
+
+**And it is worth less than a sim green, not more**, which is the opposite of how a real-cluster result
+usually reads. A sim green covers a *named, enumerated, re-runnable* set of schedules. A chaos green
+covers one unrepeatable sample of an unenumerated space. **The chaos lane's value is entirely in its
+reds**: it reaches schedules the simulator's fault model does not generate, and a violation there is
+the strongest evidence this project can produce precisely because nothing about the schedule was
+chosen by us.
+
+> **THE COUNTERS ARE WHAT SEPARATE A GREEN FROM A NON-EVENT**, which is why they gate and the verdict
+> does not. A chaos run that killed a leader every ten seconds and recorded no elections is a broken
+> harness, and it is indistinguishable from a clean run by every other signal.
+
 ---
 
 ## 1. What "real mode" means, precisely
