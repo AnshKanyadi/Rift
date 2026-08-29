@@ -6099,6 +6099,52 @@ being promised.** The first hypothesis cost a paragraph in a carried record and 
 The second cost one sentence and was settled for free by work already scheduled.
 
 ---
+### GF-51 — a signature change needs its own gate even when every existing gate still passes, especially then
+
+**Raised at I1's close from the A7 amendment, and it is a coverage-shaped hole nobody would think to
+look for.**
+
+`SweepRaftWithProgress`'s hook was widened from `func(seed, done, total int)` to carry the running
+census. Two tests cover that function and both are A7's:
+
+| | what it asserts |
+|---|---|
+| `TestASweepCountsEachSeedOnce` | the final `Seeds` count, once per seed |
+| `TestTheProgressHookSeesEverySeedInOrder` | the hook fires for every seed, in order |
+
+**Both PASS when the new argument is replaced with a zero value.** Measured, by doing exactly that
+before writing anything.
+
+> **AN ARGUMENT ADDED TO A FUNCTION IS NOT COVERED BY THE TESTS THAT COVERED THE FUNCTION. WIDENING A
+> SIGNATURE WIDENS THE SURFACE, AND THE OLD GATES KEEP PASSING OVER THE PART THAT DID NOT EXIST WHEN
+> THEY WERE WRITTEN.**
+
+**"Especially then" is the operative half.** A signature change that broke the existing tests would
+announce itself — the compiler and the suite would both object, and nobody would ship it unexamined.
+**A signature change that leaves every gate green is the dangerous one**, because green is exactly the
+signal that says "covered", and here it meant "unchanged in the parts anyone had thought to check".
+
+> **THE GREEN IS NOT WRONG. IT IS ANSWERING THE OLD QUESTION.**
+
+**Its siblings are the day's other two, and the three together are one shape at three scales:**
+
+| | the enumeration | what bounded it |
+|---|---|---|
+| `GF-44` | a derivation's search | one idiom |
+| `GF-49` | a reference implementation's expressible defects | no files, handles, or past |
+| **`GF-51`** | **a test suite's covered surface** | **the signature as it stood when the tests were written** |
+
+Each reports completeness over the set it can see. **None of the three reports any doubt**, which is
+why the remedy in every case is to state the method's boundary inside the artifact the method produced
+— and, for a signature change specifically, to write the gate in the same commit that widens the
+signature, before the widening is used anywhere.
+
+**The gate that landed** asserts the census accumulates, matches the returned census at the last seed,
+and is a copy. Its accumulation half is induced; its copy half is not and cannot be — Go passes structs
+by value — and the test says so rather than letting an assertion the language guarantees be counted as
+a check.
+
+---
 ### GF-44's first recurrence, inside its own document, four days after it was written
 
 **Recorded here rather than as a new form, because it is `GF-44` exactly.**

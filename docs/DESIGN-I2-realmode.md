@@ -1,7 +1,63 @@
 # DESIGN-I2 — real mode, chaos, and the final numbers
 
-**Status: proposed. Waiting on Ansh.** Nothing here is implemented. I2 is v1's last phase, and it is
-the one where the project stops verifying itself and starts making claims to other people.
+**Status: four questions RULED by Ansh 2026-08-29; §3.2's thresholds sent for ratification.** Nothing
+is implemented. I2 is v1's last phase, and the one where the project stops verifying itself and starts
+making claims to other people.
+
+| question | ruling |
+|---|---|
+| transport | **length-prefixed TCP** |
+| processes | **one process per node** |
+| chaos lane | **gate on counters, report the verdict** |
+| §3.2 thresholds | **sent below with derivations, for ratification or amendment** |
+
+> **I2'S CENTRAL SENTENCE: DETERMINISM AND BYTE-IDENTICAL TRACES ARE SUSPENDED; EVERY SAFETY INVARIANT
+> SURVIVES, BECAUSE THEY ARE PROPERTIES OF A HISTORY RATHER THAN OF A SCHEDULE.** That is what makes
+> the chaos lane meaningful at all: a real cluster cannot give us a schedule, but it can give us a
+> history, and a history is what every checker in this repository reads.
+
+**AND HALF OF REAL MODE ALREADY EXISTS, which concentrates the risk.** `node/` has driven a `sim.Node`
+since A0 — one goroutine per node, wall time, mailbox, no build tag and no second implementation of
+node logic. Time, concurrency and storage are inherited from phases that already signed them.
+
+> **I2'S RISK IS CONCENTRATED IN TWO THINGS — PROCESSES AND A NETWORK — RATHER THAN SPREAD ACROSS THE
+> PHASE.** Everything else has been exercised for six phases.
+
+### The rulings, with their reasons
+
+**Transport: length-prefixed TCP, and this NARROWS a pre-approval rather than refusing one.** CLAUDE.md
+pre-approves gRPC for real-mode transport. It is declined here because `sim.Transport.Send(Envelope)`
+returns **no error, deliberately, since A0.7** — *"an error signal is a covert failure detector, and
+covert failure detectors are how consensus implementations accidentally become unsafe"*. gRPC's natural
+shape is a unary call that returns something, so adapting it means discarding that error at the seam.
+
+> **THAT SEAM IS EITHER CORRECT-AND-SUBTLE OR IT IS A HOLE, AND THIS PROJECT'S POSITION IS THAT
+> CORRECT-AND-SUBTLE IS A THING YOU LATER DISCOVER WAS NEITHER.**
+
+**The cost, stated honestly:** hand-rolled framing is code we own and must verify, against a library
+that is already verified and shaped wrong. **We are choosing the code we can check over the code that
+is already checked**, and the framing therefore needs its own tests — length prefix, partial reads,
+oversized frames, a peer that closes mid-frame — rather than inheriting confidence from a dependency.
+
+**Processes: one per node.** Two configurations is the right price for `kill -9` meaning what it means.
+Goroutines-as-nodes cannot express a process dying with unsynced writes in flight — **which is exactly
+the class `GF-49` was raised about at I1**, where a substitute that could not express a class made it
+invisible rather than absent. If the goroutine configuration is kept for speed it is kept as a
+**fixture with its limit stated**, and never as evidence about crash behaviour.
+
+**Chaos: gate on counters, report the verdict.** A non-reproducible red is a bad gate; an ungated lane
+rots. So the lane gates on the deterministic properties of the run having *happened* — nodes started,
+faults injected, operations completed, histories non-vacuous — and reports checker verdicts as findings
+needing judgement.
+
+**And a chaos violation's disposition is a documented workflow, not a decision made in the moment:**
+
+1. the history and the fault log are **captured** and attached to a `BUGS.md` entry;
+2. the first question is **whether it reproduces in sim**;
+3. if it does not, **that is a finding about the simulator's fault model** and goes in the record as
+   one, rather than being dropped.
+
+> **A CHAOS RED IS NEVER CLOSED BY RE-RUNNING UNTIL IT GOES AWAY.**
 
 ---
 
@@ -115,20 +171,104 @@ that a threshold chosen after seeing the number is not a threshold.**
 | **conditions** | a fixed node count, a fixed key space, a stated warmup discarded, a stated measurement window, on hardware named in `BENCHMARKS.md` |
 | **engines** | the C++ engine **and** `engine/model`, plus the cgo boundary cost measured separately — same workload, C++ engine called from Go versus from a native C++ harness, as CLAUDE.md requires |
 
-### 3.2 What result would mean what — **declared now**
+### 3.2 What result would mean what — **thresholds with derivations, sent for ratification**
 
-| result | reading |
-|---|---|
-| chaos throughput ≥ **50%** of steady-state, p99 within **10×** of steady-state p99 | the system degrades gracefully under leader churn. **This is the claim I2 exists to support** |
-| chaos throughput **10–50%** of steady state | it survives but does not serve. Reportable, with the number, as *"available, not performant, under continuous leader loss"* |
-| chaos throughput **< 10%** of steady state | **reported as inadequate.** The system is technically live and practically down, and the honest headline is that it does not sustain load under this fault rate |
-| **any** safety violation under chaos | the benchmark section does not run. A performance number taken from a run that violated an invariant is a number about a broken system |
-| recovery time after a leader kill **> 10s** with a 10s kill interval | **reported as inadequate**, and specifically as *the cluster never reaching steady state between kills* — a number that would otherwise read as low throughput when it is really permanent recovery |
-| cgo boundary overhead **> 25%** on the mixed workload | reported as a **finding about the interface**, not a footnote, since the batch design exists to prevent exactly that |
+**Deriving these rather than picking them changed two of the four**, which is the argument for the
+exercise. The originals are shown struck through so the amendment is visible rather than silent.
 
-> **THE "INADEQUATE" ROWS ARE THE POINT OF DECLARING IN ADVANCE.** Every other row has an obvious way
-> to be reported generously after the fact. Writing down now what would count as a bad result is the
-> only version of this that costs anything.
+#### The safety GATE, which is not a threshold at all
+
+> **ANY SAFETY VIOLATION UNDER CHAOS IS INADEQUATE AT ANY NUMBER. THE BENCHMARK SECTION DOES NOT RUN.**
+
+Written as a gate and placed above the table on purpose. In a table of numbers it reads as tunable, and
+it is not: a performance number taken from a run that violated an invariant is a number about a broken
+system, and there is no throughput that redeems it.
+
+#### The parameters everything else is derived from
+
+| symbol | what | value |
+|---|---|---|
+| `E` | election timeout, real time | **configured by I2**, not fixed today — `Election: 10` ticks, and the tick's real duration is I2's to choose |
+| `K` | chaos kill interval | **10 s**, from CLAUDE.md's headline claim |
+| `R` | recovery: kill → restored steady-state throughput | **derived below** |
+
+**Recovery, derived.** A follower detects a dead leader after at most one election timeout; an election
+costs one round trip; the winner then catches up and resumes serving:
+
+```
+R  =  detection (≤ E)  +  election (1 RTT, « E on a LAN)  +  catch-up
+R  ≈  1.5E  to  2.5E
+```
+
+> **THRESHOLD 1 — RECOVERY.** `R ≤ 2.5E`. Above that, the cluster is taking longer than its own timing
+> parameters predict and the excess is unexplained. **Reported as inadequate if `R ≥ K`**, and
+> specifically as *the cluster never reaching steady state between kills* — which would otherwise be
+> read as low throughput when it is really permanent recovery.
+
+**Chaos throughput, derived rather than picked.** The cluster is unavailable for `R` out of every `K`:
+
+```
+expected ratio  =  (K − R) / K
+with E = 1s, R ≈ 1.5–2.5s, K = 10s  ->  75% to 85%
+```
+
+> **THRESHOLD 2 — CHAOS THROUGHPUT.** `≥ (K − 2.5E)/K` of steady state, computed from the configured
+> `E` and `K` rather than asserted. At `E = 1s` that is **≥ 75%**.
+>
+> ~~≥ 50% of steady state~~ — **AMENDED.** 50% was picked, not derived. At `E = 1s` it would pass a
+> system recovering in **5 seconds**, which is 2–3× worse than its own parameters predict, while
+> reporting success. **A threshold looser than the design's own prediction cannot fail anything the
+> design would call broken.**
+>
+> **Reported as inadequate below 10%** — the system is technically live and practically down.
+
+**Chaos p99, and this is the one I had most wrong.** An operation in flight during a leader change
+waits out the recovery. The fraction of operations affected is `R/K` ≈ 15–25%, which is far above the
+1% that p99 asks about — so **p99 under chaos is dominated by `R`, not by steady-state latency**:
+
+```
+p99(chaos)  ≈  R  ≈  1.5–2.5E
+p99(steady) ≈  single-digit ms
+ratio       ≈  300× to 500×
+```
+
+> **THRESHOLD 3 — CHAOS LATENCY.** `p99 ≤ 3E` and `p999 ≤ 5E`, stated **against the election timeout**,
+> because that is what determines them.
+>
+> ~~p99 within 10× of steady-state p99~~ — **AMENDED, and it was wrong by roughly a factor of 30–50.**
+> It compares two quantities that measure different things: steady-state p99 measures the write path,
+> chaos p99 measures how long a leader election takes. **A ratio between them is not a number about
+> anything**, and 10× would have failed a perfectly healthy cluster on its first run.
+
+**cgo boundary cost — already measured, so this is a regression bound, not a fresh threshold.** B5's
+numbers, signed:
+
+| pairs per crossing | boundary cost |
+|---:|---:|
+| 1 | +111% |
+| 8 | +33% |
+| 64 | +21% |
+| 512 | +24% |
+
+> **THRESHOLD 4 — BOUNDARY COST.** No **regression** beyond **+5 percentage points** against the B5
+> figure *at the same block size*, and the block size must be stated with any number quoted.
+>
+> ~~> 25% overhead is a finding about the interface~~ — **AMENDED.** An absolute 25% is already exceeded
+> by numbers B5 measured and Ansh signed (+33% at 8 pairs, +111% at 1). **A threshold that fails the
+> currently-signed state is not a threshold, it is a bug in the threshold** — and it would have fired
+> on I2's first run, against a result that was never in question.
+
+#### What ratification means
+
+These four plus the gate are what I2 will be measured against. **A number that comes in outside them is
+reported at its value with the threshold quoted beside it** — never adjusted afterwards, which is the
+whole reason for declaring first.
+
+**Two of the four originals were wrong in the same direction**: both were picked from intuition rather
+than derived from the system's own parameters, and both would have produced a *comfortable* first
+result — one by passing a system 3× worse than predicted, one by failing a healthy one so obviously
+that the threshold would have been "fixed" on the spot. **Declaring in advance is only worth anything
+if the declaration is derived; a guess written down early is still a guess.**
 
 **And BENCHMARKS.md keeps its provenance block** — commit, engine shape, caps, and what would
 invalidate the numbers — which B3 already established and I2 inherits rather than invents.
