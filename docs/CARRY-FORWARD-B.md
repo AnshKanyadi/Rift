@@ -633,3 +633,25 @@ corpus as well as the generator.
 was found by reading one line; the same shape in key length, batch size, or range width would have the
 same effect and the same invisibility.
 
+### The consequence for B4's differential claim, stated as scope rather than as retraction
+
+B4's differential reported **zero divergences** across its clean and killed schedules. That number is
+unchanged and nothing about it was wrong. What it means is now narrower than it read:
+
+> **THE DIFFERENTIAL'S ZERO DIVERGENCES ARE A STATEMENT ABOUT THE INPUT SPACE ITS GENERATOR PRODUCES,
+> AND THAT SPACE IS NOW KNOWN TO HAVE AT LEAST ONE HOLE.** The engines agreed on every input they were
+> shown. They disagree on an input the generator cannot produce.
+
+**This is the form Track B already uses** — the TSan lane states *"TSan observed no data race across
+two authored interleaving patterns; this is not a proof of race-freedom"* — and it is the same shape:
+a real result, with the boundary of what it covers written beside it rather than left to be assumed.
+
+**"At least one"** is deliberate and is not hedging. One hole is what has been *found*; the generator
+has not been audited for others, and the check named above is the audit. Until it runs, the honest
+statement of the differential's coverage is *"every input `differential_driver.cc` generates"*, and the
+reader who needs more must read that file rather than the number.
+
+**The exact clean/killed schedule counts belong in this statement and are not reproduced here**,
+because I could not locate them by grep in `DESIGN-B4-verification.md` and will not restate a figure I
+have not read. Whoever holds B4's record should attach them to the sentence above.
+

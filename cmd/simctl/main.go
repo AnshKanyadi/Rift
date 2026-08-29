@@ -693,6 +693,9 @@ func execute(p *plan.Plan, meta *Meta, hist **sim.History, newEngine func(node i
 		//	HASH IS THE MOST CONVINCING FORM IT COULD POSSIBLY TAKE.
 		opt.NewEngine = newEngine
 		res, err := hunt.RunRaftWith(p, opt, tr)
+		if verr := assertEngineWasUsed(); verr != nil {
+			return verr
+		}
 		if err != nil {
 			return err
 		}
@@ -834,6 +837,14 @@ func report(m Meta) {
 	fmt.Printf("trace    %s\n", m.TraceHash)
 	if m.Census != nil {
 		fmt.Printf("census   %s\n", describeCensus(m.Census))
+		// ENGINE BYTES, AND THE ASSERTION ABOVE ZERO. BUG-046: a run reported a
+		// byte-identical trace hash on --engine cgo having never opened the
+		// engine, and every checker passed. A trace hash is an answer; this is
+		// the mechanism. GF-25 -- they are two instruments, not one.
+		if engineRootUsed != "" {
+			n, b := engineFootprint(engineRootUsed)
+			fmt.Printf("engine   root=%s files=%d bytes=%d\n", engineRootUsed, n, b)
+		}
 	}
 	if m.Violation != nil {
 		fmt.Printf("VIOLATION %s\n", describeViolation(m.Violation))
@@ -1069,5 +1080,50 @@ func resolveEngine(name, root string) (func(node int) store.Engine, error) {
 		}
 		root = d
 	}
+	engineRootUsed = root
 	return hunt.EngineByName(name, root)
+}
+
+// engineRootUsed is the directory the run's engine wrote into, or "" for the
+// in-memory reference engine. It is package state because it is REPORTING
+// state: the run must be able to say what it actually touched, and threading it
+// through every signature would put harness bookkeeping in the paths the
+// determinism rules govern.
+var engineRootUsed string
+
+// engineFootprint counts what the engine actually wrote. Files and bytes, not
+// existence: a created-and-empty directory is exactly the state BUG-046 was in.
+func engineFootprint(root string) (files int, bytes int64) {
+	_ = filepath.Walk(root, func(_ string, fi os.FileInfo, err error) error {
+		if err == nil && !fi.IsDir() {
+			files++
+			bytes += fi.Size()
+		}
+		return nil
+	})
+	return files, bytes
+}
+
+// assertEngineWasUsed is the non-vacuity check for the engine itself.
+//
+// BUG-046: a run named --engine cgo, completed 24,622 steps, passed every
+// checker, and reported a trace hash BYTE-IDENTICAL to the model's, having
+// never opened the engine. The engine root held zero files. Nothing in the
+// run's own output could have distinguished that from success, because the
+// output was about the answer and the defect was in the mechanism.
+//
+//	A NON-VACUITY COUNTER EARNS ITS PLACE WHEN THERE IS A MEASURED INSTANCE OF
+//	WHAT ITS ABSENCE LOOKS LIKE. There is one, and this is it.
+func assertEngineWasUsed() error {
+	if engineRootUsed == "" {
+		return nil // the reference engine is in memory and writes nothing
+	}
+	n, b := engineFootprint(engineRootUsed)
+	if b > 0 {
+		return nil
+	}
+	return fmt.Errorf("simctl: a non-default engine was named and it wrote NOTHING: %s holds "+
+		"%d files and %d bytes. The run completed, and its trace hash may even match the "+
+		"model's -- that is exactly BUG-046, and it is what this check exists for",
+		engineRootUsed, n, b)
 }

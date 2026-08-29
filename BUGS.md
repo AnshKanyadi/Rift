@@ -2995,6 +2995,57 @@ comparison against the previous commit was *discarded rather than reported*, bec
 survived the stash and compromised the control.
 
 ---
+### BUG-046 — (harness) a byte-identical trace hash from an engine that was never opened
+
+| | |
+|---|---|
+| **Symptom** | `simctl run --engine cgo` reported the raft workload complete in 24,622 steps with a trace hash **byte-identical to the model's**. The engine root contained **0 directories, 0 files, 0 bytes.** |
+| **Found by** | listing the engine root instead of reading the hash — on Ansh's standing instruction to distrust a clean first result. |
+| **Reproduce** | attach the engine factory to the plan-building options rather than to the run's; the plan drops it and the run uses the default. |
+| **Invariant that caught it** | **none.** Every checker passed, every count was right, and the strongest available evidence pointed the wrong way. |
+| **Mutant class** | the non-vacuity counter added with this entry: engine bytes written, asserted above zero on any run that named a non-default engine. |
+
+**This entry sits above `BUG-B008`, the defect it was hiding**, because the hiding is worth more than
+the defect. `BUG-B008` is a null pointer at a boundary. This is a result that would have been reported
+as *"the C++ engine reproduces the model byte for byte on I1's first run."*
+
+> **A MATCHING TRACE HASH IS THE MOST PERSUASIVE FORM A CLAIM ABOUT NOTHING CAN TAKE.** It is not a
+> weak signal that happened to mislead. It is the strongest signal this project has, and it was
+> perfectly true: the two runs *were* identical, because they were the same run on the same engine.
+
+**What caught it was checking that the MECHANISM ran, not that the ANSWER was right.** That is `GF-25`
+— *a gate on the mechanism and a test on the answer are two instruments, not one* — arriving at the top
+of I1, in the most consequential place it has yet appeared. The answer was correct and told us nothing;
+`ls` told us everything, in one command, and cost nothing.
+
+#### The cause is a real design constraint, not a slip
+
+`simctl run` builds a **plan**, and the plan is what drives the run.
+
+> **A PLAN IS DATA. THAT IS WHAT MAKES IT A REPRODUCTION UNIT** — a bundle replays because everything
+> the run needs was written down. A `func` field cannot be written down, so the engine factory was
+> silently dropped at the plan boundary, and the run rebuilt its options from the plan with the
+> default engine.
+
+Nothing malfunctioned. The plan's data-only property is correct, is the reason bundles exist, and is
+exactly what produced the trap for the person extending it. **Engine choice has to travel *beside* the
+plan, never inside it**, and that is now stated at the line that attaches it.
+
+**Same family as `BUG-044`** — the frozen contract's non-blocking `Apply`, correct and load-bearing,
+making the naive harness wrong — and as `BUG-B008`, where null-means-unbounded is correct and
+load-bearing for bounds and meaningless for a value.
+
+> **THIRD INSTANCE THIS WEEK OF A CORRECT GUARANTEE BECOMING A DEFECT AT A BOUNDARY ITS AUTHOR DID NOT
+> HAVE IN VIEW.** None of the three guarantees was wrong. Each is documented where it is defined. The
+> defect is in the joint every time, and the person standing in the joint is the one extending the
+> system rather than the one who wrote either half.
+
+**Fixed:** the engine is attached at the run, and `simctl` now records `engine-bytes` on every run,
+asserted above zero whenever a non-default engine was named. **A counter exists because there is now a
+measured instance of what its absence looks like**, which is the only argument for a counter this
+project accepts.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its
