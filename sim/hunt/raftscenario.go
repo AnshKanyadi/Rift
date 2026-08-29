@@ -1943,8 +1943,36 @@ func SweepRaftWith(from, to uint64, opt RaftOptions) (RaftCensus, error) {
 // It is called AFTER each seed completes, with the count completed, so the
 // number it reports is a number of finished seeds rather than a number of
 // started ones. `nil` is the default and costs a nil check per seed.
+//
+// # AMENDMENT, I1, 2026-08-29: the hook carries the RUNNING CENSUS
+//
+// Ansh, approving a change to A7's signed work: the hook as first written
+// reported how far a run had got and nothing about what it had found. That
+// fixed LIVENESS -- the problem the paragraphs above describe -- and left
+// RESULT PRESERVATION untouched.
+//
+// MEASURED, and this is why it changed: an I1 sweep chunk was stopped by
+// something outside the process at 60 of 75 seeds, thirty minutes in. It had
+// printed sixty progress lines and zero verdicts, and every one of those sixty
+// results on the real C++ engine was unrecoverable.
+//
+//	A PROGRESS INDICATOR THAT REPORTS ONLY HOW FAR A RUN GOT TURNS A KILLED RUN
+//	INTO A TOTAL LOSS. ONE THAT REPORTS WHAT IT HAS FOUND SO FAR TURNS THE SAME
+//	KILL INTO A PARTIAL RESULT.
+//
+// The alternative considered and rejected was smaller chunks. It does not work,
+// and the reason is a second measurement: the kills are not predictable by
+// duration -- one landed at 4m35s against completions at 17m, 25m, 31m and 33m
+// -- so there is no size that survives them.
+//
+//	A PARTIAL RESULT SURVIVES A KILL WHOSE CAUSE YOU HAVE NOT IDENTIFIED. A
+//	CHUNK SIZE ONLY SURVIVES A KILL WHOSE CAUSE YOU HAVE CORRECTLY GUESSED.
+//
+// The census passed is the accumulation SO FAR, by value, after this seed has
+// been folded in. It is a copy: a hook cannot alter the sweep's own accounting,
+// which is the property `seedcount_test.go` exists to protect.
 func SweepRaftWithProgress(from, to uint64, opt RaftOptions,
-	onSeed func(seed uint64, done, total int)) (RaftCensus, error) {
+	onSeed func(seed uint64, done, total int, running RaftCensus)) (RaftCensus, error) {
 	var c RaftCensus
 	total := int(to - from)
 	for seed := from; seed < to; seed++ {
@@ -1972,7 +2000,7 @@ func SweepRaftWithProgress(from, to uint64, opt RaftOptions,
 
 		c = AddCensus(c, CensusOf(seed, r))
 		if onSeed != nil {
-			onSeed(seed, int(seed-from)+1, total)
+			onSeed(seed, int(seed-from)+1, total, c)
 		}
 	}
 	return c, nil

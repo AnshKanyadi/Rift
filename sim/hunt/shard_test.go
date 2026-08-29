@@ -120,7 +120,7 @@ func TestRaftExitShard(t *testing.T) {
 	_ = os.Remove(progress)
 	start := time.Now()
 	c, err := hunt.SweepRaftWithProgress(from, to, hunt.CurrentOptions(),
-		func(seed uint64, done, total int) {
+		func(seed uint64, done, total int, running hunt.RaftCensus) {
 			el := time.Since(start)
 			line := fmt.Sprintf("shard [%d,%d) %s: seed %d of %d done, %s elapsed, %.2f s/seed\n",
 				from, to, hunt.CurrentShapeName(), done, total,

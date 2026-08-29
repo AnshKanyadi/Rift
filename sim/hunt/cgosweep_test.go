@@ -144,9 +144,13 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 	// prints only at the end. **That is the part worth engineering against**,
 	// and it is what makes the hook proposal worth more than any chunk size:
 	// a partial result survives a kill whose cause nobody has identified.
-	c, err := hunt.SweepRaftWithProgress(from, to, opt, func(seed uint64, done, total int) {
+	c, err := hunt.SweepRaftWithProgress(from, to, opt, func(seed uint64, done, total int, running hunt.RaftCensus) {
 		if done == 1 || done%10 == 0 || done == total {
-			t.Logf("  seed %d: %d/%d done in %v", seed, done, total, time.Since(start).Round(time.Second))
+			// RUNNING VERDICTS, not just a count. A killed chunk now leaves a
+			// partial result in the log rather than nothing at all.
+			t.Logf("  seed %d: %d/%d in %v | so far: violations=%d inconclusive=%d pass=%d errors=%d",
+				seed, done, total, time.Since(start).Round(time.Second),
+				running.Violations, running.Inconclusive, running.Pass, running.Errors)
 		}
 	})
 	if err != nil {
