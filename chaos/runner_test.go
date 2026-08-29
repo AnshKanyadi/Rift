@@ -1,0 +1,158 @@
+package chaos_test
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/anshkanyadi/rift/chaos"
+)
+
+func good() chaos.Run {
+	return chaos.Run{
+		Counters: chaos.Counters{Started: 5, Kills: 12, Restarts: 2},
+		Ops:      chaos.OpCounters{Issued: 1000, Completed: 940, Failed: 60, Keys: 32},
+		Faults:   []chaos.Fault{{At: time.Now(), Kind: "kill", Node: 1}},
+		Verdicts: []chaos.Verdict{{Checker: "linearizability", OK: true}},
+	}
+}
+
+// TestTheGateCatchesEachWayARunCanNotHaveHappened.
+//
+// Every arm is a way a chaos run produces a clean verdict while having done
+// nothing, and each is checked separately because they are independent: a run
+// can start nodes and kill none, kill plenty and serve nothing, or serve
+// plenty of nothing.
+func TestTheGateCatchesEachWayARunCanNotHaveHappened(t *testing.T) {
+	if g := good().Gate(10, 500); len(g.Failures) != 0 {
+		t.Fatalf("a healthy run failed the gate: %v.\n"+
+			"      Both numbers are required: a gate that only ever fires is as useless as one "+
+			"that never does", g.Failures)
+	}
+
+	for _, tc := range []struct {
+		name string
+		want string
+		mut  func(*chaos.Run)
+	}{
+		{"no node started", "does not exist", func(r *chaos.Run) { r.Counters.Started = 0 }},
+		{"faults did not land", "DID NOT LAND", func(r *chaos.Run) { r.Counters.Kills = 1 }},
+		{"a node died uninvited", "WITHOUT being killed", func(r *chaos.Run) { r.Counters.ExitedOther = 1 }},
+		{"history too thin", "too thin", func(r *chaos.Run) { r.Ops.Completed = 3 }},
+		{"vacuous by content", "vacuous by content", func(r *chaos.Run) { r.Ops.Keys = 0 }},
+		{"accounting disagrees", "disagrees with itself", func(r *chaos.Run) { r.Ops.Issued = 10 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := good()
+			tc.mut(&r)
+			g := r.Gate(10, 500)
+			if len(g.Failures) == 0 {
+				t.Fatalf("the gate passed a run that %s", tc.name)
+			}
+			if !strings.Contains(strings.Join(g.Failures, " "), tc.want) {
+				t.Errorf("the gate fired but not for the stated reason: %v", g.Failures)
+			}
+		})
+	}
+}
+
+// TestAGreenCarriesItsCaveatInTheSameOutput is the one Ansh asked for before
+// the first run rather than after.
+//
+// A caveat a reader has to go and find is a caveat that travels separately from
+// the number it bounds. This asserts the sentence is in the same bytes as the
+// result.
+func TestAGreenCarriesItsCaveatInTheSameOutput(t *testing.T) {
+	r := good()
+	var b strings.Builder
+	r.Report(&b, r.Gate(10, 500))
+	out := b.String()
+
+	for _, want := range []string{
+		"nothing was observed under the schedules",
+		"ACTUALLY OCCURRED",
+		"not a statement that nothing is there",
+		"WEAKER CLAIM THAN ANY GREEN TRACK A EVER REPORTED",
+		"DIFFERENT",
+	} {
+		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
+			t.Errorf("a green result did not carry %q in its own output.\n%s", want, out)
+		}
+	}
+}
+
+// TestAViolationPrintsTheWorkflowRatherThanLeavingItToJudgement.
+//
+// The disposition is a documented workflow, not a decision made in the moment
+// -- so it is printed with the violation, at the moment somebody is deciding.
+func TestAViolationPrintsTheWorkflowRatherThanLeavingItToJudgement(t *testing.T) {
+	r := good()
+	r.Verdicts = append(r.Verdicts, chaos.Verdict{
+		Checker: "linearizability", OK: false, Detail: "key k07 non-linearizable",
+	})
+	var b strings.Builder
+	r.Report(&b, r.Gate(10, 500))
+	// NORMALISED, because the report is wrapped for humans and a content
+	// assertion should not depend on where a line happened to break. The first
+	// version of this searched raw output and failed on "SIMULATOR'S FAULT\n
+	// MODEL" -- a test failing on its own formatting rather than on content.
+	out := strings.Join(strings.Fields(b.String()), " ")
+
+	for _, want := range []string{
+		"CAPTURE the history",
+		"REPRODUCES IN SIM",
+		"SIMULATOR'S FAULT MODEL",
+		"NEVER CLOSED BY RE-RUNNING",
+		"benchmark section does not run",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a violation report omitted %q:\n%s", want, out)
+		}
+	}
+	// And a violation must NOT also print the green caveat, which would read as
+	// reassurance attached to a failure.
+	if strings.Contains(out, "GREEN, AND HERE IS WHAT THAT MEANS") {
+		t.Error("a run with a violation printed the green caveat")
+	}
+}
+
+// TestAFailedGateSuppressesTheVerdictsAsReportable.
+//
+// A checker's opinion about a run that did not occur as described is an opinion
+// about nothing, and printing it beside a gate failure invites someone to read
+// the verdict and skip the gate.
+func TestAFailedGateSuppressesTheVerdictsAsReportable(t *testing.T) {
+	r := good()
+	r.Counters.Kills = 0
+	var b strings.Builder
+	r.Report(&b, r.Gate(10, 500))
+	out := b.String()
+	if !strings.Contains(out, "GATE FAILED") {
+		t.Fatal("a gate failure was not announced")
+	}
+	if !strings.Contains(out, "NOT reportable") {
+		t.Error("the report did not say the verdicts are unreportable under a failed gate")
+	}
+	if strings.Contains(out, "GREEN, AND HERE IS WHAT THAT MEANS") {
+		t.Error("a run that failed its gate printed the green caveat")
+	}
+}
+
+func TestTheFaultLogIsOrderedByTime(t *testing.T) {
+	t0 := time.Now()
+	r := chaos.Run{Faults: []chaos.Fault{
+		{At: t0.Add(3 * time.Second), Kind: "restart", Node: 2},
+		{At: t0, Kind: "kill", Node: 1},
+		{At: t0.Add(time.Second), Kind: "kill", Node: 2},
+	}}
+	lines := strings.Split(strings.TrimSpace(r.FaultLog()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines", len(lines))
+	}
+	if !strings.Contains(lines[0], "kill") || !strings.Contains(lines[0], "node 1") {
+		t.Errorf("the log is not in time order: first line is %q", lines[0])
+	}
+	if !strings.Contains(lines[2], "restart") {
+		t.Errorf("last line is %q", lines[2])
+	}
+}

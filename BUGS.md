@@ -6322,6 +6322,48 @@ low throughput.
 > answer is that the cluster is never up. This project has paid for that shape before.
 
 ---
+### GF-53 — a mechanism that responds correctly to the case you meant and to a case you did not mean has not distinguished them
+
+**Raised at I2, from an induction that fired for the wrong reason.**
+
+The supervisor's claim is that it delivers **`SIGKILL`**, not `SIGTERM`, and that claim is I2's whole
+argument for separate processes: a graceful shutdown flushes, and a flushed node has lost nothing.
+
+The induction was to swap the signal and require the test to fail. **It failed.** That reads as
+verified — and it was worthless, because the fixture did not trap `SIGTERM`. An untrapping process dies
+the same way under both signals, so the test was distinguishing *"the process is gone"* from *"the
+process is here"*, which both signals satisfy.
+
+> **THE TEST FIRED, WHICH READS AS VERIFIED, AND IT WOULD HAVE FIRED IDENTICALLY UNDER THE WEAKER
+> CONDITION.** A mechanism that responds correctly to the case you meant and to a case you did not mean
+> has not distinguished them. It has answered a question that happens to have the same answer.
+
+**This is DESIGN-A7 §8.1b's two-numbers rule, arriving at an induction rather than at an oracle.** There
+the rule is that an oracle must fire on its planted defect **and** be silent on a clean tree, because
+either number alone is satisfiable by an instrument that is not discriminating. Here both numbers were
+present — pass before, fail after — and the instrument still was not discriminating, because the
+*mutation* did not isolate the property either.
+
+> **THE TWO NUMBERS BOUND THE ORACLE. THEY DO NOT BOUND THE MUTATION.** An induction is a claim that
+> *this* change breaks *that* property, and it is only evidence if no weaker change would have broken
+> it the same way.
+
+**What the corrected version proves.** The fixture now installs a `SIGTERM` handler that writes a
+marker and exits 0, and the test asserts the marker is **absent** after a kill:
+
+| | `SIGTERM` | `SIGKILL` |
+|---|---|---|
+| trapping process | **survives the signal**, runs its handler, leaves the marker | **dies**, leaves nothing |
+
+So the test now distinguishes exactly the difference the configuration exists for — **a process that got
+to run its deferred closes from one that did not** — rather than distinguishing alive from dead, which
+is not in question.
+
+**And the cost of getting this wrong is not hypothetical.** A chaos lane sending `SIGTERM` would report
+that the database survives thousands of kills, and every one of them would be a clean shutdown. **The
+headline claim would be true of a fault nobody is worried about.**
+
+---
 ### GF-44's first recurrence, inside its own document, four days after it was written
 
 **Recorded here rather than as a new form, because it is `GF-44` exactly.**
