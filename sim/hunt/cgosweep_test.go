@@ -77,8 +77,12 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 	//
 	//	A SWEEP IS N INDEPENDENT RUNS ONLY IF EVERYTHING THEY TOUCH IS
 	//	INDEPENDENT, AND A DIRECTORY IS NOT INDEPENDENT BY DEFAULT.
+	// RIFT_SWEEP_ENGINE lets the SAME code path run on the model, which is the
+	// only honest way to ask whether a result is engine-specific: same options,
+	// same workload, same checkers, one variable changed.
 	root := t.TempDir()
 	var opened int
+	useModel := os.Getenv("RIFT_SWEEP_ENGINE") == "model"
 	newEngine := func(node int) store.Engine {
 		// Unique per CALL, which is per (seed, node): store.New is the only
 		// creator now that newReplica takes the machine's engine, and it is
@@ -96,7 +100,11 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 	}
 
 	opt := hunt.CurrentOptions()
-	opt.NewEngine = newEngine
+	if !useModel {
+		opt.NewEngine = newEngine
+	} else {
+		t.Log("RIFT_SWEEP_ENGINE=model: running the CONTROL, not the C++ engine")
+	}
 
 	start := time.Now()
 	c, err := hunt.SweepRaftWithProgress(from, to, opt, func(seed uint64, done, total int) {
@@ -108,8 +116,12 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 		t.Fatalf("sweep [%d,%d): %v", from, to, err)
 	}
 
-	t.Logf("SWEEP [%d,%d) on the C++ engine in %v, %d engines opened",
-		from, to, time.Since(start).Round(time.Second), opened)
+	which := "the C++ engine"
+	if useModel {
+		which = "engine/model (CONTROL)"
+	}
+	t.Logf("SWEEP [%d,%d) on %s in %v, %d engines opened",
+		from, to, which, time.Since(start).Round(time.Second), opened)
 	t.Logf("  verdicts   seeds=%d violations=%d inconclusive=%d pass=%d errors=%d",
 		c.Seeds, c.Violations, c.Inconclusive, c.Pass, c.Errors)
 	t.Logf("  raft       terms=%d elections=%d/%d split-votes=%d no-leader=%d contention=%d",
@@ -146,9 +158,25 @@ func TestSweepOnTheCppEngine(t *testing.T) {
 				"not happen", m.name)
 		}
 	}
+	// A4: an inconclusive is never counted as a pass, AND the cause is quoted
+	// with the number. The first version of this test printed the count alone,
+	// which is the half A4 explicitly refuses -- a bare "1 inconclusive" is a
+	// number nobody can act on and is indistinguishable from a rounding error.
 	if c.Inconclusive > 0 {
-		t.Logf("  INCONCLUSIVE: %d. Amendment A4 -- never counted as a pass. The cause must be "+
-			"stated with the number wherever it is quoted.", c.Inconclusive)
+		t.Logf("  INCONCLUSIVE: %d of %d seeds. Amendment A4 -- never counted as a pass.",
+			c.Inconclusive, c.Seeds)
+		if len(c.InconclusiveCauses) == 0 {
+			t.Errorf("%d inconclusive verdict(s) and NO recorded cause. A4 requires the cause "+
+				"beside the number; a count without one cannot be acted on and cannot be "+
+				"distinguished from a checker that gave up quietly", c.Inconclusive)
+		}
+		for i, why := range c.InconclusiveCauses {
+			t.Logf("    cause %d: %s", i+1, why)
+		}
+		if c.Inconclusive > len(c.InconclusiveCauses) {
+			t.Logf("    (%d further cause(s) not retained: the census caps the list at 10)",
+				c.Inconclusive-len(c.InconclusiveCauses))
+		}
 	}
 }
 
