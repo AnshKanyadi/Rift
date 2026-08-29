@@ -384,7 +384,81 @@ properties*, which is why B was built and measured before C was accepted.
 
 ---
 
-## 13. State
+## 13. I1's exit criteria, with results
 
-Ruled, recorded, and stopped on §12. The corpus has not been rerun and no sweep has been run on
-`riftcgo`.
+**Reported for sign-off. Ansh decides; nothing here marks the phase complete.**
+
+| criterion | result |
+|---|---|
+| every bundle replays and **reproduces its finding**, strict criterion | **19 of 20**. `BUG-015` STALE, identical on both engines — the red already carried |
+| a sweep with its **seed count justified** | **300 seeds: 0 violations, 2 inconclusive, 298 pass, 0 errors** |
+| **determinism through the boundary**, fresh process | **passed on one build** — 3 seeds, identical traces *and* identical engine footprints |
+| **riftcgo's determinism scope** decided by the pass | **settled**; exclusion stands on measured grounds, not on either argument |
+| **CF-6's three checks** actually checked | **closed**; check 2 **failed** and produced `BUG-047` |
+
+**The seed count, derived not inherited:** 300 is the maximum recorded seeds-to-first-detection ceiling
+among storage-facing classes (`M30-leader-counts-its-own-unsynced-append`). `M19`'s 1,350 is excluded
+deliberately — an election class an engine swap cannot move.
+
+**Both inconclusives are inherited, not caused.** Seeds 16 and 293, each *"only 6 of ~60 operations
+decided… the history is unknown-dominated"*. Both return the identical verdict and identical cause on
+`engine/model`, settled in ~1.5 seconds each against ~17 minutes on the C++ engine. **A4: never banked
+as a pass, and the cause is quoted with the number.**
+
+**Work-rate check across five separately-launched processes**, because a sweep that stopped exercising
+anything would show a clean verdict column and a collapsing work column:
+
+| range | seeds | snapshots/seed | splits/seed |
+|---|---|---|---|
+| [0,75) | 75 | 250 | 18.2 |
+| [75,150) | 75 | 252 | 18.9 |
+| [150,190) | 40 | 249 | 19.3 |
+| [190,230) | 40 | 266 | 19.4 |
+| [230,265) | 35 | 266 | 19.0 |
+| [265,300) | 35 | 260 | 18.9 |
+
+Steady to within ~7%, and every chunk opened exactly 4 engines per seed.
+
+---
+
+## 14. The defects I1 found, and the answer to "what if it replays clean"
+
+Ansh, opening the phase: *"If the corpus replays clean against a different engine on the first try, that
+is a finding about the corpus rather than a result about the engine."*
+
+**It did not.** The corpus could not replay at all until `BUG-B008` was fixed, and four more defects
+surfaced before the sweep ran:
+
+| | what | whose |
+|---|---|---|
+| `BUG-B008` | the cgo boundary rejected `Set(key, nil)`, which the model accepts — one helper serving bounds and values, where null means *unbounded* in one and *invalid* in the other | **Track B**, found by Track A's stack |
+| `BUG-046` | a byte-identical trace hash from an engine never opened; the anti-vacuity check then had the same hole twice | harness |
+| `BUG-047` | a crash replaced the engine and the durability callbacks went with it — `OnDurable` silently stopped firing | harness, found by **CF-6.2** |
+| — | `newReplica` opened a real database per range and abandoned it: free on a model, a leak on a real engine | harness |
+| — | one engine root shared across a sweep, so each seed inherited the last one's directory | harness |
+
+**Five, on the first run of the two halves as one system**, which is the pattern every rig in this
+project has followed on its first outing. **Three of the five are invisible on `engine/model` by
+construction**: a model engine has no files, no handles and no past, so a throwaway allocation is free,
+a directory cannot be inherited, and a crash cannot orphan a callback registration.
+
+> **THE MODEL DOES NOT MERELY FAIL TO EXHIBIT THESE DEFECTS. IT MAKES THEM UNEXPRESSIBLE**, which is
+> why they survived the whole of Track A and surfaced within hours of the swap.
+
+---
+
+## 15. What is open at I1's close
+
+| item | state |
+|---|---|
+| `BUG-015` STALE | **carried**, unchanged on both engines; *"Track A does not exit while `corpus-reproduces` is red"* stands |
+| the differential's generator emits no zero-length values | **carried**, Track B's — it is why `BUG-B008` survived since B4 |
+| cross-toolchain determinism | **carried**, unmeasured, with the measurement named and amd64 CI identified as the cheapest route |
+| widening `SweepRaftWithProgress`'s hook to carry running verdicts | **proposed**, not made — A7's signed work |
+| `mutant-covered`, `power-mutants` | unchanged: unrunnable here and unrun, on their own recorded measurements |
+
+**And one correction on the record.** I explained a series of killed background jobs as *"the runtime's
+per-job duration ceiling"*, wrote it into `CARRY-FORWARD.md`, and sized chunks against it. A later kill
+at **4m35s** — against completions at 17m, 25m, 31m and 33m — refutes duration as the variable. The
+cause is **undetermined** and both records now say so. The `mutant-covered` disposition it was used to
+justify stands on its own measurements rather than on this mechanism.
