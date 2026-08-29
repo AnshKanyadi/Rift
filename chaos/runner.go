@@ -119,6 +119,17 @@ func (r Run) Report(w io.Writer, g GateResult) {
 		r.Ops.Issued, r.Ops.Completed, r.Ops.Failed, r.Ops.Keys)
 	fmt.Fprintf(w, "  faults     %d recorded\n", len(r.Faults))
 
+	// A FAILED GATE SUPPRESSES THE VERDICTS AS REPORTABLE, and this is a
+	// decision rather than an implementation detail.
+	//
+	//	A CHECKER'S OPINION ABOUT A RUN THAT DID NOT OCCUR AS DESCRIBED IS NOT A
+	//	RESULT, and printing it beside a gate failure invites reading the verdict
+	//	and skipping the gate.
+	//
+	// The verdicts are still PRINTED -- suppressing them entirely would hide
+	// information from whoever is debugging the gate failure -- but they are
+	// printed under a line that says they are not reportable, so the two can
+	// never be quoted apart.
 	if len(g.Failures) > 0 {
 		fmt.Fprintf(w, "\n  GATE FAILED -- the run did not happen as described:\n")
 		for _, f := range g.Failures {
@@ -167,7 +178,17 @@ func (r Run) Report(w io.Writer, g GateResult) {
 	}
 
 	if len(g.Failures) == 0 {
-		// The caveat travels with the number, not in a section further down.
+		// THE CAVEAT IS CARRIED IN THIS OUTPUT, not in a limits section further
+		// down, and TestAGreenCarriesItsCaveatInTheSameOutput enforces that.
+		//
+		//	A CAVEAT A READER HAS TO GO AND FIND IS A CAVEAT THAT TRAVELS
+		//	SEPARATELY FROM THE NUMBER IT BOUNDS.
+		//
+		// Every honest-limits section in this repository can be read past. This
+		// one cannot: the limit is in the same bytes as the claim, so quoting
+		// the result without it takes deliberate effort rather than mere haste.
+		// That is the strongest form of the discipline available -- it makes the
+		// limit INSEPARABLE from the claim rather than adjacent to it.
 		fmt.Fprintf(w, `
   GREEN, AND HERE IS WHAT THAT MEANS. Nothing was observed under the schedules
   that ACTUALLY OCCURRED. It is not a statement that nothing is there.

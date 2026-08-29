@@ -1495,6 +1495,46 @@ internalised the two-numbers rule will otherwise take it as complete, and it is 
 under an instrument, not a check that the instrument was aimed at the right claim. §5e.2b's four axes
 are the other half of that question.
 
+#### 8.1b.2 The SECOND limit, found at I2 — the numbers bound the oracle, not the mutation
+
+**Ansh, ratifying it and amending his own rule:** *"The two-numbers rule was mine and I have treated it
+as sufficient since A7; it is not."*
+
+I2's supervisor claims it delivers **`SIGKILL`**, not `SIGTERM`. The induction swapped the signal and
+required the test to fail. **It failed.** Both numbers were present — pass before, fail after — and the
+induction was worthless, because the fixture did not trap `SIGTERM`: an untrapping process dies the
+same way under either signal, so the test was distinguishing *"the process is gone"* from *"the process
+is here"*, which **both signals satisfy**.
+
+> **AN INDUCTION IS A CLAIM THAT *THIS* CHANGE BREAKS *THAT* PROPERTY, AND IT IS ONLY EVIDENCE AT ALL
+> IF NO WEAKER CHANGE WOULD HAVE BROKEN IT THE SAME WAY.**
+>
+> **THE TWO NUMBERS BOUND THE ORACLE. THEY DO NOT BOUND THE MUTATION.**
+
+**So the complete form is three parts, and the third is new:**
+
+| | |
+|---|---|
+| 1 | the instrument **fires on the plant** |
+| 2 | the instrument is **silent on the clean tree** |
+| 3 | **no weaker perturbation produces the same firing** |
+
+**Nothing in this repository currently checks the third**, and it is the one that would have caught
+this. `make blind`, `power-refute` and `mutant-covered` all ask forms of (1) and (2); none asks whether
+a smaller change would have produced the same red.
+
+**And the cost is what makes this more than methodology:**
+
+> **A CHAOS LANE SENDING `SIGTERM` WOULD REPORT THE DATABASE SURVIVING THOUSANDS OF CLEAN SHUTDOWNS,
+> AND THE HEADLINE CLAIM WOULD BE TRUE OF A FAULT NOBODY IS WORRIED ABOUT.** That is a green that means
+> nothing, published as the phase's result, and it was one signal away.
+
+**Two limits on one rule, discovered eight weeks apart, both by BUILDING the thing rather than by
+reading the rule.** §5a.4c's came from implementing an oracle and noticing the field it reached for was
+not the field the ruling named; this one came from writing an induction and noticing it would have
+passed against a weaker mutation. **Neither was visible from the rule's own text**, which is the
+argument for treating a methodology rule as provisional until something has been built against it.
+
 ### 8.2 The standing set
 
 1. **Every new oracle induced.** No gate counts until its failure has been induced. This covers the
