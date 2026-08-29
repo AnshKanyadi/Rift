@@ -309,6 +309,88 @@ invalidate the numbers — which B3 already established and I2 inherits rather t
 
 ---
 
+## 2.5 The client protocol — the last seam
+
+Everything else in real mode carries **Raft messages**, which the cluster already agrees about. This
+is the only wire an *operation* crosses, and it is the one the history rests on.
+
+### 2.5.1 The shape, and its refusals induced from hand-built bytes
+
+```
+request   op(1) seq(8) klen(4) key vlen(4) value
+response  seq(8) status(1) vlen(4) value
+```
+
+Fixed-width big-endian, explicit lengths, no reflection and no varint — `sim/codec.go`'s rules, for
+its reason: the encoding is a property of the definition rather than of anything discovered at run
+time. Opcodes and statuses start at **1**, so a zero byte — the most common corruption and the most
+common uninitialised value — is never valid.
+
+**Every refusal was induced from a literal byte slice before any writer existed**, the treatment every
+frozen format in this repository got:
+
+> **A DECODER TESTED ONLY AGAINST ITS OWN ENCODER IS TESTED AGAINST ONE INPUT:** the one the encoder
+> happens to produce. Every byte sequence it will meet on a real socket is one the encoder did not
+> make.
+
+Induced and confirmed to fire: short header, zero opcode, unknown opcode, key length past the end,
+value length past the end, trailing bytes, unknown status, oversized field, and — on the writer side —
+an encoder that can emit what its own decoder rejects. **One of them did not fire**, and correcting
+that produced [GF-56]: a size limit documented as an allocation guard, which the bounds check
+underneath was already doing, so deleting it broke nothing.
+
+### 2.5.2 Correlation, and the two cases that are not the happy path
+
+The history rests on a three-way correlation: a `Begin`, a response off the wire, and the `End` that
+closes the operation. Begin and End are local; **the response is the only one of the three that
+arrives from somewhere else, which makes it the only one that can be wrong.**
+
+> **(i) A RESPONSE FOR AN OPERATION THE CLIENT HAS NO RECORD OF.**
+> **(ii) AN OPERATION THAT GETS TWO RESPONSES.**
+
+Both are unknown-outcome cases in exactly the family the timeout belongs to, and the timeout's rule
+governs them: **dropping either makes the history smaller, cleaner, and wrong.** So neither is
+dropped. Each is classified, counted, and carried to the verdict:
+
+| class | meaning | disposition |
+|---|---|---|
+| **unissued** | a seq this client never handed out | **LOUD** — and it *gates*, because it is a statement about the record rather than about the cluster: if responses land on operations that do not exist, no verdict describes the run |
+| **conflicting** | a second response that **disagrees** | **LOUD** — two different answers to one request |
+| **duplicate** | a second response that agrees | counted; a lossy reordering wire with retries produces these legitimately |
+| **late-after-timeout** | a response after the operation timed out | counted separately; never conflicting, because `RespTimeout` already means "may or may not have happened" |
+
+**An unissued response cannot become a history operation.** There is no invocation time for it, and
+inventing one would fabricate exactly what the history is the record of.
+
+**A conflict is caught here rather than left to porcupine**, and the reason is structural: the history
+holds one response per operation *by construction*, so the second answer never reaches the checker at
+all. **A check that cannot fire is not a check.**
+
+**The FIRST response decides** — not the last, not the best. The history's response instant must be
+the moment the client *learned* the outcome, and a later arrival taught it nothing.
+
+**Records are never reaped.** A client that forgets an operation turns case (ii) into case (i), and
+the loud counter begins accusing the cluster of something the client did.
+
+### 2.5.3 What the first real run found
+
+The seam was built, and getting one operation to complete cost four defects, every one of which was
+named by a counter before any code was read:
+
+| | |
+|---|---|
+| [BUG-049] | the reality counters were green on traffic the harness generated itself; **Raft had never ticked** in any real cluster |
+| [BUG-050] | the transport was keyed by 1-based id where `store/` addresses by **ordinal**; the drop counters' arithmetic identified it exactly |
+| [BUG-051] | every Raft message was discarded at a **silent type assertion** — the store wants a frame, the listener posted an envelope |
+| [BUG-052] | the leader panicked on its first answered operation: `riftnode` posted events with **no `At`**, so a return landed three seconds before its call |
+
+BUG-052 exposes a seam worth a ruling rather than a quiet edit: **`node.Driver.After` stamps the
+events it creates and `node.Driver.Post` stamps nothing**, so one of the two ways into the mailbox
+carries time and the other does not, with no documented contract saying the caller must supply it.
+`node/` is signed, so the asymmetry is reported here rather than changed.
+
+---
+
 ## 4. The open questions
 
 **Nothing below is decided, and each changes what gets built.**

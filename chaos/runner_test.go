@@ -6,14 +6,17 @@ import (
 	"time"
 
 	"github.com/anshkanyadi/rift/chaos"
+	"github.com/anshkanyadi/rift/sim"
 )
 
 func good() chaos.Run {
 	return chaos.Run{
-		Counters: chaos.Counters{Started: 5, Kills: 12, Restarts: 2},
-		Ops:      chaos.OpCounters{Issued: 1000, Completed: 940, Failed: 60, Keys: 32},
-		Faults:   []chaos.Fault{{At: time.Now(), Kind: "kill", Node: 1}},
-		Verdicts: []chaos.Verdict{{Checker: "linearizability", OK: true}},
+		Counters:    chaos.Counters{Started: 5, Kills: 12, Restarts: 2},
+		Ops:         chaos.OpCounters{Issued: 1000, Completed: 940, Failed: 60, Keys: 32},
+		Faults:      []chaos.Fault{{At: time.Now(), Kind: "kill", Node: 1}},
+		LeaderKills: 4,
+		LedTicks:    900,
+		Verdicts:    []chaos.Verdict{{Checker: "linearizability", Outcome: sim.VerdictPass, Consumed: 940}},
 	}
 }
 
@@ -88,7 +91,7 @@ func TestAGreenCarriesItsCaveatInTheSameOutput(t *testing.T) {
 func TestAViolationPrintsTheWorkflowRatherThanLeavingItToJudgement(t *testing.T) {
 	r := good()
 	r.Verdicts = append(r.Verdicts, chaos.Verdict{
-		Checker: "linearizability", OK: false, Detail: "key k07 non-linearizable",
+		Checker: "linearizability", Outcome: sim.VerdictViolation, Consumed: 940, Detail: "key k07 non-linearizable",
 	})
 	var b strings.Builder
 	r.Report(&b, r.Gate(10, 500))
@@ -154,5 +157,131 @@ func TestTheFaultLogIsOrderedByTime(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "restart") {
 		t.Errorf("last line is %q", lines[2])
+	}
+}
+
+// A checker that read nothing is not a checker that agreed.
+func TestAGreenCheckerThatConsumedNothingFailsTheGate(t *testing.T) {
+	r := good()
+	r.Verdicts = []chaos.Verdict{{Checker: "linearizability", Outcome: sim.VerdictPass, Consumed: 0}}
+	g := r.Gate(1, 1)
+	if len(g.Failures) == 0 {
+		t.Fatal("a checker reporting green over zero operations passed the gate")
+	}
+	var out strings.Builder
+	r.Report(&out, g)
+	if !strings.Contains(out.String(), "consumed=0") {
+		t.Fatalf("the consumed count did not travel to the verdict line:\n%s", out.String())
+	}
+}
+
+// Every verdict prints, greens included, so the report can distinguish "four
+// checkers found nothing" from "three checkers never ran".
+func TestGreenVerdictsArePrintedWithTheirConsumedCounts(t *testing.T) {
+	r := good()
+	r.Verdicts = []chaos.Verdict{
+		{Checker: "linearizability", Outcome: sim.VerdictPass, Consumed: 940},
+		{Checker: "response-agreement", Outcome: sim.VerdictPass, Consumed: 1000},
+	}
+	var out strings.Builder
+	r.Report(&out, r.Gate(1, 1))
+	s := out.String()
+	for _, want := range []string{"linearizability", "consumed=940", "response-agreement", "consumed=1000"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("report omitted %q:\n%s", want, s)
+		}
+	}
+}
+
+// A response for an operation nobody issued breaks the correlation the history
+// rests on, so it is a statement about the RECORD and it gates.
+func TestAnUnissuedResponseFailsTheGate(t *testing.T) {
+	r := good()
+	r.Corr = chaos.Correlation{Unissued: 1}
+	g := r.Gate(1, 1)
+	if len(g.Failures) == 0 {
+		t.Fatal("a response for an operation nobody issued passed the gate")
+	}
+	var out strings.Builder
+	r.Report(&out, g)
+	if !strings.Contains(out.String(), "unissued=1") {
+		t.Fatalf("the correlation counters did not reach the report:\n%s", out.String())
+	}
+}
+
+// Wire weather is reported and does not gate: a lossy, reordering wire with
+// retries produces agreeing duplicates legitimately.
+func TestAgreeingDuplicatesAreReportedAndDoNotGate(t *testing.T) {
+	r := good()
+	r.Corr = chaos.Correlation{Duplicate: 7, LateAfterTimeout: 3}
+	if g := r.Gate(1, 1); len(g.Failures) != 0 {
+		t.Fatalf("wire weather failed the gate: %v", g.Failures)
+	}
+	var out strings.Builder
+	r.Report(&out, r.Gate(1, 1))
+	if !strings.Contains(out.String(), "duplicate=7") || !strings.Contains(out.String(), "late-after-timeout=3") {
+		t.Fatalf("wire weather was not reported:\n%s", out.String())
+	}
+}
+
+// Amendment A4, enforced in the report rather than remembered.
+//
+// An inconclusive is not a pass. It must not print the green block, it must not
+// be folded into the violation count, and its remedy must be the one A4 names.
+func TestAnInconclusiveIsNeitherGreenNorAViolation(t *testing.T) {
+	r := good()
+	r.Verdicts = []chaos.Verdict{{
+		Checker: "linearizability", Outcome: sim.VerdictInconclusive, Consumed: 900,
+		Detail: "key k03 did not finish checking within 1s",
+	}}
+	var b strings.Builder
+	r.Report(&b, r.Gate(1, 1))
+	out := strings.Join(strings.Fields(b.String()), " ")
+
+	if strings.Contains(out, "GREEN, AND HERE IS WHAT THAT MEANS") {
+		t.Fatalf("an inconclusive printed the green block:\n%s", out)
+	}
+	if !strings.Contains(out, "0 violation(s), 1 inconclusive") {
+		t.Fatalf("the inconclusive was not quoted beside the violation count:\n%s", out)
+	}
+	if !strings.Contains(out, "never a longer timeout") {
+		t.Fatalf("the report did not name A4's remedy:\n%s", out)
+	}
+}
+
+// The inconclusive count prints even at zero, so a reader never learns to stop
+// looking for it.
+func TestTheInconclusiveCountIsQuotedEvenAtZero(t *testing.T) {
+	var b strings.Builder
+	r := good()
+	r.Report(&b, r.Gate(1, 1))
+	if !strings.Contains(b.String(), "0 inconclusive") {
+		t.Fatalf("a clean run omitted the inconclusive count:\n%s", b.String())
+	}
+}
+
+// A cluster that never elected a leader never did anything, so its green is a
+// statement about an experiment that did not run.
+func TestAnUnledClusterFailsTheGate(t *testing.T) {
+	r := good()
+	r.LedTicks = 0
+	if len(r.Gate(1, 1).Failures) == 0 {
+		t.Fatal("a run in which no node ever led passed the gate")
+	}
+}
+
+// A kill schedule that never removed a leader is a gentler experiment than the
+// one being reported.
+func TestKillsThatNeverHitALeaderFailTheGate(t *testing.T) {
+	r := good()
+	r.LeaderKills = 0
+	g := r.Gate(1, 1)
+	if len(g.Failures) == 0 {
+		t.Fatal("a schedule that never killed a leader passed the gate")
+	}
+	var b strings.Builder
+	r.Report(&b, g)
+	if !strings.Contains(b.String(), "leader-kills=0") {
+		t.Fatalf("the leader-kill count did not reach the report:\n%s", b.String())
 	}
 }

@@ -3294,6 +3294,226 @@ supposed to find in code it had never seen; that the three turned out defensible
 code, and the exemptions are now visible and reasoned instead of implicit and invisible.
 
 ---
+
+### BUG-049 — (harness) the reality counters were green on traffic the harness generated itself
+
+| | |
+|---|---|
+| **Symptom** | Every real-mode cluster this project has ever started ran with **Raft frozen**: `node.Driver` does not tick itself, in sim the *loop* owns the tick schedule, and `cmd/riftnode` posted no `KindTick`. No election timeout ever fired. |
+| **Found by** | writing the client protocol and asking why no operation completed. |
+| **Reproduce** | delete the ticker goroutine in `cmd/riftnode/main.go`; the cluster starts, connects, exchanges bytes, and elects nobody. |
+| **Invariant that caught it** | none, and that is the entry. |
+| **Mutant class** | the `LedTicks == 0` gate arm in `chaos.Run.Gate`, induced. |
+
+**What hid it was a synthetic heartbeat.** `riftnode` sent a hand-made envelope to every peer every
+50ms, for a stated and reasonable purpose: without traffic the reality counters cannot distinguish
+"the network works" from "nobody said anything."
+
+> **IT WORKED. The counters went green. They were measuring the HARNESS'S OWN TRAFFIC**, and they
+> would have reported the same numbers if `store/` had been deleted.
+
+**This is BUG-046's shape one level up.** BUG-046 was a test that measured nothing. This is a test
+that measured something **real and irrelevant** — which is harder to see, because every number in it
+is true.
+
+> **A REALITY COUNTER FED BY A SOURCE THE SYSTEM UNDER TEST DOES NOT CONTROL IS NOT A REALITY
+> COUNTER.** It is an instrument measuring the instrument.
+
+**Fixed by deleting the synthetic traffic and posting real ticks.** The bytes the counters see are now
+Raft's own heartbeats, so a frozen cluster reports zero. The immediate evidence: the same end-to-end
+test that reported **1794 wire bytes** on synthetic traffic reported **330** on real traffic. The
+larger number was the harness talking to itself.
+
+**And a gate now stands where the counter could not.** `LedTicks == 0` fails the run: *a cluster that
+never elected a leader observed nothing, and every checker over its history is green because nothing
+happened.*
+
+---
+
+### BUG-050 — (harness) a cluster keyed in the wrong address space: node 2 reported `sent=0 dropped=36`
+
+| | |
+|---|---|
+| **Symptom** | Nodes connected, exchanged bytes and elected nobody. Node 2 dropped **every** send; nodes 1 and 3 dropped exactly **half**. |
+| **Found by** | the transport's own `sent`/`dropped` counters, before any code was read. |
+| **Reproduce** | key `tcp.New`'s address map by the 1-based `--id` rather than by ordinal. |
+| **Invariant that caught it** | none directly; the drop counter is what named it. |
+| **Mutant class** | the arithmetic below is the reproduction, and `LedTicks == 0` is the gate. |
+
+**`sim.NodeID` says what it is in its own doc comment:** *"an index into the run's node set, not an
+address."* `store/` obeys that — every envelope carries `sim.NodeID(n.cfg.Ordinal)` and
+`sim.NodeID(n.ordinalOf(m.To))` — and `riftnode` keyed its transport by the 1-based `--id`.
+
+**The counters identified the bug before the code was read**, and the arithmetic is worth keeping:
+
+| node | ordinals it addressed | in its 1-based map? | result |
+|---|---|---|---|
+| 1 | 1, 2 | 1 is *itself* (skipped), 2 present | `sent=18 dropped=18` |
+| 2 | 0, 2 | 0 absent, 2 is *itself* (skipped) | `sent=0 dropped=36` |
+| 3 | 0, 1 | 0 absent, 1 present | `sent=18 dropped=18` |
+
+> **A COUNTER THAT SEPARATES "SENT" FROM "DROPPED" TURNS A SILENT MISCONFIGURATION INTO A DIAGNOSIS.**
+> A single `messages` counter would have shown three healthy-looking nodes.
+
+---
+
+### BUG-051 — (harness) every Raft message the cluster ever exchanged was discarded at a type assertion
+
+| | |
+|---|---|
+| **Symptom** | With addressing fixed, all three nodes campaigned every election timeout, each received the others' messages, and none ever saw one. `led=0` on every node across 182 ticks. |
+| **Found by** | the `led`/`ticks` counters added while chasing BUG-050. |
+| **Reproduce** | post `Payload: e` (a `sim.Envelope`) instead of `Payload: sim.Encode(e)` from the listener. |
+| **Invariant that caught it** | none. The drop is a bare `return`. |
+| **Mutant class** | `LedTicks == 0`, which fails the run. |
+
+`store.Node`'s deliver arm reads `ev.Payload.([]byte)` and calls `sim.Decode` on it. Handed a
+`sim.Envelope`, the assertion fails and **the arm returns silently**. `riftnode`'s listener — which
+gets a parsed `sim.Envelope` from the transport, because the transport must parse in order to route —
+posted the envelope.
+
+> **A SILENT DROP ON AN UNEXPECTED SHAPE IS A DIAGNOSIS DELETED AT THE MOMENT IT WAS AVAILABLE.** The
+> one place that knew the payload was wrong is the one place that said nothing.
+
+This is the same family as BUG-042's uncounted drop paths and BUG-043's silent `grep`: **the absence
+of a signal presented in the same shape as a good result.** It is now the fifth instance.
+
+**Fixed by re-encoding at the listener.** One wire format read twice costs a memcpy; the alternative is
+two representations on one mailbox, which is the same bug one layer up.
+
+---
+
+### BUG-052 — (harness) the leader panicked on its first answered operation: a return at instant zero
+
+| | |
+|---|---|
+| **Symptom** | `panic: sim: operation returned at 0 before it was called at 3260430875`, in `History.End`, on the node that had just become leader. The supervisor reported `ExitedOther: 1`. |
+| **Found by** | the supervisor's uninvited-exit counter, which is a gate arm. |
+| **Reproduce** | drop `At:` from the events `cmd/riftnode` posts into the mailbox. |
+| **Invariant that caught it** | `sim.History`'s own validity check, at the call site — which is exactly where GF-53 put it. |
+| **Mutant class** | n/a; the panic *is* the detector, and it fired in the right place. |
+
+**In sim the loop stamps every event's `At`; in real mode the poster must.** `riftnode` did not, so
+every delivered message and every tick arrived stamped at the beginning of time — and the first
+operation the leader answered produced a return **three seconds before its call**.
+
+**The bug was in `cmd/riftnode`, but the shape is a seam, and it is reported rather than fixed here:**
+
+> `node.Driver.After` stamps the events **it** creates. `node.Driver.Post` stamps nothing. So one of
+> the two ways into the mailbox carries time and the other does not, and there is no documented
+> contract saying the caller must supply it.
+
+`node/` is signed, so this is a finding for Ansh rather than a change made in passing. The asymmetry
+is the defect; which side should close it is a ruling.
+
+**What it says about the instrument:** the checker refused to record a nonsensical history *instead of
+recording it and letting a checker downstream disagree later*. A history is the only artifact a chaos
+run produces, and one that validates itself at the point of construction is worth the panic.
+
+---
+
+### GF-56 — a guard whose removal breaks nothing is not a guard, whatever its comment says
+
+The client wire format's key and value limits were written as **allocation guards**, in the shape
+`ReadFrame`'s `maxBodyBytes` has, with a test named for each. Then each was deleted to check the test
+fired.
+
+> **NOTHING BROKE.** The bounds check underneath refused the same bytes, with the same sentinel error,
+> for a different reason. Both tests passed over a deleted guard.
+
+**The distinction the code had lost:** `ReadFrame` reads from an `io.Reader` and *must* bound a claimed
+length before allocating, because nothing has been read yet. `DecodeRequest` takes a `[]byte` that is
+**already in memory** — a length claimed there can never cause an allocation larger than the frame it
+arrived in.
+
+So the limit is a **policy** limit, not an allocation guard, and the difference is testable: the only
+case that separates them is a field that is genuinely **present**, inside a legal frame, and over the
+limit. `maxBodyBytes` is 4MiB and the field limit is 1MiB, so a 2MiB key is exactly that case — and
+building it costs a 2MiB slice, which is why the cheap absurd-length rows were written instead.
+
+> **A TEST THAT PASSES FOR A REASON OTHER THAN THE ONE IT NAMES IS A TEST OF SOMETHING ELSE.** It will
+> keep passing when the thing it names is gone.
+
+**The general form**, and it is a rule for induction rather than for code:
+
+> **WHEN A DELETION BREAKS NOTHING, THE QUESTION IS NOT "IS THE TEST WEAK" BUT "WHAT DID I THINK THIS
+> CODE DID".** The answer here was that a correct-sounding comment described a mechanism one layer
+> away, and the mechanism actually present was doing the work under a name that did not fit it.
+
+Related: [GF-40]'s vacuous-green register, and BUG-046 — the same shape at test scope rather than at
+guard scope.
+
+---
+
+### BUG-053 — (harness) the supervisor asked "is this node up" where the question was "was my process supposed to die"
+
+| | |
+|---|---|
+| **Symptom** | Found by inspection while investigating OPEN-I2-1 below, not by a checker. |
+| **Found by** | reading the reaper after a chaos run reported an uninvited exit for a node that had been deliberately killed. |
+| **Reproduce** | **not achieved.** See below — this is stated rather than glossed. |
+| **Invariant that caught it** | none. |
+| **Mutant class** | `TestAKilledProcessIsNotReportedAsAnUninvitedExitAcrossARestart`, which is a smoke test rather than a reproduction. |
+
+`Supervisor` kept a single `up` flag on `Node`, cleared by `Kill` before signalling so the reaper
+would not count the death as unexpected. A restart then set it back to true **for the new process** —
+and the old process's reaper, still blocked in `Wait`, would wake, read the flag, and report a
+deliberately killed node as one that died on its own.
+
+> **THE FLAG ANSWERED "IS THIS NODE UP". THE QUESTION THE REAPER HAS IS "WAS MY PROCESS SUPPOSED TO
+> DIE".** Those are the same question only while there is one process, which is exactly the condition
+> a chaos run removes.
+
+**Fixed** by moving the expectation onto a per-process `launch` that each reaper closes over, so a
+reaper can never read another process's status.
+
+#### The reproduction was attempted and FAILED, and that is the important half
+
+Three attempts, each measured:
+
+| attempt | result |
+|---|---|
+| 8 kill/restart pairs against the buggy shape | 0 failures |
+| 60 pairs | 0 failures |
+| a fixture leaving a grandchild holding the inherited stderr, to make `Wait` slow on purpose | 0 failures — instrumenting the reaper showed it woke in **65–190µs** regardless, so the grandchild never delayed it |
+
+> **A RACE THAT ONE SIDE ALWAYS WINS IS NOT REPRODUCED BY REPETITION**, and the third attempt was
+> built on that. It did not work either: the premise that `cmd.Wait` would block on the held pipe was
+> wrong, and the probe said so.
+
+**So the honest position is:** the defect is real and the fix is right, and *it has not been shown to
+be the cause of what was observed.* The two are recorded separately for that reason.
+
+---
+
+### OPEN-I2-1 — one node exited without being killed, in a run that cannot be replayed
+
+**Status: OPEN. Not closed, and specifically not closed by the two green runs that followed it.**
+
+| | |
+|---|---|
+| **Observed** | `chaos: node 2 exited WITHOUT being killed: signal: killed`, once, in the first leader-targeted chaos run. |
+| **Caught by** | the `ExitedOther > 0` gate arm, which failed the run and suppressed its verdicts. |
+| **Context** | 2580 operations, 2574 completed, 3 leader kills of 3, 142 led ticks; linearizability green over 2580 operations (**not reportable** — the gate had failed). |
+| **Reproduced** | no. Two subsequent runs were clean. |
+
+**What is known.** `signal: killed` is SIGKILL. The fault log shows node 2 killed at 0.000s and again
+at 6.007s, each followed by a restart ~2ms later. The uninvited exit was counted before `StopAll`, so
+it was not teardown.
+
+**What is not known.** Which SIGKILL the reaper saw, and who sent it. The candidates are: the
+per-node/per-process confusion of BUG-053 — which was fixed, and which three reproduction attempts
+failed to demonstrate; or a signal from outside the harness.
+
+> **A CHAOS RED IS NEVER CLOSED BY RE-RUNNING UNTIL IT GOES AWAY.** Two greens after a red are two
+> different experiments, not two confirmations. This entry exists so that the red is carried rather
+> than forgotten, and so the next occurrence is a **second** data point instead of a first one.
+
+**What was added so the next occurrence says more.** The chaos test now prints every node's stderr
+alongside a gate failure. A gate arm about a process that does not show what the process said sends
+the reader back to reproduce a schedule that cannot be reproduced.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its
@@ -6430,6 +6650,48 @@ and the guarantee is what separates them.
 express a class. This is about a real thing whose correctness makes a class unobservable — the model
 could not express a lost handle; a killed process cannot report anything at all. **One is a limitation
 of the stand-in, the other is a consequence of the real thing being real.**
+
+---
+### GF-55 — a claim that survived: one Node interface, two modes, asked of the real stack for the first time
+
+**Recorded at I2, and it is a claim SURVIVING rather than an implementation note.**
+
+`node/`'s package doc has said since A0:
+
+> *"`Driver` drives a `sim.Node` — the same interface the simulator's loop drives, with the same
+> `Handle(Event, Scheduler)` signature. There is no build tag, no `if realMode`, and no second
+> implementation of node logic."*
+
+And the argument for why that matters, in the same doc:
+
+> *"If real mode needed its own copy of the protocol, the deterministic simulation would be verifying a
+> program that never ships, and every seed in the corpus would be evidence about the wrong artifact."*
+
+**It has been unexercised since it was written.** `node/` existed to make the mailbox rule stop being
+provisional — `scope.go` carried it in those words, *"A0 does not exit until node/ exists and the rule
+has end-to-end teeth"* — and it was exercised against **fixtures**, a counter and a toy.
+
+**At I2 it was asked of the real stack, and it held:**
+
+| | |
+|---|---|
+| `store.Node` | implements `sim.Node` |
+| `node.Driver` | drives a `sim.Node` |
+| `tcp.Transport` | implements `sim.Transport` |
+
+**Nothing adapts one to another.** No shim, no wrapper, no mode branch. The Raft store that ran 25,000
+seeded schedules is the same object, byte for byte, that now runs behind a mailbox over a TCP socket in
+its own process.
+
+> **A CLAIM MADE EARLY AND EXERCISED LATE IS A CLAIM THAT HAS BEEN CARRIED, NOT TESTED**, and this
+> project has found four things this week that were carried and false. This one was carried and true,
+> and that is worth recording with the same weight — the register is not a list of failures, it is a
+> list of what measurement found.
+
+**What would have shown a failure**, so this is falsifiable rather than a congratulation: any adapter
+between the three types, any `if realMode` in `store/`, any second `Handle`. There are none, and the
+determinism pass's scope table pins the split that keeps it that way — `node/` out, everything it
+drives in.
 
 ---
 ### GF-44's first recurrence, inside its own document, four days after it was written

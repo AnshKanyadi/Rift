@@ -47,6 +47,7 @@ func main() {
 	addr := flag.String("addr", "", "host:port to listen on")
 	dir := flag.String("dir", "", "this node's storage directory")
 	peers := flag.String("peers", "", "comma-separated id=host:port for every other node")
+	clients := flag.String("clients", "", "comma-separated id=host:port for client endpoints")
 	flag.Parse()
 
 	if *id == 0 || *addr == "" || *dir == "" {
@@ -64,15 +65,78 @@ func main() {
 		os.Exit(2)
 	}
 
-	tr := tcp.New(sim.NodeID(*id), addrs)
+	// # THE TRANSPORT IS ADDRESSED BY ORDINAL, NOT BY NODE ID
+	//
+	// sim.NodeID's own doc says it: "an index into the run's node set, not an
+	// address". store/ obeys that -- every envelope it sends carries
+	// sim.NodeID(n.cfg.Ordinal) and sim.NodeID(n.ordinalOf(m.To)) -- so a
+	// transport keyed by the 1-based --id is keyed in the wrong space.
+	//
+	// The first version of this file was, and BUGS.md BUG-050 is what that
+	// looked like from outside: a cluster that started, listened, connected,
+	// exchanged bytes, and elected nobody. Node 2 reported sent=0 dropped=36,
+	// because both of its destinations resolved to ordinals its map did not
+	// hold; nodes 1 and 3 each reported sent=18 dropped=18, one destination
+	// landing and one missing. The arithmetic identified the bug before the code
+	// was read.
+	//
+	// CLIENT IDS STAY IN THEIR OWN RANGE. They are not ordinals of anything --
+	// a client is not in the node set -- so they are chosen above it and never
+	// collide.
+	byOrdinal := make(map[sim.NodeID]string, len(addrs))
+	for pid, a := range addrs {
+		if pid == 0 {
+			fmt.Fprintln(os.Stderr, "riftnode: --peers ids are 1-based")
+			os.Exit(2)
+		}
+		byOrdinal[sim.NodeID(pid-1)] = a
+	}
+	self := sim.NodeID(*id - 1)
+
+	// CLIENT ENDPOINTS ARE ADDRESSABLE, AND THEY ARE NOT PEERS. They join the
+	// transport's address map, so a response can be routed back the same way a
+	// Raft message is; they stay out of peerIDs, so no client is ever counted in
+	// a quorum. Folding them together would put a process that holds no log into
+	// the majority arithmetic, which is not a bug that fails loudly.
+	caddrs, err := parsePeers(*clients)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "riftnode: --clients: %v\n", err)
+		os.Exit(2)
+	}
+	all := map[sim.NodeID]string{}
+	for k, v := range byOrdinal {
+		all[k] = v
+	}
+	for k, v := range caddrs {
+		if k < sim.NodeID(len(addrs)+1) {
+			fmt.Fprintf(os.Stderr, "riftnode: client id %d collides with the node ordinal space (0..%d)\n",
+				k, len(addrs))
+			os.Exit(2)
+		}
+		if _, dup := all[k]; dup {
+			fmt.Fprintf(os.Stderr, "riftnode: id %d is both a peer and a client\n", k)
+			os.Exit(2)
+		}
+		all[k] = v
+	}
+
+	tr := tcp.New(self, all)
 	defer tr.Close()
 
 	// THE STORE, THE ENGINE AND THE DRIVER, wired by TYPE rather than by
-	// arrangement. store.Node implements sim.Node; node.Driver drives a
-	// sim.Node; tcp.Transport implements sim.Transport. Nothing here adapts one
-	// to another, which is node/'s own claim -- "the toy that runs under a
-	// thousand seeded schedules is byte-for-byte the toy that runs here" -- and
-	// this is the first time it has been asked of the real stack.
+	// arrangement, and this is A0's claim being exercised for the first time.
+	// See BUGS.md GF-55.
+	//
+	// THREE SIMULATOR CONCEPTS HAD TO BE ANSWERED FOR HERE, and the answers are
+	// different from each other. They are the phase's honest content:
+	//
+	//	AdvanceDurable  a real fsync, whole tail. DESIGN-A0 section 7's I1
+	//	                idealization, arriving exactly where it was recorded to
+	//	                arrive -- see engine_cgo.go.
+	//	Crash           panics. A modelled crash on a real engine discards
+	//	                nothing while reporting success, which is the weaker
+	//	                fault I1 refused, refused again in a new context.
+	//	SyncLatency     below: non-zero, or the unsynced window disappears.
 	peerIDs := make([]raft.NodeID, 0, len(addrs)+1)
 	for pid := range addrs {
 		peerIDs = append(peerIDs, raft.NodeID(pid))
@@ -111,7 +175,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	drv, err := node.New(sim.NodeID(*id), st, clk, mailboxDepth)
+	// THE CLIENT PROTOCOL WRAPS THE STORE, so it runs on the node loop. See
+	// clientserve.go for why that placement is the whole design.
+	srv := newServing(st, self, hist, tr)
+
+	drv, err := node.New(self, srv, clk, mailboxDepth)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "riftnode: driver: %v\n", err)
 		os.Exit(1)
@@ -129,6 +197,23 @@ func main() {
 	var drvRef *node.Driver // set below; the listener starts before the driver exists
 	ln, err := tcp.Listen(*addr, func(e sim.Envelope) {
 		atomic.AddUint64(&received, uint64(e.Size()))
+		// THE PAYLOAD IS A FRAME, NOT AN ENVELOPE, and the difference cost a
+		// whole debugging session. store.Node's deliver arm reads
+		// `ev.Payload.([]byte)` and calls sim.Decode on it; handed a
+		// sim.Envelope, the assertion fails and the arm RETURNS SILENTLY.
+		//
+		//	EVERY RAFT MESSAGE THIS CLUSTER EVER EXCHANGED WAS DISCARDED AT THAT
+		//	LINE. Three nodes campaigned every election timeout for three minutes,
+		//	each received the others' votes, and none of them ever saw one.
+		//	BUGS.md BUG-051.
+		//
+		// The transport parses a frame in order to route it, and the store wants
+		// the frame; re-encoding is the honest cost of one wire format being
+		// read twice, and it is a memcpy.
+		frame, err := sim.Encode(e)
+		if err != nil {
+			return
+		}
 		// INTO THE MAILBOX, never into node state. Amendment A1: every
 		// cross-goroutine interaction enters through the mailbox, and this
 		// accept goroutine is as cross as they come.
@@ -136,7 +221,17 @@ func main() {
 		// Counting the bytes BEFORE the post is deliberate: a node that
 		// receives and drops is still a node that received, and the reality
 		// counter must not depend on what the protocol did next.
-		drvRef.Post(sim.Event{Kind: sim.KindDeliver, Node: sim.NodeID(*id), Payload: e})
+		//
+		// AND IT IS STAMPED. In sim the LOOP owns event time and fills At; here
+		// the poster does, and forgetting made the leader panic on its first
+		// answered operation: History.End refused a return at instant 0 for an
+		// operation called three seconds in. BUGS.md BUG-052.
+		//
+		// The bug was in this file, but the shape is a seam: node.Driver.After
+		// stamps the events IT creates and Post stamps nothing, so one of the
+		// two ways into the mailbox carries time and the other does not. That
+		// asymmetry is reported rather than fixed here -- node/ is signed.
+		drvRef.Post(sim.Event{At: drvRef.Now(), Kind: sim.KindDeliver, Node: self, Payload: frame})
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "riftnode: listen %s: %v\n", *addr, err)
@@ -159,26 +254,48 @@ func main() {
 		os.Exit(1)
 	}
 
-	// A heartbeat to every peer, so a cluster that is merely idle still produces
-	// wire bytes. Without traffic the reality counters cannot distinguish "the
-	// network works" from "nobody said anything".
+	// THE TICKER. Raft's only source of time.
+	//
+	// # This replaced a synthetic heartbeat, and the swap is the finding
+	//
+	// There was no ticker here until now. `node.Driver` does not tick itself --
+	// it is a mailbox and a loop, and in sim the LOOP owns the tick schedule --
+	// so every real cluster this project has started ran with Raft FROZEN: no
+	// election timeout ever fired, no leader was ever elected, and no entry was
+	// ever replicated.
+	//
+	// What hid it was the thing that used to occupy these lines: a synthetic
+	// heartbeat, sending a hand-made envelope to every peer every 50ms purely so
+	// the reality counters would see wire bytes on an idle cluster.
+	//
+	//	IT WORKED. The counters went green. They were measuring the HARNESS'S
+	//	OWN TRAFFIC, and they would have reported exactly the same numbers if
+	//	the store had been deleted.
+	//
+	// That is BUG-046's shape, one level up: not a test that measured nothing,
+	// but a test that measured something real and irrelevant. A reality counter
+	// fed by a source the system under test does not control is not a reality
+	// counter. So the synthetic traffic is GONE, and the bytes the counters see
+	// are now Raft's heartbeats -- which means a frozen cluster reports zero and
+	// the counter finally says what it claims to say. BUGS.md BUG-049.
+	//
+	// The interval: Election is 10 ticks and Heartbeat is 3, so 50ms gives a
+	// 500ms-1s election timeout and a 150ms heartbeat. Fast enough that a kill
+	// is recovered from inside a chaos run, slow enough that a loaded CI machine
+	// does not manufacture elections out of scheduling delay.
 	stop := make(chan struct{})
 	go func() {
-		t := time.NewTicker(50 * time.Millisecond)
+		t := time.NewTicker(tickInterval)
 		defer t.Stop()
-		var seq uint64
 		for {
 			select {
 			case <-stop:
 				return
 			case <-t.C:
-				seq++
-				for peer := range addrs {
-					tr.Send(sim.Envelope{
-						From: sim.NodeID(*id), To: peer, Kind: 1,
-						Body: []byte(fmt.Sprintf("hb-%d", seq)),
-					})
-				}
+				// INTO THE MAILBOX. A tick is an event like any other, and
+				// Amendment A1 does not make an exception for the one that
+				// arrives on a schedule.
+				drv.Post(sim.Event{At: drv.Now(), Kind: sim.KindTick, Node: self})
 			}
 		}
 	}()
@@ -207,7 +324,7 @@ func main() {
 			case <-stop:
 				return
 			case <-t.C:
-				writeCounters(*dir, *id, tr, &received)
+				writeCounters(*dir, *id, tr, &received, srv)
 			}
 		}
 	}()
@@ -216,7 +333,7 @@ func main() {
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	<-sigs
 	close(stop)
-	writeCounters(*dir, *id, tr, &received)
+	writeCounters(*dir, *id, tr, &received, srv)
 
 	sent, dropped, wire := tr.Counters()
 	fmt.Fprintf(os.Stderr, "riftnode %d exiting: sent=%d dropped=%d wire-bytes=%d recv-bytes=%d\n",
@@ -262,10 +379,22 @@ func splitComma(s string) []string {
 // destroy them. Written to a temporary file and renamed, so a reader never sees
 // a half-written line -- a kill during the write would otherwise produce a
 // corrupt counter that reads as a small one.
-func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64) {
+func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64, srv *serving) {
 	sent, dropped, wire := tr.Counters()
-	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d\n",
-		id, sent, dropped, wire, atomicLoad(received))
+	// served and refused are read WITHOUT a lock, from the node loop's own
+	// fields, and that is a deliberate limitation stated rather than hidden:
+	// they are advisory reality counters, not gated quantities, and a torn read
+	// of a uint64 on the platforms this runs on cannot produce a number that
+	// changes a verdict. Anything the GATE reads comes from the client's own
+	// accounting, in the client's process, under the client's mutex.
+	admitted, served, refused := srv.Counters()
+	led, ticks, now := srv.Leadership()
+	cur := 0
+	if now {
+		cur = 1
+	}
+	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d\n",
+		id, sent, dropped, wire, atomicLoad(received), admitted, served, refused, led, ticks, cur)
 	tmp := filepath.Join(dir, "counters.tmp")
 	if err := os.WriteFile(tmp, []byte(line), 0o644); err != nil {
 		return
@@ -283,6 +412,12 @@ const (
 	// get to assume zero: A5's uncertainty machinery reads it, and a node
 	// claiming perfect clocks would make every uncertainty interval empty.
 	maxOffset = 250 * time.Millisecond
+
+	// tickInterval is the wall period between Raft ticks. Election is 10 ticks
+	// and Heartbeat is 3, so this sets a 500ms-1s election timeout and a 150ms
+	// heartbeat. It is the ONLY source of time Raft has in real mode: without
+	// it the state machine is frozen and reports nothing wrong.
+	tickInterval = 50 * time.Millisecond
 
 	// mailboxDepth bounds the driver's queue. Deep enough that a burst does not
 	// drop, shallow enough that a wedged node does not accumulate unboundedly.

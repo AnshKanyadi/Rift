@@ -50,9 +50,14 @@ type realEngine struct{ *riftcgo.DB }
 // actual fsync. The store schedules a durability event a sync-latency after the
 // write; when it fires, this makes it true rather than modelling it.
 //
-// The sequence is IGNORED, and that is DESIGN-A0 §7's stated I1 idealization
-// arriving in real mode: rift_db_sync covers everything submitted and takes no
-// prefix argument, so durability here is always "everything so far".
+// The sequence is IGNORED. That is DESIGN-A0 §7's I1 idealization arriving in
+// real mode -- cited rather than restated, because the entry already carries the
+// measurement and the bound.
+//
+//	AN IDEALIZATION THAT SHOWS UP EXACTLY WHERE IT WAS RECORDED TO SHOW UP IS
+//	THE RECORD WORKING. It was written down at I1 as a property of the C++
+//	engine's sync, predicted to bind wherever that sync is driven, and here it
+//	binds without anyone rediscovering it.
 func (e realEngine) AdvanceDurable(seq engine.SeqNum) {
 	if _, err := e.DB.Sync(); err != nil {
 		panic("riftnode: sync: " + err.Error())

@@ -43,6 +43,29 @@ import (
 	"time"
 )
 
+// launch is ONE process. A node has many over a run, and the distinction is
+// load-bearing rather than tidy.
+//
+// # BUG-053: an expectation stored per NODE is read by the wrong process
+//
+// The first version kept a single `up` flag on Node, cleared by Kill before
+// signalling so the reaper would not count the death as unexpected. Then a
+// restart set it back to true for the NEW process -- and the OLD process's
+// reaper, still blocked in Wait, woke up, read the flag, and reported a node
+// that had been deliberately killed as one that died on its own.
+//
+//	THE FLAG ANSWERED "IS THIS NODE UP", AND THE QUESTION THE REAPER HAS IS "WAS
+//	MY PROCESS SUPPOSED TO DIE". Those are the same question only while there is
+//	one process, which is exactly the case a chaos run leaves.
+//
+// So the expectation lives with the process it is about. Each reaper closes over
+// its own launch and can never read another's.
+type launch struct {
+	cmd    *exec.Cmd
+	pid    int
+	killed bool // set by Kill BEFORE signalling: this death was ordered
+}
+
 // Node is one cluster member, running as its own process.
 type Node struct {
 	ID   int
@@ -50,11 +73,9 @@ type Node struct {
 	Dir  string
 
 	mu     sync.Mutex
-	cmd    *exec.Cmd
-	up     bool
+	cur    *launch // the process that is meant to be running, or nil
 	kills  int
 	starts int
-	pid    int
 }
 
 // PID is this node's operating-system process id, or 0 when it is down.
@@ -65,10 +86,10 @@ type Node struct {
 func (n *Node) PID() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if !n.up {
+	if n.cur == nil {
 		return 0
 	}
-	return n.pid
+	return n.cur.pid
 }
 
 // Supervisor owns the cluster's processes.
@@ -139,9 +160,9 @@ func (s *Supervisor) startOne(n *Node) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	l := &launch{cmd: cmd, pid: cmd.Process.Pid}
 	n.mu.Lock()
-	n.cmd, n.up = cmd, true
-	n.pid = cmd.Process.Pid
+	n.cur = l
 	n.starts++
 	n.mu.Unlock()
 
@@ -155,15 +176,20 @@ func (s *Supervisor) startOne(n *Node) error {
 	// whole reason this goroutine exists.
 	go func() {
 		err := cmd.Wait()
+		// ASK ABOUT THIS LAUNCH, never about the node. See BUG-053: a restart
+		// makes "is the node up" true again while this process is still dying.
 		n.mu.Lock()
-		wasUp := n.up
-		n.up = false
+		ordered := l.killed
+		if n.cur == l {
+			n.cur = nil
+		}
 		n.mu.Unlock()
-		if wasUp {
+		if !ordered {
 			s.mu.Lock()
 			s.counts.ExitedOther++
 			s.mu.Unlock()
-			fmt.Fprintf(os.Stderr, "chaos: node %d exited WITHOUT being killed: %v\n", n.ID, err)
+			fmt.Fprintf(os.Stderr, "chaos: node %d (pid %d) exited WITHOUT being killed: %v\n",
+				n.ID, l.pid, err)
 		}
 	}()
 	return nil
@@ -177,16 +203,19 @@ func (s *Supervisor) startOne(n *Node) error {
 //	a chaos lane.
 func (s *Supervisor) Kill(n *Node) error {
 	n.mu.Lock()
-	cmd, up := n.cmd, n.up
-	if up {
-		n.up = false // claim it before signalling, so the reaper does not count this as unexpected
+	l := n.cur
+	if l != nil {
+		// Claimed BEFORE signalling, on the launch itself, so the reaper for
+		// THIS process sees the order however fast the death arrives.
+		l.killed = true
+		n.cur = nil
 		n.kills++
 	}
 	n.mu.Unlock()
-	if !up || cmd == nil || cmd.Process == nil {
+	if l == nil || l.cmd == nil || l.cmd.Process == nil {
 		return nil
 	}
-	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	if err := l.cmd.Process.Signal(syscall.SIGKILL); err != nil {
 		return err
 	}
 	s.mu.Lock()

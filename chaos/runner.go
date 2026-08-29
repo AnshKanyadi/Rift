@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/anshkanyadi/rift/sim"
 )
 
 // Run is one chaos run: a cluster, a fault schedule inflicted on it, and the
@@ -34,6 +36,22 @@ import (
 type Run struct {
 	Counters Counters
 	Ops      OpCounters
+	Corr     Correlation
+
+	// LeaderKills is how many of the kills removed a node that was leading at
+	// the moment it was killed.
+	//
+	//	A KILL THAT MISSED THE LEADER IS A KILL THE CLUSTER BARELY NOTICED. On
+	//	three nodes a round-robin schedule hits the leader a third of the time,
+	//	and the resulting run reports the same shape as the experiment CLAUDE.md
+	//	names while being a much gentler one. The number is separated from Kills
+	//	so the difference cannot be rounded away.
+	LeaderKills int
+
+	// LedTicks is the total ticks any node spent leading, summed across nodes.
+	// Zero means no node ever led, and a run in which no node ever led observed
+	// NOTHING: every checker is green because nothing happened.
+	LedTicks uint64
 	Faults   []Fault
 	Verdicts []Verdict
 }
@@ -62,8 +80,37 @@ type Fault struct {
 // Verdict is one checker's opinion. Verdicts are REPORTED, never gated on.
 type Verdict struct {
 	Checker string
-	OK      bool
+
+	// Outcome is THREE-VALUED, and it was a bool until this file was read
+	// against Amendment A4.
+	//
+	//	A BOOL HAS NOWHERE TO PUT AN INCONCLUSIVE, so an inconclusive would have
+	//	arrived here as either a pass -- banking a check that never finished --
+	//	or a violation, halting feature work over a timeout. Both are wrong in
+	//	the specific way A4 was written to forbid, and the type would have made
+	//	the wrongness invisible: every call site would have looked correct.
+	//
+	// sim.Verdict.CountsAsPass is the single site where the banking rule lives,
+	// and this field exists so that this package asks it rather than deciding
+	// for itself.
+	Outcome sim.Verdict
 	Detail  string
+
+	// Consumed is how many operations this checker actually READ.
+	//
+	// It is not decoration and it is not the same number for every checker: a
+	// per-key checker reads the operations on its key, a conservation checker
+	// reads the transactions, and a checker with a filter reads whatever
+	// survived it. The gap between the history's size and this number is where
+	// a green hides.
+	//
+	//	A CHECKER THAT CONSUMED NOTHING AGREES WITH EVERY HYPOTHESIS, and it
+	//	reports the same word as a checker that examined ten thousand
+	//	operations and found them consistent.
+	//
+	// So the number travels WITH the verdict rather than being derivable from
+	// the run, and a zero is a gate failure below rather than a green.
+	Consumed int
 }
 
 // GateResult is what the lane exits on.
@@ -107,6 +154,34 @@ func (r Run) Gate(minKills, minOps int) GateResult {
 		add("%d completed + %d failed exceeds %d issued: the client's own accounting disagrees "+
 			"with itself", r.Ops.Completed, r.Ops.Failed, r.Ops.Issued)
 	}
+	// A response for an operation nobody issued means the correlation the
+	// history rests on is broken. It is gated rather than reported because it is
+	// a statement about the RECORD, not about the cluster: if responses are
+	// landing on operations that do not exist, no verdict below is a verdict
+	// about the run that happened.
+	// A cluster that never elected a leader is a cluster that never did
+	// anything, and its history is green by construction.
+	if r.LedTicks == 0 {
+		add("no node ever led: an unled cluster serves nothing, so a green history " +
+			"here is a statement about an experiment that did not run")
+	}
+	if r.Counters.Kills > 0 && r.LeaderKills == 0 {
+		add("%d kill(s) landed and NONE of them removed a leader: this is a gentler experiment "+
+			"than the one being reported, and the difference is the whole of what a leader kill "+
+			"tests", r.Counters.Kills)
+	}
+	if r.Corr.Unissued > 0 {
+		add("%d response(s) arrived for operations the client never issued: the Begin/response/End "+
+			"correlation the history rests on is broken, so nothing below describes this run",
+			r.Corr.Unissued)
+	}
+	// And a checker that read nothing is not a checker that agreed.
+	for _, v := range r.Verdicts {
+		if v.Outcome.CountsAsPass() && v.Consumed == 0 {
+			add("checker %q reported green having consumed 0 operations: a checker that examined "+
+				"nothing agrees with every hypothesis", v.Checker)
+		}
+	}
 	return g
 }
 
@@ -117,6 +192,10 @@ func (r Run) Report(w io.Writer, g GateResult) {
 		r.Counters.Started, r.Counters.Kills, r.Counters.Restarts, r.Counters.ExitedOther)
 	fmt.Fprintf(w, "  client     issued=%d completed=%d failed=%d keys=%d\n",
 		r.Ops.Issued, r.Ops.Completed, r.Ops.Failed, r.Ops.Keys)
+	fmt.Fprintf(w, "  responses  unissued=%d conflicting=%d duplicate=%d late-after-timeout=%d\n",
+		r.Corr.Unissued, r.Corr.Conflicting, r.Corr.Duplicate, r.Corr.LateAfterTimeout)
+	fmt.Fprintf(w, "  cluster    leader-kills=%d of %d kills, led-ticks=%d\n",
+		r.LeaderKills, r.Counters.Kills, r.LedTicks)
 	fmt.Fprintf(w, "  faults     %d recorded\n", len(r.Faults))
 
 	// A FAILED GATE SUPPRESSES THE VERDICTS AS REPORTABLE, and this is a
@@ -139,17 +218,38 @@ func (r Run) Report(w io.Writer, g GateResult) {
 		fmt.Fprintf(w, "  that did not occur as described is an opinion about nothing.\n")
 	}
 
-	bad := 0
+	bad, unsure := 0, 0
 	for _, v := range r.Verdicts {
-		if !v.OK {
+		switch v.Outcome {
+		case sim.VerdictViolation:
 			bad++
+		case sim.VerdictInconclusive:
+			unsure++
 		}
 	}
-	fmt.Fprintf(w, "\n  verdicts   %d checker(s), %d violation(s)\n", len(r.Verdicts), bad)
+	// EVERY verdict prints, with the number of operations it consumed, and the
+	// greens print too. A report that lists only violations cannot distinguish
+	// "four checkers examined this history and found nothing" from "four
+	// checkers were configured and three of them never ran".
+	// THE INCONCLUSIVE COUNT IS QUOTED BESIDE THE VIOLATION COUNT, never folded
+	// into it and never omitted when it is zero. A4: the public claim quotes the
+	// inconclusive rate alongside the violation count, and a field that is
+	// printed only when nonzero is a field a reader learns to stop looking for.
+	fmt.Fprintf(w, "\n  verdicts   %d checker(s), %d violation(s), %d inconclusive\n",
+		len(r.Verdicts), bad, unsure)
 	for _, v := range r.Verdicts {
-		if !v.OK {
-			fmt.Fprintf(w, "    VIOLATION  %s: %s\n", v.Checker, v.Detail)
+		word := "         "
+		switch v.Outcome {
+		case sim.VerdictPass:
+			word = "pass     "
+		case sim.VerdictViolation:
+			word = "VIOLATION"
+		case sim.VerdictInconclusive:
+			word = "INCONCL. "
+		case sim.VerdictUnset:
+			word = "UNSET    "
 		}
+		fmt.Fprintf(w, "    %s  %-24s consumed=%-7d %s\n", word, v.Checker, v.Consumed, v.Detail)
 	}
 
 	if bad > 0 {
@@ -174,6 +274,19 @@ func (r Run) Report(w io.Writer, g GateResult) {
   benchmark section does not run. There is no throughput that redeems a number
   taken from a run that broke an invariant.
 `)
+		return
+	}
+
+	if unsure > 0 {
+		// AN INCONCLUSIVE IS NOT A GREEN, so the green block below does not
+		// print. A4 names the remedy too, and it is not a longer timeout:
+		// shrink the per-run history window, then partition harder per key.
+		fmt.Fprintf(w, `
+  NOT GREEN: %d checker(s) did not finish. An inconclusive is not a pass, and
+  this run banks nothing. The remedy is a SMALLER PROBLEM -- shorter history
+  windows, harder per-key partitioning -- and never a longer timeout, a weaker
+  model, or a smaller operation set.
+`, unsure)
 		return
 	}
 

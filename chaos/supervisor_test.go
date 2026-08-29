@@ -191,3 +191,98 @@ func waitFor(t *testing.T, path string) {
 	t.Fatalf("%s never appeared: the process did not run, so anything this test reports afterwards "+
 		"is about a cluster that does not exist", path)
 }
+
+// BUG-053: a kill followed immediately by a restart must not report the killed
+// process as having died on its own.
+//
+// The failure is a race between the dying process's reaper and the new
+// process's start, so it is exercised the way it actually occurred: kill and
+// restart back to back, several times, with no sleep between them.
+func TestAKilledProcessIsNotReportedAsAnUninvitedExitAcrossARestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts real processes")
+	}
+	// A LINGERER, not the plain sleeper, and the difference is what makes this
+	// deterministic rather than lucky.
+	//
+	// cmd.Wait does not return when the process dies; it returns when the
+	// process has died AND the stderr copier has seen EOF. The plain sleeper
+	// leaves no other holder of the pipe, so Wait returns in microseconds and
+	// the reaper always wins the race -- 60 kill/restart pairs against the
+	// buggy code produced zero failures.
+	//
+	//	A RACE THAT ONE SIDE ALWAYS WINS IS NOT REPRODUCED BY REPETITION. It is
+	//	reproduced by making the other side slow ON PURPOSE.
+	//
+	// The lingerer leaves a grandchild holding the inherited stderr, so Wait
+	// blocks for a fixed second after the kill -- long past the restart, which
+	// is the interleaving the real chaos run hit once in three kills.
+	bin := buildLingerer(t)
+	root := t.TempDir()
+	n := &chaos.Node{ID: 1, Addr: "127.0.0.1:0", Dir: filepath.Join(root, "n1")}
+	s := chaos.New(bin, []*chaos.Node{n})
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+
+	for i := 0; i < 4; i++ {
+		if err := s.Kill(n); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Restart(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Let every reaper finish before reading. A count read while a reaper is
+	// still blocked in Wait is a count of the races that happened to be over --
+	// and with the lingerer every reaper is deliberately slow, so this wait is
+	// load-bearing rather than defensive.
+	time.Sleep(2 * time.Second)
+
+	if c := s.Counters(); c.ExitedOther != 0 {
+		t.Fatalf("%d process(es) reported as uninvited exits after %d ordered kills.\n"+
+			"      A per-NODE expectation is read by the wrong process across a restart: the dying\n"+
+			"      process's reaper sees the flag the new process just set. Counters: %+v",
+			c.ExitedOther, 4, c)
+	}
+}
+
+// buildLingerer is a fixture whose exit is SLOW TO OBSERVE.
+//
+// It spawns a grandchild that inherits stderr and outlives it, so the parent's
+// cmd.Wait blocks on the pipe long after the parent is gone. That is the only
+// way to make the reaper lose the restart race on purpose; see BUG-053.
+func buildLingerer(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.go")
+	prog := `package main
+
+import ("flag";"os";"os/exec";"path/filepath";"time")
+
+func main() {
+	id := flag.String("id", "", "")
+	_ = flag.String("addr", "", "")
+	d := flag.String("dir", "", "")
+	flag.Parse()
+	// The grandchild holds the inherited stderr open past this process's death.
+	c := exec.Command("/bin/sleep", "1")
+	c.Stderr = os.Stderr
+	_ = c.Start()
+	if *d != "" {
+		_ = os.WriteFile(filepath.Join(*d, "started-"+*id), []byte("x"), 0o644)
+	}
+	for { time.Sleep(time.Hour) }
+}
+`
+	if err := os.WriteFile(src, []byte(prog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "lingerer")
+	cmd := exec.Command("go", "build", "-o", bin, src)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building the fixture: %v\n%s", err, out)
+	}
+	return bin
+}

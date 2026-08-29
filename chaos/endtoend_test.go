@@ -257,10 +257,26 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 
 	// The fault schedule, recorded AS IT IS INFLICTED. A violation here has no
 	// reproduction, so what was done to the cluster is the whole of its context.
+	// WAIT FOR A LEADER before inflicting anything. A schedule that starts
+	// killing during the first election measures the startup gap and calls it
+	// chaos, and the leader-kill count is zero because there was nothing to hit.
+	waitForLeader(t, nodes, 8*time.Second)
+
 	var faults []chaos.Fault
+	leaderKills := 0
+	led := newLedWatch()
 	const rounds = 4
 	for r := 0; r < rounds; r++ {
+		// AIM AT THE LEADER. A round-robin kill hits it a third of the time on
+		// three nodes, which is a gentler experiment than the one CLAUDE.md
+		// names; the nodes publish who leads, so the schedule uses it and falls
+		// back to round-robin only when nobody is leading yet.
+		led.sample(nodes)
 		victim := nodes[r%n]
+		if l := leaderNode(nodes); l != nil {
+			victim = l
+			leaderKills++
+		}
 		if err := s.Kill(victim); err != nil {
 			t.Fatal(err)
 		}
@@ -272,18 +288,23 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 		faults = append(faults, chaos.Fault{At: time.Now(), Kind: "restart", Node: victim.ID})
 		waitFor(t, filepath.Join(victim.Dir, "ready"))
 		time.Sleep(150 * time.Millisecond)
+		led.sample(nodes)
 	}
 	s.StopAll()
 	time.Sleep(300 * time.Millisecond)
 
 	sent, wire, recv := parseExitCounters(t, nodes)
 	run := chaos.Run{
-		Counters: s.Counters(),
-		Ops:      chaos.OpCounters{Issued: int(sent), Completed: int(sent), Keys: n},
-		Faults:   faults,
-		// No client verdicts yet: riftnode does not wire the store, so there is
-		// no history for a checker to read. Reported as absent rather than as
-		// clean -- an empty verdict list is not a passing one.
+		Counters:    s.Counters(),
+		Ops:         chaos.OpCounters{Issued: int(sent), Completed: int(sent), Keys: n},
+		Faults:      faults,
+		LeaderKills: leaderKills,
+		LedTicks:    led.total(),
+		// No client verdicts HERE. riftnode does wire the store now, and
+		// TestChaosRunWithRealCheckers is where a client asks it for something;
+		// this test drives no client, so there is no history for a checker to
+		// read. Reported as absent rather than as clean -- an empty verdict list
+		// is not a passing one.
 		Verdicts: nil,
 	}
 	g := run.Gate(rounds, 1)
@@ -330,7 +351,98 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 	}
 	if len(run.Verdicts) == 0 {
 		t.Log("NOTE: zero checker verdicts. The cluster survived the fault schedule, and NOTHING " +
-			"was checked about what it computed -- riftnode does not yet wire the store. This is " +
-			"a liveness result, not a safety one, and it must not be quoted as the latter.")
+			"was checked about what it computed -- this test drives no client. This is a liveness " +
+			"result, not a safety one, and it must not be quoted as the latter. The safety result " +
+			"is TestChaosRunWithRealCheckers.")
 	}
+}
+
+// nodeStat is one line of a node's self-report.
+type nodeStat struct {
+	id                             int
+	sent, dropped, wire, recv      uint64
+	admitted, served, refused, led uint64
+	ticks                          uint64
+	leader                         int
+}
+
+// readStats reads what each node says about itself. A node is the only party
+// that knows whether it leads, and asking it is cheaper and more honest than
+// inferring leadership from traffic.
+func readStats(nodes []*chaos.Node) map[int]nodeStat {
+	out := map[int]nodeStat{}
+	for _, nd := range nodes {
+		b, err := os.ReadFile(filepath.Join(nd.Dir, "counters"))
+		if err != nil {
+			continue
+		}
+		var st nodeStat
+		n, _ := fmt.Sscanf(string(b),
+			"id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d",
+			&st.id, &st.sent, &st.dropped, &st.wire, &st.recv, &st.admitted, &st.served,
+			&st.refused, &st.led, &st.ticks, &st.leader)
+		if n == 11 {
+			out[st.id] = st
+		}
+	}
+	return out
+}
+
+// leaderNode returns the node reporting itself leader, or nil.
+//
+// The report is up to 100ms stale, which is stated rather than hidden: a kill
+// aimed with it can miss, and the run counts LEADER KILLS from what it aimed at
+// rather than claiming every kill landed on a leader.
+func leaderNode(nodes []*chaos.Node) *chaos.Node {
+	st := readStats(nodes)
+	for _, nd := range nodes {
+		if st[nd.ID].leader == 1 {
+			return nd
+		}
+	}
+	return nil
+}
+
+// ledWatch accumulates leadership across a run.
+//
+// It keeps a per-node MAXIMUM rather than reading the final files, because a
+// restarted node's counters start again at zero:
+//
+//	SAMPLING ONCE AT THE END WOULD REPORT AN UNLED CLUSTER WHENEVER THE LAST
+//	KILL HAPPENED TO HIT THE LEADER -- which, once the schedule aims, is every
+//	time. The gate would then fire hardest on exactly the runs that did the most.
+type ledWatch struct{ max map[int]uint64 }
+
+func newLedWatch() *ledWatch { return &ledWatch{max: map[int]uint64{}} }
+
+func (l *ledWatch) sample(nodes []*chaos.Node) {
+	for id, st := range readStats(nodes) {
+		if st.led > l.max[id] {
+			l.max[id] = st.led
+		}
+	}
+}
+
+func (l *ledWatch) total() uint64 {
+	var t uint64
+	for _, v := range l.max {
+		t += v
+	}
+	return t
+}
+
+// waitForLeader blocks until some node reports itself leader.
+func waitForLeader(t *testing.T, nodes []*chaos.Node, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if leaderNode(nodes) != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// NOT a skip and not a soft warning. A cluster that cannot elect a leader in
+	// eight seconds is broken, and continuing would produce a green run whose
+	// every operation timed out.
+	t.Fatalf("no node reported itself leader within %s", within)
 }
