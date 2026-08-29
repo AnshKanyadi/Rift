@@ -292,9 +292,17 @@ func scopeFor(path string) scope {
 		// existing pin on "time", which was written for a different reason and
 		// held anyway.
 		//
-		//	"UNCLASSIFIED PACKAGES DEFAULT IN" IS ABOUT OUR PACKAGES. A5 is a
-		//	rule for code this project writes; the stdlib is not unclassified,
-		//	it is somebody else's.
+		//	"UNCLASSIFIED PACKAGES DEFAULT IN" IS ABOUT OUR PACKAGES. A5 IS A
+		//	RULE FOR CODE THIS PROJECT WRITES; THE STDLIB IS NOT UNCLASSIFIED,
+		//	IT IS SOMEBODY ELSE'S.
+		//
+		// That sentence is here rather than only in BUGS.md because the next
+		// person to touch this default will make the same reading: "default in"
+		// is a short phrase and it does not carry its own boundary. The
+		// unconditional version was caught in one run by TestScopeTable's row
+		// for "time" -- a pin written for an unrelated reason, which is the
+		// second time this week a real invariant has caught something outside
+		// its purpose.
 		//
 		// A `.test` binary is synthetic -- the toolchain's name for a package's
 		// test build -- and is not a package anyone classifies.

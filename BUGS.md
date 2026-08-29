@@ -3195,6 +3195,26 @@ a property. **The premise is what caught the defect the property was aimed at.**
 default was OFF. So three core packages — the **hybrid logical clock**, the **oracle and ledger
 package**, and the **witness types** — had never been analysed by the determinism pass at all.
 
+#### `hlc` leads this entry, and it is the same shape as A6's sixteenth instance
+
+**`hlc` is the mechanism this project's headline claims rest on** — snapshot isolation over hybrid
+logical clocks, uncertainty intervals, the clock-skew envelope. It was outside the pass for the whole
+of Track A.
+
+| | the claim | what was not reaching it |
+|---|---|---|
+| **A6 §18**, the sixteenth instance | *"snapshot isolation over HLC under bounded skew"* | the sweep exercising it **injected no skew at all** |
+| **`BUG-048`**, here | *"no `time.Now`, no map range, no float, in core scope"* | the **package implementing HLC** was not in core scope |
+
+> **NEITHER WAS A DEFECT IN THE MECHANISM. BOTH WERE THE MECHANISM'S VERIFICATION NOT REACHING IT** —
+> once by a workload that omitted the fault the phase was about, once by a scope list that omitted the
+> package the amendment was about.
+
+**AND IT IS A COVERAGE FINDING, NOT A CORRECTNESS ONE. Say it plainly, because a reader will otherwise
+assume the worse thing:** when `hlc` was finally analysed it produced **one** finding, the
+logical-overflow carry, which is necessary and correct and now carries a hatch. **No defect was found
+in `hlc`.** What was wrong was that nobody could have known that.
+
 > **A5'S LETTER HAS BEEN UNENFORCED SINCE THE DAY IT WAS WRITTEN**, and nothing in the tree
 > contradicted it, because **no new top-level package was added after the pass existed.** Every package
 > that would have exposed the inversion predates the check.
@@ -3206,7 +3226,9 @@ package**, and the **witness types** — had never been analysed by the determin
 
 > **THE PIN TESTED DEFAULT-IN FOR THE ONE SHAPE THAT WAS ALREADY COVERED BY A WILDCARD, AND NEVER FOR
 > THE SHAPE THE RULE EXISTS FOR.** `engine/wherever` is core because `engine/...` matches it, not
-> because of any default — the row would pass with the default set to anything.
+> because of any default — **the row would pass with the default set to anything.**
+>
+> **A TEST THAT CANNOT DISTINGUISH THE TWO ANSWERS IS NOT TESTING THE QUESTION.**
 
 **And the population is the point.** `GF-51` says a test covers the case that existed when it was
 written. Here **every instance that predates the test IS the population the rule was written for**: a
@@ -3231,6 +3253,14 @@ available and the same dismissal.** Four instances now, by the same reader:
 > AND HAS TO BE ACTIVELY DISTRUSTED EVERY SINGLE TIME.** Each of the four had a one-command check
 > available — `ls`, `-v`, `tr -d '\0'`, plant-a-violation — and in three of the four it was run only
 > after something else prompted suspicion.
+
+**And what the four have in common is structural rather than topical.** An empty result, an identical
+hash, a check that did not run, a grep that returned nothing:
+
+> **ALL FOUR ARE THE ABSENCE OF A SIGNAL, PRESENTED IN THE SAME SHAPE AS A GOOD RESULT.** Nothing
+> about the output distinguishes "we looked and found nothing wrong" from "we did not look". They are
+> the same bytes, the same exit code, and the same colour on a terminal — and the first reading is the
+> one a reader arrives with, because it is the reading that is usually true.
 
 #### Fixed in two parts, the mechanism first
 

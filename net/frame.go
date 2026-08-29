@@ -23,6 +23,22 @@
 //
 //	WE ARE CHOOSING THE CODE WE CAN CHECK OVER THE CODE THAT IS ALREADY CHECKED.
 //
+// # ITS PURITY IS DELIBERATE, NOT INCIDENTAL
+//
+// This package is IN CORE SCOPE and produces no findings: no os, no sockets, no
+// goroutines, no time. It is the only piece of I2's new surface that survives
+// core scope, and that is a property to defend rather than a coincidence to
+// notice.
+//
+//	THE PURE HALF STAYS IN SCOPE AND GETS CHECKED. ONLY THE PART THAT TOUCHES
+//	SOCKETS IS EXCLUDED.
+//
+// net/tcp holds the dialing, the listening, the goroutine per peer and the
+// bounded queue, and is excluded by name. Keeping them in one package would
+// have put this codec outside the determinism pass for no reason other than its
+// neighbours -- and TestScopeTable pins both polarities so the split cannot
+// erode: `net` in, `net/tcp` out, `net/tcpfoo` in.
+//
 // So this package inherits no confidence from anywhere. The frame ENCODING is
 // sim/codec.go's and is already pinned by tools/codecpin; what is new here is
 // the STREAM layer, and every way a stream can lie to a reader is a case with a
