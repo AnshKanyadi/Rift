@@ -67,6 +67,7 @@ func (t Timestamp) Equal(u Timestamp) bool { return t == u }
 // nanosecond, and the difference is every event that shares that nanosecond.
 func (t Timestamp) Next() Timestamp {
 	if t.Logical == ^uint32(0) {
+		//rift:allow-nondeterminism the logical-overflow carry; Logical has saturated so one wall nanosecond IS the next representable timestamp, and this is the only path that may add to a Wall
 		return Timestamp{Wall: t.Wall + 1}
 	}
 	return Timestamp{Wall: t.Wall, Logical: t.Logical + 1}

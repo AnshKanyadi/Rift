@@ -9,7 +9,7 @@
 #   byte-identical.
 --- a/tools/determinismcheck/scope.go
 +++ b/tools/determinismcheck/scope.go
-@@ -183,11 +183,11 @@ var defaultExclude = []string{
+@@ -205,11 +205,11 @@ var defaultExclude = []string{
  
  	// The end-of-run checkers. History *collection* runs in-sim and stays
  	// dependency-free inside the boundary; porcupine runs after the run is
@@ -17,8 +17,8 @@
  	// here by ruling. Nothing in this package executes during a simulated run.
 -	"github.com/anshkanyadi/rift/sim/checker/...",
 +	"github.com/anshkanyadi/rift/sim/...",
- }
  
- // defaultMailbox lists packages that get the mailbox rule: core state is reached
- // only through the mailbox (DESIGN-A0 DR-2).
- //
+ 	// ENUMERATED AT I2, when the default changed from scopeOff to scopeCore.
+ 	// Each was previously classified BY OMISSION; each is named here with its
+ 	// reason, which is A5's design: an enumeration someone has to write is an
+ 	// enumeration someone has to justify.

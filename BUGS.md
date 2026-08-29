@@ -3181,6 +3181,89 @@ a property. **The premise is what caught the defect the property was aimed at.**
 **Fixed:** `simcgo` owns the callback list and re-registers it on the reopened engine.
 
 ---
+### BUG-048 — (harness) Amendment A5's default was inverted in the pass, and unenforced from the day it was written
+
+| | |
+|---|---|
+| **Symptom** | `scopeFor` returned `scopeOff` for any package matching no pattern. **Amendment A5 says "Unclassified packages default in."** Nineteen packages matched nothing, including `hlc`, `raftcheck` and `internal/provenance`. |
+| **Found by** | adding `net/` at I2 — **the first new top-level package in months** — and distrusting a silent pass. |
+| **Reproduce** | plant a map range in `hlc`: **0 findings**. Plant the same in `clock`: **1**. |
+| **Invariant that caught it** | none. An unanalysed package and a clean one produce byte-identical output. |
+| **Mutant class** | `TestEveryPackageIsClassifiedExplicitly`, induced by adding an unclassified package and watching the lane fail. |
+
+**`defaultCore` was an allowlist of ten prefixes.** Anything outside them fell to the default, and the
+default was OFF. So three core packages — the **hybrid logical clock**, the **oracle and ledger
+package**, and the **witness types** — had never been analysed by the determinism pass at all.
+
+> **A5'S LETTER HAS BEEN UNENFORCED SINCE THE DAY IT WAS WRITTEN**, and nothing in the tree
+> contradicted it, because **no new top-level package was added after the pass existed.** Every package
+> that would have exposed the inversion predates the check.
+
+#### Why the test suite could not catch it, and it is `GF-51`'s sharpest instance
+
+`TestScopeTable` pinned the default with one row: `{mod + "engine/wherever", scopeCore}` — a
+**subpackage under an already-included prefix**. That is not the case A5's sentence is about.
+
+> **THE PIN TESTED DEFAULT-IN FOR THE ONE SHAPE THAT WAS ALREADY COVERED BY A WILDCARD, AND NEVER FOR
+> THE SHAPE THE RULE EXISTS FOR.** `engine/wherever` is core because `engine/...` matches it, not
+> because of any default — the row would pass with the default set to anything.
+
+**And the population is the point.** `GF-51` says a test covers the case that existed when it was
+written. Here **every instance that predates the test IS the population the rule was written for**: a
+rule about *new* packages, tested only against *old* ones, in a tree where nobody added a new one for
+months. The first addition exposed it within an hour.
+
+#### The reading error, recorded plainly
+
+`go run determinismcheck ./net/` printed nothing. **I read that as clean.** It meant *never looked*.
+
+That is `BUG-046` one layer up — a lane green over a package it never opened — with **the same tell
+available and the same dismissal.** Four instances now, by the same reader:
+
+| | the silence | what it meant |
+|---|---|---|
+| `BUG-046` | a trace hash matching with an empty engine root | the engine was never opened |
+| `BUG-046` again | the anti-vacuity check, twice | the check never ran |
+| `BUG-043` | `grep` returning nothing on a NUL-bearing log | the tool had given up |
+| **`BUG-048`** | **the pass reporting no findings** | **the package was never analysed** |
+
+> **THE PATTERN IS NOT THAT THE MECHANISM IS SUBTLE. IT IS THAT SILENCE IS READ AS A PASS BY DEFAULT,
+> AND HAS TO BE ACTIVELY DISTRUSTED EVERY SINGLE TIME.** Each of the four had a one-command check
+> available — `ls`, `-v`, `tr -d '\0'`, plant-a-violation — and in three of the four it was run only
+> after something else prompted suspicion.
+
+#### Fixed in two parts, the mechanism first
+
+**(c)** `TestEveryPackageIsClassifiedExplicitly`: every package in the module must match an explicit
+pattern, so the default is unreachable. *An implicit answer is the problem, not the direction it
+leans* — a silently-included package is a lane failing for a reason nobody chose, which is no better
+than a silently-excluded one.
+
+**(a)** The default is now `scopeCore`, and all nineteen are enumerated with their reasons.
+
+**And (a) had a defect of its own, caught by an existing pin.** The first version returned `scopeCore`
+unconditionally, making **`time`, `fmt` and every dependency core scope**. `TestScopeTable`'s row for
+`"time"` — written for an unrelated reason — failed immediately.
+
+> **"UNCLASSIFIED PACKAGES DEFAULT IN" IS ABOUT OUR PACKAGES.** A5 is a rule for code this project
+> writes; the stdlib is not unclassified, it is somebody else's.
+
+#### What the three newly-analysed packages reported
+
+Three findings, and **none is a defect** — each is a legitimate case that now carries a named hatch
+with its reason, which is what `HATCHES.txt` is for:
+
+| | |
+|---|---|
+| `hlc/hlc.go:70` | the logical-overflow carry. `Logical` has saturated, so one wall nanosecond *is* the next representable timestamp |
+| `raftcheck/oracles.go:1353` | a map **merge** — each source has unique keys, so the result is identical whatever order it visits |
+| `raftcheck/oracles.go:1563` | building a **set** — membership is what is read, and a set is identical whatever order it was filled |
+
+**That they are all benign is the honest outcome and not a disappointment.** The pass found what it was
+supposed to find in code it had never seen; that the three turned out defensible is a fact about the
+code, and the exemptions are now visible and reasoned instead of implicit and invisible.
+
+---
 # Track B — the C++ storage engine
 
 *Everything below is Track B's `BUGS.md`, merged at I1. Its defect ids carry the `B` prefix; its

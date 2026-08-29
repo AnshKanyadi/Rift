@@ -57,6 +57,28 @@ var defaultCore = []string{
 	// scope, deliberately: an excluded package would hide the exception, and
 	// the point is that every determinism exception is a hatch.
 	"github.com/anshkanyadi/rift/internal/sorted/...",
+
+	// ADDED AT I2, AND THEY HAD NEVER BEEN ANALYSED. The list above was an
+	// allowlist and the default was scopeOff, so a package matching nothing was
+	// silently out. Measured: a map range planted in hlc produced ZERO findings.
+	//
+	//	hlc                   the hybrid logical clock -- A5's own subject
+	//	raftcheck             the ledger and oracles, running IN-SIM
+	//	internal/provenance   witness types, used by store and raftcheck
+	//
+	// Each imports only bytes, fmt, sort and this module's core packages: no os,
+	// no time, no sync. They belong in scope and always did.
+	"github.com/anshkanyadi/rift/hlc/...",
+	"github.com/anshkanyadi/rift/raftcheck/...",
+	"github.com/anshkanyadi/rift/internal/provenance/...",
+
+	// I2's frame codec. Pure by construction -- encoding, decoding, and reading
+	// a frame off an io.Reader -- and it survives core scope with no findings.
+	//
+	//	A PURE PACKAGE THAT SURVIVES CORE SCOPE IS WORTH KEEPING PURE, so it is
+	//	pinned IN rather than allowed to drift out with its socket-owning
+	//	sibling. net/tcp is excluded; net is not, and the split is the point.
+	"github.com/anshkanyadi/rift/net",
 }
 
 // defaultExclude wins over everything. It is for packages that sit under a core
@@ -186,6 +208,37 @@ var defaultExclude = []string{
 	// over, is an external dependency, and needs a timeout -- so it lives out
 	// here by ruling. Nothing in this package executes during a simulated run.
 	"github.com/anshkanyadi/rift/sim/checker/...",
+
+	// ENUMERATED AT I2, when the default changed from scopeOff to scopeCore.
+	// Each was previously classified BY OMISSION; each is named here with its
+	// reason, which is A5's design: an enumeration someone has to write is an
+	// enumeration someone has to justify.
+
+	// The socket half of I2's transport: net, sync, time, one goroutine per
+	// peer. Plainly orchestration under A5's text, which names real-mode
+	// drivers. Its pure half stays in core scope -- see net, above.
+	"github.com/anshkanyadi/rift/net/tcp/...",
+
+	// Binaries. A shipping binary parses flags, reads files and writes stdout,
+	// none of which core packages may do; cmd/ is where the outside world is
+	// allowed to exist.
+	"github.com/anshkanyadi/rift/cmd/...",
+
+	// Tooling. These READ SOURCE TEXT, which needs os, and tools/gatepin's own
+	// comment is the canonical statement of why that cannot live in core scope.
+	"github.com/anshkanyadi/rift/tools/...",
+
+	// Load generators and runners. bench and soak drive runs from outside;
+	// chaos inflicts faults on real processes. All three are orchestration by
+	// A5's own naming, which lists hunters and real-mode drivers alongside cmd/.
+	//
+	// NOT OBVIOUSLY ORCHESTRATION, AND SAID SO RATHER THAN ASSERTED: `bench`
+	// could in principle be a pure workload generator that a driver runs, and
+	// if it ever becomes one it should move back. Today it owns its own timing
+	// and its own output, which is what puts it here.
+	"github.com/anshkanyadi/rift/bench/...",
+	"github.com/anshkanyadi/rift/soak/...",
+	"github.com/anshkanyadi/rift/chaos/...",
 }
 
 // defaultMailbox lists packages that get the mailbox rule: core state is reached
@@ -204,6 +257,10 @@ var defaultExclude = []string{
 // here and the rule is already in force.
 var defaultMailbox = []string{}
 
+// modulePrefix is this module's import path. A5's "default in" applies inside
+// it and nowhere else.
+const modulePrefix = "github.com/anshkanyadi/rift/"
+
 func scopeFor(path string) scope {
 	path = normalize(path)
 	switch {
@@ -214,7 +271,37 @@ func scopeFor(path string) scope {
 	case matchAny(splitPatterns(flagCore), path):
 		return scopeCore
 	default:
-		return scopeOff
+		// AMENDMENT A5's LETTER, ENFORCED AT I2: "Unclassified packages default
+		// in." This returned scopeOff from the day the pass was written, so a
+		// package matching no pattern was silently EXCLUDED -- the opposite of
+		// what the amendment says, and undetectable because an unanalysed
+		// package and a clean one produce identical output.
+		//
+		// It went unnoticed because every top-level package predated the test
+		// that pins the default, and that test pins it for a SUBPACKAGE under an
+		// included prefix, which is not the case A5's sentence is about.
+		//
+		// TestEveryPackageIsClassifiedExplicitly makes this branch unreachable
+		// for anything in the module: a package matching no pattern fails the
+		// lane rather than arriving here. The default is the direction to lean
+		// if it is ever reached, not the policy.
+		//
+		// AND IT LEANS IN ONLY FOR THIS MODULE. The first version of this
+		// returned scopeCore unconditionally, which made `time`, `fmt` and every
+		// dependency core scope -- caught immediately by TestScopeTable's
+		// existing pin on "time", which was written for a different reason and
+		// held anyway.
+		//
+		//	"UNCLASSIFIED PACKAGES DEFAULT IN" IS ABOUT OUR PACKAGES. A5 is a
+		//	rule for code this project writes; the stdlib is not unclassified,
+		//	it is somebody else's.
+		//
+		// A `.test` binary is synthetic -- the toolchain's name for a package's
+		// test build -- and is not a package anyone classifies.
+		if !strings.HasPrefix(path, modulePrefix) || strings.HasSuffix(path, ".test") {
+			return scopeOff
+		}
+		return scopeCore
 	}
 }
 

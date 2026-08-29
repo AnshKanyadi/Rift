@@ -1350,6 +1350,7 @@ func (o *TransactionAtomicity) OnStep(_ sim.View, _ sim.Event) *sim.Violation {
 		for _, c := range commits {
 			byKey[c.Key] = append(byKey[c.Key], c)
 		}
+		//rift:allow-nondeterminism a map MERGE: each dec has unique keys, so the result is identical whatever order this visits; where two ranges share a key the winner is decided by o.l.ranges, which is a slice
 		for k, v := range dec {
 			decided[k] = v
 		}
@@ -1559,6 +1560,7 @@ func (o *PercolatorInvariants) Check() *sim.Violation {
 		}
 	}
 	committedAt := map[string]bool{}
+	//rift:allow-nondeterminism building a SET: membership is what is read, and a set is identical whatever order it was filled in
 	for _, d := range decided {
 		if !d.Rollback {
 			committedAt[d.StartTS.String()+"->"+d.CommitTS.String()] = true

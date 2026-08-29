@@ -204,6 +204,24 @@ func TestScopeTable(t *testing.T) {
 		// checked, and gets excluded only by someone writing it down.
 		{mod + "engine/wherever", scopeCore},
 
+		// I2: the packages that were classified BY OMISSION until the default
+		// was fixed. Pinned in both directions, because "it is in scope now"
+		// and "it stays in scope" are different claims.
+		{mod + "hlc", scopeCore},
+		{mod + "raftcheck", scopeCore},
+		{mod + "internal/provenance", scopeCore},
+		{mod + "net", scopeCore},
+		{mod + "net/tcp", scopeOff},
+		{mod + "cmd/simctl", scopeOff},
+		{mod + "tools/gatepin", scopeOff},
+		{mod + "bench", scopeOff},
+		{mod + "soak", scopeOff},
+		{mod + "chaos", scopeOff},
+		// AND THE SPLIT THAT MATTERS: net is in, net/tcp is out. A pure package
+		// that survives core scope is kept pure rather than drifting out with
+		// its socket-owning sibling, and a wildcard on net would erase that.
+		{mod + "netfoo", scopeCore},
+
 		// Excluded by name: the real-mode adapters that need what the rules
 		// forbid, and which do not run inside a simulated run.
 		//
@@ -274,7 +292,18 @@ func TestScopeTable(t *testing.T) {
 		// fixtures stay, in force for the first package that does hold both.
 		{mod + "node/transport", scopeOff},
 
-		{mod + "raftlike", scopeOff}, // a prefix is not a parent directory
+		// AMENDED AT I2. This was scopeOff and its comment read "a prefix is not
+		// a parent directory" -- it existed to prove `raft/...` does not adopt a
+		// sibling whose name merely starts with "raft".
+		//
+		// With A5's default enforced, an unclassified package IN THIS MODULE is
+		// core scope, so raftlike is core -- not because raft/... reached it,
+		// but because nothing excluded it. **The wildcard question it was
+		// written to ask is now unanswerable in this direction**, and the pin
+		// below asks it where it still has teeth: on an EXCLUSION, where
+		// over-reach still silently removes a package from the pass.
+		{mod + "raftlike", scopeCore},
+		{mod + "net/tcpfoo", scopeCore}, // net/tcp/... must not adopt a sibling
 		{"time", scopeOff},
 	}
 	for _, tc := range cases {

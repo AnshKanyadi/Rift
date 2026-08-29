@@ -16,3 +16,6 @@
 
 clock/real.go:40  the repo's single wall-clock read; the real Clock implementation is where physical time necessarily enters, and every other package takes an injected Clock so this stays the one place
 internal/sorted/sorted.go:40  the one map range in the repo; every caller sorts before returning, so this order is never observable
+hlc/hlc.go:70  the logical-overflow carry; Logical has saturated so one wall nanosecond IS the next representable timestamp, and this is the only path that may add to a Wall
+raftcheck/oracles.go:1353  a map MERGE: each dec has unique keys, so the result is identical whatever order this visits; where two ranges share a key the winner is decided by o.l.ranges, which is a slice
+raftcheck/oracles.go:1563  building a SET: membership is what is read, and a set is identical whatever order it was filled in
