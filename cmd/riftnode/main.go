@@ -50,6 +50,8 @@ func main() {
 	dir := flag.String("dir", "", "this node's storage directory")
 	peers := flag.String("peers", "", "comma-separated id=host:port for every other node")
 	clients := flag.String("clients", "", "comma-separated id=host:port for client endpoints")
+	fault := flag.String("fault", "",
+		"deliberately misbehave: stale-read | double-answer. CALIBRATION ONLY (GF-62)")
 	unobserved := flag.Bool("unobserved", false,
 		"run with NO oracle ledger: faster, and produces no checker evidence (BUG-055)")
 	flag.Parse()
@@ -216,7 +218,7 @@ func main() {
 
 	// THE CLIENT PROTOCOL WRAPS THE STORE, so it runs on the node loop. See
 	// clientserve.go for why that placement is the whole design.
-	srv := newServing(st, self, hist, tr)
+	srv := newServing(st, self, hist, tr, Fault(*fault))
 
 	drv, err := node.New(self, srv, clk, mailboxDepth)
 	if err != nil {
@@ -285,8 +287,9 @@ func main() {
 	// from a cluster that was not producing checker evidence is not a verified
 	// result, and the only thing standing between those two readings is this
 	// line.
-	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s, ledger=%s, start=%s\n",
-		*id, *addr, *dir, len(addrs), EngineName, ledgerName(*unobserved), startMode)
+	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s, ledger=%s, start=%s, fault=%s\n",
+		*id, *addr, *dir, len(addrs), EngineName, ledgerName(*unobserved), startMode,
+		faultName(*fault))
 	// A readiness marker the supervisor can wait on. Waiting on a sleep instead
 	// is how a test becomes flaky on a loaded machine, and how a cluster that
 	// never came up reports as one that came up slowly.
@@ -523,4 +526,13 @@ func storeHasState(dir string) (bool, error) {
 	it := db.NewIter(engine.IterOptions{})
 	defer func() { _ = it.Close() }()
 	return it.First(), nil
+}
+
+// faultName is what the startup line says. A cluster deliberately breaking its
+// own guarantees must not be mistakable for one that is not.
+func faultName(f string) string {
+	if f == "" {
+		return "none"
+	}
+	return f + " (CALIBRATION: this cluster is BREAKING ITS GUARANTEES ON PURPOSE)"
 }

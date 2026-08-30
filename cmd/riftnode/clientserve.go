@@ -35,7 +35,38 @@ import (
 // the test of whether an adapter was needed, and it passed. If some day a type
 // has to exist to make store/ and node.Driver agree, GF-55 falls -- this is not
 // that type.
+// Fault is a deliberate misbehaviour, for calibrating the chaos harness.
+//
+// # sim/toy's job, for chaos/ (GF-62 item 2)
+//
+// `sim/hunt`'s mutants work because `sim/toy` exists: a protocol that can be
+// broken on purpose, so "did the harness notice?" is answerable. `chaos/` had no
+// equivalent, so every gate arm and every checker in the real-mode path was a
+// mechanism with no positive control.
+//
+//	A CHECK THAT HAS NEVER BEEN SEEN FIRING ON A REAL RUN IS A CHECK NOBODY HAS
+//	CALIBRATED. Inducing it by hand-editing the runner proves the code path; it
+//	does not prove the mechanism catches a cluster actually doing the thing.
+//
+// These are off unless --fault names one, and riftnode SAYS SO on its startup
+// line beside the engine and the ledger, because a cluster deliberately breaking
+// its own guarantees must not be mistakable for one that is not.
+type Fault string
+
+const (
+	FaultNone Fault = ""
+	// FaultStaleRead answers a get from a remembered earlier value without going
+	// through raft. A linearizability violation the checker must catch.
+	FaultStaleRead Fault = "stale-read"
+	// FaultDoubleAnswer sends a second, DISAGREEING response for every answered
+	// operation. The client's Conflicting counter must catch it.
+	FaultDoubleAnswer Fault = "double-answer"
+)
+
 type serving struct {
+	fault Fault
+	stale map[string]string
+
 	inner sim.Node
 	st    *store.Node
 	self  sim.NodeID
@@ -107,8 +138,11 @@ type waiter struct {
 	seq    uint64
 }
 
-func newServing(st *store.Node, self sim.NodeID, hist *sim.History, tr interface{ Send(sim.Envelope) }) *serving {
-	return &serving{inner: st, st: st, self: self, hist: hist, tr: tr, pending: map[int]waiter{}}
+func newServing(st *store.Node, self sim.NodeID, hist *sim.History, tr interface{ Send(sim.Envelope) }, f Fault) *serving {
+	return &serving{
+		inner: st, st: st, self: self, hist: hist, tr: tr,
+		pending: map[int]waiter{}, fault: f, stale: map[string]string{},
+	}
 }
 
 // Handle admits a client request, delegates, and then flushes whatever the
@@ -165,6 +199,26 @@ func (s *serving) admit(e sim.Envelope, sch sim.Scheduler) {
 	// is the client's, on the client's clock, and that separation is the whole
 	// of chaos/client.go's monotonic-source rule.
 	s.admitted.Add(1)
+
+	// PLANTED: answer a read from a remembered value, bypassing raft entirely.
+	if s.fault == FaultStaleRead && op == "get" && s.st != nil && s.st.IsLeader() {
+		if v, ok := s.stale[req.Key]; ok {
+			body, err := riftnet.EncodeResponse(riftnet.Response{
+				Seq: req.Seq, Status: riftnet.StatusOK, Value: v,
+			})
+			if err == nil {
+				s.tr.Send(sim.Envelope{From: s.self, To: e.From, Kind: riftnet.KindResponse, Body: body})
+				s.served.Add(1)
+				return
+			}
+		}
+	}
+	if s.fault == FaultStaleRead && op == "put" {
+		if _, seen := s.stale[req.Key]; !seen {
+			s.stale[req.Key] = req.Value // the FIRST value ever written, kept forever
+		}
+	}
+
 	idx := s.hist.Begin(sch.Now(), int(e.From), req.Seq, op, req.Key, req.Value)
 	s.pending[idx] = waiter{client: e.From, seq: req.Seq}
 	s.order = append(s.order, idx)
@@ -218,6 +272,17 @@ func (s *serving) flush(now clock.Instant) {
 		}
 		s.tr.Send(sim.Envelope{From: s.self, To: w.client, Kind: riftnet.KindResponse, Body: body})
 		s.served.Add(1)
+
+		// PLANTED: a second answer that DISAGREES with the first.
+		if s.fault == FaultDoubleAnswer {
+			if b2, err := riftnet.EncodeResponse(riftnet.Response{
+				Seq: w.seq, Status: riftnet.StatusOK, Value: evs[idx].Value + "-DISAGREE",
+			}); err == nil {
+				s.tr.Send(sim.Envelope{
+					From: s.self, To: w.client, Kind: riftnet.KindResponse, Body: b2,
+				})
+			}
+		}
 	}
 	sort.Ints(keep)
 	s.order = keep

@@ -1,0 +1,18 @@
+# id: M105-conflict-folded-into-duplicate
+# covering-test: TestADoubleAnsweringClusterIsCaught
+# package: ./chaos/
+# expect: killed
+# power-covered-by: TestADoubleAnsweringClusterIsCaught -- a real three-process cluster told to misbehave on purpose (GF-62 item 2). Deterministic: the fault fires on every operation, so the covering test kills in seconds and a rate floor over seeds would measure nothing extra.
+# power-refutation: not a seeded property. The fixture cluster breaks its guarantee on every operation by construction, so there is no schedule to sweep and the sound instrument is the calibration run itself.
+# mutates: a DISAGREEING second response is classified as an agreeing duplicate, so the one case porcupine structurally cannot see is silently discarded
+--- a/chaos/client.go
++++ b/chaos/client.go
+@@ -261,7 +261,7 @@
+ 		c.lateAfterTimeout++
+ 		return LateAfterTimeout
+ 	}
+-	if f.kind != kind || f.value != value {
++	if false {
+ 		c.conflicting++
+ 		return Conflicting
+ 	}

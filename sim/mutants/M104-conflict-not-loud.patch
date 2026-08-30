@@ -1,0 +1,18 @@
+# id: M104-conflict-not-loud
+# covering-test: TestADoubleAnsweringClusterIsCaught
+# package: ./chaos/
+# expect: killed
+# power-covered-by: TestADoubleAnsweringClusterIsCaught -- a real three-process cluster told to misbehave on purpose (GF-62 item 2). Deterministic: the fault fires on every operation, so the covering test kills in seconds and a rate floor over seeds would measure nothing extra.
+# power-refutation: not a seeded property. The fixture cluster breaks its guarantee on every operation by construction, so there is no schedule to sweep and the sound instrument is the calibration run itself.
+# mutates: two different answers to one request are counted but not loud, so the gate never fires on a cluster that contradicts itself
+--- a/chaos/client.go
++++ b/chaos/client.go
+@@ -294,7 +294,7 @@
+ }
+ 
+ // Loud reports whether anything here is a defect rather than wire weather.
+-func (c Correlation) Loud() bool { return c.Unissued > 0 || c.Conflicting > 0 }
++func (c Correlation) Loud() bool { return c.Unissued > 0 }
+ 
+ // Correlation returns the stray-response counters.
+ func (c *Client) Correlation() Correlation {

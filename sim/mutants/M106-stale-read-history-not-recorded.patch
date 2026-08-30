@@ -1,0 +1,18 @@
+# id: M106-stale-read-history-not-recorded
+# covering-test: TestChaosRunWithRealCheckers
+# package: ./chaos/
+# expect: killed
+# power-covered-by: TestChaosRunWithRealCheckers -- a HEALTHY cluster. Scored here rather than against the stale-read fixture, and the reason is the finding: against a cluster that is already violating, "a violation was reported" cannot separate the mutation's effect from the fixture's own fault, and the mutant SURVIVED for exactly that reason. On a healthy cluster the same mutation manufactures a violation that is not there, which is the sharper property and the one a reader would want.
+# power-refutation: not a seeded property. The fixture cluster breaks its guarantee on every operation by construction, so there is no schedule to sweep and the sound instrument is the calibration run itself.
+# mutates: the client stops recording what a get returned, so every read enters the history as having observed the empty value. On a healthy cluster that is a MANUFACTURED violation -- the checker accusing a correct system, which is worse than missing a real defect
+--- a/chaos/client.go
++++ b/chaos/client.go
+@@ -254,7 +254,7 @@
+ 		} else {
+ 			c.failed++
+ 		}
+-		c.h.End(f.handle, clock.Instant(c.clk.Mono()), kind, value)
++		c.h.End(f.handle, clock.Instant(c.clk.Mono()), kind, "")
+ 		return Matched
+ 	}
+ 	if f.kind == sim.RespTimeout {

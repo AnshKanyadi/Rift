@@ -4039,6 +4039,21 @@ That is the second time this session that declaring a threshold beforehand found
 did ([GF-59] was the first), and the first time it found a defect in the **system** rather than in the
 harness.
 
+#### The diagnosis, as method
+
+Three steps, each eliminating a layer, the third decisive. Worth writing down because it is the
+shape a diagnosis should have:
+
+| step | what it did | what it eliminated |
+|---|---|---|
+| **1. arithmetic on numbers already in hand** | `ok=1172` over 30s ≈ 10s × 119 ops/s | narrowed "slow" to "stopped, at the first kill" — no new instrument needed |
+| **2. per-second per-node counters** | `ldr=0 led=0` for 14s while ticks advanced, bytes flowed, requests were admitted | **engine recovery, the driver, and transport reconnect** — all three alive |
+| **3. raft state per node** | all three `follower`, `term=2`, forever | **decisive** — the term never moves, so pre-vote rounds fire and never grant |
+
+> **EACH STEP WAS CHEAPER THAN THE NEXT AND EACH RULED OUT A LAYER.** Step 1 used data already
+> printed. Step 2 added a counter. Only step 3 required exposing new state from a signed package, and
+> by then there was one question left for it to answer.
+
 #### After the fix, and one measurement artifact it exposed
 
 | | before | after |
@@ -4054,7 +4069,30 @@ reported *"never recovered"*, which read as a defect. **A kill the window cannot
 not a kill the run can measure**, so the schedule now stops rather than the measurement being excused.
 
 **T1 still misses at 1.75s against 1.25s.** Reported at its value with the threshold beside it, never
-adjusted; the excess over what `E` predicts is unexplained and is the next thing to look at.
+adjusted; the excess over what `E` predicts is **measured and unexplained**.
+
+> **TWO OF FOUR NOT MET WITH NOTHING ADJUSTED IS A STRONGER RESULT THAN FOUR OF FOUR MET.** A
+> threshold that fires is a threshold that was capable of firing; a table of passes proves only that
+> the numbers landed on the comfortable side of lines nobody has seen move.
+
+---
+
+### GF-65 — one-line records from I2's close
+
+- **A calibration fixture for `chaos/`** (GF-62 item 2): `riftnode --fault=stale-read|double-answer`
+  breaks its own guarantees on purpose and says so on its startup line beside the engine and the
+  ledger. Both are caught — the linearizability checker on the stale read, the client's `Conflicting`
+  counter on the double answer, which is the case porcupine structurally cannot see. **Inducing a gate
+  by editing the runner proves the code path; only this proves the mechanism catches a cluster.**
+- **Seven chaos-level mutants, all killed** (GF-62 items 2 and 4): four over the report generators in
+  ~1s each, three over the correlation and history in 6–16s.
+- **A mutant scored against an already-violating fixture cannot be distinguished.** `M106` survived its
+  first covering test because *"a violation was reported"* could not separate the mutation's effect
+  from the fixture's own fault. Rescored against a **healthy** cluster, where the same mutation
+  manufactures a violation that is not there — the sharper property, and it kills.
+- **A kill the window cannot observe recovering is not a kill the run can measure.** The ticker fired
+  at `K, 2K, 3K` while the window *was* `3K`; the schedule now stops rather than the measurement being
+  excused.
 
 ---
 
