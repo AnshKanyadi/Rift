@@ -1070,6 +1070,11 @@ type RaftResult struct {
 	// nothing.
 	DurabilityCrossChecks int
 
+	// DurabilityCrossChecksDeclined is how often the comparison's precondition
+	// did not hold, so nothing was compared. OPEN-I2-2: the pair is the coverage
+	// statement and either number alone is not one.
+	DurabilityCrossChecksDeclined int
+
 	// SnapshotsTaken, SnapshotsApplied and TransfersAsked are A2's evidence that
 	// its three features ran at all. A sweep in which no snapshot was ever taken
 	// proves nothing about snapshots, however green it is.
@@ -1739,6 +1744,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		// see the field's own comment for why a drop is the guard working.
 		res.StaleEpochDrops += d.StaleEpochDrops()
 		res.DurabilityCrossChecks += d.DurabilityCrossChecks()
+		res.DurabilityCrossChecksDeclined += d.DurabilityCrossChecksDeclined()
 		res.SnapshotsTaken += d.SnapshotsTaken()
 		res.SnapshotsApplied += d.SnapshotsApplied()
 		res.TransfersAsked += d.TransfersAsked()

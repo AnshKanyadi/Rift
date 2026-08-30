@@ -703,6 +703,13 @@ func (m *Node) sum(f func(*Replica) int) int {
 	return n
 }
 
+// DurabilityCrossChecksDeclined counts completions whose precondition did not
+// hold. Quoted beside DurabilityCrossChecks; either alone is not a coverage
+// statement. See OPEN-I2-2.
+func (m *Node) DurabilityCrossChecksDeclined() int {
+	return m.sum(func(r *Replica) int { return r.DurabilityCrossChecksDeclined() })
+}
+
 // DurabilityCrossChecks counts comparisons of a durability record against the engine.
 func (m *Node) DurabilityCrossChecks() int {
 	return m.sum(func(r *Replica) int { return r.DurabilityCrossChecks() })

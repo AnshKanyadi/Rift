@@ -329,6 +329,38 @@ The model is not the world, and these are the specific places it is kinder:
 
 ### 8.3 Recorded gaps, named rather than discovered later
 
+- **A6's headline rests on clock machinery that THREE mechanisms were supposed to exercise, and none
+  did.** Snapshot isolation over hybrid logical clocks is a v1 headline claim, and A6 is signed. This
+  is a **coverage** statement, not a correctness one, and the difference matters as much here as it did
+  for `hlc` itself:
+
+  | | |
+  |---|---|
+  | **established** | `hlc`'s implementation has been analysed by the determinism pass since BUG-048 fixed A5's inverted default; A6's oracles are correct and were induced individually; the uncertainty-restart machinery exists and is exercised by the schedules that run |
+  | **NOT established** | that the uncertainty machinery behaves correctly **under actual clock disagreement**, by any of the three mechanisms that were supposed to check it |
+
+  | mechanism | why it did not exercise the claim |
+  |---|---|
+  | A6's seeded sweep | ran with **skew off** — the schedules exist; the sweep's shape did not select them |
+  | the determinism pass over `hlc` | **`hlc` was never analysed at all** until BUG-048 — nineteen packages matched no pattern |
+  | real mode (I2) | **cannot produce skew** — `clock.NewReal` reads the machine clock; no drift, no jump, no per-node offset |
+
+  Each was defensible in isolation: a sweep shape, an analyser default, a real-mode clock that reads
+  the wall. **None was a decision to leave the claim unexercised, and together that is exactly what
+  they were.** A claim covered by three mechanisms is not three times as safe if nothing checks that
+  any of them fired — and *"covered by three mechanisms"* is precisely what made each individual gap
+  easy to accept. Carried as a named obligation with its configuration: a real-mode clock with an
+  injectable per-node offset and jump schedule, plus the uncertainty-envelope oracle reading a
+  real-mode ledger. See BUGS.md GF-60.
+- **Nothing in this tree gates liveness.** The safety oracles cover anything that makes a *wrong* thing
+  happen; **nothing covers anything that makes the right thing stop happening.** Progress is *measured*
+  — leader-ticks, completions, non-vacuity counters — and measurement is not a gate. Demonstrated: a
+  mutation that stops a restarted node from ever recovering is caught by **no oracle at any seed
+  count**, because a crashed node that never returns is legal. The shape of the answer is a liveness
+  floor derived from `Election` and `Heartbeat` the way I2's `R ≤ 2.5E` was, then measured against real
+  schedules before it could gate; the chaos gate's `LedTicks == 0` is the only liveness assertion in
+  the tree, it is binary, and it would not have caught this either. Named obligation, with that
+  derivation sketch. See BUGS.md GF-64.
 - **`make mutants` is INVALID and A7 was signed with it red.** Not because a mutant survived — none
   did — but because the lane's *baseline* cannot finish. It runs 52 covering tests in one process, and
   eight of them are seed sweeps inherited from A1–A6 totalling ~1,928 seeds, which puts the baseline

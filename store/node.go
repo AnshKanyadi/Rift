@@ -281,6 +281,21 @@ type Replica struct {
 	// in-process crash.
 	adoptions int
 
+	// ackedSeq is the highest engine sequence this replica has FOLDED into its
+	// durable record. It is the driver's side of the continuous cross-check's
+	// precondition -- see the guard in onDurable and OPEN-I2-2.
+	ackedSeq engine.SeqNum
+
+	// crossChecksDeclined counts completions where the cross-check's precondition
+	// did NOT hold, so no comparison was made.
+	//
+	// It exists so that a check running less often is a NUMBER rather than a
+	// silence. On engine/model the premise holds routinely and crossChecks is
+	// nonzero; on a whole-tail-sync engine this counter carries how much of the
+	// coverage was given up, and if it ever turns out that NO comparison is
+	// possible there, the pair of numbers says so out loud.
+	crossChecksDeclined int
+
 	// writtenLast is the highest log index the driver has written to the engine.
 	// Recorded, because it is what says whether a Ready is a conflicting append
 	// and the engine is still holding a discarded suffix.
@@ -1431,6 +1446,9 @@ func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
 		kept = append(kept, w)
 	}
 	n.pending = kept
+	if seq > n.ackedSeq {
+		n.ackedSeq = seq
+	}
 
 	// A mark may be acknowledged only when EVERY write issued under it is
 	// durable. raft freezes a mark's coverage at handover, so today that is one
@@ -1454,13 +1472,50 @@ func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
 	// the check firing twice per run; comparing them here fires it on every
 	// completion, which took a planted defect's detection from seed 905 to the
 	// first seeds of the range.
-	if n.db.visibleSeq() == n.db.DurableSeq() {
+	// # THE PRECONDITION IS CORRECTED. THE ASSERTION IS NOT LOOSENED. (OPEN-I2-2)
+	//
+	// The distinction matters and the diff will not show it, so it is written
+	// here: **correcting a precondition is not the same act as loosening an
+	// assertion.** `sameDurableState` is untouched -- it still demands exact
+	// equality, and it still catches a DIFFERENT entry at a recorded index, which
+	// is the failure it exists for. What changed is when it is entitled to run.
+	//
+	// The old guard was `visibleSeq() == DurableSeq()` alone, and the comment
+	// above states the premise it rests on: two independent derivations of one
+	// fact. **On a whole-tail-sync engine that premise is false.**
+	// `realEngine.AdvanceDurable` ignores the sequence and syncs everything
+	// (DESIGN-A0 section 7's I1 idealization), so the engine becomes durable past
+	// the point the driver has folded -- the guard passes, the driver's record
+	// legitimately lags, and the comparison fails on a difference that is not a
+	// defect.
+	//
+	// So the guard now also asks the DRIVER's side: has it folded everything the
+	// engine has made durable?
+	//
+	//	engine side   nothing applied is still unsynced
+	//	driver side   nothing pending, and the fold has reached the engine's own
+	//	              durable point
+	//
+	// On engine/model, where AdvanceDurable advances to exactly the sequence it
+	// was given, all three hold routinely. MEASURED rather than asserted: over 30
+	// seeds of the A7 shape, the old guard and this one produce the IDENTICAL
+	// pair -- 75,630 comparisons and 218,596 declined. The added conjuncts cost
+	// nothing where the premise is true, which is what a corrected precondition
+	// should look like.
+	//
+	// On the C++ engine it runs less often, and crossChecksDeclined says how much
+	// less -- because a check that quietly stops running is the thing this
+	// repository has counted sixteen instances of.
+	durable := n.db.DurableSeq()
+	if n.db.visibleSeq() == durable && n.ackedSeq == durable && len(n.pending) == 0 {
 		n.crossChecks++
 		st := n.readDurable().Unverified()
 		if err := sameDurableState(n.durHS, n.durSnap, n.durLog, st); err != nil {
 			panic(fmt.Sprintf("store: node %d has made durable something its own record disagrees with: %v",
 				n.cfg.ID, err))
 		}
+	} else {
+		n.crossChecksDeclined++
 	}
 
 	n.cfg.Ledger.RecordDurable(uint64(n.rng), n.cfg.Ordinal, provenance.Witness(raftcheck.DurableState{
@@ -2237,6 +2292,11 @@ func lastLogIndex(es []raft.Entry) raft.Index {
 // DurabilityCrossChecks is how often this node's durability record was compared
 // against the engine's own account of what it holds.
 func (n *Replica) DurabilityCrossChecks() int { return n.crossChecks }
+
+// DurabilityCrossChecksDeclined counts completions whose precondition did not
+// hold, so nothing was compared. Quoted BESIDE DurabilityCrossChecks: the pair is
+// the coverage statement, and either number alone is not one.
+func (n *Replica) DurabilityCrossChecksDeclined() int { return n.crossChecksDeclined }
 
 // DurabilityAdoptions counts recoveries with no prior record to compare against.
 // Expected exactly once per replica at process start; a second one, or any at

@@ -3941,7 +3941,58 @@ completions the corrected guard declines to compare, so the check's reduced freq
 engine is a number rather than a silence. If (b) turns out to admit no comparisons at all on that
 engine, it has become (c) and the counter says so.
 
-**What I have NOT done:** touched the check, the guard, or the engine adapter. The lane is red.
+#### RULED (b) with (c)'s counter, and landed
+
+> **CORRECTING A PRECONDITION IS NOT THE SAME ACT AS LOOSENING AN ASSERTION**, and the record says
+> which one this is in those words, because the diff will look similar to someone reading it later.
+
+`sameDurableState` is **untouched**. It still demands exact equality and still catches a *different*
+entry at a recorded index. What changed is when it is entitled to run:
+
+```go
+durable := n.db.DurableSeq()
+if n.db.visibleSeq() == durable && n.ackedSeq == durable && len(n.pending) == 0 {
+```
+
+| conjunct | side | says |
+|---|---|---|
+| `visibleSeq() == durable` | engine | nothing applied is still unsynced |
+| `ackedSeq == durable` | driver | the fold has reached the engine's own durable point |
+| `len(pending) == 0` | driver | nothing this replica knows about is unaccounted for |
+
+**MEASURED, not asserted.** Over 30 seeds of the A7 shape on `engine/model`, the old guard and the new
+one produce the **identical pair — 75,630 comparisons and 218,596 declined.** The added conjuncts cost
+*nothing* where the premise is true, which is what a corrected precondition should look like.
+
+**(c)'s counter is attached.** `DurabilityCrossChecksDeclined` is surfaced through `store.Node` and
+`RaftResult` and quoted beside the comparisons, so a check running less often is a NUMBER rather than a
+silence — and if it ever turned out that no comparison is possible on the C++ engine, the pair would
+say so instead of the check quietly ceasing. `TestDurableRecordAgreesWithTheEngine` asserts the
+comparison count **non-zero on `engine/model`**, where the premise does hold, so a regression that
+silenced the check everywhere fails rather than passes quietly.
+
+*(That test also mislabelled its own seed count — printing the constant 300 while `RAFT_SEEDS` bounded
+it to 30. Fourth instance of a label that stopped describing its subject; it prints the bounded count
+now.)*
+
+#### The third instance, and what makes it different
+
+GF-57's second signature, third time in one session — but **the caller is a different kind of thing**:
+
+| | what encoded whose assumptions |
+|---|---|
+| BUG-059 | an **unexported path** encoding its single **caller's** preconditions (`restart` assumed a modelled crash) |
+| BUG-059's second layer | the same, one level down (`restartFrom` assumed an in-process predecessor) |
+| **this** | a **check** encoding its single **engine's** behaviour (`onDurable`'s guard assumed per-sequence sync) |
+
+Same shape, different kind of caller: the first two were reached by code, this one by a *dependency*.
+An assertion's precondition can be engine-specific in exactly the way a function's precondition can be
+caller-specific, and neither is visible until a second one arrives.
+
+#### The result
+
+The safety phase now runs clean on `engine/riftcgo` with restarts: **2357 operations, linearizable,
+3 restarts, zero uninvited exits, `start=recovered` on every one.**
 
 ---
 

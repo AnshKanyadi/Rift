@@ -328,6 +328,17 @@ func TestI2Numbers(t *testing.T) {
 	mLed.sample(nodes)
 	measured.LedTicks = mLed.total()
 	measured.Counters = m.Counters()
+	// FROM THE LOAD DRIVER, not from the recorder. `rec` accumulates across both
+	// phases, so its counters describe the safety run plus this one; this gate is
+	// about THIS window. The first version left Ops zero entirely and the gate
+	// said so -- "0 operations completed, wanted at least 100" -- which is the
+	// arm working on the harness that fed it.
+	measured.Ops = chaos.OpCounters{
+		Issued:    int(under.OK + under.Fail),
+		Completed: int(under.OK),
+		Failed:    int(under.Fail),
+		Keys:      mMix.Keys,
+	}
 	mMu.Lock()
 	killAt = mKillAt
 	mMu.Unlock()
@@ -493,11 +504,18 @@ func TestI2Numbers(t *testing.T) {
 	//	one, and absence is the reading that flatters.
 	report("T4 boundary cost",
 		"no regression beyond +5pp vs B5 at the same block size",
-		fmt.Sprintf("NOT MEASURED: this binary is built without the rift_cgo tag, so the engine "+
-			"is %s", engineNameOf(t, s)),
-		"UNMEASURED UNDER CHAOS, not passed. It requires a -tags=rift_cgo build (I1's "+
-			"configuration) and a native C++ harness for the same workload at the same block "+
-			"size. Carried as an obligation, never as a result.", false)
+		// THE REASON IS THE MISSING COMPARISON, NOT THE MISSING TAG.
+		//
+		// This string said "built without the rift_cgo tag" while the run above it
+		// printed engine/riftcgo -- a stale reason surviving the disappearance of
+		// its cause, which is GF-61 exactly, inside the line that exists to be
+		// honest about an unmeasured threshold.
+		fmt.Sprintf("NOT MEASURED: this run crossed the cgo boundary (engine %s) but never "+
+			"measured its COST -- there is no native C++ harness result for the same workload "+
+			"at the same block size to compare against", engineNameOf(t, s)),
+		"UNMEASURED UNDER CHAOS, not passed. The tag is present now; what is missing is the "+
+			"native-versus-cgo comparison B5 defines. Carried as an obligation, never as a "+
+			"result.", false)
 
 	fmt.Fprintf(&b, "  %d of 4 thresholds not met.\n", fail)
 	t.Log(b.String())
@@ -520,9 +538,19 @@ func TestI2Numbers(t *testing.T) {
 func engineNameOf(t *testing.T, s *chaos.Supervisor) string {
 	t.Helper()
 	for _, line := range strings.Split(s.Stderr(), "\n") {
-		if i := strings.Index(line, "engine="); i >= 0 {
-			return strings.TrimSpace(line[i+len("engine="):])
+		i := strings.Index(line, "engine=")
+		if i < 0 {
+			continue
 		}
+		// STOP AT THE FIRST FIELD. The startup line carries engine=, ledger= and
+		// start=, and taking the rest of the line reported the engine as
+		// "engine/riftcgo (the C++ engine), ledger=on, start=fresh" -- three facts
+		// under one label, and the other two change between phases.
+		rest := line[i+len("engine="):]
+		if j := strings.Index(rest, ", ledger="); j >= 0 {
+			rest = rest[:j]
+		}
+		return strings.TrimSpace(rest)
 	}
 	t.Fatal("no node reported which engine it opened; a number whose engine is unknown is unquotable")
 	return ""

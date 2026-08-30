@@ -323,8 +323,9 @@ func TestClientHistoryIsLinearizable(t *testing.T) {
 // 300 seeds, roughly three and a half times the measured seeds-to-detection.
 func TestDurableRecordAgreesWithTheEngine(t *testing.T) {
 	const seeds = 300
-	checks := 0
-	for seed := uint64(0); seed < boundSeeds(seeds); seed++ {
+	ran := boundSeeds(seeds)
+	checks, declined := 0, 0
+	for seed := uint64(0); seed < ran; seed++ {
 		p, err := hunt.MaterializeRaft(seed)
 		if err != nil {
 			t.Fatalf("seed %d: materialize: %v", seed, err)
@@ -334,11 +335,25 @@ func TestDurableRecordAgreesWithTheEngine(t *testing.T) {
 			t.Fatalf("seed %d: %v", seed, err)
 		}
 		checks += r.DurabilityCrossChecks
+		declined += r.DurabilityCrossChecksDeclined
 	}
-	t.Logf("%d comparisons of the durability record against the engine across %d seeds", checks, seeds)
+	// BOTH NUMBERS, because either alone is not a coverage statement (OPEN-I2-2).
+	// `engine/model` advances durability to exactly the sequence it is given, so
+	// the cross-check's premise holds here and comparisons must actually happen.
+	// On a whole-tail-sync engine the declined count carries how much of this
+	// coverage is given up, and if it were ever to reach everything, the pair
+	// would say so instead of the check quietly ceasing.
+	// THE SEEDS ACTUALLY RUN, not the constant. The first version printed the
+	// constant, so a RAFT_SEEDS-bounded run reported "across 300 seeds" having
+	// run thirty -- a label that stopped describing its subject, which this
+	// repository has now counted four times.
+	t.Logf("%d comparisons, %d declined, across %d seeds on engine/model", checks, declined, ran)
 	if checks == 0 {
 		t.Fatal("the durability record was never once compared against the engine, so this test " +
-			"asserts nothing and the oracle's one derived input is unverified")
+			"asserts nothing and the oracle's one derived input is unverified.\n" +
+			"      On engine/model the cross-check's precondition HOLDS, so a zero here is a " +
+			"regression that silenced the check everywhere -- which is exactly what OPEN-I2-2's " +
+			"correction must not do.")
 	}
 }
 
