@@ -2163,6 +2163,29 @@ func (r *Raft) campaign() {
 // what makes the round free.
 func (r *Raft) preCampaign() {
 	r.preVoting = true
+
+	// # A PRE-CANDIDATE HAS NO LEADER, and forgetting to say so deadlocks the
+	// # cluster (BUG-060)
+	//
+	// stepPreVote refuses a round when `r.leader != 0 && r.electionElapsed <
+	// r.randomizedElectionTimeout` -- "I have heard from a leader inside one
+	// election timeout", which is the refusal that stops a node that can send but
+	// not receive from disrupting a healthy cluster.
+	//
+	// This function resets electionElapsed. Without also clearing r.leader, the
+	// pair goes on reading as "I heard from the leader recently" when what
+	// actually happened is **I campaigned recently** -- and r.leader still names
+	// the dead one, because nothing else clears it.
+	//
+	//	SO EVERY NODE REFUSED EVERY PRE-VOTE. Three followers, each resetting its
+	//	own timer on its own campaign, each therefore inside its own window when
+	//	its peers' pre-votes arrived. No quorum, no term bump, no leader -- for as
+	//	long as the run lasted. Measured: 14 seconds at term 2, all three
+	//	followers, zero operations served.
+	//
+	// forceCampaign already clears it; a node only reaches forceCampaign by
+	// winning a pre-vote round, which is exactly what this made impossible.
+	r.leader = 0
 	r.electionElapsed = 0
 	for i := range r.preGranted {
 		r.preGranted[i] = false

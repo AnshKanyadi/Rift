@@ -436,13 +436,15 @@ func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64, srv 
 	runtime.ReadMemStats(&ms)
 
 	led, ticks, now := srv.Leadership()
+	role, term, vote, last, commit := srv.Status()
 	cur := 0
 	if now {
 		cur = 1
 	}
-	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d heap=%d goroutines=%d observed=%d persistent=%d\n",
+	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d heap=%d goroutines=%d observed=%d persistent=%d role=%s term=%d vote=%d last=%d commit=%d\n",
 		id, sent, dropped, wire, atomicLoad(received), admitted, served, refused, led, ticks, cur,
-		ms.HeapAlloc, runtime.NumGoroutine(), observedFlag, persistentFlag())
+		ms.HeapAlloc, runtime.NumGoroutine(), observedFlag, persistentFlag(),
+		role, term, vote, last, commit)
 	tmp := filepath.Join(dir, "counters.tmp")
 	if err := os.WriteFile(tmp, []byte(line), 0o644); err != nil {
 		return

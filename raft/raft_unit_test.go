@@ -507,3 +507,79 @@ func TestATermStaysGatedAfterALaterMarkClosesEmpty(t *testing.T) {
 		t.Fatal("nothing is withheld, so nothing is waiting for the term to reach the disk")
 	}
 }
+
+// BUG-060: a pre-candidate must stop naming the leader it is trying to replace.
+//
+// `stepPreVote` refuses a round when `r.leader != 0 && r.electionElapsed <
+// r.randomizedElectionTimeout` -- "I heard from a leader inside one election
+// timeout". `preCampaign` resets `electionElapsed`, so unless it ALSO clears
+// `r.leader` the pair reads as leader contact when what happened was this node's
+// own campaign. Three followers each doing that refuse each other forever, and no
+// cluster ever re-elects.
+func TestAPreCandidateStopsNamingTheDeadLeader(t *testing.T) {
+	r, err := New(Config{
+		ID: 1, Peers: []NodeID{1, 2, 3},
+		ElectionTimeout: 10, HeartbeatTimeout: 3, PreVote: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It has a leader and has heard from it.
+	r.leader = 3
+	r.electionElapsed = 0
+
+	for i := 0; i < 3*r.electionTimeout; i++ {
+		r.Tick()
+		if r.preVoting {
+			break
+		}
+	}
+	if !r.preVoting {
+		t.Fatalf("no pre-vote round started within %d ticks", 3*r.electionTimeout)
+	}
+	if got := r.Status().Leader; got != 0 {
+		t.Fatalf("a pre-candidate still names leader %d.\n"+
+			"      stepPreVote refuses while `leader != 0 && electionElapsed < timeout`, and\n"+
+			"      preCampaign has just reset electionElapsed -- so this node would refuse every\n"+
+			"      peer's pre-vote while campaigning itself. Three of them deadlock a cluster\n"+
+			"      permanently, with every safety oracle green. BUG-060.", got)
+	}
+}
+
+// And the consequence, asserted directly: a follower whose leader has gone silent
+// GRANTS a pre-vote from a peer with an equal log, even while campaigning itself.
+func TestAPreCandidateGrantsAPeersPreVote(t *testing.T) {
+	r, err := New(Config{
+		ID: 1, Peers: []NodeID{1, 2, 3},
+		ElectionTimeout: 10, HeartbeatTimeout: 3, PreVote: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.leader = 3
+	for i := 0; i < 3*r.electionTimeout && !r.preVoting; i++ {
+		r.Tick()
+	}
+	if !r.preVoting {
+		t.Fatal("no pre-vote round started")
+	}
+	// A peer campaigns with an equally up-to-date log, one term ahead.
+	r.Step(Message{
+		Type: MsgPreVote, From: 2, To: 1, Term: r.term + 1,
+		LastLogIndex: r.lastIndex(), LastLogTerm: r.lastTerm(),
+	})
+	var granted, found bool
+	for _, m := range r.Ready().Messages {
+		if m.Type == MsgPreVoteResp && m.To == 2 {
+			granted, found = m.Granted, true
+		}
+	}
+	if !found {
+		t.Fatal("no pre-vote response was produced")
+	}
+	if !granted {
+		t.Fatal("a node whose leader is gone REFUSED a peer's pre-vote while campaigning itself.\n" +
+			"      That is the deadlock: nobody grants, no quorum forms, the term never moves,\n" +
+			"      and the cluster serves nothing while every safety oracle stays green. BUG-060.")
+	}
+}

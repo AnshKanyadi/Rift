@@ -413,6 +413,8 @@ type nodeStat struct {
 	leader                         int
 	heap, goroutines               uint64
 	observed, persistent           int
+	role                           string
+	term, vote, last, commit       uint64
 }
 
 // readStats reads what each node says about itself. A node is the only party
@@ -428,10 +430,11 @@ func readStats(nodes []*chaos.Node) map[int]nodeStat {
 		var st nodeStat
 		n, _ := fmt.Sscanf(string(b),
 			"id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d "+
-				"ticks=%d leader=%d heap=%d goroutines=%d observed=%d persistent=%d",
+				"ticks=%d leader=%d heap=%d goroutines=%d observed=%d persistent=%d "+
+				"role=%s term=%d vote=%d last=%d commit=%d",
 			&st.id, &st.sent, &st.dropped, &st.wire, &st.recv, &st.admitted, &st.served,
 			&st.refused, &st.led, &st.ticks, &st.leader, &st.heap, &st.goroutines,
-			&st.observed, &st.persistent)
+			&st.observed, &st.persistent, &st.role, &st.term, &st.vote, &st.last, &st.commit)
 		if n >= 11 {
 			out[st.id] = st
 		}

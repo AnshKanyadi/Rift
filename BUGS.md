@@ -3996,6 +3996,68 @@ The safety phase now runs clean on `engine/riftcgo` with restarts: **2357 operat
 
 ---
 
+### BUG-060 — a pre-candidate kept naming the dead leader, so no cluster ever re-elected one
+
+| | |
+|---|---|
+| **Symptom** | After any leader kill, all three nodes sat at `follower`, `term=2`, forever. Ticks advanced normally, bytes flowed, requests were admitted, **and nothing was ever served again.** Measured: 14 seconds, zero operations. |
+| **Found by** | I2's `T1`/`T2`/`T3` all failing, then per-second per-node `role/term/vote/last/commit` sampling. |
+| **Reproduce** | kill the leader of a 3-node real-mode cluster under concurrent load. |
+| **Invariant that caught it** | **none, and that is the entry.** Every safety oracle is green over these runs — correctly, because a cluster that stops serving has violated nothing. |
+| **Mutant class** | none existed. This is a liveness defect and [GF-64] is the boundary it sits on. |
+
+`stepPreVote` refuses a round when `r.leader != 0 && r.electionElapsed < r.randomizedElectionTimeout`
+— *"I have heard from a leader inside one election timeout"*, which is the refusal that stops a node
+that can send but not receive from disrupting a healthy cluster. It is correct.
+
+**`preCampaign` reset `electionElapsed` without clearing `r.leader`.**
+
+> After that reset the pair reads as *"I heard from the leader recently"* when what actually happened
+> is **"I campaigned recently"** — and `r.leader` still names the node that just died, because nothing
+> else clears it.
+
+So every node refused every pre-vote: three followers, each resetting its own timer on its own
+campaign, each therefore inside its own window when its peers' requests arrived. No quorum, no term
+bump, no leader, indefinitely. `forceCampaign` already clears `r.leader` — and a node only reaches
+`forceCampaign` by winning a pre-vote round, which is exactly what this made impossible.
+
+**Fixed by one line: `r.leader = 0` in `preCampaign`.** After it, a kill at t=6s is followed by a new
+leader at term 3 within a second and full throughput by t=9s.
+
+#### Why eight phases of simulation did not find it
+
+**Nothing in this tree gates liveness** — [GF-64], recorded one session earlier and demonstrating
+itself immediately. The safety oracles ask whether a wrong thing happened; a cluster that elects
+nobody does no wrong thing. The linearizability checker is green over a history in which every
+operation timed out, because a timeout is *"may or may not have happened"* and every one of them may
+not have.
+
+> **THE DEFECT WAS VISIBLE ONLY AS A NUMBER NOBODY WAS COMPARING TO ANYTHING**, and it became visible
+> the moment §3.2 required a recovery threshold to be declared in advance.
+
+That is the second time this session that declaring a threshold beforehand found something no checker
+did ([GF-59] was the first), and the first time it found a defect in the **system** rather than in the
+harness.
+
+#### After the fix, and one measurement artifact it exposed
+
+| | before | after |
+|---|---|---|
+| chaos throughput | **37 ops/s**, drift **0.00** | **86 ops/s**, drift **0.86** |
+| T2 `≥ 87.5%` | 30.7% — NOT MET | **88.8% — MET** |
+| T3 `p99 ≤ 3E` | 2.005s (at the timeout) — NOT MET | **122ms — MET** |
+| T1 `R ≤ 2.5E` | never recovered from any kill | worst **R = 1.75s**, 0 never recovered — still NOT MET |
+
+**And a harness artifact surfaced underneath it.** The kill ticker fired at `K`, `2K`, `3K` while the
+window *was* `3K`, so the last kill landed on the boundary: `RecoveryAfter` found no slices past it and
+reported *"never recovered"*, which read as a defect. **A kill the window cannot observe recovering is
+not a kill the run can measure**, so the schedule now stops rather than the measurement being excused.
+
+**T1 still misses at 1.75s against 1.25s.** Reported at its value with the threshold beside it, never
+adjusted; the excess over what `E` predicts is unexplained and is the next thing to look at.
+
+---
+
 ### GF-63 — a risk named in one part of a repository does not generalise itself to a part added later
 
 `make test` is `go test -short ./...`, and every real `chaos/` test guards on `testing.Short()` —

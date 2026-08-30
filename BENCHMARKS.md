@@ -264,6 +264,78 @@ instrument and not this one.
 | `B-chaos` | sustained throughput and p99 while killing the leader every 10s, including mid-compaction | the headline resilience claim |
 | `B-recovery` | time to restored steady-state throughput after a leader kill | recovery, not just survival |
 
+## I2 — the full stack on the C++ engine, first measurement
+
+### Methodology
+
+Three `riftnode` processes on one machine over loopback TCP, one client process,
+closed-loop load. **Every number below is from the same binary and the same run.**
+
+| | |
+|---|---|
+| **engine** | `engine/riftcgo` — the C++ LSM through the cgo batch interface |
+| **workload** | YCSB-A shape (50/50 read/write), 512 keys, 8 concurrent workers |
+| **loop** | **closed** — each worker issues one operation and waits. Offered load falls when the cluster slows, so this measures a system at fixed concurrency, not at a fixed arrival rate. **A closed loop cannot produce a queue**, so it cannot show a latency collapse an open loop would find |
+| **warmup** | 2s, issued and discarded |
+| **window** | 15s |
+| **histogram** | project-owned log-linear, 128 sub-buckets, **measured** worst-case relative error < 0.79% against a keep-everything reference, and it errs HIGH |
+| **ledger** | **OFF** (`--unobserved`). BUG-055: the oracle retains 875 bytes per operation, forever. Measured here to make no difference — see below — but the configuration is stated because which one produced a number is not something a reader should infer |
+| **timing** | `Election` 10 ticks x 50ms tick = **E = 500ms**; chaos kill interval **K = 10s** |
+
+### Provenance
+
+- Commit: the one that adds this section. Hardware: Apple Silicon laptop, macOS 25.3.
+- Reproduce: `go test ./chaos/ -run TestI2Numbers -count=1` with the C++ archive built
+  (`make cpp-cgo` or `make chaos-smoke`).
+- **What would invalidate these:** a different tick interval (every threshold is computed from `E`), a
+  different worker count (closed loop), a different key count, or an engine built with sanitizers.
+
+### Results — steady state
+
+**Three runs, reported as a range rather than as a best.** Run-to-run variance on a shared laptop is
+real and quoting one run would imply a precision this does not have.
+
+| | |
+|---|---|
+| **throughput** | **97 – 119 ops/s** |
+| **p50** | **66.9 – 81.8 ms** |
+| **p99** | **101 – 123 ms** |
+| **p999** | **115 – 173 ms** |
+| drift across the window | 1.02 – 1.09 — flat in every run, so a mean describes each one |
+
+**For scale, `engine/model` under the identical harness: ~940 ops/s, p50 8 ms.** That ratio is **the
+real engine's cost, measured for the first time.** It is not a defect and not a regression against
+anything — there is no prior number for this configuration. It is the price of real fsyncs and a real
+LSM where the reference engine keeps versions in memory.
+
+**`ledger=on` and `ledger=OFF` were indistinguishable** at the chaos rate (86 and 96 ops/s across the same pair of phases). BUG-055's
+per-operation retention is real and was measured at 875 B/op; against a C++ engine doing real fsyncs it
+is **not the bottleneck.**
+
+### Results — under chaos (leader killed every K = 10s)
+
+| | |
+|---|---|
+| **throughput** | **86 ops/s, 88.8% of steady state** — threshold `(K - 2.5E)/K = 87.5%`, **MET** |
+| **p99** | **122 ms** — threshold `3E = 1.5s`, **MET** |
+| **p999** | **2.005 s** — threshold `5E = 2.5s`, MET, **but the 2s operation timeout CENSORS the tail at its own value**, so the true p999 is unknown and at least this |
+| **recovery** | **worst R = 1.75 s** over 2 measurable kills, 0 that never recovered — threshold `R ≤ 2.5E = 1.25s`, **NOT MET.** Reported at its value; the excess over what `E` predicts is unexplained |
+
+**These are post-BUG-060 numbers.** Before that one-line fix the same configuration produced **37 ops/s
+with drift 0.00** — throughput fell to zero after the first kill and stayed there, because no cluster
+ever re-elected a leader. Every safety oracle was green over those runs.
+
+### What these numbers are not
+
+- **Not a tuned result.** No batching beyond what the store already does, no group commit, no
+  compaction tuning. First measurement, not best.
+- **Not a claim about a cluster of machines.** Three processes on one host share a page cache, a disk
+  and a scheduler.
+- **Not comparable to the B5.5 boundary numbers.** Those measure the cgo crossing in isolation; this
+  measures the whole stack.
+- **T4 (boundary cost under chaos) is UNMEASURED, not passed.** It needs a native C++ harness result
+  for the same workload at the same block size. Carried as a named obligation.
+
 ## Results
 
-*(none yet)*
+*(none yet beyond the sections above)*

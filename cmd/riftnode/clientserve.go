@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"sync"
 	"sync/atomic"
 
 	"github.com/anshkanyadi/rift/clock"
@@ -95,6 +96,10 @@ type serving struct {
 	// one the claim names. So the node answers, from its own loop, and the
 	// runner aims.
 	isLeader atomic.Bool
+
+	statusMu                 sync.Mutex
+	role                     string
+	term, vote, last, commit uint64
 }
 
 type waiter struct {
@@ -127,6 +132,12 @@ func (s *serving) Handle(ev sim.Event, sch sim.Scheduler) {
 		s.ticks.Add(1)
 		led := s.st != nil && s.st.IsLeader()
 		s.isLeader.Store(led)
+		if s.st != nil {
+			role, term, vote, last, commit := s.st.RoleTerm()
+			s.statusMu.Lock()
+			s.role, s.term, s.vote, s.last, s.commit = role, term, vote, last, commit
+			s.statusMu.Unlock()
+		}
 		if led {
 			s.leaderTicks.Add(1)
 		}
@@ -223,4 +234,14 @@ func (s *serving) Counters() (admitted, served, refused uint64) {
 // of its most recent tick.
 func (s *serving) Leadership() (led, total uint64, now bool) {
 	return s.leaderTicks.Load(), s.ticks.Load(), s.isLeader.Load()
+}
+
+// Status is the raft state as of the last tick, sampled on the node loop.
+//
+// Real mode has no ledger to read and no trace to replay, so a node that cannot
+// say what it thinks it is leaves an investigator with nothing but throughput.
+func (s *serving) Status() (role string, term, vote, last, commit uint64) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	return s.role, s.term, s.vote, s.last, s.commit
 }

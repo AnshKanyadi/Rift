@@ -300,6 +300,15 @@ func TestI2Numbers(t *testing.T) {
 			case <-mStop:
 				return
 			case <-tk.C:
+				// A KILL THE WINDOW CANNOT OBSERVE RECOVERING IS NOT A KILL THIS
+				// RUN CAN MEASURE. The ticker fires at K, 2K, 3K and the window
+				// IS 3K, so the last one landed at the boundary: RecoveryAfter
+				// found no slices past it and reported "never recovered", which
+				// then read as a defect. It is an artifact of the schedule, so
+				// the schedule stops rather than the measurement being excused.
+				if time.Since(t0)+5*electionTimeout/2 > mMix.Window {
+					return
+				}
 				mLed.sample(nodes)
 				victim := nodes[0]
 				aimed := false

@@ -703,6 +703,17 @@ func (m *Node) sum(f func(*Replica) int) int {
 	return n
 }
 
+// RoleTerm reports the first range's raft role and term, for real-mode
+// diagnostics. Real mode has no ledger to read and no trace to replay, so a node
+// that cannot say what it thinks it is leaves an investigator with nothing.
+func (m *Node) RoleTerm() (role string, term, vote, last, commit uint64) {
+	if len(m.replicas) == 0 {
+		return "none", 0, 0, 0, 0
+	}
+	st := m.replicas[0].raft.Status()
+	return st.Role.String(), uint64(st.Term), uint64(st.Vote), uint64(st.Last), uint64(st.Commit)
+}
+
 // DurabilityCrossChecksDeclined counts completions whose precondition did not
 // hold. Quoted beside DurabilityCrossChecks; either alone is not a coverage
 // statement. See OPEN-I2-2.
