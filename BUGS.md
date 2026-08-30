@@ -3877,6 +3877,129 @@ claim than any green Track A ever reported.
 
 ---
 
+### OPEN-I2-2 — the continuous durability cross-check is not evaluable on the C++ engine, and I am not changing it
+
+**Status: OPEN, and this is a written case rather than a fix.** CLAUDE.md: *if you believe a checker
+is itself buggy, stop and make the written case first.*
+
+| | |
+|---|---|
+| **Symptom** | `panic: store: node 1 has made durable something its own record disagrees with: recorded 2 durable entries above the snapshot, engine returned 3`, on `engine/riftcgo`, repeatedly, in every long run. |
+| **Where** | `store.Replica.onDurable`, the continuous cross-check — *not* the recovery one BUG-059 fixed. |
+| **Not seen in** | `TestChaosRunWithRealCheckers` (15s). Seen in `TestI2Numbers` (34s) and `TestAFaultFreeClusterHoldsItsThroughput`. |
+
+#### The mechanism, exactly
+
+```
+1. driver applies writes at seqs 1..3 and schedules durability for seq 1
+2. the event fires -> realEngine.AdvanceDurable(1) -> DB.Sync()
+3. Sync() has NO per-sequence form: it makes 1, 2 AND 3 durable
+4. the driver folds only pending writes with w.seq <= 1 -> durLog holds 2 entries
+5. the guard `visibleSeq() == DurableSeq()` now passes, because the whole tail synced
+6. readDurable() returns 3 entries. The comparison fails.
+```
+
+`engine/model.AdvanceDurable(seq)` advances **exactly to `seq`**. `realEngine.AdvanceDurable(seq)`
+**ignores it** — which is not a bug, it is DESIGN-A0 §7's I1 idealization, recorded in advance and
+cited at the line in `engine_cgo.go`.
+
+#### Why this is not a defect in Rift, and not a defect in the check either
+
+The check's comment states its own premise: *"these are two independent derivations of one fact: what
+a crash would recover."* On a whole-tail-sync engine **that premise is false** — the engine's
+durability is driven by a different quantity than the driver's acknowledgement, so the two are not
+derivations of one fact any more.
+
+> **THE ENGINE HOLDS MORE THAN THE DRIVER ACKNOWLEDGED. That direction is SAFE** — extra durability
+> violates nothing, and the invariant that matters is *the engine never holds less than what was
+> acknowledged.* The assertion tests equality, which is strictly stronger and true only of an engine
+> with a per-sequence sync.
+
+**This is GF-57's second signature, third instance in one session.** A check whose precondition was
+the simulator's, now met by a caller that cannot satisfy it: `restart` (BUG-059), `restartFrom`
+(BUG-059's second layer), and now `onDurable`'s guard.
+
+#### The three candidate dispositions, and what each costs
+
+**(a) Relax the comparison to "engine ⊇ recorded".** *This is a weakening and I am not proposing it.*
+The check would stop catching an engine that holds a DIFFERENT entry at an index the driver recorded,
+which is the failure it exists for.
+
+**(b) Fix the GUARD, not the assertion.** `visibleSeq() == DurableSeq()` was written for an engine
+where those being equal implies the driver has been told about everything. Replace it with a
+precondition that is true on both: compare only when the driver's own pending set is empty **and** its
+last acknowledged sequence equals `DurableSeq()`. **This changes no assertion** — it corrects a
+precondition that was accidentally engine-specific. On `engine/model` it is equivalent; on the C++
+engine it fires less often, and how much less is measurable.
+
+**(c) Declare the check NOT EVALUABLE on a whole-tail-sync engine, skip it, and COUNT the skips** —
+the same answer given to `durRecorded` two layers up. Honest, visible, and it gives up the continuous
+check on the engine I2 actually ships, keeping only the recovery-time one.
+
+**My recommendation is (b), with (c)'s counter attached**: fix the precondition, and count how many
+completions the corrected guard declines to compare, so the check's reduced frequency on the C++
+engine is a number rather than a silence. If (b) turns out to admit no comparisons at all on that
+engine, it has become (c) and the counter says so.
+
+**What I have NOT done:** touched the check, the guard, or the engine adapter. The lane is red.
+
+---
+
+### GF-63 — a risk named in one part of a repository does not generalise itself to a part added later
+
+`make test` is `go test -short ./...`, and every real `chaos/` test guards on `testing.Short()` —
+correctly, because they fork processes. **Nothing ran them.** Seven skips: the process supervisor, the
+end-to-end cluster, the composition test and the chaos run.
+
+> **EVERY MECHANISM I2 BUILT WAS PROTECTED BY SOMEBODY REMEMBERING TO RUN IT.**
+
+**That is RISK-1's shape, in a tree written after RISK-1 was named.** The risk was identified, written
+down, and acted on — for the code that existed then. `chaos/`, `bench/`, `net/` and `cmd/riftnode` were
+added afterwards and inherited the *guard idiom* without the lane that makes the guard safe.
+
+> **A RISK DOES NOT GENERALISE ITSELF.** Naming it protects the code you were looking at; new code
+> arrives with the same shape and none of the protection, and the naming is what makes it feel
+> handled.
+
+Same structure as the mutant-suite gap ([GF-62]) and as the rule-about-one-test that did not extend to
+its siblings: **the practice existed and did not travel.** The fix is a lane, `make chaos-smoke`, in
+`make ci`.
+
+---
+
+### GF-64 — the boundary between what the safety oracles cover and what nothing does
+
+Recorded because an induction did not fire and the reason is structural rather than accidental.
+
+Removing `Recover()` from `store.restart()` leaves the machine `down` forever. **No safety oracle sees
+it at 16 seeds, and none would at any seed count**, because a crashed node that never returns is
+*legal*: election safety, log matching, leader completeness, state machine safety and
+persist-before-reply are all satisfied by a node that does nothing.
+
+> **THE MUTATION DEGRADES LIVENESS, AND THIS PROJECT HAS DELIBERATELY NEVER GATED LIVENESS.**
+> Progress has been *measured* — leader-ticks, operations completed, non-vacuity counters — and
+> measurement is not a gate. Nothing fails when progress stops for a legal reason.
+
+**What would catch it: a liveness assertion with a stated floor.** Concretely — a run in which every
+node was killed and restarted must end with every node having led or followed within N ticks of its
+restart, or the run reports a violation. The floor is the hard part and is exactly why this has not
+been built: **a liveness floor that is too tight fails on a slow machine, and one that is too loose
+fails nothing.** Every other checker here has a floor derived from the system's own parameters; a
+liveness floor would have to be derived from `Election` and `Heartbeat` the way I2's recovery
+threshold `R ≤ 2.5E` is, and then measured against real schedules before it could gate.
+
+**I do not want this closed casually and am not proposing to close it.** It is stated as the boundary:
+
+| | |
+|---|---|
+| **safety oracles cover** | anything that makes a *wrong* thing happen |
+| **nothing covers** | anything that makes the *right* thing stop happening |
+
+The chaos gate's `LedTicks == 0` arm is the only liveness assertion in the tree, it is binary, and it
+would not have caught this mutation either — a cluster with two live nodes still elects a leader.
+
+---
+
 ### GF-62 — the harness is the only code gating every claim that is not itself held to the regime it enforces
 
 Ansh's question, asked because eleven defects in one phase were **all in the harness**, and by GF-59's
@@ -3896,8 +4019,21 @@ harness is *partly* covered. Measured rather than asserted:
 | **`sim/checker/`** | **4** |
 | `hlc/` | 1 |
 
-**17 of 71 mutate harness code**, plus the blind lane's 22 patches over `tools/determinismcheck`. So
-`sim/` and its checkers are under the regime. What is not, entirely:
+**17 of 71 mutate harness code**, plus the blind lane's 22 patches over `tools/determinismcheck`.
+
+**Both halves of that number belong in the entry, and they say different things:**
+
+> **17 of 71 means THE PRACTICE EXISTS.** The harness is not exempt on principle; `sim/`, `sim/toy`,
+> `sim/hunt` and `sim/checker` are all mutation-tested, and the discipline was applied deliberately to
+> harness code when that code was written.
+>
+> **Zero over the new tree means THE PRACTICE DID NOT TRAVEL.** `chaos/`, `bench/`, `net/` and
+> `cmd/riftnode` were written after it was established and did not inherit it.
+
+That is [GF-63]'s shape at a second site, and the pair is the finding rather than either alone: this is
+not a repository that never adopted the discipline, it is one where the discipline stops at a date.
+
+What is not covered, entirely:
 
 > **`chaos/`, `bench/`, `net/`, `net/tcp/` and `cmd/riftnode` have ZERO mutants and appear in no lane
 > in `make ci`.**
@@ -4072,6 +4208,30 @@ gap survives a project. **HLC uncertainty is the substance of A6's correctness a
 mode has never exercised it. Configuration required: a real-mode clock with an injectable per-node
 offset and jump schedule, plus the uncertainty-envelope oracle reading a real-mode ledger. Reported at
 every run as `NO clock skew injected (HLC uncertainty unexercised)`.
+
+##### And this is the sixteenth-instance shape, a THIRD time, on one headline claim
+
+Snapshot isolation over hybrid logical clocks is a v1 headline. **Three separate mechanisms were
+supposed to exercise the clock machinery underneath it, and each was unexercised for a different
+reason:**
+
+| mechanism | why it did not exercise the claim |
+|---|---|
+| A6's seeded sweep | ran with **skew off** — the schedules existed and the sweep's shape did not select them |
+| the determinism pass over `hlc` | **`hlc` was never analysed at all** — BUG-048, A5's default inverted, nineteen packages matching nothing |
+| real mode | **cannot produce skew** — `clock.NewReal(250ms)` reads the machine clock; there is no drift, no jump, no per-node offset |
+
+> **THREE INDEPENDENT MECHANISMS, ONE CLAIM, THREE DIFFERENT REASONS FOR SILENCE.** Each was defensible
+> in isolation: a sweep shape, an analyser default, a real-mode clock that reads the wall. None of them
+> was a decision to leave the claim unexercised, and together that is exactly what they were.
+>
+> **THE PATTERN IS STRONGER THAN ANY OF THE THREE.** A claim covered by three mechanisms is not three
+> times as safe if nothing checks that any of them fired — and "covered by three mechanisms" is
+> precisely what made each individual gap easy to accept.
+
+This is the mechanism-declared-and-never-invoked class at claim scope rather than at code scope: the
+project has counted sixteen instances of a mechanism that existed and was never reached, and this is
+the first where **three of them stack under one headline**.
 
 **2. A crash discards unsynced writes.**
 *Sim:* `TestEnv` sync-loss windows and the modelled fsync; a crash discards everything above the

@@ -1,0 +1,18 @@
+# id: M103-scope-line-dropped
+# covering-test: TestWhatWasExercisedPrintsBesideTheNumbers
+# package: ./chaos/
+# expect: killed
+# power-covered-by: TestWhatWasExercisedPrintsBesideTheNumbers -- a report-generator defect with a deterministic covering test. GF-62: these three functions are pure Run-to-text, so a kill is a compile-and-run away and a rate floor over seeds would measure nothing a single deterministic case does not.
+# power-refutation: not a seeded property. Run.Gate and Run.Report take a constructed Run; there is no schedule to sweep, so the only sound instrument is a table-driven case, which is what the covering test is.
+# mutates: the exercised line stops naming what the run did not cover, so a narrowed run reports like a full one
+--- a/chaos/runner.go
++++ b/chaos/runner.go
+@@ -248,7 +248,7 @@
+ 		r.Counters.Restarts, r.Counters.ExitedOther)
+ 	// THE NARROWER CLAIM, IN THE OUTPUT LINE. Not an appendix: what a run did
+ 	// and did not exercise belongs where its numbers are read.
+-	fmt.Fprintf(w, "  exercised  %s\n", r.Exercised())
++	_ = r.Exercised()
+ 	fmt.Fprintf(w, "  client     issued=%d completed=%d failed=%d keys=%d\n",
+ 		r.Ops.Issued, r.Ops.Completed, r.Ops.Failed, r.Ops.Keys)
+ 	fmt.Fprintf(w, "  responses  unissued=%d conflicting=%d duplicate=%d late-after-timeout=%d\n",

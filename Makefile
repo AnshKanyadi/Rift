@@ -295,11 +295,34 @@ hygiene: ## No tracked .orig/.rej: patch leftovers are stale duplicate source
 lane-coverage: ## Every lane in the `ci` target actually runs in .github/workflows/ci.yml
 	sh scripts/lane-coverage.sh
 
+.PHONY: chaos-smoke
+chaos-smoke: ## I2's real-mode mechanisms, ACTUALLY RUN -- see GF-63
+# # Seven skips, and nobody noticed for a phase
+#
+# `make test` is `go test -short ./...`, and every real chaos test guards on
+# testing.Short(). So the process supervisor, the end-to-end cluster, the
+# composition test and the chaos run had NEVER EXECUTED IN THE PUSH LANE. They
+# ran because I ran them by hand.
+#
+#   EVERY MECHANISM I2 BUILT WAS PROTECTED BY SOMEBODY REMEMBERING TO RUN IT.
+#
+# The -short guards stay -- they are right for `go test ./...`, which must not
+# fork processes -- and this lane calls the same tests without it. That is the
+# whole fix: the guard was never wrong, the missing lane was.
+#
+# THE C++ ARCHIVE IS BUILT FIRST, because a restart schedule on engine/model is
+# not a crash (BUG-056) and the gate refuses it. A lane that silently ran the
+# non-persistent configuration would report a green about a different system.
+chaos-smoke:
+	$(CMAKE) -S $(CPP_SRC) -B $(CPP_BUILD)/test -DRIFT_SANITIZER=none
+	$(CMAKE) --build $(CPP_BUILD)/test --target rift_capi -j $(WORKERS)
+	$(GO) test -count=1 -timeout 600s ./chaos/ ./net/... ./bench/
+
 .PHONY: lint
 lint: vet fmt-check determinism tooling-only hatches hygiene ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power anchors blockers assertions provenance corpus corpus-reproduces bundle-seeds smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
+ci: build lint test race blind power anchors blockers assertions provenance corpus corpus-reproduces bundle-seeds smoke chaos-smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
 # cpp-ci joins at the I1 merge. Before it, the two tracks had two lane sets and
 # `make ci` ran one of them -- which is the lane-dependency shape: a target that
 # exists and is never reached is a lane nobody runs and everybody counts.

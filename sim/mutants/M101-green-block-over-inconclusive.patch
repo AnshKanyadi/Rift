@@ -1,0 +1,18 @@
+# id: M101-green-block-over-inconclusive
+# covering-test: TestAnInconclusiveIsNeitherGreenNorAViolation
+# package: ./chaos/
+# expect: killed
+# power-covered-by: TestAnInconclusiveIsNeitherGreenNorAViolation -- a report-generator defect with a deterministic covering test. GF-62: these three functions are pure Run-to-text, so a kill is a compile-and-run away and a rate floor over seeds would measure nothing a single deterministic case does not.
+# power-refutation: not a seeded property. Run.Gate and Run.Report take a constructed Run; there is no schedule to sweep, so the only sound instrument is a table-driven case, which is what the covering test is.
+# mutates: the green block prints over an unfinished checker, so an inconclusive reads as a pass
+--- a/chaos/runner.go
++++ b/chaos/runner.go
+@@ -336,7 +336,7 @@
+ 		return
+ 	}
+ 
+-	if unsure > 0 {
++	if false {
+ 		// AN INCONCLUSIVE IS NOT A GREEN, so the green block below does not
+ 		// print. A4 names the remedy too, and it is not a longer timeout:
+ 		// shrink the per-run history window, then partition harder per key.

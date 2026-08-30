@@ -1,0 +1,18 @@
+# id: M102-consumed-zero-banks-a-pass
+# covering-test: TestAGreenCheckerThatConsumedNothingFailsTheGate
+# package: ./chaos/
+# expect: killed
+# power-covered-by: TestAGreenCheckerThatConsumedNothingFailsTheGate -- a report-generator defect with a deterministic covering test. GF-62: these three functions are pure Run-to-text, so a kill is a compile-and-run away and a rate floor over seeds would measure nothing a single deterministic case does not.
+# power-refutation: not a seeded property. Run.Gate and Run.Report take a constructed Run; there is no schedule to sweep, so the only sound instrument is a table-driven case, which is what the covering test is.
+# mutates: a checker reporting green over zero operations passes the gate, which is the vacuous green this project has counted eleven times
+--- a/chaos/runner.go
++++ b/chaos/runner.go
+@@ -232,7 +232,7 @@
+ 	}
+ 	// And a checker that read nothing is not a checker that agreed.
+ 	for _, v := range r.Verdicts {
+-		if v.Outcome.CountsAsPass() && v.Consumed == 0 {
++		if false {
+ 			add("checker %q reported green having consumed 0 operations: a checker that examined "+
+ 				"nothing agrees with every hypothesis", v.Checker)
+ 		}
