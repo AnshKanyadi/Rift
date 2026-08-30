@@ -399,15 +399,28 @@ func (r Run) FaultLog() string {
 //	THE NUMBER IT BOUNDS. The engine line prints in the run's output; so does
 //	this, and for the same reason.
 func (r Run) Exercised() string {
+	// # A SCOPE LINE NAMES ITS OWN REASON (BUG-057's rule, applied here)
+	//
+	// The first version said PERSISTENCE NOT EXERCISED and nothing more. That was
+	// true, and true for a reason that had already evaporated: it was written
+	// while I believed the C++ archive would not link, and it stayed true
+	// afterwards because BUG-059 keeps restarts red. A line that survives the
+	// disappearance of its reason is the next BUG-057 -- a reduction nobody can
+	// re-examine, because the reduction does not say what it rests on.
+	//
+	//	A SCOPE LIMIT WITHOUT ITS CAUSE IS A CLAIM THAT CANNOT BE RETIRED. Nobody
+	//	can tell when it stops applying, so it never does.
 	var parts []string
 	switch {
 	case r.Counters.Restarts > 0 && r.Persistent:
 		parts = append(parts, "kills WITH restart on a persistent engine (recovery exercised)")
 	case r.Counters.Restarts > 0:
-		parts = append(parts, "restarts on a NON-PERSISTENT engine -- BUG-056: not a crash")
+		parts = append(parts,
+			"restarts on a NON-PERSISTENT engine -- BUG-056: a restart there is not a crash")
 	default:
 		parts = append(parts,
-			"kills WITHOUT restart, on a shrinking cluster; PERSISTENCE NOT EXERCISED")
+			"kills WITHOUT restart, on a shrinking cluster; PERSISTENCE NOT EXERCISED "+
+				"(cause: this run scheduled no restart)")
 	}
 	if r.Unobserved {
 		parts = append(parts, "ledger=OFF, so NO checker evidence")

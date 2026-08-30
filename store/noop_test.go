@@ -2,10 +2,16 @@ package store
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/engine"
+	"github.com/anshkanyadi/rift/engine/model"
 	"github.com/anshkanyadi/rift/hlc"
 	"github.com/anshkanyadi/rift/raft"
+	"github.com/anshkanyadi/rift/raftcheck"
 )
 
 // TestTheNoOpMatchesNoStateMachineArm is D-A7-6's FIRST proposition, induced.
@@ -187,4 +193,102 @@ func TestANoOpDoesNotAnswerAZeroIdentityClientOp(t *testing.T) {
 			"applied when what applied was the no-op (M75, DESIGN-A7 section 3a)",
 			before, len(n.inflight))
 	}
+}
+
+// BUG-059: the two constructors express two different intents and neither can
+// express the other's state.
+//
+// New over a populated engine is exactly what fired on the first real crash --
+// empty bookkeeping over a recovered log -- and a constructor that can express
+// that state will express it again.
+func TestNewRefusesAPopulatedEngineAndOpenRefusesAnEmptyOne(t *testing.T) {
+	// One engine, shared across both constructions, so the second sees what the
+	// first wrote. A fresh engine per call would make this test pass over two
+	// unrelated stores.
+	shared := model.New()
+	cfg := Config{
+		ID: 1, Peers: []raft.NodeID{1}, Ordinal: 0,
+		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
+		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
+		Nodes: 1, Clock: mustSimClock(t),
+		NewEngine: func() Engine { return shared },
+	}
+
+	if _, err := Open(cfg); err == nil {
+		t.Fatal("Open accepted an empty engine; that is the fresh-cluster case")
+	} else if !strings.Contains(err.Error(), "EMPTY") {
+		t.Fatalf("Open's refusal does not name the reason: %v", err)
+	}
+
+	if _, err := New(cfg); err != nil {
+		t.Fatalf("New over an empty engine: %v", err)
+	}
+
+	// New alone writes NOTHING: the first range's descriptor "is never written
+	// down -- it exists from the moment the machine does", and the range base
+	// goes to the ledger rather than the engine. So the engine is still empty
+	// here, and the first version of this test asserted otherwise and failed.
+	//
+	// A key is written directly to stand in for durable state. That is enough
+	// for a POLICY test -- the question is which constructor accepts which
+	// engine, not what the bytes mean -- and it avoids driving a full Ready
+	// round trip to produce one HardState.
+	// A key written directly stands in for durable state. This test is about
+	// WHICH CONSTRUCTOR ACCEPTS WHICH ENGINE, not about what the bytes mean, and
+	// TestOpenActuallyRunsRecovery below carries the other half.
+	b := &engine.Batch{}
+	b.Set([]byte("z/durable"), []byte("x"))
+	if _, err := shared.Apply(b, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(cfg); err == nil {
+		t.Fatal("New accepted an engine that already holds durable state")
+	} else if !strings.Contains(err.Error(), "durable state") {
+		t.Fatalf("New's refusal does not name the reason: %v", err)
+	}
+	if _, err := Open(cfg); err != nil {
+		t.Fatalf("Open over a populated engine: %v", err)
+	}
+}
+
+// Open must RUN recovery, not merely permit it.
+//
+// The policy test above cannot show this: over a stray key,
+// Open-with-Recover and Open-without-Recover produce identical machines, so
+// deleting the call breaks no assertion. That is GF-56's shape -- a check that
+// passes for a reason other than the one it names -- so the observable has to be
+// something only recovery reaches.
+//
+// A range descriptor on disk is that observable. `Recover` walks the descriptors
+// and rebuilds a replica per range; a hand-written descriptor with no
+// accompanying snapshot is INCOHERENT durable state, and the store says so by
+// name. The panic is therefore proof that recovery read the disk: a machine that
+// skipped it never looks, and returns cleanly over the same bytes.
+func TestOpenActuallyRunsRecovery(t *testing.T) {
+	shared := model.New()
+	cfg := Config{
+		ID: 1, Peers: []raft.NodeID{1}, Ordinal: 0,
+		Election: 10, Heartbeat: 3, SyncLatency: clock.Instant(1),
+		Transport: nullTransport{}, Ledger: raftcheck.NewLedger(1),
+		Nodes: 1, Clock: mustSimClock(t),
+		NewEngine: func() Engine { return shared },
+	}
+	second := RangeDescriptor{ID: 2, Start: []byte("m"), End: nil, Epoch: 1}
+	b := &engine.Batch{}
+	b.Set(keyDescOf(second.ID), encodeDesc(second))
+	if _, err := shared.Apply(b, true); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("Open returned cleanly over a descriptor on disk: recovery never read it, " +
+				"which is BUG-059 exactly")
+		}
+		if !strings.Contains(fmt.Sprint(r), "range 2") {
+			t.Fatalf("recovery ran but did not reach the on-disk range: %v", r)
+		}
+	}()
+	_, _ = Open(cfg)
 }

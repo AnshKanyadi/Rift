@@ -286,3 +286,46 @@ func main() {
 	}
 	return bin
 }
+
+// BUG-058's assertion, induced: the panic must fire on a planted double-count
+// and stay silent on the clean tree.
+//
+// A gate that has never been seen firing is a gate nobody has checked, and this
+// one guards a figure that was quoted inside a retraction.
+func TestTheKillCounterAssertsAtTheSource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts real processes")
+	}
+	bin := buildSleeper(t)
+	root := t.TempDir()
+	n := &chaos.Node{ID: 1, Addr: "127.0.0.1:0", Dir: filepath.Join(root, "n1")}
+	s := chaos.New(bin, []*chaos.Node{n})
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+
+	// SILENT ON THE CLEAN TREE. Real kills, real deliveries, and the invariant
+	// holds by construction: every delivery is preceded by a schedule.
+	for i := 0; i < 3; i++ {
+		delivered, err := s.Kill(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && !delivered {
+			t.Fatal("the first kill delivered nothing")
+		}
+		if i > 0 && delivered {
+			t.Fatal("a kill against an already-dead node reported delivery: that is the " +
+				"over-count BUG-058 is about")
+		}
+	}
+	c := s.Counters()
+	if c.Kills > c.KillsScheduled {
+		t.Fatalf("clean tree already violates the invariant: %+v", c)
+	}
+	if c.KillsScheduled != 3 || c.Kills != 1 {
+		t.Fatalf("scheduled=%d delivered=%d; three aims, one live node",
+			c.KillsScheduled, c.Kills)
+	}
+}

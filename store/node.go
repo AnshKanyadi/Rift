@@ -253,6 +253,34 @@ type Replica struct {
 	// family this repository has now found seven of.
 	crossChecks int
 
+	// durRecorded says this replica has OBSERVED at least one durability
+	// completion, so durHS/durSnap/durLog are a record rather than a zero value.
+	//
+	// # Zero is not "nothing" (BUG-059's second layer)
+	//
+	// `restartFrom` compares the driver's record against the engine's read-back,
+	// which is BUG-005's fix and is worth keeping. It carried an unnamed
+	// precondition: **the simulator's restart happens in the same process, so the
+	// record was written by the incarnation that is restarting.** A process that
+	// started fresh over durable state has no record at all -- and `HardState{}`
+	// is indistinguishable from a node that crashed before voting.
+	//
+	//	AN "UNSET" THAT LOOKS LIKE A LEGITIMATE VALUE IS THE AMBIGUITY THIS
+	//	PROJECT REFUSES EVERYWHERE ELSE -- clock.Wall's nonzero epoch,
+	//	sim.RespUnset, VerdictUnset. This is the same shape and it gets the same
+	//	answer: a separate bit, so "I have nothing to compare" and "I recorded
+	//	zero" are different states.
+	//
+	// The check is NOT made optional. It runs whenever a record exists, and when
+	// none does the read-back is ADOPTED and counted -- so a skipped comparison
+	// is visible in `DurabilityAdoptions` rather than silent.
+	durRecorded bool
+
+	// adoptions counts recoveries where no prior record existed to compare
+	// against. Nonzero is normal at process start and would be a defect after an
+	// in-process crash.
+	adoptions int
+
 	// writtenLast is the highest log index the driver has written to the engine.
 	// Recorded, because it is what says whether a Ready is a conflicting append
 	// and the engine is still holding a discarded suffix.
@@ -1450,6 +1478,7 @@ func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
 // that record moves forward, and it moves on the engine's completion rather than
 // on the driver's intention.
 func (n *Replica) fold(w pendingWrite) {
+	n.durRecorded = true
 	if w.hs != nil {
 		n.durHS = *w.hs
 	}
@@ -2044,9 +2073,18 @@ func (n *Replica) restartFrom(stR provenance.Reported[recovered]) {
 	// is a question worth stopping for: everything the ledger asserts about
 	// persistence rests on the first, and everything the cluster does after a
 	// crash rests on the second.
-	n.crossChecks++
-	if err := sameDurableState(n.durHS, n.durSnap, n.durLog, st); err != nil {
-		panic(fmt.Sprintf("store: node %d recovered a state its own durability record disagrees with: %v", n.cfg.ID, err))
+	// COMPARED WHEN THERE IS SOMETHING TO COMPARE, ADOPTED OTHERWISE, AND THE
+	// DIFFERENCE IS COUNTED. See durRecorded: a process that started fresh over
+	// durable state has no record, and zero is not the same as none.
+	if n.durRecorded {
+		n.crossChecks++
+		if err := sameDurableState(n.durHS, n.durSnap, n.durLog, st); err != nil {
+			panic(fmt.Sprintf("store: node %d recovered a state its own durability record disagrees with: %v", n.cfg.ID, err))
+		}
+	} else {
+		n.adoptions++
+		n.durHS, n.durSnap, n.durLog = st.hs, st.snap, st.entries
+		n.durRecorded = true
 	}
 
 	r, err := raft.Restore(raft.Config{
@@ -2199,6 +2237,11 @@ func lastLogIndex(es []raft.Entry) raft.Index {
 // DurabilityCrossChecks is how often this node's durability record was compared
 // against the engine's own account of what it holds.
 func (n *Replica) DurabilityCrossChecks() int { return n.crossChecks }
+
+// DurabilityAdoptions counts recoveries with no prior record to compare against.
+// Expected exactly once per replica at process start; a second one, or any at
+// all after an in-process crash, means a record went missing.
+func (n *Replica) DurabilityAdoptions() int { return n.adoptions }
 
 // StaleEpochDrops is how many completions from a dead incarnation this node
 // refused.

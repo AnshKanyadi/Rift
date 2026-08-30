@@ -3799,9 +3799,235 @@ say that.
 > follows a modelled crash.** A process that died for real needs "reconcile with what the engine
 > holds" without "pretend to crash first", and that operation has never had to exist.
 
-`store/` is signed, so the shape of the fix is a ruling. Until then, restart-bearing chaos on the C++
-engine cannot run, and `chaos/`'s composition test is RED with this panic rather than with a green
-that hides it.
+#### Ruled and fixed: the defect is the seam, not the caller
+
+`restart()` conflated a **state transition** ("crash, then come back") with a **procedure** ("read what
+is durable and rebuild bookkeeping from it"). Real mode needs only the second.
+
+Split, with no `skipCrash` flag — *that keeps two meanings in one function and signs the seam a second
+time.* See [GF-57's second signature] for the general form.
+
+- `Recover()` — exported, one definition, legal after a modelled crash and at process start.
+- `restart()` — the transition, which now calls it.
+- `New()` — the fresh-cluster path, and it **fails against a non-empty engine**.
+- `Open()` — the recover path, and it **fails against an empty one**.
+
+**The bad state is unrepresentable rather than avoided.** Opening a store over durable state without
+recovering is what fired here, and a constructor that can express it will express it again.
+
+**Induced:** `New` accepting a populated engine, `Open` accepting an empty one, `engineHasState`
+returning false, and `Open` skipping `Recover` all fail the suite. The fourth needed a real
+observable — over a stray key, Open-with-Recover and Open-without are identical machines, so the first
+version of that test passed for a reason other than the one it named (GF-56 again, caught this time
+by inducing rather than by reading).
+
+**One induction did NOT fire, and it is recorded rather than smoothed:** removing `Recover()` from
+`restart()` is not caught by the safety oracles at 16 seeds. The reason is structural — it leaves the
+machine `down` forever, which degrades **liveness**, and the oracles are safety oracles. A crashed node
+that never returns is legal. That is precisely the shape [GF-62] is about: a harness mutation with no
+check to kill it.
+
+`cmd/riftnode` now chooses `New` or `Open` from the engine's own state and prints which
+(`start=fresh` / `start=recovered`), because a node that recovered and a node that started fresh are
+different runs.
+
+#### A second layer, found by implementing the first
+
+With recovery running, the next assertion fired:
+
+```
+store: node 1 recovered a state its own durability record disagrees with:
+hard state recorded {Term:0 Vote:0}, engine returned {Term:1 Vote:1}
+```
+
+`restartFrom` compares the driver's durability record against the engine's read-back — BUG-005's fix,
+and worth keeping. **It carried the same unnamed precondition one level down:** the simulator's restart
+happens in the same process, so the record was written by the incarnation that is restarting. A
+process that started fresh over durable state has **no record at all**, and `HardState{}` is
+indistinguishable from a node that crashed before voting.
+
+> **AN "UNSET" THAT LOOKS LIKE A LEGITIMATE VALUE IS THE AMBIGUITY THIS PROJECT REFUSES EVERYWHERE
+> ELSE** — `clock.Wall`'s nonzero epoch, `sim.RespUnset`, `VerdictUnset`. Same shape, same answer: a
+> separate bit, so *"I have nothing to compare"* and *"I recorded zero"* are different states.
+
+**The check is not made optional.** It runs whenever a record exists; when none does, the read-back is
+**adopted and counted**, so a skipped comparison shows up in `DurabilityAdoptions` rather than
+vanishing. One adoption per replica at process start is expected; a second, or any after an in-process
+crash, means a record went missing.
+
+#### The result
+
+A 3-node cluster on `engine/riftcgo`, **killed and restarted four times, recovering each time, zero
+uninvited exits** — the first genuine crash-recovery run in the project. Then with a client and the
+checkers:
+
+```
+processes  started=6 kills=3/3-scheduled restarts=3 exited-uninvited=0
+exercised  kills WITH restart on a persistent engine (recovery exercised);
+           NO clock skew injected; unsynced-write loss NOT asserted
+cluster    leader-kills=3 of 3 kills, led-ticks=140
+verdicts   1 checker(s), 0 violation(s), 0 inconclusive
+  pass       linearizability   consumed=653   every key linearizable over 653 operations
+```
+
+**This one is on a persistent engine with real recovery, and its kill figures come from delivery
+rather than intent.** It is the first chaos green in this phase that is not retracted — and it carries
+the same caveat every chaos green carries: no seed, a schedule that cannot be replayed, and a weaker
+claim than any green Track A ever reported.
+
+---
+
+### GF-62 — the harness is the only code gating every claim that is not itself held to the regime it enforces
+
+Ansh's question, asked because eleven defects in one phase were **all in the harness**, and by GF-59's
+own count most were found by reading rather than by a check.
+
+**First, the claim I was about to make is too strong, and GF-61 was written about exactly this.** The
+harness is *partly* covered. Measured rather than asserted:
+
+| what the 71 mutants actually modify | count |
+|---|---|
+| `store/` | 30 |
+| `raft/` | 19 |
+| `kv/` | 8 |
+| **`sim/`** | **5** |
+| **`sim/toy/`** | **4** |
+| **`sim/hunt/`** | **4** |
+| **`sim/checker/`** | **4** |
+| `hlc/` | 1 |
+
+**17 of 71 mutate harness code**, plus the blind lane's 22 patches over `tools/determinismcheck`. So
+`sim/` and its checkers are under the regime. What is not, entirely:
+
+> **`chaos/`, `bench/`, `net/`, `net/tcp/` and `cmd/riftnode` have ZERO mutants and appear in no lane
+> in `make ci`.**
+
+**And it is worse than "no mutants".** `make test` is `go test -short ./...`, and every real `chaos/`
+test guards on `testing.Short()`. Measured: **7 skips, and the 40 that report are the unit-level ones.**
+The process supervisor, the end-to-end cluster, the composition test and the chaos run **have never
+executed in the push lane at all.** They ran because I ran them by hand.
+
+> **THE CODE THAT GATES EVERY REAL-MODE CLAIM IS NOT IN THE LANE THAT GATES EVERY PUSH.** That is not a
+> gap in the mutation regime; it is a gap one level below it, and no amount of mutants fixes it.
+
+#### What it would take, in dependency order
+
+**1. Get the code into a lane at all** — the precondition for everything else.
+A `chaos-smoke` target: one 3-node cluster, a handful of operations, one leader kill, gate and
+verdicts, ~15 seconds. The `-short` guards stay (they are right for `go test ./...`), and the lane
+calls the tests without `-short`. **Cost: low. Blocked on nothing.** Without this, a mutant in
+`chaos/` has no covering test to be scored against, and `scripts/mutants.sh` would report it as
+uncovered rather than as killed.
+
+**2. Give the harness the thing `sim/toy` already has: a calibration protocol.**
+`sim/hunt`'s mutants work because `sim/toy` exists — a deliberately-broken protocol the harness is
+pointed at, so "did the harness notice?" is answerable. `chaos/` has no equivalent: there is no
+fixture cluster with a planted defect, so a mutant in the runner has nothing to fail against.
+**What it needs:** a `chaos/fixture` node binary that can be told to violate on cue — return a stale
+read, answer a request twice, exit uninvited, report a leader it is not. Every existing gate arm then
+has a positive control, and the arms I induced by hand-editing `runner.go` become permanent.
+**Cost: medium.** This is the substantive piece of work.
+
+**3. Then the mutants, and the classes are already known** — every one of this phase's eleven defects
+is a mutant class the suite does not have:
+
+| mutant | the defect it reproduces |
+|---|---|
+| count a kill on intent rather than delivery | BUG-058 |
+| restart without waiting for the predecessor | BUG-054 |
+| a per-node kill flag instead of per-launch | BUG-053 |
+| post an event without stamping it | BUG-052 |
+| drop a frame at a type assertion | BUG-051 |
+| key the transport by id rather than ordinal | BUG-050 |
+| generate synthetic traffic the counters can see | BUG-049 |
+| construct a store over a populated engine | BUG-059 |
+| report a verdict from an unobserved run | the ledger arm |
+| average a window whose ends differ 4x | BUG-055's baseline |
+
+**A2 already requires this.** *"If no existing mutant class would have caught it, a new mutant is added
+in the same PR as the fix."* Ten of the eleven have no mutant, because they are in packages the suite
+does not reach — so the amendment has been quietly inapplicable to a third of the tree.
+
+**4. The report generators are the easiest and the highest-yield.**
+`Run.Report`, `Run.Gate` and `Run.Exercised` are pure functions from a `Run` to text and a verdict
+list. They need no cluster, no processes and no fixture: table-driven mutants against constructed
+`Run` values, at unit-test speed. **All three of GF-59's defects — the 728%, the contradicting
+conclusion, the padding slices — are in exactly this surface.** Cost: low, and it would have caught
+three of eleven.
+
+#### The honest summary
+
+> The regime's absence is **not why the defects existed** — most are wiring errors in code written this
+> phase. It is why **finding them depended on my reading the output**, which is a detection mechanism
+> with no floor, no kill-time, and no way to notice when it degrades.
+>
+> **Every other checker in this repository has a measured sensitivity. The one reading the chaos
+> reports does not.**
+
+Order: (1) and (4) are cheap and independent; (2) is the real work; (3) follows (2) and closes A2's
+gap. **This is a recommendation, not a plan** — the scoping is Ansh's.
+
+---
+
+### GF-61 — no claim is narrowed, deferred, or scoped on a paraphrased error
+
+BUG-057's rule, and it is **mechanical rather than a matter of more care.** Six instances in
+BUG-048's reading tally is past the point where reading harder is the fix.
+
+> **THE VERBATIM OUTPUT GOES IN THE REPORT BESIDE THE REDUCTION.** If a claim is being made smaller
+> because something failed, the thing that failed is quoted, not summarised.
+
+**The cost of the paraphrase is asymmetric, which is why this is worth a rule.** A paraphrased error
+that leads to *more* work is self-correcting: the work happens, the error is met again, and it gets
+read. A paraphrased error that leads to *less* work is not: the claim shrinks, nobody returns to it,
+and the premise is never tested.
+
+> **BUG-057 NARROWED THE PHASE'S CLAIMS AND THEN NARROWED ANSH'S RULING**, which was made on my report
+> of a link failure nobody had read. A summary that reaches the architect has the authority of the
+> thing it summarised and none of its checkability.
+
+**Two corollaries, both now applied:**
+
+1. **A scope line names its own cause.** `PERSISTENCE NOT EXERCISED` was true, and true for a reason
+   that had already evaporated — it was written under the link-failure belief and stayed true because
+   BUG-059 keeps restarts red. *A scope limit without its cause is a claim that cannot be retired:
+   nobody can tell when it stops applying, so it never does.* `Run.Exercised()` now prints the cause.
+2. **A refusal quotes what it refused.** `chaos.buildNode` prints the archive path it looked for when
+   it falls back to `engine/model`, rather than reporting the fallback alone.
+
+---
+
+### GF-57's second signature — an unexported path with one caller encodes that caller's preconditions invisibly
+
+GF-57 recorded a seam signed with no caller. This is the same seam type with **one** caller, and it is
+the more common shape.
+
+`store.Node.restart()` had exactly one caller — the simulator, whose restart always follows a modelled
+crash. So `if !m.down { m.crash() }` was not a step in a procedure; it was **that caller's precondition,
+written into the body where nothing names it as one.** The function meant "crash, then come back", and
+the half real mode needed had no name at all.
+
+> **WHEN A SECOND CALLER ARRIVES, THE PRECONDITION IS PROMOTED TO AN EXPLICIT ARGUMENT OR THE PATH
+> SPLITS. IT IS NEVER SATISFIED BY THE NEW CALLER PRETENDING TO BE THE OLD ONE.**
+
+`cmd/riftnode` pretending to be the old one is exactly what BUG-059 was: it called `New`, the only
+exported door, and got fresh bookkeeping over a populated engine.
+
+**And the tempting fix is the one that must not be taken.** A `skipCrash bool` would have been three
+characters of diff and would have kept two meanings in one function — *signing the seam a second
+time*, now with a flag that says "this caller is different" instead of a type that says what each
+caller is doing. The split gives recovery one definition, exported, legal after a modelled crash and
+at process start, with both callers going through it.
+
+| | before | after |
+|---|---|---|
+| state transition | `restart()` — crash, advance epoch, and also recover | `restart()` — crash, advance epoch, then `Recover()` |
+| procedure | *unnamed, inside `restart`* | `Recover()` — exported, one definition |
+| fresh cluster | `New()` — and it accepted a populated engine | `New()` — **fails** on a populated engine |
+| process start over durable state | *no door* | `Open()` — **fails** on an empty engine, then `Recover()`s |
+
+**The bad state is unrepresentable rather than avoided.** "I meant fresh" and "I meant recover" cannot
+produce the same call, which is the ledger's `Unobserved` ruling applied to a constructor.
 
 ---
 
@@ -3832,6 +4058,39 @@ tree.
 **Two were holes; both now print in `Run.Exercised()` beside the numbers**, not in an appendix. The
 mailbox row is a third, weaker case and is recorded rather than closed: it is enforced by two
 mechanisms neither of which is the analyser that enforces the rest.
+
+#### The three scope-limited rows, in full
+
+**1. Clock skew bounded by `maxOffset`.**
+*Sim:* per-node drift and jump schedules, bounded by `maxOffset` in safety runs and deliberately
+exceeding it in `TestEnvelopeExperiment`; the uncertainty-envelope oracle reads the result.
+*Real mode:* **none.** `cmd/riftnode` constructs `clock.NewReal(250ms)` and reads the machine's clock.
+There is no drift, no jump, and no per-node offset, so every node's `Wall` agrees to within whatever
+the OS provides — and the HLC's uncertainty interval is never wide enough to force a restart.
+*Disposition:* **NAMED OBLIGATION, alongside T4** — not a print, because a print nobody owns is how a
+gap survives a project. **HLC uncertainty is the substance of A6's correctness argument**, and real
+mode has never exercised it. Configuration required: a real-mode clock with an injectable per-node
+offset and jump schedule, plus the uncertainty-envelope oracle reading a real-mode ledger. Reported at
+every run as `NO clock skew injected (HLC uncertainty unexercised)`.
+
+**2. A crash discards unsynced writes.**
+*Sim:* `TestEnv` sync-loss windows and the modelled fsync; a crash discards everything above the
+durable watermark, and storage recovery asserts the acknowledged-synced prefix.
+*Real mode:* **not asserted.** A `SIGKILL` discards whatever the OS and the engine had not flushed,
+which is the real behaviour — but nothing compares what came back against what was acknowledged, so
+the property is *exercised and unchecked* rather than tested.
+*Disposition:* **scope limit, printed** as `unsynced-write loss NOT asserted`. Closing it needs the
+client's acknowledged-write set compared against post-restart reads, which is a real-mode storage
+oracle that does not exist yet.
+
+**3. The mailbox rule: no core state touched off the node loop.**
+*Sim:* unrepresentable — one goroutine, one loop.
+*Real mode:* enforced by **package boundaries and the `-race` lane**, not by `determinismcheck`, which
+excludes `node/` by design (Amendment A5: code that needs a goroutine is orchestration and lives
+outside the boundary).
+*Disposition:* **recorded, not closed.** It is the one row where the enforcing mechanism differs from
+the one that enforces every other determinism rule, and `-race` finds a violation only on a schedule
+that actually interleaves. Weaker than the rest of the table by construction.
 
 #### And into the vacuous-green register: "byte-identical" needs a noun
 

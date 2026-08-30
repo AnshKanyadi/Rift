@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/anshkanyadi/rift/clock"
+	"github.com/anshkanyadi/rift/engine"
 	"github.com/anshkanyadi/rift/net/tcp"
 	"github.com/anshkanyadi/rift/node"
 	"github.com/anshkanyadi/rift/raft"
@@ -123,6 +124,7 @@ func main() {
 		all[k] = v
 	}
 
+	var startMode string
 	observedFlag := 1
 	if *unobserved {
 		observedFlag = 0
@@ -154,7 +156,7 @@ func main() {
 
 	clk := clock.NewReal(maxOffset)
 	hist := &sim.History{}
-	st, err := store.New(store.Config{
+	scfg := store.Config{
 		ID: raft.NodeID(*id), Peers: peerIDs, Ordinal: *id - 1,
 		Nodes:     len(peerIDs),
 		Election:  10,
@@ -185,7 +187,28 @@ func main() {
 		History:   hist,
 		NewEngine: engineFor(*dir),
 		PreVote:   true,
-	})
+	}
+
+	// FRESH OR RECOVER, and the choice is made from the engine rather than
+	// assumed. BUG-059: this called store.New unconditionally, so a restarted
+	// node built empty bookkeeping over an engine that already held a recovered
+	// log, and store/'s durability cross-check objected on the first real crash.
+	//
+	// store.New now refuses a non-empty engine and store.Open refuses an empty
+	// one, so the wrong call cannot be made silently -- and this switch says
+	// which one it made, because a node that RECOVERED and a node that started
+	// FRESH are different runs.
+	var st *store.Node
+	if hasState, herr := storeHasState(*dir); herr != nil {
+		fmt.Fprintf(os.Stderr, "riftnode: inspecting %s: %v\n", *dir, herr)
+		os.Exit(1)
+	} else if hasState {
+		st, err = store.Open(scfg)
+		startMode = "recovered"
+	} else {
+		st, err = store.New(scfg)
+		startMode = "fresh"
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "riftnode: store: %v\n", err)
 		os.Exit(1)
@@ -262,8 +285,8 @@ func main() {
 	// from a cluster that was not producing checker evidence is not a verified
 	// result, and the only thing standing between those two readings is this
 	// line.
-	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s, ledger=%s\n",
-		*id, *addr, *dir, len(addrs), EngineName, ledgerName(*unobserved))
+	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s, ledger=%s, start=%s\n",
+		*id, *addr, *dir, len(addrs), EngineName, ledgerName(*unobserved), startMode)
 	// A readiness marker the supervisor can wait on. Waiting on a sleep instead
 	// is how a test becomes flaky on a loaded machine, and how a cluster that
 	// never came up reports as one that came up slowly.
@@ -477,4 +500,25 @@ func persistentFlag() int {
 		return 1
 	}
 	return 0
+}
+
+// storeHasState reports whether this node's directory already holds engine
+// state, which decides New versus Open.
+//
+// It asks the ENGINE rather than looking for files, because "what counts as
+// state" is the engine's answer and not this file's: engine/model keeps none on
+// disk at all, and the C++ engine's layout is its own business.
+func storeHasState(dir string) (bool, error) {
+	mk := engineFor(dir)
+	if mk == nil {
+		// engine/model: purely in memory, so a restart never has state. That is
+		// BUG-056's whole problem, and the gate refuses restart schedules on it
+		// rather than this line pretending otherwise.
+		return false, nil
+	}
+	db := mk()
+	defer db.Close()
+	it := db.NewIter(engine.IterOptions{})
+	defer func() { _ = it.Close() }()
+	return it.First(), nil
 }

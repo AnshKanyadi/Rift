@@ -49,19 +49,26 @@ type Node struct {
 
 // New builds a machine hosting one replica of the initial range, which covers
 // the whole key space.
+//
+// # It REFUSES a non-empty engine (BUG-059)
+//
+// Opening a store over durable state without recovering is exactly what fired
+// on the first real crash: `cmd/riftnode` called this on every start, so a
+// restarted node built empty bookkeeping over an engine that already held a
+// recovered log, and the durability cross-check objected -- correctly.
+//
+//	A CONSTRUCTOR THAT CAN EXPRESS THAT STATE WILL EXPRESS IT AGAIN. So it
+//	cannot: New is the FRESH-CLUSTER path and says so by failing, and Open is the
+//	recover path and fails on an empty engine for the mirror reason. "I meant
+//	fresh" and "I meant recover" must not be the same call.
 func New(cfg Config) (*Node, error) {
-	if cfg.Transport == nil {
-		return nil, fmt.Errorf("store: node %d needs a transport", cfg.ID)
-	}
-	if err := cfg.checkLedger(); err != nil {
+	m, err := newMachine(cfg)
+	if err != nil {
 		return nil, err
 	}
-	if cfg.SyncLatency <= 0 {
-		return nil, fmt.Errorf("store: node %d has no modelled fsync duration", cfg.ID)
-	}
-	m := &Node{
-		cfg: cfg, db: cfg.Engine(), epoch: sim.NewEpochGuard(),
-		nextRange: RangeID(2 + cfg.Ordinal),
+	if m.engineHasState() {
+		return nil, fmt.Errorf("store: node %d called New over an engine that already holds "+
+			"durable state; New is the fresh-cluster path and Open is the recover path", cfg.ID)
 	}
 	first := FirstRangeDescriptor()
 	r, err := m.newReplicaFor(first)
@@ -77,6 +84,57 @@ func New(cfg Config) (*Node, error) {
 		provenance.Witness(encodeMachine(first, hlc.Timestamp{}, nil)),
 		provenance.Witness(raft.EncodeConfiguration(initialConf(cfg))))
 	return m, nil
+}
+
+// Open builds a machine over an engine that already holds durable state, and
+// recovers it.
+//
+// This is the process-start half of what `restart` used to do alone. It runs the
+// SAME Recover, because there is one definition of "read what is durable and
+// rebuild bookkeeping from it" and both callers go through it.
+//
+// It does NOT record the first range's birth state: that constant describes a
+// range being born, and this range was born in an earlier incarnation. A ledger
+// told otherwise would hold a fact that is false.
+func Open(cfg Config) (*Node, error) {
+	m, err := newMachine(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if !m.engineHasState() {
+		return nil, fmt.Errorf("store: node %d called Open over an EMPTY engine; Open is the "+
+			"recover path and New is the fresh-cluster path", cfg.ID)
+	}
+	m.Recover()
+	return m, nil
+}
+
+// newMachine is the shared construction and validation, with no policy about
+// whether the engine is expected to be empty.
+func newMachine(cfg Config) (*Node, error) {
+	if cfg.Transport == nil {
+		return nil, fmt.Errorf("store: node %d needs a transport", cfg.ID)
+	}
+	if err := cfg.checkLedger(); err != nil {
+		return nil, err
+	}
+	if cfg.SyncLatency <= 0 {
+		return nil, fmt.Errorf("store: node %d has no modelled fsync duration", cfg.ID)
+	}
+	return &Node{
+		cfg: cfg, db: cfg.Engine(), epoch: sim.NewEpochGuard(),
+		nextRange: RangeID(2 + cfg.Ordinal),
+	}, nil
+}
+
+// engineHasState reports whether this engine holds anything at all.
+//
+// Any key is enough: the store owns the whole keyspace it writes, so one key
+// means a previous incarnation got as far as writing something down.
+func (m *Node) engineHasState() bool {
+	it := m.db.NewIter(engine.IterOptions{})
+	defer func() { _ = it.Close() }()
+	return it.First()
 }
 
 // initialConf is the membership every machine starts the first range with. It is
@@ -366,7 +424,26 @@ func (m *Node) restart() {
 		m.crash()
 	}
 	m.epoch.Advance()
+	m.Recover()
+}
 
+// Recover reads what is durable and rebuilds this machine's bookkeeping from it.
+//
+// # It is a PROCEDURE, and `restart` is a state transition (BUG-059)
+//
+// These were one function. `restart` meant both "crash, then come back" and
+// "read what is durable and rebuild from it", and real mode needs only the
+// second: a process that died for real does not need to be told to crash, and
+// telling it to would run `Crash()` on an engine where a modelled crash discards
+// nothing while reporting success.
+//
+//	THE FIX IS NOT A skipCrash FLAG. That keeps two meanings in one function and
+//	signs the seam a second time. The transition calls the procedure; the
+//	procedure has one definition; both callers go through it.
+//
+// Legal after a modelled crash (via `restart`) and at process start (via
+// `Open`), and identical in both.
+func (m *Node) Recover() {
 	// Recovery rebuilds the machine's ranges from what the engine holds, not
 	// from what it had in memory: a range created by a split before the crash is
 	// on disk with its descriptor, and a machine that recovered only the ranges
