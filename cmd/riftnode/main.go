@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync/atomic"
 	"syscall"
@@ -385,13 +386,20 @@ func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64, srv 
 	// changes a verdict. Anything the GATE reads comes from the client's own
 	// accounting, in the client's process, under the client's mutex.
 	admitted, served, refused := srv.Counters()
+	// HEAP AND GOROUTINES, so a run that slows down can say WHY rather than
+	// leaving the slowdown to be attributed. A benchmark whose throughput falls
+	// and whose memory is unreported has one number and no explanation.
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+
 	led, ticks, now := srv.Leadership()
 	cur := 0
 	if now {
 		cur = 1
 	}
-	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d\n",
-		id, sent, dropped, wire, atomicLoad(received), admitted, served, refused, led, ticks, cur)
+	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d heap=%d goroutines=%d\n",
+		id, sent, dropped, wire, atomicLoad(received), admitted, served, refused, led, ticks, cur,
+		ms.HeapAlloc, runtime.NumGoroutine())
 	tmp := filepath.Join(dir, "counters.tmp")
 	if err := os.WriteFile(tmp, []byte(line), 0o644); err != nil {
 		return

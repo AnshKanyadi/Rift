@@ -3504,45 +3504,119 @@ be the cause of what was observed.* The two are recorded separately for that rea
 
 ---
 
-### OPEN-I2-1 — one node exited without being killed, in a run that cannot be replayed
-
-**Status: OPEN. Not closed, and specifically not closed by the two green runs that followed it.**
+### BUG-054 — (harness) the restart raced the kernel releasing the dead node's socket, and this is OPEN-I2-1's cause
 
 | | |
 |---|---|
-| **Observed** | `chaos: node 2 exited WITHOUT being killed: signal: killed`, once, in the first leader-targeted chaos run. |
-| **Caught by** | the `ExitedOther > 0` gate arm, which failed the run and suppressed its verdicts. |
-| **Context** | 2580 operations, 2574 completed, 3 leader kills of 3, 142 led ticks; linearizability green over 2580 operations (**not reportable** — the gate had failed). |
-| **Reproduced** | no. Two subsequent runs were clean. |
+| **Symptom** | `chaos: node 3 (pid 12651) exited WITHOUT being killed: exit status 1`, twice in one run. |
+| **Found by** | the `ExitedOther > 0` gate arm, which failed the run — and then by the **node stderr and kill-pid log added in response to OPEN-I2-1**, which named the cause on the next occurrence. |
+| **Reproduce** | restart a node within a few ms of `SIGKILL`ing it; the successor reaches `net.Listen` before the kernel has finished with the predecessor. |
+| **Invariant that caught it** | `ExitedOther > 0`. |
+| **Mutant class** | the gate arm itself, plus `LeaderKills > Kills`, added below. |
 
-**What is known.** `signal: killed` is SIGKILL. The fault log shows node 2 killed at 0.000s and again
-at 6.007s, each followed by a restart ~2ms later. The uninvited exit was counted before `StopAll`, so
-it was not teardown.
+The evidence, in three consecutive stderr lines:
 
-**What is not known.** Which SIGKILL the reaper saw, and who sent it. The candidates are: the
-per-node/per-process confusion of BUG-053 — which was fixed, and which three reproduction attempts
-failed to demonstrate; or a signal from outside the harness.
+```
+chaos: killed node 3 (pid 12640)
+riftnode: listen 127.0.0.1:61271: listen tcp 127.0.0.1:61271: bind: address already in use
+```
 
-> **A CHAOS RED IS NEVER CLOSED BY RE-RUNNING UNTIL IT GOES AWAY.** Two greens after a red are two
-> different experiments, not two confirmations. This entry exists so that the red is carried rather
-> than forgotten, and so the next occurrence is a **second** data point instead of a first one.
+`Restart` reused the address 2–3ms after the kill. The successor failed to bind, exited 1, and its
+reaper reported it — **correctly**: that process did die without being killed.
 
-**What would connect this to BUG-053, so a reader knows what evidence would close it.** A reaper
-reporting an uninvited exit for a pid that a `Kill` had already been issued against — the pid is in
-the message now, and the supervisor's kill log has the pids it signalled. One occurrence with those
-two lines side by side closes it; anything else opens a second hypothesis.
+> **SO_REUSEADDR DOES NOT HELP.** It lets a socket be rebound past `TIME_WAIT`; it does not let two
+> *live* processes listen on one address, and for the milliseconds between `SIGKILL` and the kernel
+> finishing with the old process, that is what this was asking for.
 
-**And the failed reproduction NARROWS rather than dead-ends.** The reaper woke in **65–190µs
-regardless** of what was done to slow it, including a fixture built to hold the stderr pipe open past
-the kill. That measurement says the race window is **not where it was looked for**: BUG-053's
-interleaving needs the reaper to wake *after* a restart, and on this machine it never does. So either
-the observed exit came from a much longer wait than any measured here — which the pid evidence above
-would show — or it was not BUG-053 at all.
+**Fixed by waiting for the predecessor's reaper**, which is also the more faithful chaos semantics and
+would be the right shape with no bug at all: **a crashed node restarts after it is dead.** A restart
+overlapping its own predecessor is not a fault this system claims to survive, so injecting it produced
+a finding about the harness rather than about Rift.
 
-**What was added so the next occurrence says more.** The chaos test now prints every node's stderr
-alongside a gate failure, and the reaper's message carries the pid. A gate arm about a process that
-does not show what the process said sends the reader back to reproduce a schedule that cannot be
-reproduced.
+#### A second gate arm, from a number that was visible and unread
+
+The same run reported `leader-kills=3 of 2 kills`. More aims than signals means a kill was aimed at a
+node that was **already down** — `Kill` found no live launch and returned without counting. The
+arithmetic was on screen and said so, and nothing was asserting it.
+
+> **A COUNT THAT CANNOT EXCEED ANOTHER IS A GATE ARM WAITING TO BE WRITTEN.** `LeaderKills > Kills`
+> now fails the run.
+
+#### What this closes, and what it does not
+
+**OPEN-I2-1 is CLOSED for the `exit status 1` occurrences**, which are fully explained and fixed.
+
+**It is NOT closed for the original `signal: killed`.** That message means SIGKILL, and a bind failure
+exits 1 — different symptoms, so the same cause cannot be assumed. The narrowing from the failed
+BUG-053 reproductions still stands and now has company: the reaper wakes in 65–190µs while
+`Restart`'s fork/exec of a Go binary takes milliseconds, so the reaper **wins** that race and BUG-053
+cannot fire in this configuration at all. Both hypotheses for the original observation are now
+measured to be unlikely, and it remains one unexplained event.
+
+**What would close it:** a reaper reporting `signal: killed` for a pid with no matching
+`chaos: killed node N (pid P)` line. Both lines now print, so the next occurrence is decisive either
+way.
+
+> The instrument that produced this entry is the one added *because* OPEN-I2-1 could not be
+> reproduced. **A red that cannot be closed can still be made cheaper to diagnose**, and that is what
+> the stderr dump and the kill-pid log bought: the cause appeared on the very next occurrence.
+
+---
+
+### BUG-055 — (harness) the benchmark measured the CHECKER: every real node runs the simulator's oracle ledger
+
+| | |
+|---|---|
+| **Symptom** | Throughput on a fault-free cluster fell **monotonically**: 1938 → 996 → 728 → 606 → 495 → 478 ops/s across six consecutive 5-second windows, with p50 rising 3.4ms → 16.3ms. No faults, no kills, nothing else running. |
+| **Found by** | a steady-state baseline that came out **slower than the chaos run it was the denominator for** — 68 ops/s against 498 — producing a "728% of steady state" result that read as a pass. |
+| **Reproduce** | run any sustained load against `cmd/riftnode` and watch `heap` in the counters file: ~80MB → ~190MB per node over 30 seconds, goroutines flat at 12. |
+| **Invariant that caught it** | none. Every checker was green; the run was *correct* and getting steadily slower. |
+| **Mutant class** | `bench.Result.SteadyEnough`, and the chaos-exceeds-steady baseline check, both induced. |
+
+**`store.Config` REQUIRES a `raftcheck.Ledger`** — `cfg.Ledger == nil` is a construction error — so
+`cmd/riftnode` supplies one, and every production node runs the simulator's oracle inside it. The
+ledger retains, forever:
+
+- every message **sent**, with the sender's durable hard state (`sent []sentRecord`)
+- every message **received** (`recv []sentRecord`)
+- every entry every node **applied**, in order (`applied [][]raft.Entry`)
+- every **committed** entry (`committed []commitRecord`)
+
+**Measured, not argued:** 100,000 recorded operations retain **87.5 MB — 875 bytes per operation.**
+The leader sends ~3 messages per client operation and each is recorded at the sender and at every
+receiver, which accounts for the observed per-node heap growth directly.
+
+> **THE BENCHMARK WAS MEASURING THE ORACLE.** Every number taken from `riftnode` is a number about a
+> node carrying a complete, unbounded audit log of its own history — and the degradation is not a
+> Rift performance characteristic, it is the checker's retention showing up as latency.
+
+#### Why this was invisible until now
+
+The ledger is **correct** for what it was built for. A sim run is bounded: a few thousand events, then
+the oracles read the ledger and the process exits. Unbounded retention is not a leak there, it is the
+entire mechanism — the oracles need the whole history to answer questions like *"was this message
+released before its term was durable?"*
+
+> **A STRUCTURE WHOSE COST IS BOUNDED BY THE RUN IS FREE UNTIL THE RUN STOPS BEING BOUNDED.** Real
+> mode is the first thing this project has built that does not end.
+
+#### NOT fixed here, and specifically not by weakening anything
+
+The ledger is an **oracle**. Trimming it, sampling it, or capping it would weaken a checker to get a
+number, which is the one thing that is never done. The fix is to make the ledger **optional in
+`store.Config`** so real mode can run without an oracle it is not consulting — and `store/` is signed,
+so that is a ruling rather than an edit.
+
+**Until then, every throughput and latency number from `riftnode` is reported with this entry beside
+it.** The numbers are real measurements of a real cluster; they are not measurements of Rift.
+
+#### And a second, smaller contaminant in code that IS mine
+
+`cmd/riftnode`'s `serving` calls `hist.Begin` on the node's own `sim.History` for every request, and
+nothing truncates it. That history is **discarded** — the authoritative one is the client's — and it
+is used only as a completion channel. At ~100 bytes per event it is roughly **2.6 MB per 26,000
+operations**: about 1/35th of the ledger's share, real, unbounded, and reported here rather than
+fixed in passing while the larger one stands.
 
 ---
 

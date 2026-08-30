@@ -285,3 +285,12 @@ func TestKillsThatNeverHitALeaderFailTheGate(t *testing.T) {
 		t.Fatalf("the leader-kill count did not reach the report:\n%s", b.String())
 	}
 }
+
+// More aims than signals means a kill was aimed at a node already down.
+func TestMoreLeaderKillsThanKillsFailsTheGate(t *testing.T) {
+	r := good()
+	r.LeaderKills = r.Counters.Kills + 1
+	if len(r.Gate(1, 1).Failures) == 0 {
+		t.Fatal("a run reporting more leader kills than kills passed the gate")
+	}
+}

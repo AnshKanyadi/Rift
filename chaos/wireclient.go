@@ -80,7 +80,7 @@ func (w *WireClient) Close() {
 // It does NOT wait for every node to answer. The first response decides, and
 // the rest arrive whenever they arrive -- into Correlate, which is where the
 // second answer to one request is either wire weather or a finding.
-func (w *WireClient) Do(op, key, value string, wait time.Duration) {
+func (w *WireClient) Do(op, key, value string, wait time.Duration) bool {
 	var wireOp byte = riftnet.OpGet
 	if op == "put" {
 		wireOp = riftnet.OpPut
@@ -92,7 +92,7 @@ func (w *WireClient) Do(op, key, value string, wait time.Duration) {
 		// cluster. It is still ENDED, as an error, because an operation left
 		// open in the history is a claim that it might have taken effect.
 		w.rec.Correlate(seq, sim.RespError, "")
-		return
+		return false
 	}
 	w.mu.Lock()
 	w.inflight[seq] = time.Now()
@@ -111,7 +111,7 @@ func (w *WireClient) Do(op, key, value string, wait time.Duration) {
 		_, still := w.inflight[seq]
 		w.mu.Unlock()
 		if !still {
-			return
+			return true
 		}
 		time.Sleep(200 * time.Microsecond)
 	}
@@ -128,6 +128,7 @@ func (w *WireClient) Do(op, key, value string, wait time.Duration) {
 		// smaller, cleaner and wrong.
 		w.rec.Timeout(seq)
 	}
+	return !still
 }
 
 // onEnvelope handles one response off the wire.

@@ -63,7 +63,8 @@ import (
 type launch struct {
 	cmd    *exec.Cmd
 	pid    int
-	killed bool // set by Kill BEFORE signalling: this death was ordered
+	killed bool          // set by Kill BEFORE signalling: this death was ordered
+	done   chan struct{} // closed by this launch's reaper, after Wait returns
 }
 
 // Node is one cluster member, running as its own process.
@@ -74,6 +75,7 @@ type Node struct {
 
 	mu     sync.Mutex
 	cur    *launch // the process that is meant to be running, or nil
+	last   *launch // the most recent launch, running or not; Restart waits on it
 	kills  int
 	starts int
 }
@@ -160,9 +162,9 @@ func (s *Supervisor) startOne(n *Node) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	l := &launch{cmd: cmd, pid: cmd.Process.Pid}
+	l := &launch{cmd: cmd, pid: cmd.Process.Pid, done: make(chan struct{})}
 	n.mu.Lock()
-	n.cur = l
+	n.cur, n.last = l, l
 	n.starts++
 	n.mu.Unlock()
 
@@ -176,6 +178,7 @@ func (s *Supervisor) startOne(n *Node) error {
 	// whole reason this goroutine exists.
 	go func() {
 		err := cmd.Wait()
+		defer close(l.done)
 		// ASK ABOUT THIS LAUNCH, never about the node. See BUG-053: a restart
 		// makes "is the node up" true again while this process is still dying.
 		n.mu.Lock()
@@ -233,7 +236,36 @@ func (s *Supervisor) Kill(n *Node) error {
 // Restart brings a killed node back. Its directory is untouched, so recovery
 // runs against whatever the kill left on disk -- which is the state a real
 // crash produces and the one the engine's own recovery path exists for.
+//
+// # IT WAITS FOR THE PREVIOUS PROCESS TO BE GONE (BUG-054)
+//
+// It did not, and the failure was `bind: address already in use`: the new
+// process reached `net.Listen` before the kernel had released the dead one's
+// listening socket, failed to bind, and exited 1 -- which the reaper reported,
+// correctly, as a node that died without being killed.
+//
+//	SO_REUSEADDR DOES NOT HELP. It lets a socket be rebound past TIME_WAIT; it
+//	does not let two LIVE processes listen on one address, and for the two
+//	milliseconds between SIGKILL and the kernel finishing with the old process,
+//	that is what this was asking for.
+//
+// Waiting is also the more faithful chaos semantics, which is the argument for
+// it independent of the bug: **a crashed node restarts after it is dead.** A
+// restart overlapping its own predecessor is not a fault this system claims to
+// survive, and injecting it produced a finding about the harness rather than
+// about Rift.
 func (s *Supervisor) Restart(n *Node) error {
+	n.mu.Lock()
+	prev := n.last
+	n.mu.Unlock()
+	if prev != nil {
+		select {
+		case <-prev.done:
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("chaos: node %d pid %d did not exit within 5s; restarting over a "+
+				"live predecessor is a different experiment", n.ID, prev.pid)
+		}
+	}
 	if err := s.startOne(n); err != nil {
 		return err
 	}

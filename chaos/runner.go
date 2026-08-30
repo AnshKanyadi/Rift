@@ -165,6 +165,16 @@ func (r Run) Gate(minKills, minOps int) GateResult {
 		add("no node ever led: an unled cluster serves nothing, so a green history " +
 			"here is a statement about an experiment that did not run")
 	}
+	// The two kill counts must be CONSISTENT. LeaderKills counts what the
+	// schedule aimed at; Kills counts what the supervisor actually signalled.
+	// More aims than signals means a kill was aimed at a node that was already
+	// dead -- which is how a run reports 3 leader kills out of 2 kills, and how
+	// the first benchmark attempt looked from outside before its stderr was read.
+	if r.LeaderKills > r.Counters.Kills {
+		add("%d leader kills against %d kills delivered: the schedule aimed at a node that was "+
+			"already down, so the fault it believes it injected did not happen",
+			r.LeaderKills, r.Counters.Kills)
+	}
 	if r.Counters.Kills > 0 && r.LeaderKills == 0 {
 		add("%d kill(s) landed and NONE of them removed a leader: this is a gentler experiment "+
 			"than the one being reported, and the difference is the whole of what a leader kill "+
