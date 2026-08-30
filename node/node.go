@@ -132,7 +132,44 @@ func (d *Driver) loop() {
 // Transport receives, durability completions, timer fires and client requests
 // all arrive through here. There is deliberately no second entry point, because
 // a second entry point is the rule's failure mode.
-func (d *Driver) Post(ev sim.Event) {
+//
+// # It does not take an Event, and that is the amendment (BUG-052)
+//
+// It used to. `Post(sim.Event)` let the caller build the whole event, including
+// its `At` — and `After` stamped the events IT created while `Post` stamped
+// nothing.
+//
+//	ONE CONTRACT WITH TWO ENTRANCES THAT BEHAVE DIFFERENTLY, and the failure mode
+//	was the worst available: an unstamped event is not an error at the call, it
+//	is a HISTORY THAT READS AS NONSENSE later. `cmd/riftnode` omitted `At` on
+//	every delivery and every tick, and the first operation the leader answered
+//	produced a return three seconds before its call.
+//
+// The fix is not "Post stamps too". That leaves the class representable and
+// merely handled: a caller can still pass an `At`, and a wrong one is worse than
+// a missing one because nothing downstream can tell it from a real observation.
+//
+//	SO THE CALLER CANNOT SUPPLY A TIME, BECAUSE IT CANNOT SUPPLY AN EVENT. The
+//	driver owns its clock and its identity; the caller owns what happened. There
+//	is no argument left in which to be wrong.
+//
+// This is the sim loop's own arrangement, arrived at from the other side: there,
+// the LOOP stamps every event and node logic never sees an unstamped one. The
+// asymmetry existed because until `cmd/riftnode` there was no real-mode caller
+// at all, so every event in the project's history was stamped by the simulator
+// and the second entrance was never used. See BUGS.md GF-57.
+//
+// # The stamp is taken at POST, not at schedule
+//
+// `After` used to stamp with the instant it PREDICTED the timer would fire.
+// Stamping here instead means the time is when the event actually entered the
+// mailbox, which is an observation rather than a prediction, and it makes stamps
+// non-decreasing in processing order: the mailbox is FIFO, so an event stamped
+// later cannot be handled earlier. A predicted stamp has neither property -- a
+// timer scheduled early and fired late carried an `At` behind events posted
+// before it.
+func (d *Driver) Post(kind sim.Kind, node sim.NodeID, payload any) {
+	ev := sim.Event{At: d.Now(), Kind: kind, Node: node, Payload: payload}
 	select {
 	case <-d.done:
 	case d.mbox <- ev:
@@ -219,9 +256,9 @@ func (d *Driver) At(at clock.Instant, kind sim.Kind, n sim.NodeID, payload any) 
 // a second goroutine touching node state, which is precisely the bug the mailbox
 // rule exists to make impossible.
 func (d *Driver) After(delay time.Duration, kind sim.Kind, n sim.NodeID, payload any) {
-	at := d.Now().Add(delay)
 	t := time.AfterFunc(delay, func() {
-		d.Post(sim.Event{At: at, Kind: kind, Node: n, Payload: payload})
+		// Stamped by Post, at the moment it enters the mailbox. See Post.
+		d.Post(kind, n, payload)
 	})
 	d.mu.Lock()
 	if d.stopped {

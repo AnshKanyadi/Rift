@@ -3397,14 +3397,32 @@ two representations on one mailbox, which is the same bug one layer up.
 every delivered message and every tick arrived stamped at the beginning of time — and the first
 operation the leader answered produced a return **three seconds before its call**.
 
-**The bug was in `cmd/riftnode`, but the shape is a seam, and it is reported rather than fixed here:**
+**The bug was in `cmd/riftnode`; the defect is the seam, and Ansh ruled it amended in `node/`.**
 
-> `node.Driver.After` stamps the events **it** creates. `node.Driver.Post` stamps nothing. So one of
-> the two ways into the mailbox carries time and the other does not, and there is no documented
-> contract saying the caller must supply it.
+> `node.Driver.After` stamped the events **it** created. `node.Driver.Post` stamped nothing. **One
+> contract with two entrances that behave differently**, and the failure mode was the worst
+> available: an unstamped event is not an error at the call, it is a history that reads as nonsense
+> later.
 
-`node/` is signed, so this is a finding for Ansh rather than a change made in passing. The asymmetry
-is the defect; which side should close it is a ruling.
+**Fixed as the asymmetry, and by the stronger of the two options.** Not "Post stamps too" — that
+leaves the class *representable and merely handled*, and a caller could still pass a **wrong** time,
+which is worse than a missing one because nothing downstream can tell it from a real observation.
+
+```go
+func (d *Driver) Post(kind sim.Kind, node sim.NodeID, payload any)
+```
+
+> **THE CALLER CANNOT SUPPLY A TIME BECAUSE IT CANNOT SUPPLY AN EVENT.** The driver owns its clock and
+> its identity; the caller owns what happened. There is no argument left in which to be wrong.
+
+**Induced three ways.** Post stamping nothing fails `TestEveryPostedEventCarriesTheDriversOwnTime`;
+restoring `Post(sim.Event)` **fails to compile**, against a signature assertion written for that
+purpose; and `After`'s predicted stamp has no path back. The second is the one that matters — the
+class is now caught before any test runs.
+
+**And the stamp moved from schedule-time to post-time.** `After` used to stamp with the instant it
+*predicted* the timer would fire. Post-time is an observation rather than a prediction, and it makes
+stamps non-decreasing in processing order, which a predicted stamp never was.
 
 **What it says about the instrument:** the checker refused to record a nonsensical history *instead of
 recording it and letting a checker downstream disagree later*. A history is the only artifact a chaos
@@ -3509,9 +3527,58 @@ failed to demonstrate; or a signal from outside the harness.
 > different experiments, not two confirmations. This entry exists so that the red is carried rather
 > than forgotten, and so the next occurrence is a **second** data point instead of a first one.
 
+**What would connect this to BUG-053, so a reader knows what evidence would close it.** A reaper
+reporting an uninvited exit for a pid that a `Kill` had already been issued against — the pid is in
+the message now, and the supervisor's kill log has the pids it signalled. One occurrence with those
+two lines side by side closes it; anything else opens a second hypothesis.
+
+**And the failed reproduction NARROWS rather than dead-ends.** The reaper woke in **65–190µs
+regardless** of what was done to slow it, including a fixture built to hold the stderr pipe open past
+the kill. That measurement says the race window is **not where it was looked for**: BUG-053's
+interleaving needs the reaper to wake *after* a restart, and on this machine it never does. So either
+the observed exit came from a much longer wait than any measured here — which the pid evidence above
+would show — or it was not BUG-053 at all.
+
 **What was added so the next occurrence says more.** The chaos test now prints every node's stderr
-alongside a gate failure. A gate arm about a process that does not show what the process said sends
-the reader back to reproduce a schedule that cannot be reproduced.
+alongside a gate failure, and the reaper's message carries the pid. A gate arm about a process that
+does not show what the process said sends the reader back to reproduce a schedule that cannot be
+reproduced.
+
+---
+
+### GF-57 — a seam signed with no caller is a contract nobody has ever had to satisfy
+
+`node/` was signed at A0 step 11. Its whole purpose was to give the mailbox rule *end-to-end teeth* —
+`scope.go` said so in those words: *A0 does not exit until `node/` exists and the rule has real
+teeth.* And from that day until `cmd/riftnode`, **every event the package ever handled came through
+`After`, or through a test.** There was no real-mode caller.
+
+So `Post`'s missing stamp was not a bug anybody could have noticed. The one entrance that was used
+stamped; the one that was not, did not. **The asymmetry was invisible for the entire project and
+surfaced on the first genuine posting** — as a panic, in another package, three seconds and one
+leader election away from the line that caused it.
+
+> **A CONTRACT WITH TWO ENTRANCES IS ONLY AS TESTED AS ITS BUSIEST ONE.** The unused entrance is not
+> "less exercised"; it is *unspecified*, because nothing has ever had to satisfy it.
+
+#### This is GF-49's shape a third time
+
+GF-49 is about a **substitute that cannot express a class** — the stand-in is not merely less
+faithful, it lacks the vocabulary for the thing you are trying to see:
+
+| instance | the substitute | the class it could not express |
+|---|---|---|
+| first | `engine/model` under the full stack | anything the C++ engine does differently |
+| second | the untagged build's engine name | that a run was not a storage result |
+| **third** | **the simulator's loop as `node/`'s only caller** | **a caller that could OMIT what the loop supplied** |
+
+The sim loop stamps every event itself. Node logic in sim mode has never seen an unstamped event, and
+**no caller in sim mode has ever had the option to produce one** — the class of "forgot the time" is
+not expressible from inside the loop. Driving `node/` exclusively from there was not a weaker test of
+the mailbox contract; it was a test of a different contract that happens to share a name.
+
+**And the fix takes the vocabulary away again, deliberately.** `Post(kind, node, payload)` makes the
+class unrepresentable for *every* caller, so the property no longer depends on which entrance is busy.
 
 ---
 # Track B — the C++ storage engine

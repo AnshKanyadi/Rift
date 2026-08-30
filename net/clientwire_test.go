@@ -49,10 +49,18 @@ func TestRequestRefusesHandBuiltBytes(t *testing.T) {
 			want: ErrShortRequest,
 		},
 		{
-			// A claimed-but-absent length. NOTE this is refused by the SIZE
-			// limit and not by the bounds check, and the two are told apart by
-			// the sentinel -- see GF-56 for why that distinction has to be
-			// forced rather than assumed.
+			// STATED LIMIT (GF-56). This row names a POLICY limit and
+			// DEMONSTRATES A BOUNDS CHECK, and the two are separable only by the
+			// sentinel. With the size limit deleted, the bounds check underneath
+			// refuses these same bytes -- differently enough that ErrFieldTooLarge
+			// vs ErrShortRequest still fails the row, but the row is not
+			// evidence that a present oversized field is refused.
+			//
+			//	IT WILL KEEP PASSING WHEN THE THING IT NAMES IS GONE, if the
+			//	sentinel ever converges. TestAnOversizedFieldThatIsActuallyThere-
+			//	IsRefused is the row that carries the real claim; it exists
+			//	because these cheap rows do not, and it costs a 2MiB slice, which
+			//	is why the cheap rows got written first.
 			name: "absurd key length",
 			in: []byte{
 				OpPut,

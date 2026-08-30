@@ -218,6 +218,12 @@ func (s *Supervisor) Kill(n *Node) error {
 	if err := l.cmd.Process.Signal(syscall.SIGKILL); err != nil {
 		return err
 	}
+	// LOGGED WITH THE PID. An uninvited exit names its pid; a kill names the pid
+	// it signalled. One occurrence with both lines closes OPEN-I2-1 or opens a
+	// second hypothesis, and neither is possible without the pair.
+	s.stderrMu.Lock()
+	s.stderr.WriteString(fmt.Sprintf("chaos: killed node %d (pid %d)\n", n.ID, l.pid))
+	s.stderrMu.Unlock()
 	s.mu.Lock()
 	s.counts.Kills++
 	s.mu.Unlock()

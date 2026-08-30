@@ -1,6 +1,7 @@
 package node_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func TestSameNodeLogicRunsUnderBothDrivers(t *testing.T) {
 	}
 	defer d.Stop()
 
-	d.Post(sim.Event{Kind: sim.KindClient, Node: 0})
+	d.Post(sim.KindClient, 0, nil)
 	if !d.WaitFor(4, 2*time.Second) {
 		t.Fatalf("real driver handled %d events, want 4 (one client plus three rescheduled)", d.Handled())
 	}
@@ -139,7 +140,7 @@ func TestRealModeDoesNotPerturbSimDeterminism(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					d.Post(sim.Event{Kind: sim.KindClient, Node: sim.NodeID(i)})
+					d.Post(sim.KindClient, sim.NodeID(i), nil)
 				}
 			}
 		}()
@@ -204,3 +205,92 @@ func TestDriverRefusesAnIncompleteConfiguration(t *testing.T) {
 }
 
 var _ = plan.SchemaVersion // keeps the plan import honest if the toy path changes
+
+// BUG-052's amendment, pinned two ways: the stamp is REAL, and the class of
+// omitting it is unrepresentable.
+//
+// The first half is an ordinary assertion and could regress. The second half
+// cannot be written as an assertion at all -- there is no argument left in which
+// to pass a bad time -- so it is pinned as a COMPILE-TIME shape instead. If
+// somebody restores `Post(sim.Event)`, the signature check below stops compiling
+// and the lane fails before any test runs.
+var _ = func(d *node.Driver) {
+	// The shape of the mailbox, asserted by assignment. `Post` takes WHAT
+	// HAPPENED and never an Event, so a caller cannot supply a time and
+	// therefore cannot omit one.
+	var post func(sim.Kind, sim.NodeID, any) = d.Post
+	_ = post
+}
+
+func TestEveryPostedEventCarriesTheDriversOwnTime(t *testing.T) {
+	rec := &recorder{}
+	clk := clock.NewReal(0)
+	d, err := node.New(7, rec, clk, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop()
+
+	before := d.Now()
+	d.Post(sim.KindClient, 7, nil)
+	d.After(time.Millisecond, sim.KindTick, 7, nil)
+	if !d.WaitFor(2, 2*time.Second) {
+		t.Fatalf("only %d event(s) handled", d.Handled())
+	}
+	after := d.Now()
+
+	got := rec.events()
+	if len(got) < 2 {
+		t.Fatalf("expected 2 events, got %d", len(got))
+	}
+	for i, ev := range got {
+		// AN UNSTAMPED EVENT IS NOT AN ERROR AT THE CALL, IT IS A HISTORY THAT
+		// READS AS NONSENSE LATER. `sim.History.End` refuses a return before its
+		// call, which is where BUG-052 finally surfaced -- three seconds and one
+		// panic away from the line that caused it.
+		if ev.At == 0 {
+			t.Fatalf("event %d (%s) arrived unstamped", i, ev.Kind)
+		}
+		if ev.At < before || ev.At > after {
+			t.Fatalf("event %d (%s) stamped %v, outside [%v, %v]", i, ev.Kind, ev.At, before, after)
+		}
+	}
+	// Non-decreasing in PROCESSING order.
+	//
+	// STATED LIMIT: this clause is NOT induced, and saying so is the point. The
+	// mailbox is FIFO and Post stamps just before enqueue, so no path in the
+	// current API can produce a decreasing pair -- which means removing this
+	// loop breaks nothing and no mutation can make it fire. It is a CONSEQUENCE
+	// of the two properties above, recorded so a future change that reintroduces
+	// a schedule-time stamp has something to fail, not evidence in its own right.
+	//
+	// (GF-56's rule, applied before rather than after: a check that cannot fire
+	// today should say so, or it will be read as evidence it is not.)
+	for i := 1; i < len(got); i++ {
+		if got[i].At < got[i-1].At {
+			t.Fatalf("event %d stamped %v, before event %d's %v: stamps must not "+
+				"decrease in processing order", i, got[i].At, i-1, got[i-1].At)
+		}
+	}
+}
+
+// recorder captures what the loop handed it, on the loop's own goroutine.
+type recorder struct {
+	mu  sync.Mutex
+	evs []sim.Event
+}
+
+func (r *recorder) Handle(ev sim.Event, _ sim.Scheduler) {
+	r.mu.Lock()
+	r.evs = append(r.evs, ev)
+	r.mu.Unlock()
+}
+
+func (r *recorder) events() []sim.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]sim.Event(nil), r.evs...)
+}

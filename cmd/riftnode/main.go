@@ -222,16 +222,13 @@ func main() {
 		// receives and drops is still a node that received, and the reality
 		// counter must not depend on what the protocol did next.
 		//
-		// AND IT IS STAMPED. In sim the LOOP owns event time and fills At; here
-		// the poster does, and forgetting made the leader panic on its first
-		// answered operation: History.End refused a return at instant 0 for an
-		// operation called three seconds in. BUGS.md BUG-052.
-		//
-		// The bug was in this file, but the shape is a seam: node.Driver.After
-		// stamps the events IT creates and Post stamps nothing, so one of the
-		// two ways into the mailbox carries time and the other does not. That
-		// asymmetry is reported rather than fixed here -- node/ is signed.
-		drvRef.Post(sim.Event{At: drvRef.Now(), Kind: sim.KindDeliver, Node: self, Payload: frame})
+		// AND THERE IS NO TIME TO FORGET. Post takes what happened, never an
+		// Event: the driver owns its clock and stamps at the moment the event
+		// enters the mailbox. This file is why -- it omitted At on every
+		// delivery and every tick, and the leader panicked on its first answered
+		// operation with a return three seconds before its call (BUG-052). The
+		// asymmetry it exposed was amended in node/ rather than patched here.
+		drvRef.Post(sim.KindDeliver, self, frame)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "riftnode: listen %s: %v\n", *addr, err)
@@ -295,7 +292,7 @@ func main() {
 				// INTO THE MAILBOX. A tick is an event like any other, and
 				// Amendment A1 does not make an exception for the one that
 				// arrives on a schedule.
-				drv.Post(sim.Event{At: drv.Now(), Kind: sim.KindTick, Node: self})
+				drv.Post(sim.KindTick, self, nil)
 			}
 		}
 	}()
