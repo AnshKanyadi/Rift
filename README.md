@@ -4,24 +4,36 @@ A distributed, transactional, MVCC key-value database. The distributed layer is 
 multi-group Raft in Go. Underneath it is a from-scratch C++ LSM storage engine. Both are checked by
 deterministic simulation rather than by hand testing.
 
-## Status
+## Status: v1 is complete
 
-Track A (the Go distributed layer) is finished. Phases A0 through A7 are signed: the simulator and
-its fault injectors, single-group Raft, snapshots and pre-vote and leadership transfer, single-node
-membership changes, multi-raft with range splits, MVCC over hybrid logical clocks, Percolator-style
-transactions, and read index.
+Fifteen signed phases — A0 through A7, B1 through B5, I1 and I2 — plus the merge where the two tracks
+met. The Go distributed layer, the C++ storage engine underneath it, and the whole thing running as
+three real processes over real sockets while a chaos script kills the leader.
 
-Track B (the C++ engine) is at B5. Integration is I1 and I2, which is where the two tracks become one
-system.
+**[docs/V1.md](docs/V1.md) is the one document to read.** It covers what exists, what was verified,
+how, and — in the same file, not an appendix — what the verification cannot see and what is still
+open.
 
-## Track A results
+## The numbers
 
-The last exit run was 25,000 seeds at commit `6c43023` with zero safety violations, run as eight
-contiguous shards that a test checks actually tile the seed space. Along the way the project found 43
-defects, and every one of them still replays from a single seed. There is also a register of 30
-separate times a checking mechanism reported success while checking nothing, which turned out to be
-the most useful thing in the repo. The full write-up, including what the verification cannot see, is
-in [docs/TRACK-A.md](docs/TRACK-A.md).
+| | |
+|---|---|
+| A6 and A7 exit runs | **25,000 seeds each, zero safety violations**, inconclusive rate 4.0 per mille |
+| defects found, every one reproducing from a seed | **67** |
+| mutant classes with a covering test and a measured floor | **78 Go, 155 C++** |
+| times a checking mechanism reported success while checking nothing | **30**, and the register is the most useful thing in the repo |
+| escape hatches in the determinism pass | **5**, each one line with a written reason, unchanged since A5 |
+| I2 chaos | **2,357 operations linearizable**, 3 leader kills of 3, 3 restarts, 0 uninvited exits |
+| I2 steady state on the C++ engine | **97–119 ops/s, p50 67–82 ms** |
+| I2 under chaos | **88.8% of steady state, p99 122 ms** |
+
+I2's four thresholds were declared before any number was taken. **Two were met and two were not, and
+none was adjusted** — a threshold that fires is a threshold that was capable of firing.
+
+**The single result worth reading is [BUG-060](BUGS.md):** a Raft liveness bug that survived eight
+phases and 25,000 seeds. After a leader kill the cluster served nothing for fourteen seconds with
+every safety oracle green — and correct to be green, because a cluster that elects nobody does no
+wrong thing. It was found by a threshold declared in advance rather than by any checker.
 
 ## How it is verified
 

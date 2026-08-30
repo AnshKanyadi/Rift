@@ -4086,10 +4086,16 @@ adjusted; the excess over what `E` predicts is **measured and unexplained**.
   by editing the runner proves the code path; only this proves the mechanism catches a cluster.**
 - **Seven chaos-level mutants, all killed** (GF-62 items 2 and 4): four over the report generators in
   ~1s each, three over the correlation and history in 6–16s.
-- **A mutant scored against an already-violating fixture cannot be distinguished.** `M106` survived its
-  first covering test because *"a violation was reported"* could not separate the mutation's effect
-  from the fixture's own fault. Rescored against a **healthy** cluster, where the same mutation
-  manufactures a violation that is not there — the sharper property, and it kills.
+- **A mutant scored against an already-violating fixture cannot be distinguished — and this is
+  [GF-53] applied unprompted.** `M106` survived its first covering test because *both* the mutation and
+  the fixture's own fault produce a violation, so *"a violation was reported"* cannot separate them:
+  a mechanism responding correctly to the case you meant and to a case you did not mean has not
+  distinguished them. Rescored against a **healthy** cluster, where the same mutation manufactures a
+  violation that is not there — the sharper property, and the one that kills.
+- **Inducing a gate by editing the runner proves the code path; only a real misbehaving cluster proves
+  the mechanism.** That is the fixture-versus-planted-violation distinction this project has held since
+  A0, arriving at the top of the stack on the last phase: `sim/toy` is a protocol that can be broken so
+  the harness can be asked whether it noticed, and `chaos/` had no equivalent until I2 closed.
 - **A kill the window cannot observe recovering is not a kill the run can measure.** The ticker fired
   at `K, 2K, 3K` while the window *was* `3K`; the schedule now stops rather than the measurement being
   excused.
