@@ -125,8 +125,10 @@ Go version is pinned by `go.mod`.
 
 ## Documents
 
-- [docs/TRACK-A.md](docs/TRACK-A.md) is the place to start. It covers what was built, what was found,
-  and what the verification cannot see.
+- **[docs/V1.md](docs/V1.md) is the place to start.** It spans both tracks: what was built, what was
+  found, how it is verified, what the verification cannot see, and what is still open.
+- [docs/TRACK-A.md](docs/TRACK-A.md) is the Go layer in more depth, phase by phase.
+- [REPORTS/](REPORTS/) has I2's session reports, including the retractions.
 - [CLAUDE.md](CLAUDE.md) is the project constitution and its amendment log
 - [docs/](docs/) has one design doc per phase, with the rejected alternatives and why
 - [BUGS.md](BUGS.md) has every defect, its seed, its root cause, and the invariant that caught it
