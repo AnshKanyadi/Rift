@@ -169,13 +169,19 @@ func TestI2Numbers(t *testing.T) {
 			case <-tk.C:
 				led.sample(nodes)
 				victim := nodes[0]
-				killMu.Lock()
+				aimed := false
 				if l := leaderNode(nodes); l != nil {
-					victim = l
+					victim, aimed = l, true
+				}
+				delivered, _ := s.Kill(victim)
+				if !delivered {
+					continue
+				}
+				killMu.Lock()
+				if aimed {
 					run.LeaderKills++
 				}
 				killMu.Unlock()
-				_ = s.Kill(victim)
 				killMu.Lock()
 				killAt = append(killAt, time.Since(t0))
 				run.Faults = append(run.Faults,
@@ -246,7 +252,7 @@ func TestI2Numbers(t *testing.T) {
 		// (BUG-054), so calling it on a LIVE node waits out the full five-second
 		// timeout and then refuses -- correctly, and the first version of this
 		// block did exactly that.
-		if err := s.Kill(nd); err != nil {
+		if _, err := s.Kill(nd); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -296,13 +302,19 @@ func TestI2Numbers(t *testing.T) {
 			case <-tk.C:
 				mLed.sample(nodes)
 				victim := nodes[0]
-				mMu.Lock()
+				aimed := false
 				if l := leaderNode(nodes); l != nil {
-					victim = l
+					victim, aimed = l, true
+				}
+				delivered, _ := m.Kill(victim)
+				if !delivered {
+					continue
+				}
+				mMu.Lock()
+				if aimed {
 					measured.LeaderKills++
 				}
 				mMu.Unlock()
-				_ = m.Kill(victim)
 				mMu.Lock()
 				mKillAt = append(mKillAt, time.Since(t0))
 				mMu.Unlock()

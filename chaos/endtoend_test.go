@@ -135,6 +135,23 @@ func TestARealClusterIsRealInTheWayThePhaseClaims(t *testing.T) {
 		r.Distinct, wire, recv, r.Self)
 }
 
+// buildNode builds the node binary, WITH the C++ engine when its archive is
+// present.
+//
+// # "It does not link on this machine" was a reading error (BUG-057)
+//
+// `go build -tags rift_cgo ./cmd/riftnode` fails with undefined symbols, and I
+// reported that as a toolchain fact. It is not. `engine/riftcgo` carries only
+// `-lstdc++` in its `#cgo LDFLAGS` **on purpose** -- the archive's directory is a
+// build artifact whose location the CALLER chooses, which is what lets the
+// package typecheck with no C++ build present. `make cpp-cgo` supplies it in
+// `CGO_LDFLAGS`; I supplied nothing.
+//
+//	THE ARCHIVES WERE SITTING IN THE TREE, BUILT, DATED, AND 7.7 MB.
+//
+// Fourth reading error of this phase, and the same shape as the other three: an
+// absence read as a fact about the world rather than as a question about the
+// invocation.
 func buildNode(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs("..")
@@ -142,8 +159,26 @@ func buildNode(t *testing.T) string {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(t.TempDir(), "riftnode")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/riftnode")
+	args := []string{"build", "-o", bin, "./cmd/riftnode"}
+	env := os.Environ()
+
+	// The archive path the Makefile's cpp-cgo lane uses. Present means a
+	// PERSISTENT engine, which is what a restart schedule requires (BUG-056).
+	lib := filepath.Join(root, "engine-cpp", "build", "test")
+	if _, err := os.Stat(filepath.Join(lib, "librift_capi.a")); err == nil {
+		args = []string{"build", "-tags", "rift_cgo", "-o", bin, "./cmd/riftnode"}
+		env = append(env, "CGO_LDFLAGS=-L"+lib+" -lrift_capi -lrift_engine")
+	} else {
+		// SAID OUT LOUD, not left to the engine line further down. A run built
+		// this way cannot support a restart claim, and the gate will refuse one
+		// -- but the reader of a skipped or narrowed test should know why.
+		t.Logf("NOTE: no C++ archive at %s, so this binary uses engine/model. "+
+			"Restart schedules will fail the persistence gate (BUG-056); run `make cpp-cgo` "+
+			"to build the archive.", lib)
+	}
+	cmd := exec.Command("go", args...)
 	cmd.Dir = root
+	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building riftnode: %v\n%s", err, out)
 	}
@@ -276,12 +311,18 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 		// back to round-robin only when nobody is leading yet.
 		led.sample(nodes)
 		victim := nodes[r%n]
+		aimed := false
 		if l := leaderNode(nodes); l != nil {
-			victim = l
-			leaderKills++
+			victim, aimed = l, true
 		}
-		if err := s.Kill(victim); err != nil {
+		// COUNTED ON DELIVERY. See BUG-058: the figure that said "3 leader kills
+		// of 3" in the retracted runs came from a counter that counted intent.
+		delivered, err := s.Kill(victim)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if delivered && aimed {
+			leaderKills++
 		}
 		faults = append(faults, chaos.Fault{At: time.Now(), Kind: "kill", Node: victim.ID})
 		time.Sleep(150 * time.Millisecond)

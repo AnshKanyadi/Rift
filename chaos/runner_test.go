@@ -11,7 +11,7 @@ import (
 
 func good() chaos.Run {
 	return chaos.Run{
-		Counters:    chaos.Counters{Started: 5, Kills: 12, Restarts: 2},
+		Counters:    chaos.Counters{Started: 5, Kills: 12, KillsScheduled: 12, Restarts: 2},
 		Ops:         chaos.OpCounters{Issued: 1000, Completed: 940, Failed: 60, Keys: 32},
 		Faults:      []chaos.Fault{{At: time.Now(), Kind: "kill", Node: 1}},
 		LeaderKills: 4,
@@ -332,5 +332,40 @@ func TestRestartsOnANonPersistentEngineFailTheGate(t *testing.T) {
 	r2.Counters.Restarts = 0
 	if f := r2.Gate(1, 1).Failures; len(f) != 0 {
 		t.Fatalf("a run with no restarts failed on the persistence arm: %v", f)
+	}
+}
+
+// The narrower claim travels in the output line, not an appendix.
+func TestWhatWasExercisedPrintsBesideTheNumbers(t *testing.T) {
+	noRestart := good()
+	noRestart.Counters.Restarts = 0
+	var b strings.Builder
+	noRestart.Report(&b, noRestart.Gate(1, 1))
+	if !strings.Contains(b.String(), "PERSISTENCE NOT EXERCISED") {
+		t.Fatalf("a run with no restarts did not say persistence was unexercised:\n%s", b.String())
+	}
+	// The assumptions real mode never exercises print on EVERY run, not only on
+	// the narrowed ones.
+	for _, want := range []string{"NO clock skew injected", "unsynced-write loss NOT asserted"} {
+		if !strings.Contains(b.String(), want) {
+			t.Fatalf("the report omitted %q:\n%s", want, b.String())
+		}
+	}
+
+	unobserved := good()
+	unobserved.Unobserved, unobserved.Verdicts = true, nil
+	var c strings.Builder
+	unobserved.Report(&c, unobserved.Gate(1, 1))
+	if !strings.Contains(c.String(), "NO checker evidence") {
+		t.Fatalf("an unobserved run did not say so beside its numbers:\n%s", c.String())
+	}
+}
+
+// More delivered than scheduled means the counter itself is broken.
+func TestMoreKillsThanScheduledFailsTheGate(t *testing.T) {
+	r := good()
+	r.Counters.KillsScheduled = r.Counters.Kills - 1
+	if len(r.Gate(1, 1).Failures) == 0 {
+		t.Fatal("a run delivering more kills than it scheduled passed the gate")
 	}
 }

@@ -118,12 +118,22 @@ func TestChaosRunWithRealCheckers(t *testing.T) {
 			// three nodes and is a gentler run reported under the same name.
 			victim = victim%n + 1
 			nd := nodes[victim-1]
+			aimedAtLeader := false
 			if l := leaderNode(nodes); l != nil {
-				nd, victim = l, l.ID
+				nd, victim, aimedAtLeader = l, l.ID, true
+			}
+			// COUNTED ON DELIVERY, never on intent. A kill aimed at a node that
+			// is already down injects nothing, and counting the attempt reports
+			// a fault that did not happen. BUG-058.
+			delivered, err := s.Kill(nd)
+			if err != nil {
+				t.Logf("kill node %d: %v", victim, err)
+			}
+			if delivered && aimedAtLeader {
 				run.LeaderKills++
 			}
-			if err := s.Kill(nd); err != nil {
-				t.Logf("kill node %d: %v", victim, err)
+			if !delivered {
+				continue
 			}
 			run.Faults = append(run.Faults, chaos.Fault{At: time.Now(), Kind: "kill", Node: victim})
 			// Restarted immediately: a chaos run wants a cluster that keeps

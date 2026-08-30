@@ -3666,10 +3666,29 @@ replying to any RPC* — is an **assumption of the safety argument**, not a prop
 harness that violates it is testing a different system, and `raft/`'s assertion firing is the
 instrument working.
 
+#### THIS IS TWO DEFECTS, AND THE SECOND ONE IS WORSE TO STATE
+
+The persistence hole is the first. **The second is that the kill figures in the retracted runs came
+from a counter now known to over-report** — the same counter that printed `leader-kills=3 of 2 kills`
+in GF-59's list, which is arithmetically impossible and was on screen twice.
+
+> **SO THE HONEST STATEMENT IS NOT "THE KILLS EXECUTED CORRECTLY AND THE PERSISTENCE ASSUMPTION WAS
+> VIOLATED".** It is that **how many leaders those runs killed is not known.** `LeaderKills` was
+> incremented on *intent* — before `Kill` was called — and `Kill` returns without signalling when the
+> node is already down. Every "3 leader kills of 3" in the record is an upper bound on a number nobody
+> measured.
+>
+> Recording it the first way would have preserved a false precision inside a retraction, which is a
+> particularly bad place for one: a retraction is read as the careful version.
+
+See [BUG-058] for the fix, which is an assertion at the point of production rather than a check by a
+reader.
+
 #### THE EARLIER CHAOS GREENS ARE RETRACTED AS SAFETY EVIDENCE
 
 Three runs were reported green under kills and restarts: 2731, 2461 and 23,010 operations, each
-"linearizability green, 3 leader kills of 3". **Every one of those restarts was an amnesiac node.**
+"linearizability green, **3 leader kills of 3** — a figure now known to be unreliable". **Every one of
+those restarts was an amnesiac node.**
 
 > **THEY WERE NOT GREENS ABOUT RIFT.** They were greens about a cluster in which one member
 > periodically forgot everything, and they passed because the amnesiac happened not to cast a second
@@ -3689,9 +3708,152 @@ The node reports `persistent=0|1` from its build, and the chaos gate fails a run
 a storage result: **the configuration is named, and a run that cannot support the claim does not make
 it.** A restart schedule needs `-tags=rift_cgo`.
 
-**Consequence, stated rather than worked around:** `chaos/`'s restart-bearing tests are now RED on this
-arm, and I2 cannot produce a safety result under restarts on this machine, because the C++ archive is
-not linked here. That is the honest state; the alternative is a green about a different system.
+**Consequence:** `chaos/`'s restart-bearing tests fail this arm on any build without a persistent
+engine. The claim that this meant "I2 cannot produce a safety result under restarts on this machine"
+was **wrong** and is corrected in [BUG-057].
+
+#### And the assumption itself was the hole
+
+CLAUDE.md states the persistence rule in prose — *term, vote and log durable before replying to any
+RPC* — and the simulator asserts it with a persist-before-reply oracle. **Real mode asserted nothing**,
+so the assumption held only as long as no configuration violated it.
+
+> **AN ASSUMPTION LIVING ONLY IN PROSE IS A HOLE THAT PRESENTS AS A COMPONENT DEFECT.** The panic
+> named `raft/`. The defect was in the harness's fault model, and the distance between those two is the
+> whole cost of leaving an assumption unasserted.
+
+That generalises past this one assumption; see [GF-60].
+
+---
+
+### BUG-057 — (harness) "it does not link on this machine" was an unread error
+
+| | |
+|---|---|
+| **Symptom** | I reported that the `rift_cgo` build could not link here, and narrowed I2's claims accordingly. |
+| **Found by** | Ansh: *"'Does not link on this machine' is not a finding until you have read why."* |
+| **Reproduce** | `go build -tags rift_cgo ./cmd/riftnode` → undefined symbols. Then `CGO_LDFLAGS="-L$(pwd)/engine-cpp/build/test -lrift_capi -lrift_engine" go build -tags rift_cgo ./cmd/riftnode` → **links, 6.5 MB, runs.** |
+| **Invariant that caught it** | none. |
+| **Mutant class** | n/a — this is a reading error, and the tally is BUG-048's. |
+
+`engine/riftcgo` carries only `-lstdc++` in its `#cgo LDFLAGS`, **deliberately**, with the reason
+written at the line: the archive's directory is a build artifact whose location the *caller* chooses,
+which is what lets the package typecheck with no C++ build present. `make cpp-cgo` supplies it via
+`CGO_LDFLAGS`. I supplied nothing.
+
+> **THE ARCHIVES WERE SITTING IN THE TREE — BUILT, DATED, 7.7 MB.** `find . -name '*.a'` would have
+> answered it, and it is the same one-command check the other four instances had available.
+
+**Fourth reading error of this phase, and the sixth in BUG-048's tally.** Same shape: an absence read
+as a fact about the world rather than as a question about the invocation. The consequence here was
+larger than the others — it produced a *scope narrowing of the phase's claims* on a false premise,
+which is the most expensive form this error has taken.
+
+`chaos.buildNode` now builds with the tag and the archive path whenever the archive is present, and
+says so when it is not. A real three-process cluster on `engine/riftcgo` runs.
+
+---
+
+### BUG-058 — (harness) the leader-kill counter counted intent, not delivery
+
+| | |
+|---|---|
+| **Symptom** | `leader-kills=3 of 2 kills` — more leaders killed than kills delivered. |
+| **Found by** | reading the report, twice, before it became a gate arm; then Ansh, who required the assertion move to the point of production. |
+| **Reproduce** | aim a kill at a node that is already down; `Kill` returns without signalling and the caller counts it anyway. |
+| **Invariant that caught it** | `LeaderKills > Kills` at the gate — a reader-side check, which is the wrong place. |
+| **Mutant class** | `Kills > KillsScheduled` panics inside `Supervisor.Kill`. |
+
+**Fixed at the source, which is the ruling's point.** `Supervisor.Kill` now returns whether a signal
+was actually delivered, tracks `KillsScheduled` alongside `Kills`, and **panics if delivered ever
+exceeds scheduled**. Every schedule counts what came back rather than what it asked for.
+
+> **ANY REPORT FIGURE WITH A DERIVABLE INVARIANT IS ASSERTED WHERE IT IS PRODUCED, NOT CHECKED BY A
+> READER.** A reader-side check catches the figure after it has been printed, believed, and — as here
+> — quoted inside a retraction.
+
+---
+
+### BUG-059 — (harness) a restarted `riftnode` never runs the recovery path
+
+| | |
+|---|---|
+| **Symptom** | `panic: store: node 2 has made durable something its own record disagrees with: recorded 0 durable entries above the snapshot, engine returned 1`, on the **C++ engine**, immediately after a restart. |
+| **Found by** | `store/`'s own durability cross-check, firing correctly. |
+| **Reproduce** | kill and restart a `riftnode` built with `-tags=rift_cgo`; the successor calls `store.New` over a populated engine. |
+| **Invariant that caught it** | storage recovery: the engine recovers the acknowledged-synced prefix, and the store's record must agree with it. |
+| **Mutant class** | none yet; the assertion is the detector and it fired on the first real crash. |
+
+`store.Node.restart()` is the recovery path — it reads descriptors, calls `readRecovered()` for every
+replica, then `restartFrom()`. **`cmd/riftnode` calls `store.New()` on every start**, which is the
+*fresh cluster* path, so a restarted node builds empty bookkeeping over an engine that already holds a
+recovered log. The cross-check compares the two and is right to object.
+
+**Not fixed here, and the reason is the seam rather than the fix.** `restart()` is unexported and
+begins `if !m.down { m.crash() }` — and `crash()` on a real engine **panics by design**
+(`realEngine.Crash`), because a modelled crash on a real engine discards nothing while reporting
+success. So real mode needs the *second half* of restart without the first, and `store/` has no way to
+say that.
+
+> **GF-57 AGAIN: `store/`'s recovery was signed with one caller, the simulator, whose restart always
+> follows a modelled crash.** A process that died for real needs "reconcile with what the engine
+> holds" without "pretend to crash first", and that operation has never had to exist.
+
+`store/` is signed, so the shape of the fix is a ruling. Until then, restart-bearing chaos on the C++
+engine cannot run, and `chaos/`'s composition test is RED with this panic rather than with a green
+that hides it.
+
+---
+
+### GF-60 — every assumption stated in prose and asserted by nothing is a hole shaped like a component defect
+
+BUG-056's general form, asked once across the whole constitution the way [GF-58] was asked across the
+tree.
+
+> **THE FAILURE MODE IS NOT THAT THE ASSUMPTION IS WRONG. It is that when a configuration violates it,
+> the failure surfaces inside the component that trusted it** — `raft/` panicking on state machine
+> safety — **and reads as that component's defect.** The distance between where it fires and where it
+> lives is the entire cost.
+
+**The audit. Each assumption is now a checked property or a scope limit that PRINTS.**
+
+| CLAUDE.md assumption | sim | real mode | disposition |
+|---|---|---|---|
+| term/vote/log durable before replying | persist-before-reply oracle | nothing | **gated** — `Restarts > 0 && !Persistent` fails the run (BUG-056) |
+| clock skew bounded by `maxOffset` | drift/jump schedules, oracles | **no skew injected at all** | **scope limit, printed**: `NO clock skew injected (HLC uncertainty unexercised)` |
+| a crash discards unsynced writes | modelled sync-loss windows | not asserted | **scope limit, printed**: `unsynced-write loss NOT asserted` |
+| same seed → byte-identical trace | the determinism gate | n/a | **checked, with a newly-named limit** — see the register entry below |
+| randomness only from `internal/rng` | determinismcheck | same pass | checked |
+| no `time.Now` outside the real clock | determinismcheck | same pass | checked |
+| mailbox rule: no core state off the node loop | by construction | `node/` excluded from the pass | **partially checked**: the `-race` lane and package boundaries, not the analyser |
+| no new dependencies | `tooling-only` lane | same | checked |
+| one process per node | n/a | pid counters | checked |
+
+**Two were holes; both now print in `Run.Exercised()` beside the numbers**, not in an appendix. The
+mailbox row is a third, weaker case and is recorded rather than closed: it is enforced by two
+mechanisms neither of which is the analyser that enforces the rest.
+
+#### And into the vacuous-green register: "byte-identical" needs a noun
+
+`sim.Trace.Step` folds `(step, at, kind, node, payloadLen)`. It does **not** fold payload content.
+
+> **EVERY "BYTE-IDENTICAL TRACE HASH" CLAIM ACROSS EIGHT PHASES RESTS ON THAT.** It is a limitation of
+> the instrument, not of any test that uses it.
+
+The scope, stated once so it can be cited instead of rediscovered:
+
+| instrument | catches | misses |
+|---|---|---|
+| trace hash | event **shape** — which events, when, to whom, of what size | anything inside a payload that keeps its length |
+| history comparison | **client-visible values** | anything that never reaches a client |
+| the two together | both of the above | internal state that never reaches a message, a client, or an event's shape |
+
+The `hlc.Now()` plant of [GF-57]'s test sits in exactly that residual band, which is why it passed and
+why passing was the *correct* outcome rather than a blind spot.
+
+> **STOP WRITING "BYTE-IDENTICAL" WITHOUT NAMING WHAT IT IS IDENTICAL IN.**
+
+---
 
 ---
 

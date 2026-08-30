@@ -210,6 +210,11 @@ func (r Run) Gate(minKills, minOps int) GateResult {
 	// More aims than signals means a kill was aimed at a node that was already
 	// dead -- which is how a run reports 3 leader kills out of 2 kills, and how
 	// the first benchmark attempt looked from outside before its stderr was read.
+	if r.Counters.Kills > r.Counters.KillsScheduled {
+		add("%d kills delivered against %d scheduled: the counter that produces this figure is "+
+			"inconsistent, so no kill number in this report can be trusted",
+			r.Counters.Kills, r.Counters.KillsScheduled)
+	}
 	if r.LeaderKills > r.Counters.Kills {
 		add("%d leader kills against %d kills delivered: the schedule aimed at a node that was "+
 			"already down, so the fault it believes it injected did not happen",
@@ -238,8 +243,12 @@ func (r Run) Gate(minKills, minOps int) GateResult {
 // Report writes the run, with the caveat attached to the numbers.
 func (r Run) Report(w io.Writer, g GateResult) {
 	fmt.Fprintf(w, "chaos run\n")
-	fmt.Fprintf(w, "  processes  started=%d kills=%d restarts=%d exited-uninvited=%d\n",
-		r.Counters.Started, r.Counters.Kills, r.Counters.Restarts, r.Counters.ExitedOther)
+	fmt.Fprintf(w, "  processes  started=%d kills=%d/%d-scheduled restarts=%d exited-uninvited=%d\n",
+		r.Counters.Started, r.Counters.Kills, r.Counters.KillsScheduled,
+		r.Counters.Restarts, r.Counters.ExitedOther)
+	// THE NARROWER CLAIM, IN THE OUTPUT LINE. Not an appendix: what a run did
+	// and did not exercise belongs where its numbers are read.
+	fmt.Fprintf(w, "  exercised  %s\n", r.Exercised())
 	fmt.Fprintf(w, "  client     issued=%d completed=%d failed=%d keys=%d\n",
 		r.Ops.Issued, r.Ops.Completed, r.Ops.Failed, r.Ops.Keys)
 	fmt.Fprintf(w, "  responses  unissued=%d conflicting=%d duplicate=%d late-after-timeout=%d\n",
@@ -381,4 +390,43 @@ func (r Run) FaultLog() string {
 		}
 	}
 	return b.String()
+}
+
+// Exercised names what this run's configuration can and cannot support, in one
+// line, beside the numbers.
+//
+//	A SCOPE LIMIT IN AN APPENDIX IS A SCOPE LIMIT THAT TRAVELS SEPARATELY FROM
+//	THE NUMBER IT BOUNDS. The engine line prints in the run's output; so does
+//	this, and for the same reason.
+func (r Run) Exercised() string {
+	var parts []string
+	switch {
+	case r.Counters.Restarts > 0 && r.Persistent:
+		parts = append(parts, "kills WITH restart on a persistent engine (recovery exercised)")
+	case r.Counters.Restarts > 0:
+		parts = append(parts, "restarts on a NON-PERSISTENT engine -- BUG-056: not a crash")
+	default:
+		parts = append(parts,
+			"kills WITHOUT restart, on a shrinking cluster; PERSISTENCE NOT EXERCISED")
+	}
+	if r.Unobserved {
+		parts = append(parts, "ledger=OFF, so NO checker evidence")
+	}
+	// THE ASSUMPTIONS REAL MODE DOES NOT EXERCISE, printed rather than filed.
+	//
+	// CLAUDE.md's fault list includes bounded clock skew and loss of unsynced
+	// writes. The simulator injects both; real mode injects NEITHER -- riftnode
+	// reads a real clock with no drift or jump schedule, and a SIGKILL's effect
+	// on unsynced writes is whatever the engine and the OS did, unasserted.
+	//
+	//	AN ASSUMPTION LIVING ONLY IN PROSE IS A HOLE THAT PRESENTS AS A COMPONENT
+	//	DEFECT -- BUG-056's lesson, applied to the rest of the list rather than
+	//	only to the one that already bit.
+	parts = append(parts,
+		"NO clock skew injected (HLC uncertainty unexercised)",
+		"unsynced-write loss NOT asserted")
+	if r.Counters.Kills > r.Counters.KillsScheduled {
+		parts = append(parts, "KILL COUNTER INCONSISTENT")
+	}
+	return strings.Join(parts, "; ")
 }

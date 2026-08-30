@@ -82,7 +82,7 @@ func TestAKillIsAKillAndTheCountersSaySo(t *testing.T) {
 	waitFor(t, filepath.Join(root, "n1", "started-1"))
 	waitFor(t, filepath.Join(root, "n2", "started-2"))
 
-	if err := s.Kill(nodes[0]); err != nil {
+	if _, err := s.Kill(nodes[0]); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -161,7 +161,7 @@ func TestARestartReusesTheDirectory(t *testing.T) {
 	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Kill(n); err != nil {
+	if _, err := s.Kill(n); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(150 * time.Millisecond)
@@ -227,7 +227,7 @@ func TestAKilledProcessIsNotReportedAsAnUninvitedExitAcrossARestart(t *testing.T
 	defer s.StopAll()
 
 	for i := 0; i < 4; i++ {
-		if err := s.Kill(n); err != nil {
+		if _, err := s.Kill(n); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.Restart(n); err != nil {

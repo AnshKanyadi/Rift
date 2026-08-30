@@ -110,8 +110,30 @@ type Supervisor struct {
 // Counters is what the lane GATES on. Every field is a deterministic property
 // of the run having happened, not a verdict about what it found.
 type Counters struct {
-	Started     int // process starts, including restarts
-	Kills       int // SIGKILLs delivered
+	Started int // process starts, including restarts
+
+	// KillsScheduled is how many kills a schedule ASKED FOR; Kills is how many
+	// signals were actually delivered. They differ when a kill is aimed at a
+	// node that is already down.
+	//
+	// # Two counters because one of them was wrong and nobody could tell
+	//
+	// A run reported `leader-kills=3 of 2 kills` -- an arithmetic impossibility,
+	// printed, in a report being read closely, and scrolled past twice (BUG-048's
+	// reading tally, fifth entry). Worse: the retracted chaos greens all reported
+	// "3 leader kills of 3" through the SAME counter.
+	//
+	//	SO THE HONEST STATEMENT ABOUT THOSE RUNS IS NOT "THE KILLS EXECUTED
+	//	CORRECTLY AND THE PERSISTENCE ASSUMPTION WAS VIOLATED". It is that the
+	//	kill figures came from a counter now known to over-report, and how many
+	//	leaders those runs killed IS NOT KNOWN. See BUG-058.
+	//
+	// The invariant is asserted HERE, where the numbers are produced, rather than
+	// checked by a reader downstream: `Kills <= KillsScheduled` by construction,
+	// and Kill panics if it ever is not.
+	KillsScheduled int
+	Kills          int
+
 	Restarts    int // starts that followed a kill
 	ExitedOther int // processes that died without being killed -- always a finding
 }
@@ -204,7 +226,17 @@ func (s *Supervisor) startOne(n *Node) error {
 //	kill -9 IS THE POINT. A process that gets to run a deferred Close has lost
 //	nothing, and "the database survives a clean shutdown" is not a claim worth
 //	a chaos lane.
-func (s *Supervisor) Kill(n *Node) error {
+//
+// Kill delivers SIGKILL and reports whether a signal actually went out.
+//
+// The bool is the point: a kill aimed at a node that is already down delivers
+// nothing, and a caller that counts the ATTEMPT reports a fault it did not
+// inject. Every schedule must count what came back from here.
+func (s *Supervisor) Kill(n *Node) (bool, error) {
+	s.mu.Lock()
+	s.counts.KillsScheduled++
+	s.mu.Unlock()
+
 	n.mu.Lock()
 	l := n.cur
 	if l != nil {
@@ -216,10 +248,10 @@ func (s *Supervisor) Kill(n *Node) error {
 	}
 	n.mu.Unlock()
 	if l == nil || l.cmd == nil || l.cmd.Process == nil {
-		return nil
+		return false, nil
 	}
 	if err := l.cmd.Process.Signal(syscall.SIGKILL); err != nil {
-		return err
+		return false, err
 	}
 	// LOGGED WITH THE PID. An uninvited exit names its pid; a kill names the pid
 	// it signalled. One occurrence with both lines closes OPEN-I2-1 or opens a
@@ -229,8 +261,18 @@ func (s *Supervisor) Kill(n *Node) error {
 	s.stderrMu.Unlock()
 	s.mu.Lock()
 	s.counts.Kills++
+	// ASSERTED WHERE IT IS PRODUCED. Any report figure with a derivable
+	// invariant is checked at the source, not by whoever reads the report --
+	// GF-59's rule turned into code.
+	if s.counts.Kills > s.counts.KillsScheduled {
+		bad := fmt.Sprintf("chaos: %d kills delivered against %d scheduled; the counter that "+
+			"produces this figure cannot be trusted and neither can any run reported through it",
+			s.counts.Kills, s.counts.KillsScheduled)
+		s.mu.Unlock()
+		panic(bad)
+	}
 	s.mu.Unlock()
-	return nil
+	return true, nil
 }
 
 // Restart brings a killed node back. Its directory is untouched, so recovery
@@ -278,7 +320,7 @@ func (s *Supervisor) Restart(n *Node) error {
 // StopAll kills everything, for teardown rather than for chaos.
 func (s *Supervisor) StopAll() {
 	for _, n := range s.nodes {
-		_ = s.Kill(n)
+		_, _ = s.Kill(n)
 	}
 	// Give the reapers a moment to run so the counters settle before a caller
 	// reads them.
