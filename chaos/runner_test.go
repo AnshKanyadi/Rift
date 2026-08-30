@@ -16,6 +16,7 @@ func good() chaos.Run {
 		Faults:      []chaos.Fault{{At: time.Now(), Kind: "kill", Node: 1}},
 		LeaderKills: 4,
 		LedTicks:    900,
+		Persistent:  true,
 		Verdicts:    []chaos.Verdict{{Checker: "linearizability", Outcome: sim.VerdictPass, Consumed: 940}},
 	}
 }
@@ -292,5 +293,44 @@ func TestMoreLeaderKillsThanKillsFailsTheGate(t *testing.T) {
 	r.LeaderKills = r.Counters.Kills + 1
 	if len(r.Gate(1, 1).Failures) == 0 {
 		t.Fatal("a run reporting more leader kills than kills passed the gate")
+	}
+}
+
+// A verdict from an unobserved cluster is a checker's opinion about a run nobody
+// watched.
+func TestVerdictsFromAnUnobservedRunFailTheGate(t *testing.T) {
+	r := good()
+	r.Unobserved = true
+	g := r.Gate(1, 1)
+	if len(g.Failures) == 0 {
+		t.Fatal("a run with the ledger off reported verdicts and passed the gate")
+	}
+	// And an unobserved run with NO verdicts is legitimate: that is how a
+	// benchmark measures anything.
+	r2 := good()
+	r2.Unobserved, r2.Verdicts = true, nil
+	if f := r2.Gate(1, 1).Failures; len(f) != 0 {
+		t.Fatalf("an unobserved run claiming nothing failed the gate: %v", f)
+	}
+}
+
+// A restart on a non-persistent engine is not a crash; it is a fresh node
+// wearing an existing identity.
+func TestRestartsOnANonPersistentEngineFailTheGate(t *testing.T) {
+	r := good()
+	r.Persistent = false
+	g := r.Gate(1, 1)
+	if len(g.Failures) == 0 {
+		t.Fatal("a restart schedule on an in-memory engine passed the gate")
+	}
+	if !strings.Contains(strings.Join(g.Failures, " "), "amnesia") {
+		t.Fatalf("the failure does not name what went wrong: %v", g.Failures)
+	}
+	// A run with NO restarts is fine on any engine: nothing was asked to recover.
+	r2 := good()
+	r2.Persistent = false
+	r2.Counters.Restarts = 0
+	if f := r2.Gate(1, 1).Failures; len(f) != 0 {
+		t.Fatalf("a run with no restarts failed on the persistence arm: %v", f)
 	}
 }

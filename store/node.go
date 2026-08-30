@@ -111,8 +111,34 @@ type Config struct {
 	// drives the store on a source that is not an HLC. Same distinction this
 	// project keeps making, between a mechanism declared and one invoked.
 	NewTimestampSource func(c clock.Clock, node uint32) (hlc.Source, error)
-	Ledger             *raftcheck.Ledger
-	History            *sim.History
+	// Ledger is the oracle. It is REQUIRED unless Unobserved says otherwise.
+	//
+	// See BUG-055 and raftcheck's nil-receiver block: the ledger retains every
+	// message and every applied entry forever, which is the mechanism a bounded
+	// run needs and a cost an unbounded one cannot carry.
+	Ledger *raftcheck.Ledger
+
+	// Unobserved says the absence of a Ledger was CHOSEN.
+	//
+	// # The default is on, and that is the whole of this field's design
+	//
+	// Every Track A number was taken with an oracle watching. A simulated run
+	// without one has no oracle at all, so absence must be the deliberate choice
+	// rather than the fallback:
+	//
+	//	A CONFIG THAT OMITS THE LEDGER FAILS. It does not quietly run unobserved,
+	//	because "I forgot" and "I meant it" must not produce the same program.
+	//
+	// Setting this alongside a Ledger is also an error. A config that says both
+	// has not made a choice, and guessing which half it meant is how a run ends
+	// up observed when it claimed not to be, or the reverse.
+	//
+	// It changes NOTHING a node computes. TestTheLedgerIsAnObserver asserts that
+	// a sim run with it set produces a byte-identical trace hash to one without,
+	// because an observer that changes the run is not an observer.
+	Unobserved bool
+
+	History *sim.History
 
 	// Learners are the peers that start as learners rather than voters.
 	Learners []raft.NodeID
@@ -450,8 +476,11 @@ type clientOp struct {
 //	A THROWAWAY ALLOCATION IS FREE ON A MODEL AND A LEAK ON A REAL ENGINE, and
 //	the model is what made it invisible for the whole of Track A.
 func newReplica(cfg Config, db *tracked) (*Replica, error) {
-	if cfg.Transport == nil || cfg.Ledger == nil {
-		return nil, fmt.Errorf("store: node %d needs a transport and a ledger", cfg.ID)
+	if cfg.Transport == nil {
+		return nil, fmt.Errorf("store: node %d needs a transport", cfg.ID)
+	}
+	if err := cfg.checkLedger(); err != nil {
+		return nil, err
 	}
 	if cfg.SyncLatency <= 0 {
 		return nil, fmt.Errorf("store: node %d has no modelled fsync duration", cfg.ID)
@@ -2299,3 +2328,17 @@ func (n *Replica) GCApplied() int         { return n.gcApplied }
 func (n *Replica) VersionsCollected() int { return n.versionsCollected }
 func (n *Replica) EnvelopeRefusals() int  { return n.envelopeRefusals }
 func (n *Replica) ReadsRefused() int      { return n.readsRefused }
+
+// checkLedger enforces that the absence of an oracle is a decision.
+func (c Config) checkLedger() error {
+	switch {
+	case c.Ledger == nil && !c.Unobserved:
+		return fmt.Errorf("store: node %d has no ledger and did not set Unobserved; a run with no "+
+			"oracle must SAY so, because a forgotten ledger and a deliberate one would otherwise "+
+			"produce the same program", c.ID)
+	case c.Ledger != nil && c.Unobserved:
+		return fmt.Errorf("store: node %d set Unobserved AND supplied a ledger; a config that says "+
+			"both has not made a choice", c.ID)
+	}
+	return nil
+}

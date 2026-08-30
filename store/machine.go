@@ -50,8 +50,11 @@ type Node struct {
 // New builds a machine hosting one replica of the initial range, which covers
 // the whole key space.
 func New(cfg Config) (*Node, error) {
-	if cfg.Transport == nil || cfg.Ledger == nil {
-		return nil, fmt.Errorf("store: node %d needs a transport and a ledger", cfg.ID)
+	if cfg.Transport == nil {
+		return nil, fmt.Errorf("store: node %d needs a transport", cfg.ID)
+	}
+	if err := cfg.checkLedger(); err != nil {
+		return nil, err
 	}
 	if cfg.SyncLatency <= 0 {
 		return nil, fmt.Errorf("store: node %d has no modelled fsync duration", cfg.ID)

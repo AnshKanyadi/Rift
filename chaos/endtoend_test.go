@@ -119,6 +119,8 @@ func TestARealClusterIsRealInTheWayThePhaseClaims(t *testing.T) {
 		}
 	}
 
+	// Read BEFORE StopAll: a killed node's last counters file is what remains,
+	// and it is written during the run rather than at exit (BUG-045's lane).
 	sent, wire, recv := parseExitCounters(t, nodes)
 	if wire == 0 {
 		t.Errorf("no bytes were written to any socket. The cluster may be running entirely in "+
@@ -261,6 +263,7 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 	// killing during the first election measures the startup gap and calls it
 	// chaos, and the leader-kill count is zero because there was nothing to hit.
 	waitForLeader(t, nodes, 8*time.Second)
+	persistent := clusterIsPersistent(nodes)
 
 	var faults []chaos.Fault
 	leaderKills := 0
@@ -293,6 +296,8 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 	s.StopAll()
 	time.Sleep(300 * time.Millisecond)
 
+	// Read BEFORE StopAll: a killed node's last counters file is what remains,
+	// and it is written during the run rather than at exit (BUG-045's lane).
 	sent, wire, recv := parseExitCounters(t, nodes)
 	run := chaos.Run{
 		Counters:    s.Counters(),
@@ -300,6 +305,7 @@ func TestTheClusterSurvivesKillsIsACompositionTest(t *testing.T) {
 		Faults:      faults,
 		LeaderKills: leaderKills,
 		LedTicks:    led.total(),
+		Persistent:  persistent,
 		// No client verdicts HERE. riftnode does wire the store now, and
 		// TestChaosRunWithRealCheckers is where a client asks it for something;
 		// this test drives no client, so there is no history for a checker to
@@ -364,6 +370,8 @@ type nodeStat struct {
 	admitted, served, refused, led uint64
 	ticks                          uint64
 	leader                         int
+	heap, goroutines               uint64
+	observed, persistent           int
 }
 
 // readStats reads what each node says about itself. A node is the only party
@@ -378,10 +386,12 @@ func readStats(nodes []*chaos.Node) map[int]nodeStat {
 		}
 		var st nodeStat
 		n, _ := fmt.Sscanf(string(b),
-			"id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d",
+			"id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d "+
+				"ticks=%d leader=%d heap=%d goroutines=%d observed=%d persistent=%d",
 			&st.id, &st.sent, &st.dropped, &st.wire, &st.recv, &st.admitted, &st.served,
-			&st.refused, &st.led, &st.ticks, &st.leader)
-		if n == 11 {
+			&st.refused, &st.led, &st.ticks, &st.leader, &st.heap, &st.goroutines,
+			&st.observed, &st.persistent)
+		if n >= 11 {
 			out[st.id] = st
 		}
 	}
@@ -445,4 +455,21 @@ func waitForLeader(t *testing.T, nodes []*chaos.Node, within time.Duration) {
 	// eight seconds is broken, and continuing would produce a green run whose
 	// every operation timed out.
 	t.Fatalf("no node reported itself leader within %s", within)
+}
+
+// clusterIsPersistent reports whether the nodes' engine survives a restart, from
+// the nodes' own report rather than from a constant here. See BUG-056 and the
+// engineNameOf comment: a constant asserting what a binary did is a claim that
+// survives the binary changing.
+func clusterIsPersistent(nodes []*chaos.Node) bool {
+	st := readStats(nodes)
+	if len(st) == 0 {
+		return false
+	}
+	for _, s := range st {
+		if s.persistent != 1 {
+			return false
+		}
+	}
+	return true
 }

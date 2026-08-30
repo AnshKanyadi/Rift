@@ -49,6 +49,8 @@ func main() {
 	dir := flag.String("dir", "", "this node's storage directory")
 	peers := flag.String("peers", "", "comma-separated id=host:port for every other node")
 	clients := flag.String("clients", "", "comma-separated id=host:port for client endpoints")
+	unobserved := flag.Bool("unobserved", false,
+		"run with NO oracle ledger: faster, and produces no checker evidence (BUG-055)")
 	flag.Parse()
 
 	if *id == 0 || *addr == "" || *dir == "" {
@@ -121,6 +123,11 @@ func main() {
 		all[k] = v
 	}
 
+	observedFlag := 1
+	if *unobserved {
+		observedFlag = 0
+	}
+
 	tr := tcp.New(self, all)
 	defer tr.Close()
 
@@ -163,7 +170,15 @@ func main() {
 		// as the write and erase the unsynced window entirely, which is the
 		// fault the whole phase is built to inject.
 		SyncLatency: clock.Instant(2 * time.Millisecond),
-		Ledger:      raftcheck.NewLedger(len(peerIDs)),
+		// THE ORACLE, AND THE DEFAULT IS ON.
+		//
+		// BUG-055: the ledger retains every message and every applied entry
+		// forever -- the mechanism a bounded run needs, and a cost an unbounded
+		// one cannot carry. Real mode may decline it, and declining is a CHOICE
+		// the flag has to make explicitly; store.New refuses a config that
+		// simply omits it.
+		Ledger:     ledgerFor(*unobserved, len(peerIDs)),
+		Unobserved: *unobserved,
 		// The node's OWN history, which is discarded. The authoritative history
 		// is the CLIENT's, in the client's process, on the client's clock --
 		// one monotonic source, which is why the two cannot be the same object.
@@ -242,8 +257,13 @@ func main() {
 	// THE ENGINE IS NAMED IN THE OUTPUT. A result is about whichever engine
 	// produced it, and a reader who cannot tell which will assume the one the
 	// phase claims.
-	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s\n",
-		*id, *addr, *dir, len(addrs), EngineName)
+	//
+	// AND SO IS THE ORACLE, in the same place and for the same reason. A green
+	// from a cluster that was not producing checker evidence is not a verified
+	// result, and the only thing standing between those two readings is this
+	// line.
+	fmt.Fprintf(os.Stderr, "riftnode %d listening on %s, dir=%s, peers=%d, engine=%s, ledger=%s\n",
+		*id, *addr, *dir, len(addrs), EngineName, ledgerName(*unobserved))
 	// A readiness marker the supervisor can wait on. Waiting on a sleep instead
 	// is how a test becomes flaky on a loaded machine, and how a cluster that
 	// never came up reports as one that came up slowly.
@@ -322,7 +342,7 @@ func main() {
 			case <-stop:
 				return
 			case <-t.C:
-				writeCounters(*dir, *id, tr, &received, srv)
+				writeCounters(*dir, *id, tr, &received, srv, observedFlag)
 			}
 		}
 	}()
@@ -331,7 +351,7 @@ func main() {
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	<-sigs
 	close(stop)
-	writeCounters(*dir, *id, tr, &received, srv)
+	writeCounters(*dir, *id, tr, &received, srv, observedFlag)
 
 	sent, dropped, wire := tr.Counters()
 	fmt.Fprintf(os.Stderr, "riftnode %d exiting: sent=%d dropped=%d wire-bytes=%d recv-bytes=%d\n",
@@ -377,7 +397,7 @@ func splitComma(s string) []string {
 // destroy them. Written to a temporary file and renamed, so a reader never sees
 // a half-written line -- a kill during the write would otherwise produce a
 // corrupt counter that reads as a small one.
-func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64, srv *serving) {
+func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64, srv *serving, observedFlag int) {
 	sent, dropped, wire := tr.Counters()
 	// served and refused are read WITHOUT a lock, from the node loop's own
 	// fields, and that is a deliberate limitation stated rather than hidden:
@@ -397,9 +417,9 @@ func writeCounters(dir string, id int, tr *tcp.Transport, received *uint64, srv 
 	if now {
 		cur = 1
 	}
-	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d heap=%d goroutines=%d\n",
+	line := fmt.Sprintf("id=%d sent=%d dropped=%d wire=%d recv=%d admitted=%d served=%d refused=%d led=%d ticks=%d leader=%d heap=%d goroutines=%d observed=%d persistent=%d\n",
 		id, sent, dropped, wire, atomicLoad(received), admitted, served, refused, led, ticks, cur,
-		ms.HeapAlloc, runtime.NumGoroutine())
+		ms.HeapAlloc, runtime.NumGoroutine(), observedFlag, persistentFlag())
 	tmp := filepath.Join(dir, "counters.tmp")
 	if err := os.WriteFile(tmp, []byte(line), 0o644); err != nil {
 		return
@@ -428,3 +448,33 @@ const (
 	// drop, shallow enough that a wedged node does not accumulate unboundedly.
 	mailboxDepth = 1024
 )
+
+// ledgerFor builds the oracle unless the run declined it.
+//
+// A nil return is legal ONLY beside Config.Unobserved, which store.New enforces:
+// a forgotten ledger and a declined one must not produce the same program.
+func ledgerFor(unobserved bool, n int) *raftcheck.Ledger {
+	if unobserved {
+		return nil
+	}
+	return raftcheck.NewLedger(n)
+}
+
+// ledgerName is what the startup line says, in the engine name's own shape: a
+// configuration that weakens what a run can claim says so where the claim is
+// read, not in a document beside it.
+func ledgerName(unobserved bool) string {
+	if unobserved {
+		return "OFF (--unobserved: NOT producing checker evidence)"
+	}
+	return "on"
+}
+
+// persistentFlag reports whether this build's engine survives the process, so a
+// chaos runner can refuse a restart schedule it cannot support. See BUG-056.
+func persistentFlag() int {
+	if EnginePersistent {
+		return 1
+	}
+	return 0
+}

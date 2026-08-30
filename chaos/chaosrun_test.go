@@ -85,6 +85,7 @@ func TestChaosRunWithRealCheckers(t *testing.T) {
 		addrs[sim.NodeID(i)] = fmt.Sprintf("127.0.0.1:%d", ports[i-1])
 	}
 
+	run := chaos.Run{}
 	hist := &sim.History{}
 	rec := chaos.NewClient(clientID, clock.NewReal(0), hist)
 	wc, err := chaos.NewWireClient(clientID, clientAddr, addrs, rec, 2*time.Second)
@@ -97,13 +98,13 @@ func TestChaosRunWithRealCheckers(t *testing.T) {
 	// history lands in the pre-leader window measures the startup gap and calls
 	// it the system.
 	waitForLeader(t, nodes, 8*time.Second)
+	run.Persistent = clusterIsPersistent(nodes)
 
 	const (
 		keys     = 8
 		duration = 12 * time.Second
 		killEach = 3 * time.Second
 	)
-	run := chaos.Run{}
 	led := newLedWatch()
 	deadline := time.Now().Add(duration)
 	nextKill := time.Now().Add(killEach)

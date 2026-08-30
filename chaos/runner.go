@@ -52,8 +52,36 @@ type Run struct {
 	// Zero means no node ever led, and a run in which no node ever led observed
 	// NOTHING: every checker is green because nothing happened.
 	LedTicks uint64
-	Faults   []Fault
-	Verdicts []Verdict
+
+	// Unobserved says the cluster ran with no oracle ledger (BUG-055).
+	//
+	// A run may legitimately choose that -- it is how the benchmark measures
+	// anything at all -- but then it produces NO CHECKER EVIDENCE, and a run
+	// that reports verdicts must not have chosen it:
+	//
+	//	A VERDICT FROM AN UNOBSERVED CLUSTER IS A CHECKER'S OPINION ABOUT A RUN
+	//	NOBODY WATCHED. The gate refuses the combination for the same reason the
+	//	untagged binary refuses --engine cgo with a named reason: the two
+	//	configurations claim different things, and only one of them is entitled
+	//	to the word.
+	Unobserved bool
+
+	// Persistent says the nodes' engine survives the process (BUG-056).
+	//
+	//	A RESTART ON A NON-PERSISTENT ENGINE IS NOT A CRASH. `engine/model` is
+	//	in-memory and `store/` persists HardState and log INTO the engine, so a
+	//	SIGKILLed node comes back with no term, no vote and no log -- a FRESH node
+	//	wearing an existing identity. A node that has forgotten its vote can vote
+	//	twice in one term, and two leaders in one term overwrite committed
+	//	entries.
+	//
+	// That is not a fault Rift claims to survive: CLAUDE.md's persistence rule is
+	// an ASSUMPTION of the safety argument, not a property being tested. A run
+	// that violates it is testing a different system, and its greens are greens
+	// about that system.
+	Persistent bool
+	Faults     []Fault
+	Verdicts   []Verdict
 }
 
 // OpCounters is the client side of the gate. A cluster that started, was
@@ -161,6 +189,18 @@ func (r Run) Gate(minKills, minOps int) GateResult {
 	// about the run that happened.
 	// A cluster that never elected a leader is a cluster that never did
 	// anything, and its history is green by construction.
+	if r.Counters.Restarts > 0 && !r.Persistent {
+		add("%d restart(s) on a NON-PERSISTENT engine: store/ persists term, vote and log into "+
+			"the engine, and engine/model is in-memory, so each restarted node came back with "+
+			"amnesia -- a fresh node wearing an existing identity. That breaks Raft's persistence "+
+			"assumption rather than testing it, so nothing this run observed is about Rift. "+
+			"Restart schedules need -tags=rift_cgo", r.Counters.Restarts)
+	}
+	if r.Unobserved && len(r.Verdicts) > 0 {
+		add("%d checker verdict(s) from a cluster that ran --unobserved: the ledger was off, so "+
+			"this run produced no checker evidence and is not entitled to a verdict",
+			len(r.Verdicts))
+	}
 	if r.LedTicks == 0 {
 		add("no node ever led: an unled cluster serves nothing, so a green history " +
 			"here is a statement about an experiment that did not run")

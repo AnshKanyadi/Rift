@@ -78,3 +78,8 @@ func (e realEngine) Crash() {
 	panic("riftnode: store.Crash() was called on a real engine; a real crash is the process dying, " +
 		"and a modelled one here would discard nothing while reporting success")
 }
+
+// EnginePersistent: the C++ engine has a WAL, a manifest and a recovery path, so
+// a restarted node recovers the acknowledged-synced prefix -- which is what
+// Raft's persistence assumption requires. See BUG-056.
+const EnginePersistent = true

@@ -423,12 +423,45 @@ func (l *Ledger) forRange(id uint64) *rangeLedger {
 
 // Ranges returns the sub-ledgers in range order, which is the order every oracle
 // walks them in.
-func (l *Ledger) Ranges() []*rangeLedger { return l.ranges }
+//
+// A nil Ledger has none. That is reachable only through Config.Unobserved, and a
+// CALLER THAT IS NOT AN ORACLE must say what it does with an empty answer --
+// which is a live concern rather than a hypothetical: `sim/hunt`'s rebalance
+// driver reads this to choose which range to move. See GF-58.
+func (l *Ledger) Ranges() []*rangeLedger {
+	if l == nil {
+		return nil
+	}
+	return l.ranges
+}
 
 // RecordMove records a replica movement the harness ordered.
 //
 // Observed: the harness is the thing that issued it.
+// # THE NIL LEDGER IS THE DELIBERATELY-UNOBSERVED ONE (BUG-055)
+//
+// Every Record method below returns immediately on a nil receiver. That is not a
+// convenience and it is not defensive programming:
+//
+//	A LEDGER IS AN ORACLE. It retains every message sent, every message
+//	received and every entry applied -- 875 bytes per operation, measured -- and
+//	that is the mechanism, not a leak: the oracles need the whole history to
+//	answer "was this message released before its term was durable?".
+//
+// A run that is bounded pays that cost once and exits. Real mode does not end,
+// so a real node carrying a complete audit log of its own history slows down
+// forever. The fix is to let real mode run WITHOUT an oracle it is not
+// consulting -- never to trim, sample or cap the oracle, which is weakening a
+// checker to get a number.
+//
+// The nil case is therefore reachable ONLY through a deliberate choice.
+// `store.New` refuses a nil Ledger unless `Config.Unobserved` says the absence
+// was chosen, and refuses `Unobserved` alongside a Ledger, so "I forgot" and "I
+// meant it" cannot produce the same program.
 func (l *Ledger) RecordMove(mO provenance.Observed[MoveRecord]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.moves = append(l.moves, mO.Fact())
 }
@@ -437,6 +470,9 @@ func (l *Ledger) RecordMove(mO provenance.Observed[MoveRecord]) {
 //
 // Observed: the harness is the thing that issued it.
 func (l *Ledger) RecordTxnBegin(r provenance.Observed[TxnRecord]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.txns = append(l.txns, r.Fact())
 }
@@ -469,6 +505,9 @@ type TxnCommitRecord struct {
 }
 
 func (l *Ledger) RecordTxnCommit(r provenance.Observed[TxnCommitRecord]) {
+	if l == nil {
+		return
+	}
 	c := r.Fact()
 	l.rev++
 	for i := range l.txns {
@@ -506,6 +545,9 @@ type TxnRestartRecord struct {
 //
 // Observed: the coordinator minted the new timestamp and re-issued its reads.
 func (l *Ledger) RecordTxnRestart(r provenance.Observed[TxnRestartRecord]) {
+	if l == nil {
+		return
+	}
 	c := r.Fact()
 	l.rev++
 	l.txnRestarts++
@@ -523,7 +565,12 @@ func (l *Ledger) RecordTxnRestart(r provenance.Observed[TxnRestartRecord]) {
 // It exists to be compared against the coordinator's own count. Two numbers for
 // one fact is the only way to notice that the recording path stopped being
 // called, which is what happened to the field this replaces.
-func (l *Ledger) TxnRestarts() int { return l.txnRestarts }
+func (l *Ledger) TxnRestarts() int {
+	if l == nil {
+		return 0
+	}
+	return l.txnRestarts
+}
 
 // Txns is every transaction the harness issued.
 func (l *Ledger) Txns() []TxnRecord { return l.txns }
@@ -532,6 +579,9 @@ func (l *Ledger) Txns() []TxnRecord { return l.txns }
 //
 // Observed: the bytes crossing the boundary out of the node.
 func (l *Ledger) RecordRead(r provenance.Observed[ReadRecord]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.reads = append(l.reads, r.Fact())
 }
@@ -541,6 +591,9 @@ func (l *Ledger) Reads() []ReadRecord { return l.reads }
 
 // RecordWrite files one acknowledged write.
 func (l *Ledger) RecordWrite(r provenance.Observed[WriteRecord]) {
+	if l == nil {
+		return
+	}
 	l.writes = append(l.writes, r.Fact())
 }
 
@@ -549,6 +602,9 @@ func (l *Ledger) Writes() []WriteRecord { return l.writes }
 
 // RecordTxnRead appends one snapshot read and its answer.
 func (l *Ledger) RecordTxnRead(r provenance.Observed[TxnReadRecord]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.txnReads = append(l.txnReads, r.Fact())
 }
@@ -558,6 +614,9 @@ func (l *Ledger) TxnReads() []TxnReadRecord { return l.txnReads }
 
 // RecordAudit appends one complete audit.
 func (l *Ledger) RecordAudit(r provenance.Observed[AuditRecord]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.audits = append(l.audits, r.Fact())
 }
@@ -577,10 +636,18 @@ func (l *Ledger) ReadsRefused() int {
 }
 
 // Moves is every replica movement the harness ordered.
-func (l *Ledger) Moves() []MoveRecord { return l.moves }
+func (l *Ledger) Moves() []MoveRecord {
+	if l == nil {
+		return nil
+	}
+	return l.moves
+}
 
 // RecordConfOrder notes that the churn driver asked for a change to a node.
 func (l *Ledger) RecordConfOrder(o provenance.Observed[ConfOrder]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.confOrders = append(l.confOrders, o.Fact())
 }
@@ -623,6 +690,9 @@ func (l *Ledger) moveEnds(i int) clock.Instant {
 // MovesCompleted counts the ordered moves whose removal is committed, which is
 // the only sense in which a move can be said to have happened.
 func (l *Ledger) MovesCompleted() int {
+	if l == nil {
+		return 0
+	}
 	n := 0
 	for i, m := range l.moves {
 		rl := l.rangeByID(m.Range)
@@ -657,6 +727,9 @@ func (l *Ledger) MovesCompleted() int {
 // A change is "the move's own" if it adds the destination or removes the source.
 // Anything else committed inside the window belongs to somebody else.
 func (l *Ledger) MovesRacingUnrelatedChanges() int {
+	if l == nil {
+		return 0
+	}
 	n := 0
 	for i, m := range l.moves {
 		rl := l.rangeByID(m.Range)
@@ -1335,30 +1408,45 @@ func (l *Ledger) Nodes() int { return l.nodes }
 
 // RecordDurable records what a node made durable for one range.
 func (l *Ledger) RecordDurable(rangeID uint64, node int, st provenance.Observed[DurableState], at clock.Instant) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.forRange(rangeID).RecordDurable(node, st, at)
 }
 
 // RecordSent records a released message.
 func (l *Ledger) RecordSent(rangeID uint64, node int, m provenance.Observed[raft.Message], at clock.Instant) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.forRange(rangeID).RecordSent(node, m, at)
 }
 
 // RecordReceived records a message a node accepted.
 func (l *Ledger) RecordReceived(rangeID uint64, node int, m provenance.Observed[raft.Message], at clock.Instant) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.forRange(rangeID).RecordReceived(node, m, at)
 }
 
 // RecordApplied records entries a node applied.
 func (l *Ledger) RecordApplied(rangeID uint64, node int, entries provenance.Observed[[]raft.Entry], at clock.Instant) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.forRange(rangeID).RecordApplied(node, entries, at)
 }
 
 // RecordSnapshot records a snapshot a node created or installed.
 func (l *Ledger) RecordSnapshot(rangeID uint64, node int, r provenance.Observed[SnapshotRecord], at clock.Instant) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.forRange(rangeID).RecordSnapshot(node, r, at)
 }
@@ -1370,6 +1458,9 @@ func (l *Ledger) RecordSnapshot(rangeID uint64, node int, r provenance.Observed[
 // one busy one contended. Per-range censuses are available from Ranges() for
 // anyone asking a per-range question.
 func (l *Ledger) Census() Census {
+	if l == nil {
+		return Census{}
+	}
 	var out Census
 	for _, r := range l.ranges {
 		c := r.Census()
@@ -1413,6 +1504,9 @@ func (l *Ledger) SnapshotsInstalled() int {
 
 // RecordRangeBase records the state a range started from, keyed by range.
 func (l *Ledger) RecordRangeBase(rangeID uint64, data, conf provenance.Observed[[]byte]) {
+	if l == nil {
+		return
+	}
 	l.rev++
 	l.forRange(rangeID).RecordRangeBase(data, conf)
 }

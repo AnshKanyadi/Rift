@@ -62,6 +62,20 @@ type RaftOptions struct {
 	// GCRetention is how far behind its clock a leader collects. Zero disables.
 	GCRetention time.Duration
 
+	// Unobserved runs with NO oracle and no ledger (BUG-055).
+	//
+	// It exists for exactly one purpose here: TestTheLedgerIsAnObserver runs the
+	// same plan both ways and asserts the trace hashes are identical.
+	//
+	//	AN OBSERVER THAT CHANGES THE RUN IS NOT AN OBSERVER, and until this
+	//	option existed there was no way to ask. The ledger has watched every
+	//	simulated run this project has ever done, so "it does not perturb the
+	//	system" was an architectural belief with nothing behind it.
+	//
+	// It must NEVER be set in a safety sweep. A run with no oracle observes
+	// nothing, and its green is the emptiest kind there is.
+	Unobserved bool
+
 	// NewEngine builds each node's storage. Nil means engine/model.
 	//
 	// I1 sets this to engine/simcgo so the stack runs on the C++ engine. It is a
@@ -1028,6 +1042,11 @@ type RaftResult struct {
 	Ledger  *raftcheck.Ledger
 	History *sim.History
 
+	// Unobserved says this run had NO oracle, so Violated == nil means "nothing
+	// was checked" and never "nothing was found". A caller that treats the two
+	// alike is banking the emptiest green there is.
+	Unobserved bool
+
 	// StaleEpochDrops is how many completions from a dead incarnation this run's
 	// nodes refused. It is EVIDENCE, not a verdict, and
 	// TestStaleDurabilityCompletionIsRefused is what asks for it: a nonzero
@@ -1224,7 +1243,10 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	n := p.Config.Nodes
 
 	hist := sim.NewHistory()
-	ledger := raftcheck.NewLedger(n)
+	var ledger *raftcheck.Ledger
+	if !opt.Unobserved {
+		ledger = raftcheck.NewLedger(n)
+	}
 
 	nodes := make([]sim.Node, n)
 	for i := range nodes {
@@ -1240,9 +1262,13 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 
 	// The oracles watch the run and halt it at the first violation. They read
 	// the ledger and nothing else (DESIGN-A1 §0).
-	oracles, reb, _ := raftcheck.AllWithRebalance(
-		ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts, valueAtIndex(ledger))
-	run.Loop.SetOracles(oracles)
+	var reb *raftcheck.RebalanceSafety
+	if !opt.Unobserved {
+		var oracles []sim.Oracle
+		oracles, reb, _ = raftcheck.AllWithRebalance(
+			ledger, stateDigest, splitSteps, extentOf, readExpectations, txnFacts, valueAtIndex(ledger))
+		run.Loop.SetOracles(oracles)
+	}
 
 	peers := make([]raft.NodeID, n)
 	for i := range peers {
@@ -1286,7 +1312,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 			ReadIndex:         opt.ReadIndex,
 			SyncLatency:       syncLatency,
 			NewEngine:         engineFactoryFor(opt, ord),
-			Transport:         run.Transport, Ledger: ledger, History: hist,
+			Transport:         run.Transport, Ledger: ledger, Unobserved: opt.Unobserved, History: hist,
 			OnTxnApplied: func(c store.TxnCommand, r store.TxnResult, at clock.Instant, s sim.Scheduler) {
 				if coordRef != nil {
 					coordRef.applied(c, r, at, s)
@@ -1558,6 +1584,16 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	res.Outcome = out
 	res.Violated = run.Loop.Violation()
 
+	// AN UNOBSERVED RUN HAS NO VERDICT, and it must not produce one by accident.
+	//
+	// Every post-run oracle below reads the ledger. Over a nil ledger each would
+	// find nothing and return "no violation" -- a vacuous green, from a checker
+	// that examined zero facts, indistinguishable in the result struct from one
+	// that examined a million. So they do not run, and the result SAYS the run
+	// was unobserved rather than leaving res.Violated == nil to be read as a pass.
+	observe := !opt.Unobserved
+	res.Unobserved = opt.Unobserved
+
 	// The Percolator invariants are properties of the FINAL state, so they are
 	// evaluated once, here, rather than on every step. That is not an
 	// optimisation dressed as a principle: evaluating them mid-run would assert
@@ -1567,10 +1603,10 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	// are evaluated once, here. Ordered cheapest-evidence-first: a conservation
 	// failure names one audit and one number, and is the easiest of the four to
 	// read on the way to a seed.
-	if res.Violated == nil && coord != nil {
+	if observe && res.Violated == nil && coord != nil {
 		res.Violated = raftcheck.NewBankConservation(ledger, opt.Accounts).Check()
 	}
-	if coord != nil {
+	if observe && coord != nil {
 		si := raftcheck.NewSnapshotIsolation(ledger)
 		if v := si.Check(); v != nil && res.Violated == nil {
 			res.Violated = v
@@ -1581,11 +1617,11 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 		res.StaleRestarts = coord.StaleRestarts()
 		res.StaleIncarnation = coord.StaleIncarnation()
 	}
-	if res.Violated == nil && coord != nil {
+	if observe && res.Violated == nil && coord != nil {
 		res.Violated = raftcheck.NewUncertaintyEnvelope(
 			ledger, time.Duration(p.Config.MaxOffsetNS)).Check()
 	}
-	if res.Violated == nil {
+	if observe && res.Violated == nil {
 		// Every range's clock, from whichever node hosts it. Merged rather than
 		// taken from one node: a range lives on several, and the invariant is
 		// about the clock that will stamp the next read there.
@@ -1640,7 +1676,7 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	//
 	// It was caught by the oracle's own non-vacuity counter rather than by
 	// reading the code, which is the argument for having built the counter.
-	if opt.ReadIndex {
+	if observe && opt.ReadIndex {
 		// §5a / ruling 3's gate. Same placement and the same reason as the
 		// differential below: a final-state oracle in the list built by
 		// AllWithRebalance is never invoked, because SetOracles drives OnStep
@@ -1760,7 +1796,9 @@ func RunRaftWith(p *plan.Plan, opt RaftOptions, tr *sim.Trace) (RaftResult, erro
 	res.MovesOrdered = len(ledger.Moves())
 	res.MovesCompleted = ledger.MovesCompleted()
 	res.MovesRacingChurn = ledger.MovesRacingUnrelatedChanges()
-	res.MovesUnattributable = reb.Unattributable()
+	if reb != nil {
+		res.MovesUnattributable = reb.Unattributable()
+	}
 
 	res.SnapshotReads = snapshotReads
 	res.Reports = sim.CheckAll(run.Counters, hist, checker.NewLinearizability())

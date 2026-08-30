@@ -66,18 +66,36 @@ func TestI2Numbers(t *testing.T) {
 			Dir: filepath.Join(root, fmt.Sprintf("n%d", i)),
 		})
 	}
-	s := chaos.NewWithArgs(bin, nodes, func(nd *chaos.Node) []string {
-		var others []string
-		for _, p := range peerParts {
-			if !strings.HasPrefix(p, strconv.Itoa(nd.ID)+"=") {
-				others = append(others, p)
+	// The node arguments, parameterised by whether the run carries an oracle.
+	//
+	// BUG-055: the ledger retains 875 bytes per operation, forever, so a cluster
+	// carrying it slows down for as long as it runs. The SAFETY phase must have
+	// it -- a verdict from an unobserved cluster is an opinion about a run nobody
+	// watched, and the gate refuses that combination. The MEASUREMENT phase must
+	// not, or it measures the oracle.
+	//
+	//	THE TWO PHASES ARE DIFFERENT CONFIGURATIONS AND THE REPORT SAYS SO BESIDE
+	//	EVERY NUMBER. Running one and quoting it as the other is the whole hazard.
+	argsFor := func(observed bool) func(*chaos.Node) []string {
+		return func(nd *chaos.Node) []string {
+			var others []string
+			for _, p := range peerParts {
+				if !strings.HasPrefix(p, strconv.Itoa(nd.ID)+"=") {
+					others = append(others, p)
+				}
 			}
+			a := []string{
+				"--peers", strings.Join(others, ","),
+				"--clients", fmt.Sprintf("%d=%s", clientID, clientAddr),
+			}
+			if !observed {
+				a = append(a, "--unobserved")
+			}
+			return a
 		}
-		return []string{
-			"--peers", strings.Join(others, ","),
-			"--clients", fmt.Sprintf("%d=%s", clientID, clientAddr),
-		}
-	})
+	}
+
+	s := chaos.NewWithArgs(bin, nodes, argsFor(true))
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +105,7 @@ func TestI2Numbers(t *testing.T) {
 	for i := 1; i <= n; i++ {
 		addrs[sim.NodeID(i)] = fmt.Sprintf("127.0.0.1:%d", ports[i-1])
 	}
+	run := chaos.Run{}
 	hist := &sim.History{}
 	rec := chaos.NewClient(clientID, clock.NewReal(0), hist)
 	wc, err := chaos.NewWireClient(clientID, clientAddr, addrs, rec, 2*time.Second)
@@ -95,6 +114,7 @@ func TestI2Numbers(t *testing.T) {
 	}
 	defer wc.Close()
 	waitForLeader(t, nodes, 15*time.Second)
+	run.Persistent = clusterIsPersistent(nodes)
 
 	// The key space is wide DELIBERATELY. A4's remedy for a rising inconclusive
 	// rate is a smaller problem, not a longer timeout: 512 keys over a run this
@@ -117,7 +137,6 @@ func TestI2Numbers(t *testing.T) {
 	//
 	// So the chaos phase runs first, the gate and the checkers decide, and no
 	// measurement is taken or printed until both have passed.
-	run := chaos.Run{}
 	led := newLedWatch()
 	chaosMix := mix
 	chaosMix.Name = "ycsb-a/chaos"
@@ -171,11 +190,12 @@ func TestI2Numbers(t *testing.T) {
 			}
 		}
 	}()
-	under := bench.Run(wc, chaosMix)
+	safety := bench.Run(wc, chaosMix)
 	close(stop)
 	led.sample(nodes)
 	killMu.Lock()
-	defer killMu.Unlock()
+	killAt = append([]time.Duration(nil), killAt...)
+	killMu.Unlock()
 
 	run.LedTicks = led.total()
 	run.Counters = s.Counters()
@@ -230,21 +250,81 @@ func TestI2Numbers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	s.StopAll()
 	for _, nd := range nodes {
 		if err := os.RemoveAll(nd.Dir); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, nd := range nodes {
-		if err := s.Restart(nd); err != nil {
-			t.Fatalf("restarting for the baseline: %v", err)
-		}
+
+	// A SECOND CLUSTER, UNOBSERVED. Fresh state, no oracle, and it claims no
+	// verdicts -- which is what entitles it to run without one.
+	m := chaos.NewWithArgs(bin, nodes, argsFor(false))
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
 	}
+	defer m.StopAll()
 	waitForLeader(t, nodes, 15*time.Second)
 
 	steadyMix := mix
 	steadyMix.Window = 15 * time.Second
 	steady := bench.Run(wc, steadyMix)
+
+	// ---- and the chaos numbers, on the same unobserved cluster --------------
+	measured := chaos.Run{Unobserved: true, Persistent: clusterIsPersistent(nodes)}
+	mLed := newLedWatch()
+	mMix := mix
+	mMix.Name = "ycsb-a/chaos"
+	mMix.Window = 3 * killInterval
+	var mKillAt []time.Duration
+	var mMu sync.Mutex
+
+	mStop := make(chan struct{})
+	go func() {
+		select {
+		case <-mStop:
+			return
+		case <-time.After(mMix.Warmup):
+		}
+		t0 := time.Now()
+		tk := time.NewTicker(killInterval)
+		defer tk.Stop()
+		for {
+			select {
+			case <-mStop:
+				return
+			case <-tk.C:
+				mLed.sample(nodes)
+				victim := nodes[0]
+				mMu.Lock()
+				if l := leaderNode(nodes); l != nil {
+					victim = l
+					measured.LeaderKills++
+				}
+				mMu.Unlock()
+				_ = m.Kill(victim)
+				mMu.Lock()
+				mKillAt = append(mKillAt, time.Since(t0))
+				mMu.Unlock()
+				_ = m.Restart(victim)
+				mLed.sample(nodes)
+			}
+		}
+	}()
+	under := bench.Run(wc, mMix)
+	close(mStop)
+	mLed.sample(nodes)
+	measured.LedTicks = mLed.total()
+	measured.Counters = m.Counters()
+	mMu.Lock()
+	killAt = mKillAt
+	mMu.Unlock()
+
+	mg := measured.Gate(1, 100)
+	if len(mg.Failures) > 0 {
+		t.Fatalf("the MEASUREMENT run's gate failed, so its numbers may not be taken:\n  %s\n\n"+
+			"node stderr:\n%s", strings.Join(mg.Failures, "\n  "), m.Stderr())
+	}
 
 	// ---- the four thresholds ------------------------------------------------
 	var b strings.Builder
@@ -252,10 +332,17 @@ func TestI2Numbers(t *testing.T) {
 	fmt.Fprintf(&b, "  parameters   E=%s (Election 10 ticks x %s), K=%s\n",
 		electionTimeout, 50*time.Millisecond, killInterval)
 	fmt.Fprintf(&b, "  engine       %s\n", engineNameOf(t, s))
+	// THE CONFIGURATION, BESIDE THE NUMBERS. Two phases, two clusters, two
+	// different things they are entitled to claim.
+	fmt.Fprintf(&b, "  safety       ledger=on   -- produced the verdicts and the gate above\n")
+	fmt.Fprintf(&b, "  measurement  ledger=OFF  -- claims NO checker evidence (BUG-055)\n")
 	fmt.Fprintf(&b, "  workload     %s, %d keys, %d workers, closed loop\n\n",
 		mix.Name, mix.Keys, mix.Workers)
-	fmt.Fprintf(&b, "  STEADY   %s   drift=%.2f\n", steady, steady.Drift())
-	fmt.Fprintf(&b, "  CHAOS    %s   drift=%.2f\n\n", under, under.Drift())
+	fmt.Fprintf(&b, "  STEADY  [ledger=OFF]  %s   drift=%.2f\n", steady, steady.Drift())
+	fmt.Fprintf(&b, "  CHAOS   [ledger=OFF]  %s   drift=%.2f\n", under, under.Drift())
+	fmt.Fprintf(&b, "  SAFETY  [ledger=on ]  %s   drift=%.2f  -- the run the verdicts came from,\n"+
+		"                        reported so the two configurations can be compared rather than\n"+
+		"                        one being read as the other\n\n", safety, safety.Drift())
 
 	// IS THERE A BASELINE AT ALL? Every ratio below divides by steady state, and
 	// a mean over a window whose ends differ by more than 2x represents neither
@@ -295,27 +382,27 @@ func TestI2Numbers(t *testing.T) {
 
 	// THRESHOLD 1 -- recovery, R <= 2.5E; inadequate if R >= K.
 	var worst time.Duration
-	measured, missed := 0, 0
+	nMeasured, missed := 0, 0
 	for _, at := range killAt {
 		r, ok := bench.RecoveryAfter(under, at, steady.Throughput())
 		if !ok {
 			missed++
 			continue
 		}
-		measured++
+		nMeasured++
 		if r > worst {
 			worst = r
 		}
 	}
 	switch {
-	case measured == 0:
+	case nMeasured == 0:
 		report("T1 recovery", fmt.Sprintf("R <= 2.5E = %s", 5*electionTimeout/2),
 			fmt.Sprintf("NOT MEASURED: throughput never returned to half of steady state after "+
 				"any of %d kills", len(killAt)),
 			"Not a large R. §3.2 distinguishes them, and this is the never-recovered case.", false)
 	case worst >= killInterval:
 		report("T1 recovery", fmt.Sprintf("R <= 2.5E = %s", 5*electionTimeout/2),
-			fmt.Sprintf("worst R = %s over %d kills (%d never recovered)", worst, measured, missed),
+			fmt.Sprintf("worst R = %s over %d kills (%d never recovered)", worst, nMeasured, missed),
 			"INADEQUATE: R >= K, so the cluster never reaches steady state between kills. "+
 				"Read as permanent recovery, not as low throughput.", false)
 	case !baselineOK:
@@ -335,7 +422,7 @@ func TestI2Numbers(t *testing.T) {
 			}
 		}
 		report("T1 recovery", fmt.Sprintf("R <= 2.5E = %s", 5*electionTimeout/2),
-			fmt.Sprintf("worst R = %s over %d kills (%d never recovered)", worst, measured, missed),
+			fmt.Sprintf("worst R = %s over %d kills (%d never recovered)", worst, nMeasured, missed),
 			concl, ok)
 	}
 
@@ -383,12 +470,22 @@ func TestI2Numbers(t *testing.T) {
 
 	// THRESHOLD 4 -- cgo boundary cost. Regression bound against B5, at the same
 	// block size. NOT MEASURABLE from this binary and reported as such.
+	// T4 IS NOT MEASURED HERE, AND THAT IS THE CORRECT DISPOSITION.
+	//
+	// It needs a rift_cgo build, which is I1's configuration and not this one.
+	// Carried as a named obligation with the configuration it requires, and
+	// reported at every run:
+	//
+	//	A THRESHOLD REPORTED NOT MEASURED IS HONEST. THE SAME THRESHOLD QUIETLY
+	//	OMITTED IS NOT -- the reader cannot tell an absent number from a passing
+	//	one, and absence is the reading that flatters.
 	report("T4 boundary cost",
 		"no regression beyond +5pp vs B5 at the same block size",
 		fmt.Sprintf("NOT MEASURED: this binary is built without the rift_cgo tag, so the engine "+
 			"is %s", engineNameOf(t, s)),
-		"A threshold about the cgo boundary cannot be evaluated by a run that never crossed it. "+
-			"Reported as absent rather than as met.", false)
+		"UNMEASURED UNDER CHAOS, not passed. It requires a -tags=rift_cgo build (I1's "+
+			"configuration) and a native C++ harness for the same workload at the same block "+
+			"size. Carried as an obligation, never as a result.", false)
 
 	fmt.Fprintf(&b, "  %d of 4 thresholds not met.\n", fail)
 	t.Log(b.String())

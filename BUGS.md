@@ -3248,6 +3248,16 @@ available and the same dismissal.** Four instances now, by the same reader:
 | `BUG-046` again | the anti-vacuity check, twice | the check never ran |
 | `BUG-043` | `grep` returning nothing on a NUL-bearing log | the tool had given up |
 | **`BUG-048`** | **the pass reporting no findings** | **the package was never analysed** |
+| **`BUG-054`** | **`leader-kills=3 of 2 kills`, printed and read past** | **a kill was aimed at a node already down, so the fault it believed it injected did not happen** |
+
+**The fifth is a different colour and belongs in the same tally.** The first four are silences. This one
+was *loud* — an arithmetic impossibility printed in the report, on screen, in a run that was being
+read closely — and it was scrolled past anyway, twice, until it became a gate arm.
+
+> **A NUMBER THAT CANNOT BE TRUE IS NOT SAFER THAN A SILENCE. It has the same fate**: it is read as
+> part of the shape of a normal report rather than as a claim, because nothing in the output asks the
+> reader to compare it against anything. That is GF-59 from the other side — the numbers that got
+> checked were the ones printed beside a threshold, and this one was not.
 
 > **THE PATTERN IS NOT THAT THE MECHANISM IS SUBTLE. IT IS THAT SILENCE IS READ AS A PASS BY DEFAULT,
 > AND HAS TO BE ACTIVELY DISTRUSTED EVERY SINGLE TIME.** Each of the four had a one-command check
@@ -3542,6 +3552,19 @@ arithmetic was on screen and said so, and nothing was asserting it.
 > **A COUNT THAT CANNOT EXCEED ANOTHER IS A GATE ARM WAITING TO BE WRITTEN.** `LeaderKills > Kills`
 > now fails the run.
 
+**This is the fifth entry in BUG-048's reading tally**, and the first that was not a silence: a loud
+arithmetic impossibility, printed, in a report being read closely, and scrolled past twice.
+
+#### The instrumentation earned its place
+
+The stderr dump and the kill-pid log were added **because OPEN-I2-1 could not be reproduced** — a red
+that could not be closed, made cheaper to diagnose instead. The cause appeared on the very next
+occurrence, in three consecutive lines.
+
+> **A RED THAT CANNOT BE CLOSED CAN STILL BE MADE CHEAPER TO DIAGNOSE.** Reproduction is the goal;
+> instrumentation is what you buy when the goal is out of reach, and it pays on the next occurrence
+> rather than on this one.
+
 #### What this closes, and what it does not
 
 **OPEN-I2-1 is CLOSED for the `exit status 1` occurrences**, which are fully explained and fixed.
@@ -3617,6 +3640,112 @@ nothing truncates it. That history is **discarded** — the authoritative one is
 is used only as a completion channel. At ~100 bytes per event it is roughly **2.6 MB per 26,000
 operations**: about 1/35th of the ledger's share, real, unbounded, and reported here rather than
 fixed in passing while the larger one stands.
+
+---
+
+### BUG-056 — (harness) a restart on `engine/model` is not a crash: every restarted node came back with amnesia
+
+| | |
+|---|---|
+| **Symptom** | `panic: raft: node 2 truncated to 17113 with commit index 18453; an entry this node was told was committed is being overwritten, which is state machine safety failing`, plus a linearizability violation on one key over 38 operations. |
+| **Found by** | `raft/`'s own state-machine-safety assertion, and the chaos gate's `ExitedOther` arm. |
+| **Reproduce** | any `cmd/riftnode` chaos schedule with restarts on the untagged build. |
+| **Invariant that caught it** | state machine safety, asserted in `raft/` and firing exactly as designed. |
+| **Mutant class** | the `Restarts > 0 && !Persistent` gate arm, induced. |
+
+**`engine/model` is a pure in-memory Go structure** — no files, no directory, no recovery path. `store/`
+persists HardState and log entries **into the engine**. So a `SIGKILL`ed `riftnode` restarts with no
+term, no vote and no log.
+
+> **A RESTARTED NODE WAS NOT THE SAME NODE RECOVERING. It was a FRESH node wearing an existing
+> identity** — the single most dangerous thing that can happen to a Raft cluster. A node that has
+> forgotten its vote can vote twice in one term; two leaders in one term overwrite committed entries.
+
+**This is not a Rift defect.** CLAUDE.md's persistence rule — *term, vote and log durable before
+replying to any RPC* — is an **assumption of the safety argument**, not a property under test. A
+harness that violates it is testing a different system, and `raft/`'s assertion firing is the
+instrument working.
+
+#### THE EARLIER CHAOS GREENS ARE RETRACTED AS SAFETY EVIDENCE
+
+Three runs were reported green under kills and restarts: 2731, 2461 and 23,010 operations, each
+"linearizability green, 3 leader kills of 3". **Every one of those restarts was an amnesiac node.**
+
+> **THEY WERE NOT GREENS ABOUT RIFT.** They were greens about a cluster in which one member
+> periodically forgot everything, and they passed because the amnesiac happened not to cast a second
+> vote in a term it had already voted in. The fourth run is what happens when it does.
+>
+> This is the second retraction this phase, and the shape is the same as the first: **a result that
+> looked right for a reason nobody had checked.**
+
+What survives from those runs is everything that is not a safety claim — the transport works, the
+client protocol works, the correlation counters are clean, the process supervision is real. The word
+"linearizable" does not.
+
+#### Fixed as a REFUSAL, in the shape already ruled on
+
+The node reports `persistent=0|1` from its build, and the chaos gate fails a run with
+`Restarts > 0 && !Persistent`, naming the amnesia. Same shape as the untagged binary refusing to claim
+a storage result: **the configuration is named, and a run that cannot support the claim does not make
+it.** A restart schedule needs `-tags=rift_cgo`.
+
+**Consequence, stated rather than worked around:** `chaos/`'s restart-bearing tests are now RED on this
+arm, and I2 cannot produce a safety result under restarts on this machine, because the C++ archive is
+not linked here. That is the honest state; the alternative is a green about a different system.
+
+---
+
+### GF-58 — a structure whose cost is bounded by the run is free until the run stops being bounded
+
+BUG-055's general form, and it is a **class** rather than an incident.
+
+> **REAL MODE IS THE FIRST THING THIS PROJECT HAS BUILT THAT DOES NOT END.** Every prior consumer
+> terminated: a sim run is a few thousand events and then the process exits. Anything that accumulates
+> per operation was therefore *correct* for eight phases — not tolerated, correct — because its cost
+> was bounded by a run that always stopped.
+
+**The question was asked once, across the whole tree, and the answer is: two more.**
+
+| structure | drained? | verdict |
+|---|---|---|
+| `raftcheck.Ledger` — sent, recv, applied, committed | never | **BUG-055.** 875 B/op, measured |
+| `node.Driver.timers` | only at `Stop()` | **CONFIRMED SECOND INSTANCE.** Every `After` appends a `*time.Timer` and nothing prunes fired ones. Held so `Stop` can cancel outstanding timers — right for a bounded run, a leak for one that does not end, and each retains the closure's payload |
+| `raft.log` under `cmd/riftnode` | compaction exists; **riftnode sets no `SnapshotThreshold`** | **CONFIRMED THIRD INSTANCE.** Every sim shape compacts; the only configuration that never does is the one that never ends |
+| `store.inflight`, `store.pending`, `store.pendingReads` | yes | fine |
+| `raft.pendingReads`, `raft.readyReads`, `raft.snapTo` | yes | fine |
+| `engine/model.pending` | yes | fine |
+| `sim.Trace.steps` | capped by `limit` | fine |
+| `sim.History` | never | a run artifact by design, and bounded by the run that produces it |
+| `cmd/riftnode`'s per-node `sim.History` | never | ~2.6 MB / 26k ops; mine, reported beside the larger one |
+
+**All three confirmed instances are in the real-mode path, and none is in `raft/`, `store/` or `kv/`.**
+That is the useful shape of the answer: the class is not scattered through the system, it is
+concentrated exactly where the "runs end" assumption was inherited without being restated.
+
+---
+
+### GF-59 — threshold, then result, then conclusion: the format is what makes a wrong number visible
+
+Three defects in the benchmark harness were found in one run, and **not one of them was found by a
+check.** They were found because the numbers refused to look right:
+
+| what was printed | why it was wrong |
+|---|---|
+| `T2 chaos throughput MET — 728.0% of steady state` | a cluster losing its leader every 10s cannot outperform one that never does; the baseline had been measured on a post-chaos cluster |
+| `T1 recovery NOT MET … conclusion: the cluster recovers inside its own timing parameters` | a fixed conclusion printed beside a computed verdict |
+| a flat run reporting `drift=0.33` | two permanently-empty padding slices sat entirely in the last third |
+
+> **A NUMBER WITHOUT ITS THRESHOLD BESIDE IT IS A NUMBER NOBODY CAN DISBELIEVE.** `498 ops/s under
+> chaos` is unfalsifiable prose. `498 ops/s against a threshold of 87.5% of 68` is visibly absurd, and
+> the absurdity is what got read.
+
+The discipline is B3.7b's and it was adopted for a different reason — *a threshold chosen after seeing
+the number is not a threshold*. This is the second thing it buys, and it is arguably the larger one:
+the format puts the claim and its yardstick in the same glance, so a wrong number has to survive being
+compared rather than merely being printed.
+
+**And the conclusion must follow the verdict.** A line that contradicts the word above it is worse than
+no line: it gives the reader a sentence to quote that the computation does not support.
 
 ---
 
