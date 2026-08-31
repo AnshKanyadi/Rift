@@ -1,7 +1,7 @@
 {
   "seed": 14,
-  "commit": "e39904db2ce16ad710cc709dbcb951df05a65902",
-  "rerecord_reason": "Re-pinned at seed 14 after ee0b86f (BUG-060), from seed 9. The seed-9 plan stopped carrying its finding when preCampaign began clearing r.leader: M65 diverged on it and produced nothing. Searched under the post-fix path: 10 detections in 300 seeds against 0 of 300 on the unmutated tree, first at seed 14. The PLAN is regenerated rather than re-recorded, because a plan that no longer reproduces is not the finding it was kept for.",
+  "commit": "274f787ffa1f6b199af685e37dfa69a297b20b07",
+  "rerecord_reason": "Re-pinned at seed 14 after ee0b86f (BUG-060), from seed 9. The seed-9 plan stopped reaching M65 when preCampaign began clearing r.leader -- checked with a CURRENT recording, so it is the bundle and not the lane. Searched under the post-fix path: 10 detections in 300 seeds against 0 of 300 on the unmutated tree, first at seed 14. See BUG-060 and GF-66.",
   "workload": "raft",
   "trace_hash": "3bfc2ab7ea0c95610ca8e8f0b380814f49baaad32e67707345bf1c5224ef2a9f",
   "step_hashes": [
