@@ -101,8 +101,8 @@ type Meta struct {
 	// Commit says WHERE the trace was pinned; this says WHY it had to be
 	// re-pinned. Without it a re-record is indistinguishable from quietly
 	// banking a divergence nobody explained, which is the one thing the corpus
-	// lane exists to make impossible. It is carried across later re-records
-	// unless a new reason is given, because the explanation outlives the run.
+	// lane exists to make impossible. `--rerecord` refuses to run without
+	// `--reason`, so every re-recorded bundle carries the answer.
 	RerecordReason string `json:"rerecord_reason,omitempty"`
 
 	Workload    string        `json:"workload"`
@@ -464,6 +464,19 @@ func cmdReplay(args []string) int {
 	if *reason != "" && !*rerecord {
 		return fail("--reason only means anything with --rerecord")
 	}
+	// # A re-record without a reason is indistinguishable from banking a
+	// # divergence nobody explained
+	//
+	// Which is the one thing the corpus lane exists to make impossible. The
+	// trace hash is a property of the harness, not of the plan, so a bundle that
+	// stops matching means EITHER corpus rot OR a deliberate change to the
+	// system -- and the tool that resolves the mismatch is the only place that
+	// knows which. Requiring the answer here is cheaper than reconstructing it
+	// from a commit message later, and it survives in the bundle where the next
+	// reader of the mismatch will actually be standing.
+	if *rerecord && *reason == "" {
+		return fail("--rerecord needs --reason: say why the recorded observation moved, or the re-record is a divergence banked without an explanation")
+	}
 
 	if *rerecord && *strip {
 		return fail("--rerecord with --strip-faults would record a trace from a schedule the bundle does not carry")
@@ -537,10 +550,7 @@ func cmdReplay(args []string) int {
 		got.Seed = recorded.Seed
 		got.Mutant, got.Mutants = recorded.Mutant, recorded.Mutants
 		got.Commit = headCommit()
-		got.RerecordReason = recorded.RerecordReason
-		if *reason != "" {
-			got.RerecordReason = *reason
-		}
+		got.RerecordReason = *reason
 		if err := writeBundle(*dir, p, got, hist); err != nil {
 			return fail("re-recording bundle: %v", err)
 		}

@@ -180,10 +180,46 @@ print(' '.join(s))")
   if printf '%s' "$out" | grep -qE 'THE RECORDING DID NOT|WHERE THE RECORDING WAS NOT|panic|simctl:'; then
     printf '   ok       %-12s reproduces its FINDING under %s\n' "$name" "$label"
   elif printf '%s' "$out" | grep -qE 'DIVERGED'; then
-    printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$label"
-    printf '            The bundle is sensitive to SOMETHING; only the finding returning proves\n'
-    printf '            it is sensitive to the thing it was recorded for. Re-record it at a seed\n'
-    printf '            where the finding returns, or retire it with the reason written down.\n'
+    # # A WEAK verdict is only meaningful against a CURRENT recording
+    #
+    # This lane's whole criterion is a DIFFERENCE from the recording, so a
+    # recording the unmutated tree no longer reproduces cannot support one: the
+    # mutated replay diverges either way, no finding is attributable to the
+    # mutation, and the lane prints "the bundle no longer carries its finding"
+    # about a bundle that carries it perfectly well.
+    #
+    # Measured, on the same plan with nothing else changed: BUG-011 against a
+    # recording from `0d10fd7` reports WEAK; the identical plan against a
+    # recording taken at HEAD reports ok. **The bundle, the code and the mutant
+    # were the same in both. Only the recording's freshness differed.**
+    #
+    # That verdict was acted on. It cost a correct bundle its place in the
+    # corpus for the length of one session and produced a written claim that a
+    # Raft fix had made a recorded defect unreachable, which was false.
+    #
+    # `make corpus` establishes this precondition for every bundle and `make ci`
+    # runs it first, so the ordering usually hides the hole -- which is exactly
+    # the shape of the standing rule it breaks: A DIRECTED TEST THAT ARRANGES A
+    # PRECONDITION MUST ASSERT THAT IT ARRANGED IT. Nothing here arranged it and
+    # nothing here asked.
+    #
+    # So the clean replay is run on the FAILING path only. It costs nothing on a
+    # bundle that reproduces, and on one that does not it separates the two
+    # causes instead of naming the wrong one.
+    clean=$(cd "$ROOT" && $GO run $GOTAGS ./cmd/simctl replay --bundle "$d" 2>&1 || true)
+    if printf '%s' "$clean" | grep -qE 'DIVERGED'; then
+      printf '   PRECOND  %-12s its recording is STALE, so this lane cannot judge it.\n' "$name"
+      printf '            The unmutated tree does not reproduce the recorded trace, and this\n'
+      printf '            lane tests for a DIFFERENCE from that recording. Nothing is provable\n'
+      printf '            about %s here until `make corpus` is green for this\n' "$label"
+      printf '            bundle. NOT a verdict that the bundle stopped carrying its finding.\n'
+    else
+      printf '   WEAK     %-12s diverges under %s but produces NO FINDING.\n' "$name" "$label"
+      printf '            Its recording IS current -- checked, not assumed -- so this is the\n'
+      printf '            bundle and not the lane. Only the finding returning proves it is\n'
+      printf '            sensitive to the thing it was recorded for. Re-record it at a seed\n'
+      printf '            where the finding returns, or retire it with the reason written down.\n'
+    fi
     failed=$((failed + 1))
   else
     printf '   STALE    %-12s replays IDENTICALLY with %s applied.\n' "$name" "$label"

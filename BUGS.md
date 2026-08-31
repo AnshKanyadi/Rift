@@ -734,7 +734,7 @@ gains a way to change its own state. It is worth re-asking at every phase that a
 | **Found by** | sim — snapshot equivalence, on 178 of the first 300 A4 seeds |
 | **Phase** | A4 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M43-extent-recovered-from-a-floating-key.patch && go run ./cmd/simctl replay --bundle seeds/BUG-011` |
-| **Reproduce (seed)** | seed **0**, range 3, applied index 12 |
+| **Reproduce (seed)** | seed **0**, range 3, applied index 12. Unchanged: `ee0b86f` moved this bundle's trace and its observation was re-recorded, but the PLAN is byte-identical to the one recorded at `0d10fd7` and M43 still reproduces on it. It was briefly reported as having lost its finding; that was the lane reading a stale recording, and BUG-060 records it |
 | **Invariant that caught it** | snapshot equivalence — a snapshot's contents are the state the committed log produces at its index |
 | **Mutant class** | none existed — added `M43-extent-recovered-from-a-floating-key` |
 | **Fix commit** | ebea8c5 |
@@ -1326,7 +1326,7 @@ the fix that a future change has to get past.
 | **Phase** | A6 |
 | **Reproduce (unit)** | `go test ./kv -run 'StealSomebodyElsesLock'` |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M65-rollback-takes-any-lock.patch && go run ./cmd/simctl replay --bundle seeds/BUG-019` |
-| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **9**, re-recorded at BUG-022's fix — the read mark moved every raft trace, and seed 41 regenerated cleanly while no longer reaching M65 at all, which is the search §16.3 warns a regeneration is |
+| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **14**. It carried seed **9** from BUG-022's fix until `ee0b86f`, whose pre-vote correction stopped that plan reaching M65 at all — the same shape as the seed-41 regeneration §16.3 warns about, arriving from a source change rather than from a regeneration. Re-pinned by search under the post-fix path: **10 detections in 300 seeds, first at 14**, against **0 of 300** on the unmutated tree. See BUG-060 |
 | **Invariant that caught it** | bank conservation over client-observed history — the accounts sum to what they summed to at the beginning |
 | **Mutant class** | none existed — added `M65-rollback-takes-any-lock` and `M66-commit-takes-any-lock` |
 | **Fix commit** | *(this commit)* |
@@ -4053,6 +4053,110 @@ shape a diagnosis should have:
 > **EACH STEP WAS CHEAPER THAN THE NEXT AND EACH RULED OUT A LAYER.** Step 1 used data already
 > printed. Step 2 added a counter. Only step 3 required exposing new state from a signed package, and
 > by then there was one question left for it to answer.
+
+#### What the fix cost the corpus, and the explanation that would have been wrong
+
+`make corpus` went red at this commit: fourteen of twenty-four bundles stopped replaying their
+recorded trace. Clearing `r.leader` changes which pre-votes are granted, so it moves any trace whose
+schedule contains a pre-vote decision that turned on the stale pointer. **The bundles were re-pinned,
+except where the fix had taken something with it.**
+
+**The discriminator, because the obvious one is false.** The plausible explanation is *the fourteen
+involve elections and the ten that still replay do not*, and the census refutes it. Every raft bundle
+involves elections, and **the surviving ones involve the most**: BUG-001, BUG-004 and BUG-006 each
+record 28 terms and 28 elections started, against BUG-002's 4 and 14. Election volume does not
+separate the two sets, and neither does "an election happened", because this change is conditional on
+STATE rather than on elections occurring.
+
+What is true, and it is a proof rather than a correlation in one direction: `preCampaign` is reachable
+only with pre-vote enabled, so **every bundle recorded with `pre_vote=false` — BUG-001, BUG-004,
+BUG-006 — plus both toy bundles must replay identically, and does.** Pre-vote enabled is NECESSARY and
+not sufficient: five bundles with pre-vote on also replay identically, because their schedules never
+reach a pre-vote decision the stale pointer would have flipped.
+
+> **A PLAUSIBLE EXPLANATION THAT PREDICTS THE RIGHT SET IS STILL NOT THE CAUSE.** "Involves an
+> election" would have predicted fourteen-versus-ten and been wrong about the mechanism, which is the
+> kind of wrong that survives until the next time the same code moves.
+
+The cause was established by measurement, not by the census: at HEAD, **with this one line removed and
+nothing else touched, all twenty-four bundles replay byte-identically.** That rules out the two
+alternatives rather than merely preferring this one — the bundle bytes are unchanged and match under a
+tree carrying every other change since `0d10fd7`, so they have not rotted, and the replay machinery
+reproduces 24 of 24, so it has not broken.
+
+#### ONE recorded defect became unreachable on its pinned schedule, and the first answer was two
+
+`BUG-019` genuinely lost its finding to this fix and was re-pinned by search. `BUG-011` never lost
+anything, and the session that said it had was reading a lane that cannot answer the question it was
+asked. **The wrong half is written up first, because it is the more useful half.**
+
+**The measurement that misled.** `corpus-reproduces` applies a bundle's mutant, replays, and requires
+a FINDING THE RECORDING DID NOT HAVE. Its criterion is a difference from the recording. Run against a
+recording the unmutated tree no longer reproduces, that criterion cannot be evaluated at all: the
+mutated replay diverges whatever the mutant does, nothing is attributable, and **the lane prints "the
+bundle no longer carries its finding"** — a diagnosis, about a bundle carrying it perfectly well.
+
+Induced, on the same plan with nothing else varied:
+
+| plan | recording | verdict |
+|---|---|---|
+| BUG-011's, byte-identical | from `0d10fd7`, stale | **WEAK** — "produces NO FINDING" |
+| BUG-011's, byte-identical | taken at HEAD | **ok** — reproduces its finding |
+
+Same bundle, same code, same mutant. **Only the recording's freshness differed.**
+
+**And the control that was supposed to catch that varied two things at once.** To separate *this fix
+did it* from *it was already so*, the session ran `corpus-reproduces` on HEAD with the one line
+removed. Both bundles came back `ok` there, and that was read as the fix having cost them their
+finding. But removing the line ALSO restores every recorded trace — that is the whole reason the
+fourteen diverged — so the control moved the code and the recordings' freshness together, in one step,
+and could not tell their effects apart.
+
+> **A CONTROL THAT RESTORES THE PRECONDITION ALONG WITH THE VARIABLE IS NOT A CONTROL.** It gave the
+> right answer for `BUG-019` and the wrong one for `BUG-011`, which is the worst way to be wrong: half
+> the output was correct, so nothing looked off.
+
+What broke the tie was noticing that `BUG-011`'s regenerated `plan.json` was **byte-identical** to the
+old one — so the claim that its schedule had moved was false on its face, and the WEAK verdict had to
+be coming from somewhere else.
+
+**The corrected picture, every cell measured with a current recording:**
+
+| bundle | mutant | before the fix | at this commit | disposition |
+|---|---|---|---|---|
+| **BUG-011** | `M43-extent-recovered-from-a-floating-key` | ok | **ok** | re-recorded with the other thirteen; nothing was ever wrong with it |
+| **BUG-019** | `M65-rollback-takes-any-lock` | ok | **WEAK** | genuinely lost; re-pinned by search |
+
+`BUG-019` is the real one: its seed-9 plan, **re-recorded at HEAD so the precondition holds**, still
+produces no finding under `M65`. Re-pinned at seed 14 by search under the post-fix path.
+
+| | detecting seeds in 300 | first | recorded before |
+|---|---|---|---|
+| **M65** (BUG-019) | **10** | seed **14** | 2 of 300 at A6 |
+| **M43** (BUG-011, for comparison) | **118** | seed **0** | 105 of 300 at A5-close |
+| **the unmutated tree** | **0** | none in 300 | — |
+
+**The baseline is the half that makes those counts mean anything.** A detection has to be a DIFFERENCE
+rather than a presence, and the same 300 seeds fire nothing at all on the unmutated tree. Both classes
+came back MORE reachable than they were recorded, not less — 10 against 2, 118 against 105 — so the fix
+weakened neither class. **It invalidated one particular schedule**, which is a much narrower fact and
+the only one the evidence supports.
+
+#### The lane now separates the two causes, and both branches are induced
+
+`corpus-reproduces` runs the clean replay **on the failing path only** — free on a bundle that
+reproduces — and reports `PRECOND` rather than `WEAK` when the recording is stale, saying in the output
+that this is not a verdict about the bundle. The `WEAK` text now states that the recording was
+*checked, not assumed*.
+
+Both elements, against the cases that produced them: `PRECOND` fires on BUG-011's stale recording,
+`WEAK` still fires on BUG-019's current one, and a reproducing bundle is still `ok`.
+
+> **A DIRECTED TEST THAT ARRANGES A PRECONDITION MUST ASSERT THAT IT ARRANGED IT** — this repository's
+> own standing rule, and this lane had never arranged or asked. `make corpus` establishes the
+> precondition for every bundle and `make ci` runs it first, so the ORDERING hid the hole for the
+> project's whole life. Nothing enforced the ordering, and the first run that skipped it produced a
+> false written claim about a Raft fix within the hour.
 
 #### After the fix, and one measurement artifact it exposed
 

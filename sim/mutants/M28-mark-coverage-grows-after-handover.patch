@@ -7,12 +7,18 @@
 # power-ceiling: 10
 # power-measured: 297 of 300, first at seed 0, under current at commit A5-close; was 253 of 300, first at seed 0, at commit 6e716d5+A5-open
 # mutates: a mark is reused after the driver has already started writing it, so its coverage grows and the acknowledgement means less than the messages gated on it require. BOTH defences are removed, because either alone prevents it: raft freezing coverage at handover, and the driver refusing to acknowledge a mark whose writes are not all durable. Removing one gives 0 of 300; removing both gives 257 of 300
-# re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
-#   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
-#   one were applied to clean copies and the results are byte-identical.
+# re-anchored: 2026-08-30, after `patch-rot-kind` reported STRUCTURAL. Hunk 2's target moved when
+#   d276962 rewrote the durability cross-check below it; BOTH mutation sites are intact, so the
+#   class still exists and the patch is regenerated rather than the class re-decided. Hunk 1 at
+#   -U15 so it opens on `func (r *Raft) dirty()`; hunk 2 at -U2 because 46 unbroken comment lines
+#   sit between the site and the next code line, and widening would only anchor on more prose.
+#   The mutation is unchanged and proved so: the mutated tree this patch produces is byte-identical
+#   to the one the old patch's hunk 1 plus hunk 2's recorded edit produce.
+diff --git a/raft/raft.go b/raft/raft.go
 --- a/raft/raft.go
 +++ b/raft/raft.go
-@@ -2822,29 +2822,29 @@ func (r *Raft) sendGatedOn(mark, snapMark PersistMark, m Message) {
+@@ -2844,31 +2844,31 @@ func (r *Raft) sendGatedOn(mark, snapMark PersistMark, m Message) {
+ // mutation of persistent state, so a mark exists to gate against.
  func (r *Raft) dirty() {
  	// # A mark's coverage is frozen at handover
  	//
@@ -43,21 +49,11 @@
  	}
  }
  
+ func (r *Raft) setTermAndVote(t Term, v NodeID) {
+diff --git a/store/node.go b/store/node.go
 --- a/store/node.go
 +++ b/store/node.go
-@@ -1352,31 +1352,29 @@ func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
- 				snapMark = w.snapMark
- 			}
- 			continue
- 		}
- 		kept = append(kept, w)
- 	}
- 	n.pending = kept
- 
- 	// A mark may be acknowledged only when EVERY write issued under it is
- 	// durable. raft freezes a mark's coverage at handover, so today that is one
- 	// batch per mark and this never fires -- but the acknowledgement is the
- 	// driver's statement, not raft's, and the driver is the only side that knows
+@@ -1457,7 +1457,5 @@ func (n *Replica) onDurable(seq engine.SeqNum, at clock.Instant) {
  	// what it has actually written. If a mark ever spans two batches again, this
  	// keeps the statement true instead of quietly making it a guess.
 -	if len(n.pending) > 0 && n.pending[0].mark != 0 && n.pending[0].mark <= mark {
@@ -66,15 +62,3 @@
 +
  
  	// # The driver's record and the engine's own account, compared continuously
- 	//
- 	// These are two independent derivations of one fact: what a crash would
- 	// recover. The ledger is fed the first, because the second is an answer the
- 	// system gives about itself and answers with its VISIBLE state.
- 	//
- 	// But the second is a legitimate input to a check that can only FAIL, and
- 	// here is where it can be taken honestly: the engine has nothing in flight,
- 	// so a read-back IS the durable state. Comparing them only at recovery left
- 	// the check firing twice per run; comparing them here fires it on every
- 	// completion, which took a planted defect's detection from seed 905 to the
- 	// first seeds of the range.
- 	if n.db.VisibleSeq() == n.db.DurableSeq() {

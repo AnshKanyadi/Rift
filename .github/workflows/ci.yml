@@ -271,3 +271,23 @@ jobs:
       # for a whole sweep. This lane requires that a system-reported fact fail to
       # COMPILE into a verdict, and induces it against a fixture that tries.
       - run: make provenance
+
+  chaos-smoke:
+    name: real-mode mechanisms, actually run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # Added to `make ci` at the I2 chaos commit and to this file at no point,
+      # so for a day it was a lane in the target and a job in no workflow. That
+      # is the exact shape the lane-coverage job exists to catch, and it caught
+      # it -- on a pre-push hook, which is the only thing on this project that
+      # has ever executed the list, because there was no remote until now.
+      #
+      # What it guards is worth the minute: seven chaos/ tests were behind
+      # testing.Short() and therefore ran in no push lane at all, against a
+      # package that had zero mutants and appeared in no job here.
+      - run: make chaos-smoke
