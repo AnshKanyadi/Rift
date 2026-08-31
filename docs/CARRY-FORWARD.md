@@ -1205,7 +1205,35 @@ defect.
 
 ---
 
-## DECIDED 2026-08-30: the commit history keeps its `Co-Authored-By` trailers, and what would change that
+## SUPERSEDED 2026-08-31: the trailers were stripped, after the lane this entry demanded was built
+
+**Ansh reversed the decision below on 2026-08-31 and required the sequencing this entry names, in
+order.** What happened, so the reversal is legible next to the reasoning it overrode:
+
+1. **`scripts/citations.sh` was built first**, and joined `make ci`, the pre-push hook and `ci.yml`.
+   It checks all three populations — prose tokens, bundle `commit` fields, tag targets — by ancestry
+   rather than resolution, and it is induced in three directions. **It found a dangling citation on
+   its first run, inside GF-69, the entry about dangling citations, on a tree a hand audit had passed
+   the day before.**
+2. **Then the rewrite**: 408 commits, tree identical at every one, author and committer identity and
+   all six date fields unchanged, verified pairwise with zero mismatches. Run WITHOUT
+   `--tag-name-filter`, with all seventeen tag targets and messages captured first, because of GF-69.
+3. **Then the repair from the map**: 191 prose occurrences across 49 files at their original
+   abbreviation lengths, 24 of 24 bundle `commit` fields, seventeen tags re-cut and each checked with
+   `merge-base --is-ancestor`.
+4. **Then the lane, green**: 169 citations, 0 dangling.
+
+**Objection 3 below is the one that was answered**, and answering it took building the instrument
+rather than arguing about it. Objections 1 and 2 were overruled, not refuted: the trailers still
+concealed nothing and the citation graph was still the more valuable artifact. **That is Ansh's call
+to make and it is recorded as a call, not as a conclusion the reasoning below now supports.**
+
+The reasoning is kept verbatim, because the next person to reopen this needs the argument that was
+overruled and not only the outcome.
+
+---
+
+## DECIDED 2026-08-30 (SUPERSEDED, see above): the commit history keeps its `Co-Authored-By` trailers, and what would change that
 
 Recorded here rather than left in one session's exchange, because it is a decision somebody will
 reopen — most likely somebody preparing the repository to be read by a stranger, which is exactly the
