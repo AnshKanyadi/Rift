@@ -74,7 +74,12 @@ scan() {
   for f in $files; do
     [ -f "$f" ] || continue
     for t in $(grep -ohE '\b[0-9a-f]{7,40}\b' "$f" 2>/dev/null | sort -u); do
-      git cat-file -e "${t}^{commit}" 2>/dev/null || continue
+      case $(classify "$t") in
+        notacommit) continue ;;
+        ambiguous)
+          printf '   AMBIGUOUS prose   %-40s %s resolves to more than one object\n' "$f" "$t"
+          bad=$((bad + 1)); continue ;;
+      esac
       checked=$((checked + 1))
       if ! git merge-base --is-ancestor "$t" HEAD 2>/dev/null; then
         printf '   DANGLING  prose   %-40s %s\n' "$f" "$t"
@@ -107,6 +112,36 @@ scan() {
 
   echo "$checked $bad" > "$scratch/counts"
   return 0
+}
+
+# # AMBIGUOUS is not the same answer as NOT A COMMIT, and one exit code says both
+#
+# `git cat-file -e <t>^{commit}` fails identically for "no such object" and for
+# "that prefix matches several objects". A lane that treats both as *not a
+# citation* SILENTLY SKIPS the ambiguous one -- and an ambiguous citation is
+# strictly worse than a dangling one, because it reads as fine and resolves to
+# whichever object the reader's repository happens to disambiguate to.
+#
+# So the two are told apart on stderr and ambiguity FAILS the lane. A citation
+# that does not name one commit is not a citation.
+#
+# Reachability, stated rather than implied: at 821 commit objects here, no two
+# share a 7-character prefix, so this branch does not fire on this repository
+# today. It is a latent hole rather than a live one, and it is closed now because
+# the population only grows and because the skip would have been silent.
+classify() {
+  if git rev-parse --verify --quiet "${1}^{commit}" >/dev/null 2>&1; then
+    echo commit; return
+  fi
+  # NO --quiet on this one. --quiet suppresses the very message being matched, so
+  # the ambiguous case comes back with empty stderr and reads as not-a-commit --
+  # which is exactly the silent skip this function exists to remove. The lane's
+  # own self-test caught it on its first run.
+  err=$(git rev-parse --verify "${1}^{commit}" 2>&1 >/dev/null) || true
+  case "$err" in
+    *ambiguous*) echo ambiguous ;;
+    *)           echo notacommit ;;
+  esac
 }
 
 scratch=$(mktemp -d)
@@ -157,8 +192,30 @@ if [ "${1:-}" = "--self-test" ]; then
     exit 1
   fi
   printf '   silent on a clean tree: yes, %d citations checked\n' "$1"
+
+  # # The third branch, and what this induction does NOT prove
+  #
+  # A 4-character prefix is ambiguous among 821 commit objects where a
+  # 7-character one is not, so `classify` can be driven onto its ambiguous arm
+  # directly. That proves THE CODE PATH. It does not prove the MECHANISM -- only
+  # a real 7-character collision arriving through the scan would, and this
+  # repository cannot produce one at its size. The distinction is I2's, about its
+  # chaos gates, and it is written here rather than left for a reader to assume
+  # the stronger claim.
+  amb=$(git rev-parse HEAD | cut -c1-4)
+  got=$(classify "$amb")
+  if [ "$got" != "ambiguous" ]; then
+    printf '   TELLS AMBIGUOUS FROM NOT-A-COMMIT: NO. classify(%s) said %s\n' "$amb" "$got"
+    exit 1
+  fi
+  printf '   tells ambiguous from not-a-commit: yes, on the code path (see the note)\n'
+  if [ "$(classify zzzzzzz)" != "notacommit" ] || [ "$(classify "$(git rev-parse HEAD | cut -c1-12)")" != "commit" ]; then
+    printf '   ...but misclassifies a plain non-commit or a plain commit\n'
+    exit 1
+  fi
+  printf '   and still calls a non-commit a non-commit, and a commit a commit\n'
   printf '  ----------------------------------------------------------------\n'
-  printf '   citations self-test: both directions\n\n'
+  printf '   citations self-test: three branches\n\n'
   exit 0
 fi
 
