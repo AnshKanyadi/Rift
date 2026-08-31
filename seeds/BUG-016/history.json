@@ -431,23 +431,23 @@
   },
   {
     "Call": 8956245325,
-    "Return": 0,
+    "Return": 8980782113,
     "Client": 2,
     "Seq": 10,
     "Key": "k06",
     "Op": "get",
-    "Value": "v8",
-    "Outcome": 0
+    "Value": "v48",
+    "Outcome": 1
   },
   {
     "Call": 9023025051,
-    "Return": 0,
+    "Return": 9048817932,
     "Client": 0,
     "Seq": 20,
     "Key": "k01",
     "Op": "put",
     "Value": "v57",
-    "Outcome": 0
+    "Outcome": 1
   },
   {
     "Call": 9113994848,
@@ -461,137 +461,137 @@
   },
   {
     "Call": 9144412766,
-    "Return": 0,
+    "Return": 9167261611,
     "Client": 2,
     "Seq": 12,
     "Key": "k02",
     "Op": "put",
     "Value": "v42",
-    "Outcome": 0
-  },
-  {
-    "Call": 9150878982,
-    "Return": 0,
-    "Client": 0,
-    "Seq": 21,
-    "Key": "k07",
-    "Op": "get",
-    "Value": "v37",
-    "Outcome": 0
-  },
-  {
-    "Call": 9167046546,
-    "Return": 0,
-    "Client": 0,
-    "Seq": 22,
-    "Key": "k06",
-    "Op": "put",
-    "Value": "v6",
-    "Outcome": 0
-  },
-  {
-    "Call": 9247744633,
-    "Return": 0,
-    "Client": 1,
-    "Seq": 16,
-    "Key": "k07",
-    "Op": "put",
-    "Value": "v29",
-    "Outcome": 0
-  },
-  {
-    "Call": 9313609229,
-    "Return": 0,
-    "Client": 1,
-    "Seq": 17,
-    "Key": "k06",
-    "Op": "get",
-    "Value": "v72",
-    "Outcome": 0
-  },
-  {
-    "Call": 9365948363,
-    "Return": 0,
-    "Client": 1,
-    "Seq": 18,
-    "Key": "k03",
-    "Op": "put",
-    "Value": "v10",
-    "Outcome": 0
-  },
-  {
-    "Call": 9510865036,
-    "Return": 0,
-    "Client": 2,
-    "Seq": 13,
-    "Key": "k03",
-    "Op": "get",
-    "Value": "v10",
-    "Outcome": 0
-  },
-  {
-    "Call": 9592340796,
-    "Return": 0,
-    "Client": 2,
-    "Seq": 14,
-    "Key": "k03",
-    "Op": "get",
-    "Value": "v45",
-    "Outcome": 0
-  },
-  {
-    "Call": 9835030796,
-    "Return": 0,
-    "Client": 0,
-    "Seq": 23,
-    "Key": "k04",
-    "Op": "get",
-    "Value": "v80",
-    "Outcome": 0
-  },
-  {
-    "Call": 9891805998,
-    "Return": 0,
-    "Client": 1,
-    "Seq": 19,
-    "Key": "k01",
-    "Op": "get",
-    "Value": "v46",
-    "Outcome": 0
-  },
-  {
-    "Call": 9976345026,
-    "Return": 0,
-    "Client": 2,
-    "Seq": 15,
-    "Key": "k00",
-    "Op": "get",
-    "Value": "v3",
-    "Outcome": 0
-  },
-  {
-    "Call": 10440148635,
-    "Return": 10463104899,
-    "Client": 0,
-    "Seq": 24,
-    "Key": "k03",
-    "Op": "get",
-    "Value": "v47",
     "Outcome": 1
   },
   {
-    "Call": 10868356536,
-    "Return": 10891771831,
-    "Client": 2,
-    "Seq": 16,
+    "Call": 9150878982,
+    "Return": 9175021747,
+    "Client": 0,
+    "Seq": 21,
     "Key": "k07",
     "Op": "get",
     "Value": "v48",
     "Outcome": 1
   },
   {
+    "Call": 9167046546,
+    "Return": 9192507178,
+    "Client": 0,
+    "Seq": 22,
+    "Key": "k06",
+    "Op": "put",
+    "Value": "v6",
+    "Outcome": 1
+  },
+  {
+    "Call": 9247744633,
+    "Return": 9273468690,
+    "Client": 1,
+    "Seq": 16,
+    "Key": "k07",
+    "Op": "put",
+    "Value": "v29",
+    "Outcome": 1
+  },
+  {
+    "Call": 9313609229,
+    "Return": 9339259421,
+    "Client": 1,
+    "Seq": 17,
+    "Key": "k06",
+    "Op": "get",
+    "Value": "v6",
+    "Outcome": 1
+  },
+  {
+    "Call": 9365948363,
+    "Return": 9392194648,
+    "Client": 1,
+    "Seq": 18,
+    "Key": "k03",
+    "Op": "put",
+    "Value": "v10",
+    "Outcome": 1
+  },
+  {
+    "Call": 9510865036,
+    "Return": 9536225997,
+    "Client": 2,
+    "Seq": 13,
+    "Key": "k03",
+    "Op": "get",
+    "Value": "v10",
+    "Outcome": 1
+  },
+  {
+    "Call": 9592340796,
+    "Return": 9619801940,
+    "Client": 2,
+    "Seq": 14,
+    "Key": "k03",
+    "Op": "get",
+    "Value": "v10",
+    "Outcome": 1
+  },
+  {
+    "Call": 9835030796,
+    "Return": 9859989511,
+    "Client": 0,
+    "Seq": 23,
+    "Key": "k04",
+    "Op": "get",
+    "Value": "v46",
+    "Outcome": 1
+  },
+  {
+    "Call": 9891805998,
+    "Return": 9918429899,
+    "Client": 1,
+    "Seq": 19,
+    "Key": "k01",
+    "Op": "get",
+    "Value": "v57",
+    "Outcome": 1
+  },
+  {
+    "Call": 9976345026,
+    "Return": 9999785524,
+    "Client": 2,
+    "Seq": 15,
+    "Key": "k00",
+    "Op": "get",
+    "Value": "v64",
+    "Outcome": 1
+  },
+  {
+    "Call": 10440148635,
+    "Return": 10465154674,
+    "Client": 0,
+    "Seq": 24,
+    "Key": "k03",
+    "Op": "get",
+    "Value": "v10",
+    "Outcome": 1
+  },
+  {
+    "Call": 10868356536,
+    "Return": 10893096103,
+    "Client": 2,
+    "Seq": 16,
+    "Key": "k07",
+    "Op": "get",
+    "Value": "v29",
+    "Outcome": 1
+  },
+  {
     "Call": 11055567233,
-    "Return": 11079612826,
+    "Return": 11079363461,
     "Client": 0,
     "Seq": 25,
     "Key": "k07",
@@ -601,7 +601,7 @@
   },
   {
     "Call": 11176796957,
-    "Return": 11199991367,
+    "Return": 11201615301,
     "Client": 1,
     "Seq": 20,
     "Key": "k07",
@@ -621,13 +621,13 @@
   },
   {
     "Call": 12008469442,
-    "Return": 0,
+    "Return": 12886056990,
     "Client": 1,
     "Seq": 21,
     "Key": "k05",
     "Op": "get",
-    "Value": "v57",
-    "Outcome": 0
+    "Value": "v59",
+    "Outcome": 1
   },
   {
     "Call": 12275959326,
@@ -671,17 +671,17 @@
   },
   {
     "Call": 12945794416,
-    "Return": 12971624444,
+    "Return": 12972097172,
     "Client": 0,
     "Seq": 29,
     "Key": "k01",
     "Op": "get",
-    "Value": "",
+    "Value": "v57",
     "Outcome": 1
   },
   {
     "Call": 13007688467,
-    "Return": 13032921614,
+    "Return": 13032993647,
     "Client": 0,
     "Seq": 30,
     "Key": "k07",
@@ -691,12 +691,12 @@
   },
   {
     "Call": 13886238351,
-    "Return": 13910066859,
+    "Return": 13994222054,
     "Client": 1,
     "Seq": 23,
     "Key": "k03",
     "Op": "get",
-    "Value": "v47",
+    "Value": "v10",
     "Outcome": 1
   }
 ]

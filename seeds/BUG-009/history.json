@@ -551,12 +551,12 @@
   },
   {
     "Call": 13442349848,
-    "Return": 0,
+    "Return": 13460000000,
     "Client": 1,
     "Seq": 23,
     "Key": "k01",
     "Op": "get",
-    "Value": "v40",
-    "Outcome": 0
+    "Value": "v95",
+    "Outcome": 1
   }
 ]

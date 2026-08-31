@@ -95,6 +95,16 @@ type Meta struct {
 	// there is no way to tell which, or to go and look.
 	Commit string `json:"commit"`
 
+	// RerecordReason is why the recorded observation moved, for a re-record
+	// forced by a deliberate change to the system rather than by rot.
+	//
+	// Commit says WHERE the trace was pinned; this says WHY it had to be
+	// re-pinned. Without it a re-record is indistinguishable from quietly
+	// banking a divergence nobody explained, which is the one thing the corpus
+	// lane exists to make impossible. It is carried across later re-records
+	// unless a new reason is given, because the explanation outlives the run.
+	RerecordReason string `json:"rerecord_reason,omitempty"`
+
 	Workload    string        `json:"workload"`
 	Scenario    *ScenarioMeta `json:"scenario,omitempty"`
 	TraceHash   string        `json:"trace_hash"`
@@ -448,7 +458,12 @@ func cmdReplay(args []string) int {
 	engineRoot := fs.String("engine-root", "", "directory the cgo engine places one store per node under; empty uses a temp dir")
 	strip := fs.Bool("strip-faults", false, "replay with every fault entry removed")
 	rerecord := fs.Bool("rerecord", false, "overwrite the bundle's recorded trace with this run's, keeping its plan")
+	reason := fs.String("reason", "", "with --rerecord: why the observation moved, stored in the bundle's meta")
 	_ = fs.Parse(args)
+
+	if *reason != "" && !*rerecord {
+		return fail("--reason only means anything with --rerecord")
+	}
 
 	if *rerecord && *strip {
 		return fail("--rerecord with --strip-faults would record a trace from a schedule the bundle does not carry")
@@ -522,6 +537,10 @@ func cmdReplay(args []string) int {
 		got.Seed = recorded.Seed
 		got.Mutant, got.Mutants = recorded.Mutant, recorded.Mutants
 		got.Commit = headCommit()
+		got.RerecordReason = recorded.RerecordReason
+		if *reason != "" {
+			got.RerecordReason = *reason
+		}
 		if err := writeBundle(*dir, p, got, hist); err != nil {
 			return fail("re-recording bundle: %v", err)
 		}

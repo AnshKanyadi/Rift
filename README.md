@@ -1,140 +1,157 @@
 # Rift
 
-A distributed, transactional, MVCC key-value database. The distributed layer is from-scratch
-multi-group Raft in Go. Underneath it is a from-scratch C++ LSM storage engine. Both are checked by
-deterministic simulation rather than by hand testing.
+A distributed, transactional, MVCC key-value database written from scratch. The distributed layer is
+Go: multi-group Raft, range splitting, MVCC over hybrid logical clocks, Percolator-style
+transactions, linearizable reads via read index. Underneath it is a C++ LSM storage engine reached
+through a batch cgo interface.
+
+The unusual part is not the feature list. It is that every safety claim here was produced by a
+harness that is itself tested, and that the repository records what the verification cannot see in
+the same document as the claims.
 
 ## Status: v1 is complete
 
-Fifteen signed phases — A0 through A7, B1 through B5, I1 and I2 — plus the merge where the two tracks
-met. The Go distributed layer, the C++ storage engine underneath it, and the whole thing running as
-three real processes over real sockets while a chaos script kills the leader.
+Fifteen signed phases: A0 through A7 on the Go side, B1 through B5 on the C++ side, then the merge
+between the two tracks, I1 (the Go stack running on the C++ engine) and I2 (three real processes
+over TCP, chaos, benchmarks).
 
-**[docs/V1.md](docs/V1.md) is the one document to read.** It covers what exists, what was verified,
-how, and — in the same file, not an appendix — what the verification cannot see and what is still
-open.
+**[docs/V1.md](docs/V1.md) is the document to read.** It covers what exists, what was verified, how,
+what the verification cannot see, and what is still open. Nothing below repeats it.
 
 ## The numbers
 
 | | |
 |---|---|
-| A6 and A7 exit runs | **25,000 seeds each, zero safety violations**, inconclusive rate 4.0 per mille |
-| defects found, every one reproducing from a seed | **67** |
-| mutant classes with a covering test and a measured floor | **78 Go, 155 C++** |
-| times a checking mechanism reported success while checking nothing | **30**, and the register is the most useful thing in the repo |
-| escape hatches in the determinism pass | **5**, each one line with a written reason, unchanged since A5 |
-| I2 chaos | **2,357 operations linearizable**, 3 leader kills of 3, 3 restarts, 0 uninvited exits |
-| I2 steady state on the C++ engine | **97–119 ops/s, p50 67–82 ms** |
-| I2 under chaos | **88.8% of steady state, p99 122 ms** |
+| signed phases | 15, plus the merge |
+| A6 and A7 exit runs | 25,000 seeds each, 0 safety violations, 97 and 100 inconclusive |
+| defects, every one reproducing | 67, of which 60 on Track A and integration, 7 on Track B |
+| mutant classes, each with a covering test and a measured floor | 78 Go, 155 C++ |
+| escape hatches in the determinism pass | 5, each one line with a written reason |
+| times a checking mechanism reported success while checking nothing | 30, recorded and numbered |
+| I2 chaos | 2,357 operations, linearizable, 3 leader kills of 3, 3 restarts |
+| I2 steady state on the C++ engine | 97 to 119 ops/s, p50 66.9 to 81.8 ms |
+| I2 under chaos | 86 ops/s, 88.8% of steady state, p99 122 ms |
 
-I2's four thresholds were declared before any number was taken. **Two were met and two were not, and
-none was adjusted** — a threshold that fires is a threshold that was capable of firing.
+I2 declared four thresholds before any number was taken. Two were met, one was not, and one was
+never measured. None was adjusted. See [BENCHMARKS.md](BENCHMARKS.md) for methodology and
+[docs/V1.md](docs/V1.md) section 7 for the verdicts.
 
-**The single result worth reading is [BUG-060](BUGS.md):** a Raft liveness bug that survived eight
-phases and 25,000 seeds. After a leader kill the cluster served nothing for fourteen seconds with
-every safety oracle green — and correct to be green, because a cluster that elects nobody does no
-wrong thing. It was found by a threshold declared in advance rather than by any checker.
+The single result worth reading is BUG-060 in [BUGS.md](BUGS.md): a Raft liveness defect that
+survived eight phases and 25,000 seeds. After a leader kill the cluster served nothing for fourteen
+seconds with every safety oracle green, and correct to be green, because a cluster that elects
+nobody does no wrong thing. It was found by a threshold declared in advance rather than by any
+checker.
 
-## How it is verified
+## Architecture
 
-This part matters more than the feature list. Implementing Raft is not the hard bit. Knowing whether
-your implementation is wrong is.
+`raft/` is a pure state machine: `Step` and `Tick` in, a `Ready` struct out, with no goroutines, no
+clock and no I/O. `store/` hosts many Raft groups over one transport and executes splits. `kv/` is
+MVCC and Percolator transactions; `router/` is the client with the range cache and the transaction
+coordinator; `clock/` and `hlc/` are the hybrid logical clock. `engine/` is the storage interface
+both engines implement, with `engine/model` as the Go reference and `engine-cpp/` as the C++ LSM
+(skiplist memtable, checksummed WAL, block-based SSTables with bloom filters, leveled compaction,
+MANIFEST, range tombstones).
 
-**Deterministic simulation.** The whole distributed layer runs on one thread, on an event loop, with a
-virtual clock. No goroutines, channels, locks, wall-clock reads, or real network and disk calls in any
-package that runs during a simulation. A custom vet pass (`tools/determinismcheck`) turns those into
-build failures, including `range` over a map. Exemptions need a written reason and are listed in
-[HATCHES.txt](HATCHES.txt), which a test diffs against the tree. The vet pass is itself mutation
-tested by `make blind`. Same seed, same trace, every time.
-
-**Faults are on by default.** Dropped, delayed, duplicated and reordered messages, symmetric and
-asymmetric partitions, crashes, restarts, pauses, lost unsynced writes, and per-node clock drift and
-jumps inside `maxOffset`. Every injector counts how often it fired, and a run where an enabled
-injector never fired is a failure, because a chaos test that did nothing proves nothing.
-
-**Everything replays.** A seed produces a plan, which is a readable, serializable description of the
-entire run. Plans carry keyed-PRF parameters instead of RNG state, so replaying takes no live
-randomness at all. Seeds reproduce at the commit that found them, and plans reproduce at any commit.
-Both live in [`seeds/`](seeds/).
-
-**The harness is tested against known bugs.** A passing test suite tells you the harness runs, not
-that it catches anything. `sim/mutants/` holds 71 deliberately broken versions of the code: acknowledge
-before fsync, serve a stale read, apply a retried request twice, and so on. Each has a covering test
-that has to kill it, and a measured detection rate. If a mutant survives, the harness is too weak and
-the phase is not done. Every entry in [BUGS.md](BUGS.md) names the mutant class that would have caught
-it, and if none existed, a new one lands with the fix.
-
-**Checkers do not get loosened.** Linearizability checking is bounded, so a check that runs out of
-budget is reported as inconclusive and never as a pass. Inconclusive results get their own column in
-[SOAK.md](SOAK.md). If that rate goes up, the fix is to make the problem smaller, not the checker
-weaker.
-
-**What the simulator does not model** is written down rather than left to be discovered: computation
-is instant unless slowness is injected, the network has no congestion model, replay determinism is
-scoped to the Go reference engine, and Byzantine faults are out of scope. Full list in
-[DESIGN-A0 §7](docs/DESIGN-A0-simulator.md).
-
-## What it does
-
-- From-scratch Raft: elections, replication, persistence, snapshots, pre-vote, leadership transfer,
-  single-node membership changes with learner catch-up
-- Multi-raft: one Raft group per range, size-threshold splitting, manual replica movement
-- Distributed transactions over MVCC: Percolator-style 2PC, snapshot isolation, hybrid logical clocks
-  with uncertainty intervals
-- Linearizable reads via read index, including follower reads
-- C++ LSM engine behind a batched cgo interface (Track B, in progress)
-
-Joint consensus, parallel commits, leader leases and automatic load balancing are deliberately out of
-scope for v1. The reasoning is in [STRETCH.md](STRETCH.md) and none of them is claimed anywhere.
-
-## Layout
+That purity is what makes the verification possible. `sim/` runs the whole distributed layer on one
+thread against a virtual clock and a seeded PCG64, injecting drops, delays, duplicates, reorders,
+partitions, crashes, restarts, lost unsynced writes and clock skew. The same seed gives the same
+trace on the Go reference engine. `tools/determinismcheck` turns a wall-clock read, a global rand
+draw, a map range or a goroutine in core scope into a build failure. `raftcheck/` holds the safety
+oracles, which read a ledger of observed events and nothing else. `sim/mutants/` holds 78
+deliberately broken versions of the code, each with a covering test that has to kill it.
 
 | path | what |
 |---|---|
-| `raft/` | the consensus state machine. `Step` and `Tick` in, a `Ready` struct out. No I/O, no clock, no goroutines. |
+| `raft/` | the consensus state machine |
 | `store/` | multi-raft node: many groups over one transport, persist and apply loops, splits |
 | `kv/` | MVCC and transactions |
 | `router/` | client library, range cache, transaction coordinator |
-| `clock/` | hybrid logical clock with `maxOffset` |
-| `engine/` | the storage interface both engines implement. `engine/model` is the Go reference. |
-| `engine-cpp/` | the C++ LSM engine and its cgo bindings |
-| `sim/` | event loop, fault injectors, checkers, and the mutant patches |
-| `raftcheck/` | the safety oracles, which read a ledger of observed events and nothing else |
+| `clock/`, `hlc/` | hybrid logical clock with `maxOffset` |
+| `engine/` | the storage interface; `engine/model` is the Go reference |
+| `engine-cpp/` | the C++ LSM engine, its own test rig, and the cgo bindings |
+| `sim/` | event loop, fault injectors, checkers, mutant patches |
+| `raftcheck/` | the safety oracles |
+| `net/`, `node/`, `cmd/riftnode` | real mode: TCP transport, mailbox driver, the node binary |
+| `chaos/`, `bench/` | the chaos runner and the load generators |
 | `cmd/simctl/` | `run`, `replay`, `hunt` |
 | `internal/rng/` | a project-owned PCG64 with pinned test vectors |
 | `tools/` | the vet passes and the lane pins |
+| `seeds/` | the failing-seed corpus, one plan bundle per historical defect |
 
-## Building
+## Running it
+
+`make help` lists every lane with a one-line description, and `make lanes` says which are real and
+which are still stubs. Go version is pinned by `go.mod`; the C++ side needs CMake and vendors
+GoogleTest at a pinned commit rather than fetching it.
 
 ```sh
-make help      # every lane, and which are real vs still stubs
-make test      # unit tests, seed searches bounded
-make race      # unit tests under -race
-make lint      # vet, formatting, the determinism pass
-make smoke     # 500-seed smoke run
-make ci        # everything the push lane runs
-make exit-run  # 25,000 seeds across contiguous shards
+make build          # compile everything
+make test           # Go unit tests, -short: every path runs, no path is swept
+make race           # -race over every package but sim/hunt
+make lint           # vet, formatting, and the determinism pass
+make smoke          # 500-seed smoke run
+make corpus         # replay every bundle in seeds/
+make mutants        # the mutant suite
+make chaos-smoke    # I2's real-mode mechanisms, actually run
+make cpp-ci         # the whole Track B lane set, with networking disabled
+make ci             # everything the push lane runs
 ```
 
-Lanes come in three tiers, split by cost rather than importance. Every-change lanes run from the
-pre-push hook. Nightly lanes are the full-range covering tests and the 10,000-seed soak.
-Solo lanes need the machine to themselves and take hours, which is the exit run and the mutant power
-floors.
+Lanes are tiered by cost. The every-change tier runs from the pre-push hook (`make hooks` installs
+it). `make nightly` is the full-range covering tests and the 10,000-seed soak. `make solo` is the
+three measurements that need the machine to themselves. `make exit-run` is the phase gate: 25,000
+seeds across contiguous shards, hours per shard.
 
-Go version is pinned by `go.mod`.
+To replay a historical defect, `simctl replay --bundle seeds/BUG-0NN`. A seed reproduces at the
+commit that found it; the plan bundle reproduces at any commit.
+
+## Scope
+
+In v1: from-scratch Raft with elections, replication, persistence, snapshots, pre-vote, leadership
+transfer and single-node membership changes with learner catch-up; multi-raft with size-threshold
+splits and a manual rebalance command; MVCC with hybrid logical clocks and uncertainty-interval
+reads; Percolator-style snapshot-isolated transactions; linearizable reads via read index; the C++
+LSM engine behind the batch cgo interface.
+
+Deliberately out of scope: joint consensus, parallel commits, leader leases, automatic load-based
+balancing. The reasoning is in [STRETCH.md](STRETCH.md), and none of them is claimed anywhere.
 
 ## Documents
 
-- **[docs/V1.md](docs/V1.md) is the place to start.** It spans both tracks: what was built, what was
-  found, how it is verified, what the verification cannot see, and what is still open.
-- [docs/TRACK-A.md](docs/TRACK-A.md) is the Go layer in more depth, phase by phase.
-- [REPORTS/](REPORTS/) has I2's session reports, including the retractions.
-- [CLAUDE.md](CLAUDE.md) is the project constitution and its amendment log
-- [docs/](docs/) has one design doc per phase, with the rejected alternatives and why
-- [BUGS.md](BUGS.md) has every defect, its seed, its root cause, and the invariant that caught it
-- [SOAK.md](SOAK.md) is the cumulative verification ledger
-- [STRETCH.md](STRETCH.md) is what is deliberately out of scope
-- [BENCHMARKS.md](BENCHMARKS.md) is methodology first, numbers second
+- [docs/V1.md](docs/V1.md), the close document. Start here.
+- [BUGS.md](BUGS.md), every defect: symptom, seed or kill point, root cause, fix, the invariant that
+  caught it, and which mutant class would have caught it.
+- [BENCHMARKS.md](BENCHMARKS.md), methodology first, numbers second. It records I2's full-stack
+  numbers, B5.5's cgo boundary cost and B3.7b's compaction amplification, and says which of its
+  tables are still placeholders.
+- [docs/TRACK-A.md](docs/TRACK-A.md), the Go layer phase by phase.
+- [REPORTS/](REPORTS/), I2's session reports, including the retractions.
+- [SOAK.md](SOAK.md), the cumulative verification ledger with its inconclusive column.
+- [STRETCH.md](STRETCH.md), what is deliberately outside v1.
+- [HATCHES.txt](HATCHES.txt), the five determinism escape hatches, diffed against the tree by a test.
+- [CLAUDE.md](CLAUDE.md), the project constitution and its amendment log.
+- One design doc per phase, each with the rejected alternatives and the reasons:
+  [A0](docs/DESIGN-A0-simulator.md),
+  [A1](docs/DESIGN-A1-raft.md),
+  [A2](docs/DESIGN-A2-snapshots.md),
+  [A3](docs/DESIGN-A3-membership.md),
+  [A4](docs/DESIGN-A4-multiraft.md),
+  [A5](docs/DESIGN-A5-mvcc.md),
+  [A6](docs/DESIGN-A6-transactions.md),
+  [A7](docs/DESIGN-A7-readindex.md),
+  [B1](docs/DESIGN-B1-engine.md),
+  [B2](docs/DESIGN-B2-sstables.md),
+  [B3](docs/DESIGN-B3-compaction.md),
+  [B4](docs/DESIGN-B4-verification.md),
+  [B5](docs/DESIGN-B5-cgo.md),
+  [I1](docs/DESIGN-I1-engineswap.md),
+  [I2](docs/DESIGN-I2-realmode.md).
+  The A0 sub-designs (clock, engine, event loop, transport, plan, oracles, toy and simctl) are in
+  [docs/](docs/) alongside them.
+
+The simulator's idealizations, which is to say what it deliberately does not model, are in
+[DESIGN-A0 section 7](docs/DESIGN-A0-simulator.md) and summarised in
+[docs/V1.md](docs/V1.md) section 8.
 
 ## License
 
