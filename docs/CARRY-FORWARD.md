@@ -1329,6 +1329,18 @@ happens, in preference order: push tags and `main` in a single invocation where 
 or accept the window and re-run CI after the second push; never "fix" it by making the lane tolerate a
 tag that is not an ancestor, which is the one thing that would restore the hole GF-69 is about.
 
+**Use `git push --atomic`** where one invocation can carry both. It makes the whole push succeed or
+fail as a unit, so the remote never holds `main` from one history and tags from another. That works
+whenever the tags do not need per-ref leases; a *rewrite* is the case where they do, and
+`--force-with-lease` cannot form a lease for a tag because no remote-tracking ref exists for one. **So
+the window is not always avoidable.**
+
+**Which is the argument for the citation lane running on EVERY push, not a reason to route around the
+window.** The lane is the thing that detects it, and it detected it on its first real outing, against
+a remote that genuinely was inconsistent. A window nothing observes is indistinguishable from no
+window; a window a lane reports is a fact with a duration. If the choice is between a push sequence
+that cannot be made atomic and a lane that notices when it was not, keep the lane.
+
 **The lane is worth building whether or not the rewrite is ever redone.** It is a real gap today: 87
 citations across fifteen records and 24 bundle fields, and nothing checks any of them. `bundle-seeds`
 exists for exactly this reason one level down, and it caught a genuine drift the same day. Had the

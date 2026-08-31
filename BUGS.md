@@ -9236,9 +9236,23 @@ ops/s the oracle's **875 bytes per operation** never accumulate to a scale that 
 > not, and **neither outcome is a statement about the code.** The failure looks like a portability bug
 > and the pass looks like a verified property, and both readings are wrong.
 
-It is BUG-036's class with the arranging party changed. There the precondition was unmet and the test
-skipped; here it is unmet and the test **passes**, which is worse, because a skip is at least visible
-in the output.
+**It is BUG-036's class with the arranging party changed, and the change makes it worse.**
+
+| | BUG-036 | here |
+|---|---|---|
+| who arranges the precondition | the test, or the generated data | **the platform** |
+| what happens when it is unmet | the test **skips** | the test **passes** |
+| what the output says | `SKIP`, in every reporting mechanism | `ok`, indistinguishable from a verified property |
+
+> **A SKIP ANNOUNCES ITSELF AND A PASS DOES NOT.** BUG-036's skips were dangerous because a skip reads
+> as success in the summary; these are worse, because there is not even a token to read. The same
+> structural gap — an assertion whose precondition nothing checks — is **more dangerous exactly where
+> the environment happens to satisfy it**, because satisfaction is what removes the last visible trace
+> of the question.
+
+And the arranging party decides where it bites. A test that depends on its own data fails on the
+machine that generated it; a test that depends on the platform fails on somebody else's machine,
+after the property has been believed for a phase.
 
 **Disposition.** BUG-036's rule is that a skip must name what it could not arrange, so where the
 barrier form is in use the test now skips with exactly that reason instead of passing, and
@@ -9249,7 +9263,76 @@ visible as soon as the platform stops hiding it.
 
 **What it would have caused in production:** nothing directly. It corrupts the record, by carrying a
 verified-looking property that was never verified, and by making a number comparable across platforms
-where it is not. Both consequences landed in `BENCHMARKS.md` and are corrected there.
+where it is not. Both consequences landed in `BENCHMARKS.md` and are corrected there; the sharper of
+the two is its own entry, **[GF-71]**.
 
 **Mutant class:** none, and none is obvious. A mutation that changes the code cannot produce this,
 because the defect is that the platform, not the code, decides whether the assertion means anything.
+
+---
+
+### GF-71 — the vacuous-green shape arriving in a BENCHMARK: a conclusion drawn in a regime where the effect it denies cannot appear
+
+The register's first instance outside a checker, and the reason it belongs in the register is that the
+mechanism is identical — a result reported over a run that could not have produced the other answer.
+
+`BENCHMARKS.md` records, from I2:
+
+> **`ledger=on` and `ledger=OFF` were indistinguishable** at the chaos rate (86 and 96 ops/s across the
+> same pair of phases).
+
+**That measurement was taken at roughly 90 operations per second.** BUG-055's own finding, in the same
+file, is that the oracle retains **875 bytes per operation**. Ninety operations per second is about 79
+kB/s; across a chaos phase it is single-digit megabytes, against a process whose heap is tens of
+megabytes before it starts. **The effect could not have shown at that rate whatever its true size.**
+
+On `linux/amd64`, where plain `fsync` replaces `F_FULLFSYNC` and the same cluster opens at **990 ops/s**,
+the same configuration decays **990 → 246 ops/s over thirty fault-free seconds** ([GF-70]).
+
+> **"INDISTINGUISHABLE" WAS A STATEMENT ABOUT THE RATE, NOT ABOUT THE LEDGER**, and it was written as a
+> statement about the ledger. The comparison ran, both numbers are correct, and the conclusion drawn
+> from them is unsupported — which is the vacuous-green shape exactly: **the instrument reported, and
+> could not have reported otherwise.**
+
+**Why a benchmark is a harder place to catch it than a checker.** A checker has a verdict, and this
+project has spent thirty entries learning to ask whether a verdict was reachable. A benchmark has two
+numbers and a sentence, and **nothing in the repository asks whether the sentence's negation was
+reachable at the rate the numbers were taken at.** `make ci` has no lane over prose.
+
+**The rule this yields, and it is cheap.** A comparison that reports *no difference* must state the
+regime in which it was taken and the magnitude the effect would need in order to show there. Had the
+sentence read *"indistinguishable at 90 ops/s, where 875 B/op is 79 kB/s"*, the limitation would have
+been visible in the sentence that carried the claim, on the day it was written, to its own author.
+
+**Neither number is withdrawn.** Both are correct for their platform; the file now says which platform,
+and that the durability call differs between them.
+
+---
+
+### GF-72 — the test printed its own diagnosis and the lane discarded it, so the least explicable case got the least explicable output
+
+`make power` failed on CI with:
+
+	ONLY 0 of 26 killed. A class exempt because something better covers it, whose
+	something-better does not kill it, is exempt for nothing.
+
+and nothing else. The classes that survive are printed from the sub-lane's log — but that grep matches
+only per-mutant verdicts, and there are none when the sub-lane **never reaches the mutants**: a failed
+baseline, a tree that will not build. **That is exactly the case that produces `0 of N`, and exactly
+the case the output cannot explain.**
+
+The reason existed and was thrown away. `TestChaosRunWithRealCheckers` prints it in full:
+
+> `NOTE: no C++ archive at …/engine-cpp/build/test, so this binary uses engine/model. Restart schedules
+> will fail the persistence gate (BUG-056); run make cpp-cgo to build the archive.`
+
+The `power` job has no `cmake` step, unlike `chaos-smoke`. `buildNode` fell back to `engine/model`, the
+persistence gate failed **on the unpatched baseline**, and `scripts/mutants.sh` aborted before touching
+a mutant. Diagnosing it took reproducing the whole thing on arm64 by deleting the archive — to recover
+a sentence the run had already written and the pass had already deleted.
+
+> **A COUNT IS THE MOST COMPRESSED FORM OF A RESULT AND THE LEAST DIAGNOSABLE ONE**, and the compression
+> is worst precisely where the count is zero, because zero is what a mechanism that did not run reports.
+
+**Fixed:** on a zero-kill result `power-refute` prints the sub-lane's own last lines rather than only
+the classes. It costs nothing on every other path, since every other path has verdicts to print.
