@@ -506,6 +506,23 @@ if [ -n "$test_list" ]; then
         printf '   ONLY %s of %s killed. A class exempt because something better covers it, whose\n' "$k" "$n"
         printf '   something-better does not kill it, is exempt for nothing.\n'
         grep -E '^   (ALIVE|ROT|MISSING|DIED)' "$scratch/covertests.log" | sed 's/^/     /' | head -10
+        # # A COUNT WITHOUT ITS REASON CANNOT BE DIAGNOSED FROM A CI LOG
+        #
+        # The lines above name classes that survived. They print NOTHING when the
+        # sub-lane never reached the per-mutant phase -- a failed baseline, a tree
+        # that would not build -- and that is the case where the count is 0 of N
+        # and least self-explanatory.
+        #
+        # It happened on this project's first CI run: `power` has no cmake step,
+        # so `buildNode` fell back to engine/model, `TestChaosRunWithRealCheckers`
+        # failed the BUG-056 persistence gate on the UNPATCHED baseline, and the
+        # sub-lane aborted before killing anything. The test says all of that in
+        # its own output. This pass discarded it and printed `ONLY 0 of 26`.
+        if [ "$k" = "0" ]; then
+          printf '   Zero killed means the sub-lane may never have reached the mutants at all.\n'
+          printf '   Its own last lines, which are otherwise discarded:\n'
+          tail -25 "$scratch/covertests.log" | sed 's/^/     | /'
+        fi
         failed=$((failed + 1))
         printf '\n'
       fi

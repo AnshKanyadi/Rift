@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,9 +38,47 @@ import (
 // The band is 2x, the same derivation `bench.Result.SteadyEnough` uses: at a
 // factor of two the mean sits at 1.5x one end and 0.75x the other, so no single
 // number describes the window.
+//
+// # ITS PRECONDITION IS SUPPLIED BY THE PLATFORM, AND WENT UNSTATED FOR A PHASE
+//
+// This assertion can only observe retention-driven decay if the cluster is fast
+// enough to accumulate observable retention inside thirty seconds. **That is a
+// property of the platform's durable-write call, not of this code.**
+//
+// `engine-cpp/src/env/posix/posix_env.cc` uses `F_FULLFSYNC` on Apple and plain
+// `fsync` elsewhere, deliberately: on macOS `fsync(2)` returns before the drive
+// has flushed its own write cache, so only the barrier form makes the durability
+// claim true. The barrier costs about an order of magnitude, and the two
+// platforms therefore are not making the same promise:
+//
+//	darwin/arm64, F_FULLFSYNC   109 ops/s opening, p50 73 ms   -> 1.14x, no decay
+//	linux/amd64,  fsync         990 ops/s opening, p50  6 ms   -> 0.25x, FAILS
+//
+// So this test PASSED on the development machine for reasons that have nothing
+// to do with the defect it exists to catch: at 109 ops/s the observer's 875
+// bytes per operation never reach a scale that moves throughput. **The green was
+// the vacuous outcome and the red is the informative one**, which is the reverse
+// of how it reads.
+//
+// BUG-036's rule applies and names the shape: a skip must say what it could not
+// arrange. So where the barrier form is in use this SKIPS with that reason rather
+// than passing, because a pass here would be a statement about a run that could
+// not have observed the thing. `docs/V1.md` section 9 carries the consequence --
+// this property is unverified on macOS.
+//
+// The discriminator is not a proxy for the platform: it is the SAME condition the
+// engine itself compiles against to choose the call.
 func TestAFaultFreeClusterHoldsItsThroughput(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts real processes and runs for 30 seconds")
+	}
+	if runtime.GOOS == "darwin" {
+		t.Skip("PRECONDITION NOT ARRANGED: the C++ Env uses F_FULLFSYNC here " +
+			"(posix_env.cc, `#if defined(__APPLE__)`), which holds this cluster near 109 ops/s. " +
+			"At that rate the oracle's 875 B/op never reaches a scale that moves throughput, so a " +
+			"pass would not mean the cluster held its rate -- it would mean this machine cannot " +
+			"produce the decay. What could not be arranged: a throughput at which retention is " +
+			"observable inside a 30s window. NOT a pass; see docs/V1.md section 9")
 	}
 	bin := buildNode(t)
 	root := t.TempDir()

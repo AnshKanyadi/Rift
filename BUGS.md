@@ -9202,3 +9202,54 @@ redoing the rewrite, extended by one line — **every ref under `refs/tags` must
 `main`.** It is the same assertion as the one over cited hashes, over a different set of pointers, and
 neither exists today.
 
+
+---
+
+### GF-70 — a directed test whose precondition is supplied by the PLATFORM passes where the platform supplies it and fails where it does not, and neither outcome is about the code
+
+Found by the first CI run this project has ever had, which was also the first time its code ran on
+anything but the machine it was written on.
+
+`TestAFaultFreeClusterHoldsItsThroughput` asserts that a fault-free cluster holds its rate across six
+five-second windows. It has passed on `darwin/arm64` since BUG-055's fix. It **fails on `linux/amd64`**:
+
+| | opening | closing | ratio | verdict |
+|---|---|---|---|---|
+| darwin/arm64 | 109 ops/s, p50 73 ms | 124 ops/s | 1.14 | passes |
+| linux/amd64 | **990 ops/s, p50 5.96 ms** | 246 ops/s | **0.25** | fails |
+
+**The runner is not slow. It is nine times faster**, and that is the entire mechanism.
+`engine-cpp/src/env/posix/posix_env.cc` chooses `F_FULLFSYNC` on Apple and plain `fsync` elsewhere,
+deliberately and correctly: *"fsync(2) on macOS returns before the drive has flushed its own write
+cache. F_FULLFSYNC is the call that does not."* The barrier costs about an order of magnitude. At 109
+ops/s the oracle's **875 bytes per operation** never accumulate to a scale that moves throughput; at
+990 ops/s they do, inside the same thirty seconds.
+
+> **THE GREEN WAS THE VACUOUS OUTCOME AND THE RED IS THE INFORMATIVE ONE.** The test could not observe
+> the thing it exists to observe on the machine it was written on, and nothing said so — not the test,
+> not the lane, not the record. It reported success for a run that could not have failed.
+
+**The general form, which is why this is filed here rather than as a defect:**
+
+> A directed test can have a precondition that no line of it arranges, because the PLATFORM arranges
+> it. Such a test passes wherever the platform supplies the precondition and fails wherever it does
+> not, and **neither outcome is a statement about the code.** The failure looks like a portability bug
+> and the pass looks like a verified property, and both readings are wrong.
+
+It is BUG-036's class with the arranging party changed. There the precondition was unmet and the test
+skipped; here it is unmet and the test **passes**, which is worse, because a skip is at least visible
+in the output.
+
+**Disposition.** BUG-036's rule is that a skip must name what it could not arrange, so where the
+barrier form is in use the test now skips with exactly that reason instead of passing, and
+`docs/V1.md` §9 carries the consequence: the property is **unverified on macOS**. The band is
+untouched, the run length is untouched, and the amd64 failure stands — it is a true statement that the
+shipped chaos configuration retains 875 B/op with `ledger=on` by default, and that retention is
+visible as soon as the platform stops hiding it.
+
+**What it would have caused in production:** nothing directly. It corrupts the record, by carrying a
+verified-looking property that was never verified, and by making a number comparable across platforms
+where it is not. Both consequences landed in `BENCHMARKS.md` and are corrected there.
+
+**Mutant class:** none, and none is obvious. A mutation that changes the code cannot produce this,
+because the defect is that the platform, not the code, decides whether the assertion means anything.

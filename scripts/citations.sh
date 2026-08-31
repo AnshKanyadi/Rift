@@ -158,7 +158,18 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '\n  citations: self-test\n'
   printf '  ----------------------------------------------------------------\n'
 
-  orphan=$(git commit-tree "$(git rev-parse HEAD^{tree})" -m 'citations.sh self-test: a commit on no branch' < /dev/null)
+  # The plant carries its OWN identity, because the lane must not assume one.
+  #
+  # `git commit-tree` refuses without a configured user.name/user.email, and a
+  # hosted runner has neither: `actions/checkout` does not set them. On a
+  # developer machine this is invisible, which is why it survived being written,
+  # reviewed and reported as a confirmed cause before anyone noticed it had never
+  # actually fired. The plant is a throwaway object on no branch, so whose name is
+  # on it means nothing -- and supplying one is cheaper than depending on the
+  # environment having one.
+  orphan=$(GIT_AUTHOR_NAME='citations self-test' GIT_AUTHOR_EMAIL='citations@invalid' \
+           GIT_COMMITTER_NAME='citations self-test' GIT_COMMITTER_EMAIL='citations@invalid' \
+           git commit-tree "$(git rev-parse HEAD^{tree})" -m 'citations.sh self-test: a commit on no branch' < /dev/null)
   short=$(echo "$orphan" | cut -c1-7)
 
   git cat-file -e "${orphan}^{commit}" || { printf '   the plant does not resolve; the fixture is wrong\n'; exit 2; }

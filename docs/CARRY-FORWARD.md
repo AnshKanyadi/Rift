@@ -1315,6 +1315,20 @@ around them do. Normalizing means a scoped rewrite of five commits, which is not
 day the argument against rewrites was made, and the inconsistency is honest about when they were
 written. Left deliberately, recorded here so a reader who notices has the answer.
 
+**STANDING, from the lane's first real outing: `main` and tags land in TWO pushes, and CI can run
+between them.** The first force-push moved `main` and had all seventeen tags rejected — `git push
+--force-with-lease` cannot form a lease for a tag, because there is no remote-tracking ref for one, so
+every tag came back `stale info` and needed an explicit `--force-with-lease=refs/tags/<t>:<sha>`. The
+workflow triggered on the `main` push, so **CI checked out rewritten `main` against pre-rewrite tags**
+and the citation lane reported 17 dangling tags — correctly. The remote really was inconsistent for
+the length of one push.
+
+That is not a one-off. **Any push of a rewritten history is at least two operations, and the window
+between them is a state in which this repository's own lane fails by design.** Options when it next
+happens, in preference order: push tags and `main` in a single invocation where the leases allow it;
+or accept the window and re-run CI after the second push; never "fix" it by making the lane tolerate a
+tag that is not an ancestor, which is the one thing that would restore the hole GF-69 is about.
+
 **The lane is worth building whether or not the rewrite is ever redone.** It is a real gap today: 87
 citations across fifteen records and 24 bundle fields, and nothing checks any of them. `bundle-seeds`
 exists for exactly this reason one level down, and it caught a genuine drift the same day. Had the

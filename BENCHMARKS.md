@@ -308,6 +308,25 @@ real engine's cost, measured for the first time.** It is not a defect and not a 
 anything — there is no prior number for this configuration. It is the price of real fsyncs and a real
 LSM where the reference engine keeps versions in memory.
 
+> **QUALIFIED 2026-08-31, and the attribution above is mostly wrong.** Every number in this section was
+> taken on **darwin/arm64**, where `engine-cpp/src/env/posix/posix_env.cc` issues `F_FULLFSYNC` — the
+> only call on that platform that flushes the drive's own write cache. CI run `33371398512` ran the
+> same C++ engine through the same harness on **linux/amd64**, where the Env issues plain `fsync`, and
+> measured **990 ops/s at p50 5.96 ms** — that is, the C++ engine on Linux performs about what
+> `engine/model` does here.
+>
+> **So the ~9x is almost entirely the durability CALL, not the LSM.** `fsync` on Linux and
+> `F_FULLFSYNC` on macOS do not make the same promise, and a number taken under one is not comparable
+> to a number taken under the other. The sentence above says "the price of real fsyncs and a real LSM";
+> the Linux datum says the LSM's share of it is small. Neither number is withdrawn — both are correct
+> for their platform, and the platform is now stated with each.
+
+> **QUALIFIED 2026-08-31: measured in a regime where the effect cannot appear.** "Indistinguishable at
+> the chaos rate" was established at ~90 ops/s on darwin/arm64 under `F_FULLFSYNC`. At 990 ops/s on
+> linux/amd64 the same configuration decays **990 -> 246 ops/s over thirty fault-free seconds**, and
+> `ledger=on` is riftnode's default. **875 B/op is invisible at 90 ops/s and dominant at 990**, so the
+> comparison below is a statement about that rate and not about the ledger. See [GF-70].
+
 **`ledger=on` and `ledger=OFF` were indistinguishable** at the chaos rate (86 and 96 ops/s across the same pair of phases). BUG-055's
 per-operation retention is real and was measured at 875 B/op; against a C++ engine doing real fsyncs it
 is **not the bottleneck.**
