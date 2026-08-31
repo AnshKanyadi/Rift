@@ -8,6 +8,14 @@
 *.test
 *.out
 
+# `go build ./cmd/<name>` drops an EXTENSIONLESS binary in the working
+# directory, which no suffix rule above can catch. riftnode was committed that
+# way at 32647de and sat in the tree as the largest tracked file in the repo.
+# One line per cmd/ target, so a new command is a conscious addition here.
+/riftnode
+/simctl
+/shapename
+
 # Go
 /vendor/
 coverage.out
@@ -21,6 +29,11 @@ engine-cpp/build-*/
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json
+
+# Engine roots written at a RELATIVE path, so they land wherever the lane ran.
+# engine-cpp/test/tsan_harness_test.cc hardcodes this one and leaves the
+# directory behind; `make cpp-tsan` from the repo root therefore creates it here.
+/tsan-flush-db/
 
 # Simulator artifacts
 # NOTE: seeds/ IS tracked -- the failing-seed corpus is a deliverable.
