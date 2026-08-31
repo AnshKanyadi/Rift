@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 150
 # power-ceiling: 10
-# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: a withheld message is never released, so the cluster stalls with every checker green -- the class behind BUG-003, where a mark that covered nothing was left open and everything gated on it waited forever. A message gated on a mark that is never acknowledged is indistinguishable from a message never generated, and AssertQuiescent is the only thing that can tell the difference
 --- a/raft/raft.go
 +++ b/raft/raft.go

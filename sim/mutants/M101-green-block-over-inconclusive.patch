@@ -5,7 +5,7 @@
 # power-covered-by: TestAnInconclusiveIsNeitherGreenNorAViolation -- a report-generator defect with a deterministic covering test. GF-62: these three functions are pure Run-to-text, so a kill is a compile-and-run away and a rate floor over seeds would measure nothing a single deterministic case does not.
 # power-refutation: not a seeded property. Run.Gate and Run.Report take a constructed Run; there is no schedule to sweep, so the only sound instrument is a table-driven case, which is what the covering test is.
 # mutates: the green block prints over an unfinished checker, so an inconclusive reads as a pass
-# re-anchored: 2026-08-30, per GF-41. It landed at 1d144b6 with three all-prose trailing context
+# re-anchored: 2026-08-30, per GF-41. It landed at b36546d with three all-prose trailing context
 #   lines and no code, which is past the measured fuzz reach of 2, so `make anchors` and `make test`
 #   have been red since. WIDENED to -U6 rather than narrowed: the next code line is only three
 #   comment lines away, so widening reaches `fmt.Fprintf` instead of anchoring on more prose. The

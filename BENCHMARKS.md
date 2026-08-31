@@ -60,7 +60,7 @@ re-derived is a number nobody can trust or retire.**
 
 | | |
 |---|---|
-| **taken at commit** | `19f1d45` (Track B, branch `rift-b`) |
+| **taken at commit** | `c98e853` (Track B, branch `rift-b`) |
 | **engine shape** | two levels; L0 from flushes, L1 a non-overlapping run of files capped at the flush threshold; compaction trigger `\|L0\| >= 4`; range tombstones in-table; file lifetime by reference count |
 | **caps** | **as shipped**: flush threshold 4 MiB, WAL buffer 256 MiB, max record 32 MiB |
 | **crossing point** | derived from the caps as `8 · K · F` = 128 MiB — **not a constant**, so a caps change moves it |
@@ -160,7 +160,7 @@ variance from a finding.
 
 | | |
 |---|---|
-| **engine tree** | `62e213a` (Track B, branch `rift-b`) — B5.5 adds only the harness; no engine code changed to take these |
+| **engine tree** | `850b2e0` (Track B, branch `rift-b`) — B5.5 adds only the harness; no engine code changed to take these |
 | **hardware** | Apple M3 Pro, 11 cores, 18 GB, APFS on internal NVMe, macOS 26.3.1 |
 | **toolchains** | Go 1.26.5, Apple clang 17.0.0, `-O2` via CMake `Release` |
 | **caps** | as shipped: flush 4 MiB, WAL buffer 256 MiB, max record 64 MiB, busy 192 MiB |

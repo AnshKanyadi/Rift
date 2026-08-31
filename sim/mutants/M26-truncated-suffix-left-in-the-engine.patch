@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 5
 # power-ceiling: 10
-# power-measured: 14 of 300, first at seed 1, under current at commit A5-close; was 16 of 300, first at seed 1, at commit 6e716d5+A5-open
+# power-measured: 14 of 300, first at seed 1, under current at commit A5-close; was 16 of 300, first at seed 1, at commit 1e2721a+A5-open
 # mutates: a conflicting append rewrites the entries it replaces but leaves the discarded branch's tail in the engine, so recovery reads a new prefix spliced onto a dead branch and calls the result a log -- gapless by index, so Restore accepts it
 --- a/store/node.go
 +++ b/store/node.go

@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 32
 # power-ceiling: 10
-# power-measured: 79 of 300, first at seed 0, under current at commit A5-close; was 77 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 79 of 300, first at seed 0, under current at commit A5-close; was 77 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: a leadership transfer to a node that is no longer in the configuration is treated as a caller bug and panics. Membership changes under the caller's feet, so it is a runtime condition, and killing the leader for it turns a routine rebalance into an outage
 --- a/raft/raft.go
 +++ b/raft/raft.go

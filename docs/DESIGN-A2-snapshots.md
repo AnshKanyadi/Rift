@@ -346,7 +346,7 @@ and a patch declaring neither **fails the lane** -- because saying nothing is ho
 thirty-one classes came to share four floors. Seventeen classes carry floors;
 fourteen opt out, each with its reason recorded in the patch header.
 
-**Floors, measured at `bf10d04`**, set at roughly half the measured rate, which
+**Floors, measured at `62a7231`**, set at roughly half the measured rate, which
 is the margin rule the toy floors already use:
 
 | class | measured | floor | first |

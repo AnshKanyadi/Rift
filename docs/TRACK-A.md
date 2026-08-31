@@ -36,8 +36,8 @@ violations** under the phase's fault mix.
 | **A3** | single-node membership changes, learner catch-up, config-across-snapshot | continuous membership churn under faults, 15,000 seeds green | **signed** |
 | **A4** | multi-raft: range descriptors with epochs, size-threshold splits, router retry, manual rebalance | workloads spanning many splits mid-traffic, per-key linearizability green, 10,000 seeds | **signed** |
 | **A5** | MVCC, versioned key encoding, version GC, hybrid logical clocks with `maxOffset` | MVCC semantics suite deterministic and green; HLC causality green under skew schedules | **signed** |
-| **A6** | Percolator-style distributed transactions, uncertainty intervals, reader-side lock resolution | 25,000 seeds: conservation, atomicity and SI green; single-key porcupine still green | **signed** — measured at commit `611d0b9`: **pass 24,903, violations 0, inconclusive 97** |
-| **A7** | read index, follower reads, the term-start no-op | staleness checker green under partitions and leader churn; 25,000 seeds | **measured** at commit `6c43023`: **25,000 seeds, pass 24,900, violations 0, inconclusive 100, errors 0** |
+| **A6** | Percolator-style distributed transactions, uncertainty intervals, reader-side lock resolution | 25,000 seeds: conservation, atomicity and SI green; single-key porcupine still green | **signed** — measured at commit `c807555`: **pass 24,903, violations 0, inconclusive 97** |
+| **A7** | read index, follower reads, the term-start no-op | staleness checker green under partitions and leader churn; 25,000 seeds | **measured** at commit `b730acf`: **25,000 seeds, pass 24,900, violations 0, inconclusive 100, errors 0** |
 
 **A7's exit run, in full**, because it is the most recent and the most completely recorded: eight
 contiguous shards tiling `[0, 25000)` with no gap and no overlap, all at one commit, aggregated by a

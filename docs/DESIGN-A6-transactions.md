@@ -1399,7 +1399,7 @@ reported as one.
 
 ### 21.1b The run that was in flight is a MEASUREMENT, not a gate
 
-The sharded run launched at `90382fc` **is not the exit run**, and this paragraph
+The sharded run launched at `cc0e08a` **is not the exit run**, and this paragraph
 has been rewritten twice as that became clearer, which is itself the point.
 
 - It first said "no Go source at all changed since" — false the moment the
@@ -2212,7 +2212,7 @@ both are consequences of replacing a TSO with per-node clocks.
 The obvious worry is that a guard which refuses prewrites refuses too many. Measured over 200 seeds
 against the two pre-fix 25,000-seed runs:
 
-| | pre-fix (`90382fc`) | pre-fix (`8e10220`) | post-fix (200 seeds) |
+| | pre-fix (`cc0e08a`) | pre-fix (`c1e6cde`) | post-fix (200 seeds) |
 |---|---|---|---|
 | commit rate | 0.615 | 0.624 | **0.611** |
 | `WriteConflicts` per 200 seeds | 364 | 356 | 2,120 |
@@ -2506,7 +2506,7 @@ does that.
 Found while making the lane affordable, not while looking for it, which is the only reason it was
 found at all.
 
-**The state.** At `087229a` — the commit the handoff describes as *"tree clean, all fast lanes
+**The state.** At `395d6cf` — the commit the handoff describes as *"tree clean, all fast lanes
 green"* — `power-mutants` fails on two classes:
 
 ```
@@ -2572,15 +2572,15 @@ wall-time-to-detection, and that half is either measured at `POWER_JOBS=1` or no
 
 ## 32. The exit run, re-run after BUG-022
 
-At `611d0b9`, 10 contiguous non-overlapping shards, aggregated:
+At `c807555`, 10 contiguous non-overlapping shards, aggregated:
 
 ```
-aggregate:    10 shards covering [0,25000) at commit 611d0b9
+aggregate:    10 shards covering [0,25000) at commit c807555
 verdicts:     pass=24903 violation=0 inconclusive=97 errors=0
 contention:   25000 seeds contended, 0 seeds never elected anybody
 ```
 
-| | pre-BUG-021 (`90382fc`) | post-BUG-021 (`8e10220`) | post-BUG-022 (`611d0b9`) |
+| | pre-BUG-021 (`cc0e08a`) | post-BUG-021 (`c1e6cde`) | post-BUG-022 (`c807555`) |
 |---|---|---|---|
 | seeds | 25,000 | 25,000 | 25,000 |
 | **violations** | **271** | **184** | **0** |
@@ -3494,7 +3494,7 @@ identifier in the system packages, is there a caller anywhere in the tree includ
 | `kv.EncodeLockValue`, `kv.EncodeWriteValue`, `kv.EncodeTxnValue` | **the retired model's own leftovers.** Their doc comment says so in as many words: *"The value codecs, exported for the harness's model."* They existed so `modelRecords` could render the model's logical state into engine records; the model was retired at §13 and `modelRecords` was deleted after it, and these outlived both | **deleted.** The unexported `encodeLock`/`encodeWrite`/`encodeTxn` are the production path and are untouched. The **decoders** stay and are not symmetry: a split-born range inherits records, so `recoveredStates` has to read what the harness did not write |
 | `coordinator.resolves` / `Resolves()` | a **duplicate counter**: `c.resolves++` and `c.readerResolves++` are incremented at the same two lines, and only `ReaderResolves()` is ever read | **deleted**, field and accessor |
 | `raftcheck.Ledger.Rev()` | an exported accessor for `l.rev`. Every reader of `rev` is `base.stale()`, inside the package. It has had no caller in any commit | **deleted** |
-| `store.codec.encodeKV` / `decodeKV` | the serialiser for the state machine **when the state machine was a Go map**. Both halves lost their callers at `e8b258c`, *"A5: MVCC is the replicated state machine"*, and neither has been called by anything since, tests included | **deleted.** It was `store/`'s only use of `internal/sorted`, and that import went with it |
+| `store.codec.encodeKV` / `decodeKV` | the serialiser for the state machine **when the state machine was a Go map**. Both halves lost their callers at `8e4a470`, *"A5: MVCC is the replicated state machine"*, and neither has been called by anything since, tests included | **deleted.** It was `store/`'s only use of `internal/sorted`, and that import went with it |
 | `raftcheck.rangeLedger.holds` | a durable-coverage helper written at A2. `git log -G` finds the commit that wrote it and the commit that moved it from `Ledger` to `rangeLedger` at A4, and **no commit that ever added or removed a call to it** | **deleted**, with its reasoning kept in prose where it was |
 | `store.Replica.TxnRefused()` | a live counter — `txnRefused` increments at four sites — whose accessor nobody reads | **reported, not deleted** — see below |
 
@@ -3643,7 +3643,7 @@ That is §37's shape one level in — *a lane too expensive to run is a lane who
 **And it is worse than a claim that went stale, which is what I expected to find.** The obvious story
 is that the schedule mix moved under a reachability claim written for an earlier mix — A2's kill-time
 amendment exists for exactly that. So the claim was re-measured under **A5's own shape**, the shape it
-was written against, at commit `7a809a4`:
+was written against, at commit `7cb342b`:
 
 | | detections |
 |---|---|
@@ -4206,12 +4206,12 @@ whatever the mutation does.*
 
 **What it has cost, which is the part that makes it a finding rather than a bug report.** Three classes
 declare a sweep detector: `M67` (ruled today), and **`M68` and `M73`, which landed at A6**. Both have
-therefore been reporting BLIND in the default lane **since `d8589a9`** — a red verdict produced by the
+therefore been reporting BLIND in the default lane **since `5174472`** — a red verdict produced by the
 lane's plumbing rather than by either class. That is §31's shape exactly, one turn later: *a lane
 reporting red into a room with nobody in it*, except this time the red is not even about the classes.
 
 **The chain that let it happen, stated because the fix follows from it.** `POWER_JOBS` was added first
-(`ba9df9d`), which created the second path. The sweep detector was added next (`d8589a9`) and taught to
+(`e289819`), which created the second path. The sweep detector was added next (`5174472`) and taught to
 `measure_one` — **the shared helper, which is the right place** — and the inline copy was not updated,
 because nothing in the script says the two paths must agree. *A feature added to one of two duplicated
 paths is a feature that exists in one mode.*
@@ -4262,14 +4262,14 @@ more than one line.**
 tree fails several *non-vacuity* criteria — *no snapshot was ever taken*, *no prewrite met a live
 lock* — so almost every probe emits sweep lines. Therefore:
 
-> **Since `d8589a9` (2026-08-23), `power-mutants` could not report a pass for essentially any class in
+> **Since `5174472` (2026-08-23), `power-mutants` could not report a pass for essentially any class in
 > `POWER_JOBS > 1` mode, and could not fire the sweep detector in `POWER_JOBS = 1` mode. Both modes.
 > The lane whose entire purpose is to notice when detection power drops has been unable to return a
 > verdict in either configuration.**
 
 **The span is one day of wall clock, and saying "the back half of a phase" — as an earlier draft of
 this section did — was an overstatement worth correcting rather than quietly trimming.** What the
-window actually covers is not long, it is *load-bearing*: `d8589a9` to `6d479ea` is the entire
+window actually covers is not long, it is *load-bearing*: `5174472` to `a08a569` is the entire
 post-A6 measurement cycle — §40's detector, §41's sweep, §42's five re-measurements and the `M56`
 finding, and §43's whole refutation pass. Every sentence in those sections that says *the lane* was
 written while the lane could not return a verdict. The numbers survive because they came through
@@ -4316,7 +4316,7 @@ With both defects fixed, the two ruled classes through `power-mutants`:
 fires on `ForeignTagStarts` against a baseline that passes.
 
 > **And this is the first verdict `power-mutants` has ever been in a position to produce, which is a
-> stranger sentence than the fix that made it possible.** Since `d8589a9` the sequential mode could
+> stranger sentence than the fix that made it possible.** Since `5174472` the sequential mode could
 > not fire a sweep detector and the parallel mode could not report a pass; before that, `noticed()`
 > could not see an aggregate detector at all (§35.1), and before *that* the lane floored zero mutant
 > classes (§31, and the file header has said so since A0). At no point in this lane's history has it
@@ -4663,7 +4663,7 @@ Five things — the first now ruled, the rest still Ansh's:
 
 ## 44. A6's record, closed
 
-A6 was signed at `611d0b9` and this document kept going, because the sign-off ruled four items open
+A6 was signed at `c807555` and this document kept going, because the sign-off ruled four items open
 and then the answers to those items produced more. This section closes the record: what the
 post-sign-off cycle produced, what colour the tree is, and where everything still owed now lives.
 

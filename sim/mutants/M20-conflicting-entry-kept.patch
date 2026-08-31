@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 5
 # power-ceiling: 28
-# power-measured: 19 of 300, first at seed 1, under current at commit A5-close; was 18 of 300, first at seed 7, at commit 6e716d5+A5-open
+# power-measured: 19 of 300, first at seed 1, under current at commit A5-close; was 18 of 300, first at seed 7, at commit 1e2721a+A5-open
 # mutates: a follower keeps its own entry at a conflicting index instead of truncating from it, so two replicas apply different commands at the same log position
 --- a/raft/raft.go
 +++ b/raft/raft.go

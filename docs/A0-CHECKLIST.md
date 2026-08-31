@@ -51,8 +51,8 @@ The mapping, as reconciled:
 | 11 | **— no landing-plan row exists.** `node/` is a close condition the landing plan never scheduled |
 
 Landing-plan rows `A0.1`–`A0.5` predate the checklist and have no step number. They landed in commits
-`4f9f360`/`690ab2b` (skeleton), `e042b44` (rng), `a68916c` (determinismcheck, tags `a0.3-signed` and
-`a0.3b-signed`), `ee2322b`/`e3b9abd` (clock), `eefa269` (engine). They are not exempt from A0's exit
+`80e1880`/`98960bb` (skeleton), `ce9bfd8` (rng), `882d266` (determinismcheck, tags `a0.3-signed` and
+`a0.3b-signed`), `7a0725c`/`d7b65f7` (clock), `c30a273` (engine). They are not exempt from A0's exit
 criteria — they are covered by the lane set, which every step below also depends on.
 
 Step 11 having no landing-plan row is the sharpest illustration of why both documents are needed. The

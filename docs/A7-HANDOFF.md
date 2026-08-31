@@ -1,6 +1,6 @@
 # A7 handoff — written mid-run, for a session that knows nothing
 
-**Written:** 2026-08-25 21:15, at commit `e8dbfaa`, with A7's exit run in its sixth hour and this
+**Written:** 2026-08-25 21:15, at commit `1f95db2`, with A7's exit run in its sixth hour and this
 session at its context limit. **A7 is the last Track A phase and it is NOT complete.** Only Ansh
 marks a phase complete, and he has not.
 
@@ -26,7 +26,7 @@ already.
 
 ## 1. The exit run — identity, and how to tell whether it is still alive
 
-**Started 2026-08-25 15:29. Commit `e83885d`. 25,000 seeds, 8 contiguous shards.**
+**Started 2026-08-25 15:29. Commit `3d263e7`. 25,000 seeds, 8 contiguous shards.**
 
 ```
 42477  sh -c make exit-run > <log> 2>&1; echo EXIT=$? >> <log>
@@ -73,24 +73,24 @@ whole reason for §3.2. Do not report one until a shard lands and you can comput
 
 ### 1.4 The tree is TWO COMMITS AHEAD of the run, and that is a fact the aggregate has to carry
 
-The run's binaries were compiled at `e83885d`. Since launch:
+The run's binaries were compiled at `3d263e7`. Since launch:
 
 | commit | time | what it touched |
 |---|---|---|
-| `b5eba7e` | 17:01 | `scripts/exit-run.sh` banner, `sim/hunt/raftscenario.go` **(+35, additive)**, mutant declarations, BUG-024 bundle |
-| `e8dbfaa` | 17:11 | `docs/` only |
+| `3c2c696` | 17:01 | `scripts/exit-run.sh` banner, `sim/hunt/raftscenario.go` **(+35, additive)**, mutant declarations, BUG-024 bundle |
+| `1f95db2` | 17:11 | `docs/` only |
 
 The `raftscenario.go` change is `CurrentShapeName()` / `ShapeNameOf()` — **new functions, no change
-to `A7Options()` or to any swept behaviour** (verify with `git show b5eba7e -- sim/hunt/raftscenario.go`).
+to `A7Options()` or to any swept behaviour** (verify with `git show 3c2c696 -- sim/hunt/raftscenario.go`).
 The running binaries sweep the same shape they would today.
 
-**But the exit criterion says "exactly 25,000 seeds at one commit," and that commit is `e83885d`,
-not `HEAD`.** The aggregate must record `e83885d`. Do not silently attribute this run to HEAD.
+**But the exit criterion says "exactly 25,000 seeds at one commit," and that commit is `3d263e7`,
+not `HEAD`.** The aggregate must record `3d263e7`. Do not silently attribute this run to HEAD.
 
 ### 1.5 The banner in that log LIES, and the fix arrived too late to help it
 
-The running log reads **"A6 exit run: 25000 seeds across 8 shards at e83885d"**. It is sweeping
-**A7's shape**. `e83885d` moved the sweep to A7 and the hardcoded banner did not follow; `b5eba7e`
+The running log reads **"A6 exit run: 25000 seeds across 8 shards at 3d263e7"**. It is sweeping
+**A7's shape**. `3d263e7` moved the sweep to A7 and the hardcoded banner did not follow; `3c2c696`
 fixed it by computing the name from the options struct (`cmd/shapename`, `ShapeNameOf`) — 40 minutes
 after this run launched. A fresh session reading that log without this paragraph would conclude the
 exit run swept the wrong phase. It did not.
@@ -115,7 +115,7 @@ RAFT_SHARD_DIR=.exitrun RAFT_TOTAL=25000 go test -count=1 -run TestRaftExitAggre
 The aggregate must prove, and the report must state:
 
 - **contiguity and non-overlap** — the eight ranges tile `[0, 25000)` exactly, no gap, no double-count;
-- **one commit** — every shard JSON carries `e83885d`;
+- **one commit** — every shard JSON carries `3d263e7`;
 - **exactly 25,000 seeds**, not "about";
 - **zero safety violations**;
 - **the inconclusive rate, explained rather than reported** (Amendment A4: an inconclusive is never a

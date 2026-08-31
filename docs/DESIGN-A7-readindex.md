@@ -655,7 +655,7 @@ and passed under the exact mutation it existed to catch (§3a.4).
 
 Open question 9 asked for the share of read volume that is transactional, *"measurable now from A6's
 own census without writing any A7 code"*. It is, and here it is — from the signed 25,000-seed exit run
-at `611d0b9`:
+at `c807555`:
 
 | | reads | how it is obtained |
 |---|---|---|
@@ -1207,7 +1207,7 @@ list, not a finding.
 
 Entry 1 was the defect that prompted it: 526 seeds, found by porcupine. **Entry 2 was found by
 writing entry 2** — listing the property and asking whether read index kept it. It had been live
-since `90a4844`, it is invisible to porcupine in a quiet history, and it was masked in the full sweep
+since `9d30e90`, it is invisible to porcupine in a quiet history, and it was masked in the full sweep
 by entry 1's much higher rate. No further sweep found it and no code review did.
 
 > **A class is cheaper to enumerate than to meet one member at a time.** The first member costs a

@@ -145,7 +145,7 @@ Newest last. Each is a defect in Rift found by the verification machinery.
 | **Reproduce (seed)** | every seed exhibited it; `seeds/BUG-001` carries seed 0 |
 | **Invariant that caught it** | **none.** No safety oracle could see this, and none did |
 | **Mutant class** | none existed — added `M21-decode-off-by-one` in this PR |
-| **Fix commit** | `ff895a0` |
+| **Fix commit** | `133d8d7` |
 | **Minimized?** | n/a — the defect was schedule-independent; there was nothing to minimize |
 
 **Symptom.** `store/codec.go`'s `decodeMessage` read eleven `uint64`s where `encodeMessage` wrote
@@ -204,7 +204,7 @@ Seventy-nine terms, no leader, and not one violation reported.
 | **Reproduce (seed)** | `seeds/BUG-002` carries seed **32** (was 40, and 66 before that; see *the seeds moved* below and §A5 rot) |
 | **Invariant that caught it** | none of the four — this is a liveness stall, and `AssertQuiescent` is the mechanism that refuses to call one a clean run |
 | **Mutant class** | `M14-epoch-check-removed` |
-| **Fix commit** | `ff895a0`, made structural in `04d8d20` |
+| **Fix commit** | `133d8d7`, made structural in `a56897d` |
 | **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6); the bundle is the whole schedule |
 
 **Symptom.** A node that had restarted twice stopped sending anything. It was up, it was stepping
@@ -232,7 +232,7 @@ silence, and it is the only thing that could have found this.
 restart. The range keeps its nominal replication factor while actually running one voter short, so
 the next failure takes the quorum with no warning that the margin was already gone.
 
-**Fix.** The reset was the immediate fix. The real fix, in `04d8d20`, was `sim.Epoch`: every
+**Fix.** The reset was the immediate fix. The real fix, in `a56897d`, was `sim.Epoch`: every
 incarnation carries a monotonically increasing epoch, every sync completion is stamped with the epoch
 that issued it, and a cross-epoch delivery is dropped and counted. Epoch 0 means "no incarnation", so
 a forgotten stamp is refused rather than defaulting into acceptance. The class became
@@ -240,7 +240,7 @@ unrepresentable rather than catchable — this project's house move, after Wall/
 
 `M14` was declared in that commit and could not be validated then: it targets `./sim/hunt/`, whose
 baseline was red while `TestRaftExitCriteria` failed, and the mutant lane correctly refuses to report
-kills against a red baseline. It was validated at `01d6fe4`, and validating it found that the epoch
+kills against a red baseline. It was validated at `39608a0`, and validating it found that the epoch
 guard was itself being **counted and never asked about** — the sixth mechanism in this repository to
 be declared, wired, and never invoked.
 
@@ -256,7 +256,7 @@ be declared, wired, and never invoked.
 | **Reproduce (seed)** | `seeds/BUG-003` carries seed **23**, re-recorded at A6 when the workload moved every raft trace (DESIGN-A6 §16); it carried seed 0 when the bug was found |
 | **Invariant that caught it** | none of the four — a stall, again |
 | **Mutant class** | none existed — added `M23-gated-messages-never-released` in this PR |
-| **Fix commit** | `5264236` (`markHandedOff`) |
+| **Fix commit** | `8d2dc3a` (`markHandedOff`) |
 | **Minimized?** | no — same reason as BUG-002 |
 
 **Symptom.** Same shape as BUG-002 from the outside, different mechanism inside. A node stopped
@@ -299,7 +299,7 @@ tells us nothing.
 | **Reproduce (seed)** | `seeds/BUG-004` carries seed **2**; it has carried 0 and 17 before that — see *the seeds moved* below |
 | **Invariant that caught it** | **Linearizability of single-key reads and writes**, not any of the four safety oracles |
 | **Mutant class** | none existed — added `M24-answer-by-position` in this PR |
-| **Fix commit** | `b1210cf` |
+| **Fix commit** | `dcc9464` |
 | **Minimized?** | no — same reason as BUG-002 |
 
 **Symptom.** Node 1 proposed `put k04=v70`, it landed at index N in term 1, and node 1 was deposed at
@@ -348,10 +348,10 @@ exported surface, with `Advance` pinned as a required *absence*.
 | **Found by** | sim — the **persist-before-reply** oracle |
 | **Phase** | A1 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M25-restart-recovers-unsynced-writes.patch && go run ./cmd/simctl replay --bundle seeds/BUG-005` |
-| **Reproduce (seed)** | found at seed **92**, instant **2592077256**, step 1086, at commit `f624c0a`. `seeds/BUG-005` carries seed **3**; it has carried 40 before that — see *the seeds moved* below |
+| **Reproduce (seed)** | found at seed **92**, instant **2592077256**, step 1086, at commit `8c0fad1`. `seeds/BUG-005` carries seed **3**; it has carried 40 before that — see *the seeds moved* below |
 | **Invariant that caught it** | persist-before-reply, which is DR-8's **first enumerated gate** |
 | **Mutant class** | none existed — added `M25-restart-recovers-unsynced-writes` |
-| **Fix commit** | `0c55e30` |
+| **Fix commit** | `8416028` |
 | **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6); the bundle is the whole schedule |
 
 **Symptom, verbatim from the oracle:**
@@ -403,7 +403,7 @@ the oracle at all: it is refused earlier, by `readDurable`'s precondition, which
 engine is asked for its durable state while a write is in flight. The finding moved from a checker to
 a structural refusal, which is the right direction.
 
-**The first diagnosis was wrong, and the correction is worth keeping.** `f624c0a` attributed seed 92
+**The first diagnosis was wrong, and the correction is worth keeping.** `8c0fad1` attributed seed 92
 to `persistedIndex` deriving durability from the *shape* of the unstable-entry slice — empty meant
 "all durable", and `Ready()` clears that slice on **handover**, not on acknowledgement. That was a
 real defect and its fix stands: `logTail` now records `persisted` and `handed` in fields with
@@ -425,7 +425,7 @@ defects this entry was split out of.
 | **Reproduce (seed)** | found at seed **0**, instant **4201040044**, step 1971. `seeds/BUG-006` still carries seed 0 |
 | **Invariant that caught it** | persist-before-reply |
 | **Mutant class** | none existed — added `M28-mark-coverage-grows-after-handover` |
-| **Fix commit** | `0c55e30` |
+| **Fix commit** | `8416028` |
 | **Minimized?** | no — same reason as BUG-005 |
 
 **Symptom.** `node 2 acked index 16 at instant 4201040044 with only 15 durable`. One entry in flight,
@@ -480,7 +480,7 @@ never fires" now has a number behind it saying what it would catch if the other 
 | **Reproduce (seed)** | `seeds/BUG-007` carries seed **1**; it has carried 12 and 15 before that — see *the seeds moved* below |
 | **Invariant that caught it** | `raft.truncateFrom`'s own assertion — a **false** one, which is the bug |
 | **Mutant class** | none existed — added `M29-truncation-refused-below-the-durable-watermark` |
-| **Fix commit** | `0c55e30` |
+| **Fix commit** | `8416028` |
 | **Minimized?** | no — same reason as BUG-005 |
 
 **Symptom, verbatim:**
@@ -532,7 +532,7 @@ it is safe in a way that releasing it later is not.
 | **Reproduce (seed)** | `seeds/BUG-008` carries seed **7**, re-recorded at A6 (DESIGN-A6 §16); it carried 12, and 84 before that — see *the seeds moved* below |
 | **Invariant that caught it** | **Storage recovery** — "after any crash, the engine recovers exactly the acknowledged-synced prefix" |
 | **Mutant class** | none existed — added `M26-truncated-suffix-left-in-the-engine`, and `M27-durable-record-ignores-a-clear` for the mirror direction |
-| **Fix commit** | `0c55e30`, with the continuous cross-check in `56e3c18` |
+| **Fix commit** | `8416028`, with the continuous cross-check in `5abb1ca` |
 | **Minimized?** | no — same reason as BUG-005 |
 
 **Symptom, verbatim:**
@@ -734,10 +734,10 @@ gains a way to change its own state. It is worth re-asking at every phase that a
 | **Found by** | sim — snapshot equivalence, on 178 of the first 300 A4 seeds |
 | **Phase** | A4 |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M43-extent-recovered-from-a-floating-key.patch && go run ./cmd/simctl replay --bundle seeds/BUG-011` |
-| **Reproduce (seed)** | seed **0**, range 3, applied index 12. Unchanged: `ee0b86f` moved this bundle's trace and its observation was re-recorded, but the PLAN is byte-identical to the one recorded at `0d10fd7` and M43 still reproduces on it. It was briefly reported as having lost its finding; that was the lane reading a stale recording, and BUG-060 records it |
+| **Reproduce (seed)** | seed **0**, range 3, applied index 12. Unchanged: `1a35d04` moved this bundle's trace and its observation was re-recorded, but the PLAN is byte-identical to the one recorded at `16e3de9` and M43 still reproduces on it. It was briefly reported as having lost its finding; that was the lane reading a stale recording, and BUG-060 records it |
 | **Invariant that caught it** | snapshot equivalence — a snapshot's contents are the state the committed log produces at its index |
 | **Mutant class** | none existed — added `M43-extent-recovered-from-a-floating-key` |
-| **Fix commit** | ebea8c5 |
+| **Fix commit** | c56ab50 |
 | **Minimized?** | no — `simctl minimize` is STRETCH.md (Amendment A6) |
 
 **Symptom, verbatim:**
@@ -789,7 +789,7 @@ instances of it before the phase closed.
 | **Reproduce (seed)** | seed **2**, range 1 |
 | **Invariant that caught it** | none — this is a defect in the checker, not the system |
 | **Mutant class** | covered by `M42-a-split-child-is-born-one-key-wide`, which fails if the model stops modelling splits faithfully |
-| **Fix commit** | ebea8c5 |
+| **Fix commit** | c56ab50 |
 | **Minimized?** | no |
 
 **Root cause.** The harness's model of the state machine applied **every** split entry it found in a
@@ -821,7 +821,7 @@ what the harness is for.
 | **Reproduce (seed)** | seed **2**, range 1, index 24 |
 | **Invariant that caught it** | snapshot equivalence |
 | **Mutant class** | none existed — added `M44-installed-snapshot-drops-the-extent` |
-| **Fix commit** | ebea8c5 |
+| **Fix commit** | c56ab50 |
 | **Minimized?** | no |
 
 **Root cause.** The extent travelled beside the snapshot rather than inside it: the storage layer
@@ -853,7 +853,7 @@ same defect is now a caught violation rather than a silence.
 | **Reproduce (seed)** | found at seed **28**, range 2, index 13; `seeds/BUG-014` carries seed **15**, re-recorded at A6 (DESIGN-A6 §16) |
 | **Invariant that caught it** | snapshot equivalence; the invariant it breaks is *no request served under a stale descriptor epoch* |
 | **Mutant class** | none existed — added `M45-apply-ignores-the-extent` |
-| **Fix commit** | ebea8c5 |
+| **Fix commit** | c56ab50 |
 | **Minimized?** | no |
 
 **Root cause.** The extent was checked where a request **arrived** and nowhere else. A leader accepts
@@ -891,7 +891,7 @@ this survive is a loud failure instead of a slow divergence.
 | **Reproduce (seed)** | **16** — and it does **not** currently reproduce; see *The search, and why the null is a finding* below |
 | **Invariant that caught it** | none — a refusal, from `ApplyConfEntry` declining an illegal transition |
 | **Mutant class** | none existed — added `M46-split-inherits-the-appended-configuration` |
-| **Fix commit** | ebea8c5 |
+| **Fix commit** | c56ab50 |
 | **Minimized?** | no |
 
 **The search, and why the null is a finding** *(2026-08-27, and it is OPEN)*.
@@ -1041,7 +1041,7 @@ second caller that needed it. The split path asks for the configuration **at the
 | **Reproduce (seed)** | seed **103**, range 1 |
 | **Invariant that caught it** | none — this is a defect in the checker |
 | **Mutant class** | covered by `M41-rebalance-removes-before-it-adds`, which the corrected oracle still kills at 192 of 300 |
-| **Fix commit** | 34b284d |
+| **Fix commit** | 036255a |
 | **Minimized?** | no |
 
 **Root cause, in two rounds.** A move is an intent, and no sequence of committed entries states one:
@@ -1326,7 +1326,7 @@ the fix that a future change has to get past.
 | **Phase** | A6 |
 | **Reproduce (unit)** | `go test ./kv -run 'StealSomebodyElsesLock'` |
 | **Reproduce (plan)** | `patch -p1 < sim/mutants/M65-rollback-takes-any-lock.patch && go run ./cmd/simctl replay --bundle seeds/BUG-019` |
-| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **14**. It carried seed **9** from BUG-022's fix until `ee0b86f`, whose pre-vote correction stopped that plan reaching M65 at all — the same shape as the seed-41 regeneration §16.3 warns about, arriving from a source change rather than from a regeneration. Re-pinned by search under the post-fix path: **10 detections in 300 seeds, first at 14**, against **0 of 300** on the unmutated tree. See BUG-060 |
+| **Reproduce (seed)** | found on seed **7** (the audit at `1600000003877395934.0` summed to **-9**); the bundle carries seed **14**. It carried seed **9** from BUG-022's fix until `1a35d04`, whose pre-vote correction stopped that plan reaching M65 at all — the same shape as the seed-41 regeneration §16.3 warns about, arriving from a source change rather than from a regeneration. Re-pinned by search under the post-fix path: **10 detections in 300 seeds, first at 14**, against **0 of 300** on the unmutated tree. See BUG-060 |
 | **Invariant that caught it** | bank conservation over client-observed history — the accounts sum to what they summed to at the beginning |
 | **Mutant class** | none existed — added `M65-rollback-takes-any-lock` and `M66-commit-takes-any-lock` |
 | **Fix commit** | *(this commit)* |
@@ -2109,13 +2109,13 @@ retries.
 | **Mutant class** | the test above *is* the induction; re-adding the increment turns it red. |
 
 **The defect.** `SweepRaftWith` did `c.Seeds++` and then folded in `CensusOf`, which sets
-`c.Seeds = 1`. Introduced at `d8589a9` by extracting `CensusOf` and **leaving the increment behind in
+`c.Seeds = 1`. Introduced at `5174472` by extracting `CensusOf` and **leaving the increment behind in
 the caller it was extracted from** — a known refactoring hazard whose tell is that two counting paths
 existed and only one was updated. `TestPowerProbe`, which the extraction was *for*, calls `CensusOf`
 correctly and was never affected.
 
 **A6 is untouched, and the way that was established is the part worth keeping.** A6's signed exit run
-is at `611d0b9`, seventeen hours before `d8589a9`. But the argument does not rest on dates: A6
+is at `c807555`, seventeen hours before `5174472`. But the argument does not rest on dates: A6
 reported pass 24903 + violation 0 + inconclusive 97 = **25,000 exactly**, and its aggregate
 **passed** — running the same guard that refused A7's.
 
@@ -2161,7 +2161,7 @@ rather than inventing one, which is the direction that does not announce itself.
 | **Reproduce** | induced: a padded script rewritten **in place** (same inode) one second into a run. Top-level form dies `syntax error near unexpected token 'do'`, EXIT=2. `perl -i` renames and does **not** reproduce it. |
 | **Invariant that caught it** | none; this is the eighth instance of the observability family. |
 
-**The defect.** POSIX `sh` reads a script **incrementally, by byte offset, while it runs**. `b5eba7e`
+**The defect.** POSIX `sh` reads a script **incrementally, by byte offset, while it runs**. `3c2c696`
 edited `scripts/exit-run.sh` forty minutes into the run to fix a banner. Six and a half hours later
 the shell returned from `wait`, resumed reading at its saved offset — now pointing into the middle of
 a file that had grown — executed a fragment of the loop body as a command (creating a spurious
@@ -2186,7 +2186,7 @@ the children did, which is the same family again.
 
 | | |
 |---|---|
-| **Symptom** | `make hatches` and `make corpus` — both CI lanes on every push, and `corpus` is A7 exit criterion §8.2.3 — were failing at `faad5a2`, before any work in this session. |
+| **Symptom** | `make hatches` and `make corpus` — both CI lanes on every push, and `corpus` is A7 exit criterion §8.2.3 — were failing at `82670d9`, before any work in this session. |
 | **Found by** | running them. Confirmed pre-existing by stashing every local change and re-running. |
 
 **The determinism lane.** `store/codec_readindex_test.go` — BUG-025's own fix — imports `os` to read
@@ -2198,9 +2198,9 @@ semantic half, which needs no source text, stayed. **Not hatched** — a hatch i
 code that must live where it is, not a way to legalise a misplaced file.
 
 **The corpus lane.** Every stored bundle diverges from its recorded trace, recorded at
-`c39a53adfb8c` — the commit immediately before A7's term-start no-op. The no-op moved every trace, as
+`b47f49835d04` — the commit immediately before A7's term-start no-op. The no-op moved every trace, as
 DESIGN-A7 §7 said it would; BUG-022's and BUG-024's bundles were re-pinned during the phase and the
-other twenty-two were not. `make corpus` has therefore been red since `965ec87`, A7's first commit.
+other twenty-two were not. `make corpus` has therefore been red since `2954870`, A7's first commit.
 Regenerated here with `simctl replay --rerecord`, which keeps each plan and re-records this commit's
 observation — and then `make corpus-reproduces` is **read rather than assumed**, because they are
 different questions and A5 paid to learn it.
@@ -2866,7 +2866,7 @@ the happy number.
 instrument-building can become self-perpetuating.** At I1, `BUG-013` came back `ROT` and the question
 was which of three causes it was — the C++ engine, the wiring, or a bundle whose finding was
 model-specific. `scripts/patch-rot-kind.sh`, built two days earlier for `BUG-039`, answered
-**STRUCTURAL** in one command, and a check against `8a95e01^` confirmed it: the patch applies before
+**STRUCTURAL** in one command, and a check against `ec89bcb^` confirmed it: the patch applies before
 the I1 wiring and not after. **That is a question that would otherwise have been guessed at**, and the
 guess would have been "the engine", because the engine is what changed most conspicuously that day.
 
@@ -4081,7 +4081,7 @@ reach a pre-vote decision the stale pointer would have flipped.
 The cause was established by measurement, not by the census: at HEAD, **with this one line removed and
 nothing else touched, all twenty-four bundles replay byte-identically.** That rules out the two
 alternatives rather than merely preferring this one — the bundle bytes are unchanged and match under a
-tree carrying every other change since `0d10fd7`, so they have not rotted, and the replay machinery
+tree carrying every other change since `16e3de9`, so they have not rotted, and the replay machinery
 reproduces 24 of 24, so it has not broken.
 
 #### ONE recorded defect became unreachable on its pinned schedule, and the first answer was two
@@ -4100,7 +4100,7 @@ Induced, on the same plan with nothing else varied:
 
 | plan | recording | verdict |
 |---|---|---|
-| BUG-011's, byte-identical | from `0d10fd7`, stale | **WEAK** — "produces NO FINDING" |
+| BUG-011's, byte-identical | from `16e3de9`, stale | **WEAK** — "produces NO FINDING" |
 | BUG-011's, byte-identical | taken at HEAD | **ok** — reproduces its finding |
 
 Same bundle, same code, same mutant. **Only the recording's freshness differed.**
@@ -5349,7 +5349,7 @@ experiments and one must not be able to feed the other.
 |---|---|
 | **Found by** | mutant `LEDGER-always-promoted`, which **survived** |
 | **Phase** | B1.3 |
-| **Reproduce** | apply `engine-cpp/mutants/LEDGER-always-promoted.patch` against the tree at `cf12938` and run `make cpp-test`: green |
+| **Reproduce** | apply `engine-cpp/mutants/LEDGER-always-promoted.patch` against the tree at `b01a73f` and run `make cpp-test`: green |
 | **Invariant that caught it** | none — that is the entry. The mutant survived, and the survival is the finding |
 | **Mutant class** | `LEDGER-always-promoted`, added at B1.3 alongside the ledger it blinds |
 | **Fix commit** | this one |
@@ -5425,10 +5425,10 @@ leaves its tree for whoever has to debug it.
 |---|---|
 | **Found by** | implementing the scan rule that catches it (`A5-ADDRESS`), at B1.4 |
 | **Phase** | B1.3, found at B1.4 |
-| **Reproduce** | at `3239469`: `std::map<const void*, std::string> handles_` in `engine-cpp/src/env/test/test_env.cc` |
+| **Reproduce** | at `8a7b1dc`: `std::map<const void*, std::string> handles_` in `engine-cpp/src/env/test/test_env.cc` |
 | **Invariant that caught it** | §6.1 — "nothing may depend on an address — no pointer-keyed containers, no address-ordered anything", which §9.4 says the scan checks |
 | **Mutant class** | `A5-ADDRESS`'s fixture and blind patch; `A5-ADDRINT` was added at B1.5 for the arithmetic half the rule was missing |
-| **Fix commit** | `187a3eb` |
+| **Fix commit** | `544d1a1` |
 
 **Symptom.** The first run of the new rule over `engine-cpp/src` reported a violation in code ratified
 the previous cycle.
@@ -5465,7 +5465,7 @@ different files on different runs while reporting the same ordinals.
 |---|---|
 | **Found by** | writing B1.7b's discard test, which needed a torn `Sync` and found it marked the run non-evidence |
 | **Phase** | B1.3, found at B1.7b |
-| **Reproduce** | at `dfba754`: `SuspendsExactness(Injection::kTornSync)` returns true |
+| **Reproduce** | at `7490757`: `SuspendsExactness(Injection::kTornSync)` returns true |
 | **Invariant that caught it** | none — no lane could catch it. The classification decides what a run may be *banked* as, and every run it mislabelled still passed every assertion |
 | **Mutant class** | `REGISTRY-lying-sync-not-suspending`, which existed and could not see this: it checks that members ARE members, not that non-members are not |
 | **Fix commit** | this one |
@@ -5695,7 +5695,7 @@ meaning whose correct response is to delete something.
 |---|---|
 | **Found by** | AddressSanitizer, inside `make cpp-mutants`'s **baseline gate** |
 | **Phase** | B1.7b |
-| **Reproduce** | at `dfba754`, with `Slice(std::string&&)` still permitted: `Op op; op.key = Slice("k");` |
+| **Reproduce** | at `7490757`, with `Slice(std::string&&)` still permitted: `Op op; op.key = Slice("k");` |
 | **Invariant that caught it** | none by design. The baseline gate ran `cpp-asan` on the unpatched tree before reporting any kill, and refused to report |
 | **Mutant class** | none, and none is added: the fix is a compile error, so there is no runtime behaviour left for a mutant to blind |
 | **Fix commit** | this one |
@@ -5836,7 +5836,7 @@ asks exactly that, scoped, filtered, and monotone.
 | **Reproduce** | before the fix: mark a file `RIFT_ORACLE`, leave it out of `ORACLES.txt`, and the scan says nothing |
 | **Invariant that caught it** | the rule's own both-ways check, which fired on the OTHER direction and exposed this one |
 | **Mutant class** | the four inductions in `B3.0a`'s commit, each observed and restored |
-| **Fix commit** | `3e6d2c0` |
+| **Fix commit** | `0121905` |
 
 **Symptom.** `ARTIFACTS.txt` and `ORACLES.txt` were built, the registry cross-check was written, and
 it **matched nothing** — every lookup fell through to the "not registered" branch. Two defects, and
@@ -6062,7 +6062,7 @@ the second was only findable after the first was fixed.**
 | **Found by** | inspection of the printed numbers, both times — **not by any instrument** |
 | **Phase** | B3.7b, before the number was published |
 | **Mutant class** | `BM110` preserves the first, `BM111` the second |
-| **Fix commit** | `19f1d45` (both), classes at `e70951a` |
+| **Fix commit** | `c98e853` (both), classes at `a5b177e` |
 
 **HARNESS-021 — it returned zero where it should have returned bytes.** Write amplification is bytes
 written over bytes submitted, and the harness summed `LedgerEntry::durable_bytes_after` over Append
@@ -6457,7 +6457,7 @@ it at the moment of writing.
 **A THIRD SAME-DAY INSTANCE, AND IT BROKE IN THIS FILE.** A B3.7 report named `HARNESS-021` and
 `HARNESS-022` in its summary block **before either entry had been written** — two ids that resolved to
 nothing, in the file whose job is recording gaps. Caught by re-reading the report, which is `GF-29`'s
-least reliable instrument, and filed at `07044c3`.
+least reliable instrument, and filed at `9a0d5a3`.
 
 **Three instances, all in one day, all in the hands of the author who had just written the rule.**
 That is not carelessness worth apologising for; it is the rule's own claim being demonstrated:
@@ -6920,8 +6920,8 @@ mean the same thing. It runs at I1.
 
 **140 killed, 0 survived, 15 ROT.** A `ROT` is a patch that no longer applies: *the code moved and the
 mutation did not.* **Fourteen of the fifteen were already rotted when B4 signed**, verified by
-replaying every one of them against the tree at `8179320`. They rotted across **B3.5 through B4.2** —
-`BM79` at `5ef23f5`, `BM55` at `71aafba`, `BM105` at `e70951a`, `BM87` as late as `cd2b227` — and
+replaying every one of them against the tree at `8ce0ace`. They rotted across **B3.5 through B4.2** —
+`BM79` at `9f6a5c9`, `BM55` at `1c58292`, `BM105` at `a5b177e`, `BM87` as late as `f3e3547` — and
 nothing noticed for two phases. Only `BM16` was B5's, broken by `kBusy`'s in-flight accounting; it is
 re-aimed and killed.
 
@@ -7005,8 +7005,8 @@ catalogue takes **hours**.
 that gets skipped, so the cheap half of what it proves must not live inside it.* Fourteen classes
 rotted precisely because the only thing that could detect them cost hours.
 
-**It would have caught all fourteen on the day each one rotted** — `BM79` at `5ef23f5`, `BM55` at
-`71aafba`, `BM105` at `e70951a`, `BM87` at `cd2b227` — each as a one-line failure naming the class and
+**It would have caught all fourteen on the day each one rotted** — `BM79` at `9f6a5c9`, `BM55` at
+`1c58292`, `BM105` at `a5b177e`, `BM87` at `f3e3547` — each as a one-line failure naming the class and
 the file whose code moved out from under it.
 
 **It is deliberately NOT in `CPP_LANES` yet.** It is red, by fourteen, for a debt that predates the
@@ -9056,7 +9056,7 @@ returns, or retire it*. Both are wrong when the recording is the stale thing.
 
 | plan | recording | verdict |
 |---|---|---|
-| BUG-011's, byte-identical | from `0d10fd7`, stale | **WEAK**, "produces NO FINDING" |
+| BUG-011's, byte-identical | from `16e3de9`, stale | **WEAK**, "produces NO FINDING" |
 | BUG-011's, byte-identical | taken at HEAD | **ok**, reproduces its finding |
 
 Same bundle, same code, same mutant. **Only the recording's freshness differed.**

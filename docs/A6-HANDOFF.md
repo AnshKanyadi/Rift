@@ -35,7 +35,7 @@ weakened to pass; sessions never mark a phase complete; a fact is recorded, neve
 |---|---|---|
 | 1 | **BUG-022 root-caused and fixed** | **done** — the read mark, `M71`/`M72`, BUGS.md, bundle |
 | 2 | BUG-024 mutant-classed and in BUGS.md | **done** — `M73`, entry, bundle |
-| 3 | The exit run re-run clean, 25,000 seeds | **done** — 0 violations, 97 inconclusive, at `611d0b9` |
+| 3 | The exit run re-run clean, 25,000 seeds | **done** — 0 violations, 97 inconclusive, at `c807555` |
 | 4 | The three solo measurements | **all three done** — see §4 |
 | 5 | `BUG-015`'s bundle | **still red**, and now blocked on a ruling rather than on a run — §4 |
 | 6 | `make mutant-covered` finished at full scale | **done** — 56 checked, 8 failures, §5 |
@@ -45,7 +45,7 @@ weakened to pass; sessions never mark a phase complete; a fact is recorded, neve
 ## 3. The exit run
 
 ```
-aggregate:  10 shards covering [0,25000) at commit 611d0b9
+aggregate:  10 shards covering [0,25000) at commit c807555
 verdicts:   pass=24903 violation=0 inconclusive=97 errors=0
 cost:       8.33-8.47 s/seed, 5h47m-5h53m per shard, ~58 CPU-hours
 ```

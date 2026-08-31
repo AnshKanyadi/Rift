@@ -5,7 +5,7 @@
 # power-seeds: 1500
 # power-floor: 4
 # power-ceiling: 1350
-# power-measured: 10 of 1500, first at seed 65, under current at commit A5-close; was 7 of 1500, first at seed 553, at commit 6e716d5+A5-open
+# power-measured: 10 of 1500, first at seed 65, under current at commit A5-close; was 7 of 1500, first at seed 553, at commit 1e2721a+A5-open
 # mutates: the candidate up-to-date check is dropped, so a node missing committed entries can win an election and those entries are overwritten -- leader completeness failing exactly as figure 8 predicts
 --- a/raft/raft.go
 +++ b/raft/raft.go

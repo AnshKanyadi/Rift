@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 130
 # power-ceiling: 10
-# power-measured: 273 of 300, first at seed 0, under current at commit 9c0c900+A6
+# power-measured: 273 of 300, first at seed 0, under current at commit ace9b69+A6
 # mutates: transaction steps in one Ready are staged into one batch and written once at the end, so a step cannot see the effects of the steps above it. Every step READS the engine before it writes -- a prewrite asks whether the key is locked, a resolve reads the lock and the primary's record -- so two prewrites of one key in one batch both succeed and the second overwrites the first's lock. Two transactions own one key and neither knows (BUG-018). The replica's state then depends on how many entries happened to arrive together, which is not a function of the log
 # re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
 #   rather than on prose. The mutation is unchanged and was proved so: the old patch and this

@@ -43,7 +43,7 @@
 #
 # # Cost, measured rather than planned
 #
-# A6's exit run measured 8.4 s/seed and about 58 CPU-hours (cb4937d). A7's shape
+# A6's exit run measured 8.4 s/seed and about 58 CPU-hours (6afeb3c). A7's shape
 # measured 7.5 s/seed per shard across eight shards. The figure this file used to
 # quote -- 3.75 s/seed -- was A6's PLANNING number, and A6's own run had already
 # superseded it; leaving it here is how A7's halved rate went unquestioned.

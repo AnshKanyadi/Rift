@@ -1,6 +1,6 @@
 {
   "seed": 0,
-  "commit": "0d10fd7c0b02d2a6dd72c2edd18bb289fd11d7c9",
+  "commit": "16e3de9451fa7688730c0d96b697d256b2bf71e9",
   "workload": "raft",
   "trace_hash": "795d7b9aa323db1da19f5cb9bf77f925223cd805cddb927bfd37d5b90aeafc82",
   "step_hashes": [

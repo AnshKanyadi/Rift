@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 48
 # power-ceiling: 10
-# power-measured: 271 of 300, first at seed 0, under current at commit A5-close; was 254 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 271 of 300, first at seed 0, under current at commit A5-close; was 254 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: a snapshot is written without its configuration, so a node recovering from it has no idea who it is talking to and falls back to the membership it was first constructed with
 --- a/store/node.go
 +++ b/store/node.go

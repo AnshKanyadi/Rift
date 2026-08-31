@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 150
 # power-ceiling: 10
-# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: a range born from a split starts one key above where the split entry says it does. The parent gives away everything at or above the cut point and the child claims everything above it, so the cut key itself belongs to neither. Both ranges are internally consistent, which is why no per-range oracle can see it
 --- a/store/machine.go
 +++ b/store/machine.go

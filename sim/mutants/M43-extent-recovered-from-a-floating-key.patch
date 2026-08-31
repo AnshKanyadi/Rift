@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 60
 # power-ceiling: 10
-# power-measured: 105 of 300, first at seed 2, under current at commit A5-close; was 122 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 105 of 300, first at seed 2, under current at commit A5-close; was 122 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: a range's extent is recovered from its own descriptor key whenever that key is newer than the snapshot's. The key is aligned with no log index, so after a crash it can be ahead of the state being rebuilt: the node re-applies the split, finds its own effect already recorded in the extent, judges the entry stale and never moves the keys (BUG-011)
 --- a/store/node.go
 +++ b/store/node.go

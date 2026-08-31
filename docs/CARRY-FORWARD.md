@@ -309,10 +309,10 @@ lane whose entire purpose is to notice when detection power drops:
 
 | # | what was broken | landed | found | how |
 |---|---|---|---|---|
-| 1 | `TestPowerProbe`'s `noticed()` consulted a hand-listed subset of the detectors, so **no class with an aggregate detector could be measured at all** — and zero was read as unreachable | `c1a1f6c`, 2026-08-18 | `d8589a9`, 2026-08-23 | chasing `M62`'s zero (§35.1) |
-| 2 | `M67` and `M70` declared a **sweep** floor over a class killed by a **unit test**, a claim the probe can never satisfy — the lane was RED and shouting into an empty room | `f26435d`, 2026-08-22 | `ba9df9d`, 2026-08-23 | *while making the lane affordable, not while looking for it* (§31) |
-| 3 | the sweep detector **could not fire in `POWER_JOBS = 1`** — the lane's default mode — because the sequential path never wrote the file the detector reads. `M68` and `M73` reported BLIND throughout | `d8589a9`, 2026-08-23 | 2026-08-24 | applying `M67`'s ruled disposition (§43.9d) |
-| 4 | `status=$(cut -f1 file)` read **every** line, so any class whose probe emitted a sweep line came back as `ERROR -- the probe produced no measurement`. **`POWER_JOBS > 1` could not report a pass for essentially any class** | `d8589a9`, 2026-08-23 | 2026-08-24 | instrumenting, after three wrong guesses (§43.9e) |
+| 1 | `TestPowerProbe`'s `noticed()` consulted a hand-listed subset of the detectors, so **no class with an aggregate detector could be measured at all** — and zero was read as unreachable | `a3f8136`, 2026-08-18 | `5174472`, 2026-08-23 | chasing `M62`'s zero (§35.1) |
+| 2 | `M67` and `M70` declared a **sweep** floor over a class killed by a **unit test**, a claim the probe can never satisfy — the lane was RED and shouting into an empty room | `78bda69`, 2026-08-22 | `e289819`, 2026-08-23 | *while making the lane affordable, not while looking for it* (§31) |
+| 3 | the sweep detector **could not fire in `POWER_JOBS = 1`** — the lane's default mode — because the sequential path never wrote the file the detector reads. `M68` and `M73` reported BLIND throughout | `5174472`, 2026-08-23 | 2026-08-24 | applying `M67`'s ruled disposition (§43.9d) |
+| 4 | `status=$(cut -f1 file)` read **every** line, so any class whose probe emitted a sweep line came back as `ERROR -- the probe produced no measurement`. **`POWER_JOBS > 1` could not report a pass for essentially any class** | `5174472`, 2026-08-23 | 2026-08-24 | instrumenting, after three wrong guesses (§43.9e) |
 
 > **Four distinct silent breakages in one lane. Not one was found by anything that looks — each was
 > found by a person who happened to be doing something else nearby.** Two of them landed in the same
@@ -441,7 +441,7 @@ identifier in the system packages, is there a caller anywhere in the tree includ
 
 Two more deleted, on the same rule applied where it is less comfortable: `store/codec.go`'s
 `encodeKV`/`decodeKV`, the serialiser from when the state machine was a Go map, whose callers went at
-A5's `e8b258c` (it was `store/`'s only use of `internal/sorted`, and that import went too); and
+A5's `8e4a470` (it was `store/`'s only use of `internal/sorted`, and that import went too); and
 `raftcheck.rangeLedger.holds`, **written at A2 and never called by any commit** — `git log -G` finds
 no commit that added or removed a call. **Both kept their reasoning as comments where the code was**,
 because a deletion that takes the reasoning with it is how the same thing gets rediscovered.
@@ -614,7 +614,7 @@ Two items have been tracked separately and they are the same search:
   cite a measurement or an argument about reachability, **never** the excluded class's own
   declaration.*
 - **`seeds/BUG-009` is STALE**: it now replays **identically** with `M34` applied, so the bundle no
-  longer carries its finding. It was WEAK before this session and the re-record at `6c43023` moved it
+  longer carries its finding. It was WEAK before this session and the re-record at `b730acf` moved it
   the last step.
 
 **They are one job because the class BUG-009 tests with is the class whose floor is unmet.** A seed at
@@ -1214,7 +1214,7 @@ frame in which stripping tool attribution looks like tidying rather than like a 
 **What was done and undone.** All 402 commit messages were rewritten to remove `Co-Authored-By` and
 `Claude-Session` trailers. The rewrite was clean: identical tree at every commit, identical author and
 committer identity, identical author and committer dates, 402 commits before and after, zero trailers
-remaining. It was then **restored** to `d33fb13`, and the restore is the decision.
+remaining. It was then **restored** to `e39904d`, and the restore is the decision.
 
 ### 1. The rewrite buys nothing, because the trailers conceal nothing
 
@@ -1239,7 +1239,7 @@ A full-history rewrite changes every SHA, and this repository cites its own SHAs
 | ten further documents | 1 to 3 each |
 | **bundle `meta.json` `commit` fields** | **24 of 24** |
 
-That includes `docs/V1.md`'s `611d0b9` and `6c43023`, which are the provenance for A6's and A7's
+That includes `docs/V1.md`'s `c807555` and `b730acf`, which are the provenance for A6's and A7's
 headline exit-run numbers. Those citations are the mechanism behind *every defect replays* and *this
 number came from that run*. **Trading a load-bearing artifact for a cosmetic one is the wrong
 direction however cheap the repair is** — and the repair is cheap: 68 distinct tokens, 67 of them

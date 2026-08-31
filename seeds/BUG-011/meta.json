@@ -1,6 +1,6 @@
 {
   "seed": 0,
-  "commit": "274f787ffa1f6b199af685e37dfa69a297b20b07",
+  "commit": "4afd89c7d5b08e1c59b65ef889d525fbf1708cce",
   "rerecord_reason": "Re-recorded after ee0b86f (BUG-060), whose pre-vote correction moved this trace like the other thirteen. The PLAN is byte-identical to the one recorded at 0d10fd7 and this bundle never stopped carrying its finding: M43 reproduces on it at this commit once the recording is current. It was briefly held back on a WEAK verdict that came from comparing a mutated replay against a STALE recording, which is a fact about the lane and not about the bundle. See BUG-060 and GF-66.",
   "workload": "raft",
   "trace_hash": "4080dca0dacea83ab6e5816e34eb96bf8573aa07eb8960c2d875f2a9f2a58e38",

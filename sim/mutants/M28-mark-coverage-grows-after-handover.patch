@@ -5,10 +5,10 @@
 # power-seeds: 300
 # power-floor: 140
 # power-ceiling: 10
-# power-measured: 297 of 300, first at seed 0, under current at commit A5-close; was 253 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 297 of 300, first at seed 0, under current at commit A5-close; was 253 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: a mark is reused after the driver has already started writing it, so its coverage grows and the acknowledgement means less than the messages gated on it require. BOTH defences are removed, because either alone prevents it: raft freezing coverage at handover, and the driver refusing to acknowledge a mark whose writes are not all durable. Removing one gives 0 of 300; removing both gives 257 of 300
 # re-anchored: 2026-08-30, after `patch-rot-kind` reported STRUCTURAL. Hunk 2's target moved when
-#   2708e29 rewrote the durability cross-check below it; BOTH mutation sites are intact, so the
+#   d276962 rewrote the durability cross-check below it; BOTH mutation sites are intact, so the
 #   class still exists and the patch is regenerated rather than the class re-decided. Hunk 1 at
 #   -U15 so it opens on `func (r *Raft) dirty()`; hunk 2 at -U2 because 46 unbroken comment lines
 #   sit between the site and the next code line, and widening would only anchor on more prose.

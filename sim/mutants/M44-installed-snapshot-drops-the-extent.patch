@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 70
 # power-ceiling: 10
-# power-measured: 180 of 300, first at seed 2, under current at commit A5-close; was 143 of 300, first at seed 2, at commit 6e716d5+A5-open
+# power-measured: 180 of 300, first at seed 2, under current at commit A5-close; was 143 of 300, first at seed 2, at commit 1e2721a+A5-open
 # mutates: a follower that installs a snapshot adopts its keys and keeps its own extent. It is then a state machine that has split holding an extent that has not, so it refuses the next split entry for naming an extent it cannot see (BUG-013)
 # re-anchored: 2026-08-27, tools/anchorcheck. Context regenerated so the hunk anchors on CODE
 #   rather than on prose. The mutation is unchanged and was proved so: the old patch and this
@@ -13,7 +13,7 @@
 # re-anchored: 2026-08-28. STRUCTURAL drift caused by I1's own wiring -- store/node.go's
 #   n.db.Apply became n.apply when the stack moved onto store.Engine, and this hunk's context
 #   held that call. Not anchor drift: scripts/patch-rot-kind.sh says STRUCTURAL, and the patch
-#   applies cleanly at 8a95e01^ and not after. Mutation unchanged and proved so.
+#   applies cleanly at ec89bcb^ and not after. Mutation unchanged and proved so.
 --- a/store/node.go
 +++ b/store/node.go
 @@ -629,38 +629,39 @@ func (n *Replica) drain(at clock.Instant, s sim.Scheduler) {

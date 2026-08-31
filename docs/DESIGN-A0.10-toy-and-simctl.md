@@ -19,7 +19,7 @@ The null hypothesis is the same crash, aimed at the same node, for the same down
 drawn instant instead of at the window. Only the placement differs — letting the uniform cell also
 pick a random node would have confounded placement with target and answered neither question.
 
-Measured at commit `f9dedcd`. **Every ablation in this project carries the commit it was measured
+Measured at commit `2c6d67e`. **Every ablation in this project carries the commit it was measured
 at**, for the reason §5 gives: an ablation is a measurement of the *harness*, so it expires the moment
 the machinery under it changes.
 
@@ -385,14 +385,14 @@ supposed to be the defence.
 
 | site | keyed by | verdict |
 |---|---|---|
-| `plan.Run.fired` (rule budgets) | rule index | **fixed** in `be8a626`; was the defect |
+| `plan.Run.fired` (rule budgets) | rule index | **fixed** in `d30398a`; was the defect |
 | `sim.Counters.minFires` | injector *kind* | **finding 1** — coarser than the entities it covers |
 | `Counters.Fire` call sites | — | **finding 2** — counts intent, not occurrence |
 | `SimTransport.ordinal` | directed link | correct — per-link, which is what the dice are keyed on |
 | `SimTransport.cut` / `links` | directed link | correct — a cut is a property of one direction of one link |
 | `toy.applied` (client dedupe) | client id | correct — dedupe is per client by definition |
 | `toy.inflight` | engine sequence | correct — one pending per write |
-| `pending.acked` | node id | **fixed** in `f9dedcd`; was TOY-002, the same class |
+| `pending.acked` | node id | **fixed** in `2c6d67e`; was TOY-002, the same class |
 | `clock` holds | node, one per node | correct — validation rejects two holds on one node |
 | `rng.PCG.children` | derived-stream name | correct — memoization, not a budget |
 | `Trace.limit` | whole run | correct — a retention cap, not a per-entity quota |

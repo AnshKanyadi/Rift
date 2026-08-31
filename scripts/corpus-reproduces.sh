@@ -189,7 +189,7 @@ print(' '.join(s))")
     # about a bundle that carries it perfectly well.
     #
     # Measured, on the same plan with nothing else changed: BUG-011 against a
-    # recording from `0d10fd7` reports WEAK; the identical plan against a
+    # recording from `16e3de9` reports WEAK; the identical plan against a
     # recording taken at HEAD reports ok. **The bundle, the code and the mutant
     # were the same in both. Only the recording's freshness differed.**
     #

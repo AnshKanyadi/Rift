@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 150
 # power-ceiling: 10
-# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 5517111+A5
+# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 45de643+A5
 # mutates: collection removes EVERY version below the mark, including the newest one at or below it -- which is the version a read at the mark's successor still needs. The mark refuses reads at or below itself, so the first answerable timestamp then returns nothing where it should return a value. Off by one here is a silently wrong read, which is the exact failure the mark exists to prevent
 --- a/kv/store.go
 +++ b/kv/store.go

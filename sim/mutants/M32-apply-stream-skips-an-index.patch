@@ -5,7 +5,7 @@
 # power-seeds: 300
 # power-floor: 150
 # power-ceiling: 10
-# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 6e716d5+A5-open
+# power-measured: 300 of 300, first at seed 0, under current at commit A5-close; was 300 of 300, first at seed 0, at commit 1e2721a+A5-open
 # mutates: the driver acknowledges one more applied index than it applied, so the state machine never sees that command and the next Ready starts past it -- a hole no cross-node comparison can see, because every node's stream is self-consistent
 --- a/store/node.go
 +++ b/store/node.go

@@ -1,6 +1,6 @@
 {
   "seed": 3,
-  "commit": "4d138f697b41368da1abf12b52249d982289a790",
+  "commit": "5dde00c090e255e94a1c9a10459925de5630bed0",
   "rerecord_reason": "ee0b86f (BUG-060) made preCampaign clear r.leader, which changes pre-vote grant decisions and so moves every trace whose schedule contains one. The plan is unchanged and this bundle still reproduces its FINDING under its mutant at this commit; only the expected observation moved.",
   "workload": "raft",
   "trace_hash": "76b855d1c76c0f65116971824251446259a31b6d3219f42db7608ab3e98753a8",

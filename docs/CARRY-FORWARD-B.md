@@ -41,7 +41,7 @@ because the prediction it rested on was wrong in a way worth keeping.
 | **Raised by** | HARNESS-010 |
 | **Discharged by** | **B2**, in the same cycle as the memtable flush |
 | **Check** | `make cpp-campaign`, the `BM2-accept-torn-tail` row |
-| **Compare against** | 194 per mille, first detection at kill point 14 (measured at `f257e29`, 175 kill points) |
+| **Compare against** | 194 per mille, first detection at kill point 14 (measured at `9f42c2d`, 175 kill points) |
 
 **The obligation.** B1's recovery can apply BATCH records past the last
 `GROUP_END`. In B1 those records land in the memtable at sequences **above** the
@@ -68,7 +68,7 @@ The accident ends there.
 
 Re-measured under B2's shape, in both regimes, at B2.7:
 
-| regime | measured | vs `f257e29` |
+| regime | measured | vs `9f42c2d` |
 |---|---|---|
 | **default** (no flush) | **34 / 300 = 113 per mille**, first at kill point **39** | count **unchanged at 34**; rate fell; first detection +25 |
 | **flush** | **36 / 985 = 36 per mille**, first at kill point **39** | count **34 → 36**; rate fell |
@@ -579,7 +579,7 @@ that it does not do without them, and this entry becomes the first place to look
 
 **The state.** The full catalogue ran for the first time since B3 and reported **140 killed, 0
 survived, 15 ROT**. `BM16` was B5's own and is repaired. The other fourteen rotted across **B3.5
-through B4.2**, verified against the tree at `8179320`, and are listed by `make cpp-rot`:
+through B4.2**, verified against the tree at `8ce0ace`, and are listed by `make cpp-rot`:
 
 | class | file the code moved under |
 |---|---|

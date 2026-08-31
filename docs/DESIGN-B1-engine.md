@@ -187,7 +187,7 @@ network-isolated lane run as a gate with its own induced failure (BM21).
 
 → §12. §1.1 keeps the paste-ready text as the handoff artifact; no Track A file is touched.
 
-> Owed next cycle: rebase rift-b onto main from 1390969 and report the resulting HEAD.
+> Owed next cycle: rebase rift-b onto main from 6f50ec2 and report the resulting HEAD.
 
 → §12 item 4.
 
@@ -2018,20 +2018,20 @@ one correction, plus this revision:
 
 | sha | step |
 |---|---|
-| `f57ad9b` | **B1.0** — GoogleTest vendored at `52eb8108…` (v1.17.0), the offline hash lane, `cpp-ci` |
-| `646fca5` | **B1.1** — closed enums, four lanes un-stubbed, the ALIVE canary |
-| `29bebd2` | **B1.2a** — the Env choke point, zero implementations |
-| `cf12938` | **B1.2b** — `PosixEnv` and the raw-write seam |
-| `3239469` | **B1.3** — `TestEnv`, the content/durable split, threshold 3 |
-| `787307d` | correction — B1-Q12 is ruled, not open; the thinness rule stated |
-| `187a3eb` | **B1.4** — the scope scan, the split-label registry, `CLAIMS.txt`, the blind-patch set |
+| `8c38a56` | **B1.0** — GoogleTest vendored at `52eb8108…` (v1.17.0), the offline hash lane, `cpp-ci` |
+| `7a08cd1` | **B1.1** — closed enums, four lanes un-stubbed, the ALIVE canary |
+| `5f0573f` | **B1.2a** — the Env choke point, zero implementations |
+| `b01a73f` | **B1.2b** — `PosixEnv` and the raw-write seam |
+| `8a7b1dc` | **B1.3** — `TestEnv`, the content/durable split, threshold 3 |
+| `6e34d14` | correction — B1-Q12 is ruled, not open; the thinness rule stated |
+| `544d1a1` | **B1.4** — the scope scan, the split-label registry, `CLAIMS.txt`, the blind-patch set |
 
 The `Makefile` and `.github/workflows/cpp.yml` lane definitions are in those commits, on `rift-b`, per
 §12.3 item 1's reassignment. Merges to `main` remain Ansh's.
 
-**2026-08-17.** Revision 3 committed as `60e4ced`, one file, subject `DESIGN-B1 revision 3: the NVI
-choke point, the two-element oracle, one registry`. `rift-b` fast-forwarded from `1390969` onto `main`,
-**resulting HEAD `60e4ced`**, both ranges empty, doc byte-identical in both worktrees at blob `10f56bd`.
+**2026-08-17.** Revision 3 committed as `1ca6360`, one file, subject `DESIGN-B1 revision 3: the NVI
+choke point, the two-element oracle, one registry`. `rift-b` fast-forwarded from `6f50ec2` onto `main`,
+**resulting HEAD `1ca6360`**, both ranges empty, doc byte-identical in both worktrees at blob `10f56bd`.
 Track A's untracked `docs/A0-CHECKLIST.md` was left untracked. That commit was the **last** write this
 session makes to the Track A worktree, under §12.2 item 5.
 
@@ -2060,7 +2060,7 @@ for B1 as already scheduled into I2.
 postdates revision 4, and revision 4 was never revised, so §13 printed B1-Q12 as *open* for a week
 after it had been decided. B1.2b was written against the document and stated in its own header that the
 question was open and that acting on it would extend §10.2 unruled — a comment that misdescribed the
-state of a ruling, which is the kind that gets believed. It was corrected in `787307d`, in its own
+state of a ruling, which is the kind that gets believed. It was corrected in `6e34d14`, in its own
 commit, before B1.4 enforced anything.
 
 **The general form, ruled 2026-08-24:**
@@ -2079,8 +2079,8 @@ sections exist for this, and the cycles that skipped them are the cycles it happ
 
 ## 14. Landing sequence
 
-**Five of the thirteen have landed** (`f57ad9b`, `646fca5`, `29bebd2`, `cf12938`, `3239469`,
-`187a3eb` — six commits, one of them a correction). §13 is closed, §12.3 is closed, and the remote gate
+**Five of the thirteen have landed** (`8c38a56`, `7a08cd1`, `5f0573f`, `b01a73f`, `8a7b1dc`,
+`544d1a1` — six commits, one of them a correction). §13 is closed, §12.3 is closed, and the remote gate
 was lifted on 2026-08-24; there is still no `origin` and CI has still never run, which is why every
 lane here is one a person runs by hand and why each carries its own induced failure rather than a
 promise that someone else's runner will notice.
@@ -2177,7 +2177,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   networking available and fail under isolation*.
 - **Mutants:** `BM21`.
 - **Depends on:** nothing.
-- **Landed `f57ad9b`.** Beyond its written scope: `cpp-vendor-build` as a lane whose claim is only that
+- **Landed `8c38a56`.** Beyond its written scope: `cpp-vendor-build` as a lane whose claim is only that
   the vendored tree configures and builds; the `cpp-mutants` runner itself, with **direction controls**
   — a patch may declare a lane it must NOT break, so "the lane caught it" and "the patch broke the
   build" stop being the same exit code; and the isolation wrapper's own positive control, which proves
@@ -2207,7 +2207,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   is the first step at which any test of ours exists, so there is no earlier body to retire. B1.0's two
   checks are about the vendored tree and the network and cannot be engine-account tests, there being no
   engine — recorded so the empty answer is a classification and not an omission.
-- **Landed `646fca5`.** Beyond its written scope: each sanitizer lane **asserts at compile time** that
+- **Landed `7a08cd1`.** Beyond its written scope: each sanitizer lane **asserts at compile time** that
   it has the sanitizer it claims, and `cpp-test` asserts it has none — a lane that lost its
   `-fsanitize` flag now fails to build rather than passing quietly, which is a guarantee no canary can
   give because it cannot be reached by a test that was skipped. Also `cpp-build` (build everything, run
@@ -2231,7 +2231,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   interception*; and *delete one `CallSite` registration*, the other direction of the same 1:1:1.
 - **Mutants:** `BM17` (its static half; the reachability half is B1.3's).
 - **Depends on:** B1.1.
-- **Landed `29bebd2`.** Beyond its written scope: §3.3 gained two rows it had always implied but never
+- **Landed `5f0573f`.** Beyond its written scope: §3.3 gained two rows it had always implied but never
   printed (`Env::NewDirectory`, `RandomAccessFile::Read`) — recorded there as a **correction**, not an
   addition. The scan parses under a **strict grammar**: a line it cannot classify is a lane failure,
   never a line it skips, because a parser that silently ignores what it does not understand reports the
@@ -2256,7 +2256,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   unit-tested here and are deliberately absent from the kill-point sweep, so they never combine with
   another injected fault in one run.
 - **Depends on:** B1.2a.
-- **Landed `cf12938`.** Beyond its written scope: the three seam gates exist as repeatable `SEAM-*`
+- **Landed `b01a73f`.** Beyond its written scope: the three seam gates exist as repeatable `SEAM-*`
   patches rather than a one-time hand induction — there is no CI here, and an induction nobody can
   re-run decays into a sentence in a commit message. §14.2's "Mutants: none" is a statement about the
   **BM catalogue**, not a statement that the gates need no induction. The seam test's fake writer also
@@ -2287,7 +2287,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   a syscall's **return value** — short count, `EINTR`, zero — not about durable state. B1.3 records that
   classification explicitly; had any of them asserted that bytes were on disk, it would be retired here,
   because before this step nothing could have justified the assertion.
-- **Landed `3239469`.** Beyond its written scope: `AllCallSites()` became a **fourth** artifact bound
+- **Landed `8a7b1dc`.** Beyond its written scope: `AllCallSites()` became a **fourth** artifact bound
   by the correspondence, because the census iterates it and a hand-written array beside a hand-written
   enum is a drift waiting to happen (`BM17d`). `TestEnvironment::ContentNow` was added because
   `content = durable` on a kill is otherwise unobservable — after a kill the Env is dead and cannot be
@@ -2322,7 +2322,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
     Env seam"*.
   - This document, **§3.2.1** and **§11 item 8**: the *"two independent checks"* residual — which becomes
     one check, and then zero.
-- **Landed `187a3eb`.** Beyond its written scope, and the first item is a **defect in ratified work
+- **Landed `544d1a1`.** Beyond its written scope, and the first item is a **defect in ratified work
   found by implementing the rule that catches it**: B1.3's `TestEnv` held
   `std::map<const void*, std::string>`, a pointer-keyed container, which §6.1 bans outright and says
   this scan checks. Nothing behaved wrongly — the map is looked up and never iterated — but there is no
@@ -2384,7 +2384,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   creation and `Directory::Sync`*.
 - **Mutants:** `BM4`, `BM6`, `BM9`, `BM12`, `BM16`, `BM18`, `BM19`, `BM20`.
 - **Depends on:** B1.1, B1.3.
-- **Landed `dfba754`, and AFTER B1.7a rather than before it.** Ruled: the torn-tail rule and
+- **Landed `7490757`, and AFTER B1.7a rather than before it.** Ruled: the torn-tail rule and
   fragment-chain legality are the freeze surface, so their gates are induced *before the writer is
   trusted*. That is not a re-ordering — B1.7a's own entry says it depends on B1.1 alone, and §14.4
   gives the reason the split exists. Taking that freedom means the writer's output is checked against
@@ -2416,7 +2416,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   data loss"*, which is the induced failure that names the actual consequence.
 - **Mutants:** `BM3`, `BM8`, `BM10`, `BM11`.
 - **Depends on:** B1.1 only, for its gates.
-- **Landed `e287627`, BEFORE B1.6.** Carries the frozen record layout with it, because a decoder is
+- **Landed `e7cc1f9`, BEFORE B1.6.** Carries the frozen record layout with it, because a decoder is
   defined against a format and cannot precede one. The CRC divergence from LevelDB lives on the
   `FragmentCrc` helper as §5.3.3 requires, and reader and writer call that one helper so the covered
   range has a single definition. BM10 is the one mutation in the catalogue a reviewer would most
@@ -2441,7 +2441,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   file; the open must fail*.
 - **Mutants:** `BM2`, `BM3`, `BM4`, `BM11`.
 - **Depends on:** B1.3, B1.5, B1.6, B1.7a — the most-depended step in the sequence.
-- **Landed `a634266`.** Two things it added that its written scope did not name, both because a test
+- **Landed `f3d9299`.** Two things it added that its written scope did not name, both because a test
   demanded them. The FILE_HEADER is validated **unconditionally**, before the committed-records loop:
   written inside that loop it was conditional on a GROUP_END existing, so a WAL with the wrong name
   passed whenever it held no closed group — and §5.3.4 lists a foreign file and a file whose name and
@@ -2470,7 +2470,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   exactness-(ii) failure, not a tidiness one.
 - **Mutants:** `BM7`, `BM9`.
 - **Depends on:** B1.5, B1.7b.
-- **Landed `4611e50`.** **Two divergences from the frozen shape recorded for the first time**, beyond
+- **Landed `3e45001`.** **Two divergences from the frozen shape recorded for the first time**, beyond
   the two §7.1 already rules (`OnDurable` absent, `sync` flag absent):
   - **Go's nil-versus-empty has no `Slice` equivalent**, and the frozen interface depends on it —
     `InRange` treats a nil bound as unbounded, and *an empty key is a valid key* in this engine, so
@@ -2514,7 +2514,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
   assertion of that second form**, replacing it with one against the harness's submission log and
   TestEnv's ledger per §7.3. B1.7b must therefore tag which of its assertions are which as it writes
   them; an untagged recovery assertion is treated as the second form.
-- **Landed `4786435`.** Three things beyond its written scope, each forced by a condition.
+- **Landed `21db818`.** Three things beyond its written scope, each forced by a condition.
   - **The choke point gained a second half.** §7.4's in-flight element — *"a `Sync` can complete on
     the device with the kill preempting its return"* — cannot be expressed by an injector that runs
     *before* the effect. `FaultController::AfterEffect` runs after the implementation and before its
@@ -2563,7 +2563,7 @@ mutants, what it depends on, and the revert condition. Mutant IDs are §10.1's; 
     caught this.'"* — unanswerable with no campaign.
   - `SOAK.md`: every Track B row, and the inconclusive column beside it.
   - This document, **§10, "How B1 proves itself"** — the section title becomes false, not merely thinner.
-- **Landed `f257e29`.** The sweep runs **three modes at every ordinal** — killed before the effect,
+- **Landed `9f42c2d`.** The sweep runs **three modes at every ordinal** — killed before the effect,
   killed after it, and torn with authored prefixes — because the first two alone can never leave a
   BATCH on disk without its `GROUP_END`, which is the single thing the group marker exists to prevent.
   175 kill points, both elements observed, every printed count asserted (the census and the visit
