@@ -202,12 +202,32 @@ if [ "${1:-}" = "--self-test" ]; then
   # repository cannot produce one at its size. The distinction is I2's, about its
   # chaos gates, and it is written here rather than left for a reader to assume
   # the stronger claim.
-  amb=$(git rev-parse HEAD | cut -c1-4)
+  # The prefix is CONSTRUCTED, not guessed. A short prefix is usually ambiguous
+  # among several hundred objects and the first version of this fixture took
+  # HEAD's first four characters on that basis -- which passed, and then failed on
+  # the next commit whose four characters happened to be unique. A FIXTURE THAT
+  # USUALLY ARRANGES ITS PRECONDITION IS THE SAME DEFECT THIS LANE IS ABOUT.
+  #
+  # So: sort every object id, take the adjacent pair sharing the longest prefix,
+  # and use that prefix. Two objects begin with it by construction. If the longest
+  # such prefix is shorter than git's four-character minimum the branch cannot be
+  # induced here at all, and this FAILS rather than skipping, because a skip that
+  # reports success is the thing.
+  amb=$(git rev-list --all --reflog | sort -u | awk '
+    NR>1 { n=0; while (n < length($0) && substr($0,n+1,1) == substr(p,n+1,1)) n++;
+           if (n > best) { best=n; pre=substr($0,1,n) } }
+    { p=$0 } END { if (best >= 4) print pre }')
+  if [ -z "$amb" ]; then
+    printf '   NO AMBIGUOUS PREFIX OF >= 4 CHARS EXISTS HERE, so the branch is not induced.\n'
+    printf '   Failing rather than skipping: an uninduced branch reported green is the defect.\n'
+    exit 1
+  fi
   got=$(classify "$amb")
   if [ "$got" != "ambiguous" ]; then
     printf '   TELLS AMBIGUOUS FROM NOT-A-COMMIT: NO. classify(%s) said %s\n' "$amb" "$got"
     exit 1
   fi
+  printf '   constructed ambiguous prefix %s (two object ids begin with it)\n' "$amb"
   printf '   tells ambiguous from not-a-commit: yes, on the code path (see the note)\n'
   if [ "$(classify zzzzzzz)" != "notacommit" ] || [ "$(classify "$(git rev-parse HEAD | cut -c1-12)")" != "commit" ]; then
     printf '   ...but misclassifies a plain non-commit or a plain commit\n'
