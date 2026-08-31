@@ -40,7 +40,7 @@ printf '\n  pre-push: the every-change lanes\n'
 # beside the lane it repairs; its cheap half checks the PARTITION and the
 # HEADERS, which is what catches a class arriving in the exempt column carrying a
 # label instead of an argument.
-for lane in build lint lane-coverage bundle-seeds assertions provenance power-decl power-refute-decl test corpus; do
+for lane in build lint lane-coverage bundle-seeds citations assertions provenance power-decl power-refute-decl test corpus; do
   printf '  ---- make %s\n' "$lane"
   if ! make "$lane" >/tmp/rift-hook.log 2>&1; then
     printf '\n  FAILED: make %s\n\n' "$lane"

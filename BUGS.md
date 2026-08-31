@@ -9183,7 +9183,11 @@ history that had just been discarded.**
 > validity. It answers every question you ask it except whether it is on the branch you ship.
 
 **This is the citation graph's failure mode one level up**, and the two arrived together: the same
-restore that dangled `d276962` and two bundle `commit` fields also orphaned both tags. The bundle
+restore that dangled a mutant patch header's commit reference and two bundle `commit` fields also
+orphaned both tags. **That reference is deliberately described here rather than quoted**: a record
+naming a SHA the rewrite destroyed would itself be a dangling citation, and `scripts/citations.sh`
+does not exempt prose for being about dangling citations. It caught exactly that in this entry's first
+draft. The bundle
 fields were caught by an explicit ancestry check written for them; the tags were caught only because
 the same check was extended to `refs/tags` on suspicion. **The suspicion is not a mechanism.**
 

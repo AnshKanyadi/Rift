@@ -222,6 +222,11 @@ corpus: ## Replay every bundle in seeds/; a bundle that stops reproducing fails 
 bundle-seeds: ## BUGS.md's stated bundle seed matches the bundle it points at
 	sh scripts/bundle-seeds.sh
 
+.PHONY: citations
+citations: ## Every commit this repo cites -- prose, bundle metas, tags -- is an ancestor of main
+	@sh scripts/citations.sh
+	@sh scripts/citations.sh --self-test
+
 .PHONY: corpus-reproduces
 corpus-reproduces: ## Every bundle still EXERCISES its defect: apply its mutant, replay, require a difference
 	sh scripts/corpus-reproduces.sh
@@ -322,7 +327,7 @@ chaos-smoke:
 lint: vet fmt-check determinism tooling-only hatches hygiene ## vet + formatting + the determinism vet pass
 
 .PHONY: ci
-ci: build lint test race blind power anchors blockers assertions provenance corpus corpus-reproduces bundle-seeds smoke chaos-smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
+ci: build lint test race blind power anchors blockers assertions provenance corpus corpus-reproduces bundle-seeds citations smoke chaos-smoke mutants mutant-covered lane-coverage cpp-ci ## Everything the push lane runs
 # cpp-ci joins at the I1 merge. Before it, the two tracks had two lane sets and
 # `make ci` ran one of them -- which is the lane-dependency shape: a target that
 # exists and is never reached is a lane nobody runs and everybody counts.

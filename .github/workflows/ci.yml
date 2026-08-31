@@ -291,3 +291,24 @@ jobs:
       # testing.Short() and therefore ran in no push lane at all, against a
       # package that had zero mutants and appeared in no job here.
       - run: make chaos-smoke
+
+  citations:
+    name: every commit the records cite is on main
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth 0: the whole point is ancestry, and a shallow clone has none.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      # The records cite SHAs as evidence -- BUGS.md's fix commits, every bundle's
+      # recorded commit, every phase tag -- and nothing checked any of them. A
+      # history rewrite dangles all of it at once, and the only thing standing
+      # between that and 87 broken citations was somebody remembering to look.
+      #
+      # It caught one on its first run, in the entry written about this exact
+      # failure mode, on a tree a hand audit had already passed.
+      - run: make citations
