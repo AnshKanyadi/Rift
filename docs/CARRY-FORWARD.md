@@ -1202,3 +1202,86 @@ is the reason not to guess.**
 corpus from `seeds/differential/format` (22 entries). The package and the corpus have to move
 together or its tests fail on a missing directory, which is a merge-completeness item rather than a
 defect.
+
+---
+
+## DECIDED 2026-08-30: the commit history keeps its `Co-Authored-By` trailers, and what would change that
+
+Recorded here rather than left in one session's exchange, because it is a decision somebody will
+reopen — most likely somebody preparing the repository to be read by a stranger, which is exactly the
+frame in which stripping tool attribution looks like tidying rather than like a trade.
+
+**What was done and undone.** All 402 commit messages were rewritten to remove `Co-Authored-By` and
+`Claude-Session` trailers. The rewrite was clean: identical tree at every commit, identical author and
+committer identity, identical author and committer dates, 402 commits before and after, zero trailers
+remaining. It was then **restored** to `d33fb13`, and the restore is the decision.
+
+### 1. The rewrite buys nothing, because the trailers conceal nothing
+
+`CLAUDE.md`'s second section is *"Ansh is the architect. Claude is the implementation pair."* Every
+design document's header reads **Author:** Claude. **Decider:** Ansh. `docs/V1.md` is written on that
+premise from its first page. Removing 261 trailers deletes the machine-readable form of a fact the
+prose states outright in the first forty lines of the constitution. **There is no reading of this
+repository that the trailers change.**
+
+### 2. The citation graph is load-bearing where the trailers are cosmetic
+
+A full-history rewrite changes every SHA, and this repository cites its own SHAs as evidence:
+
+| record | commit hashes cited |
+|---|---|
+| `BUGS.md` | 29 |
+| `docs/DESIGN-B1-engine.md` | 15 |
+| `docs/DESIGN-A6-transactions.md` | 9 |
+| `docs/A0-CHECKLIST.md` | 7 |
+| `docs/CARRY-FORWARD.md` | 6 |
+| `REPORTS/I2-1.md` | 4 |
+| ten further documents | 1 to 3 each |
+| **bundle `meta.json` `commit` fields** | **24 of 24** |
+
+That includes `docs/V1.md`'s `611d0b9` and `6c43023`, which are the provenance for A6's and A7's
+headline exit-run numbers. Those citations are the mechanism behind *every defect replays* and *this
+number came from that run*. **Trading a load-bearing artifact for a cosmetic one is the wrong
+direction however cheap the repair is** — and the repair is cheap: 68 distinct tokens, 67 of them
+seven characters, and **zero** of the 27 long hex strings in the records (trace and step hashes) have a
+seven-character prefix that resolves to a commit. Measured, not assumed. The mechanical hazard is not
+the objection.
+
+### 3. The repair has no instrument behind it, in the repository whose whole argument is that this fails
+
+**Nothing here can go red if a citation repair is wrong.** There is no lane asserting that a hash cited
+in a record resolves to a commit on `main`. A ninety-site edit across signed documents, correct only
+because it was done carefully, is the register's shape exactly: correctness resting on attention.
+
+That argument stopped being abstract on the day it was made. The same session **wrote a false claim
+into `BUGS.md` within the hour** — that BUG-060's fix had cost two recorded defects their findings,
+when it had cost one — and it survived being written, reviewed and reported twice. What caught it was
+not care but an accident: a regenerated `plan.json` came out byte-identical, which made the claim false
+on its face. See the register entry on `corpus-reproduces` and the one on the invalid control.
+
+> **A BULK EDIT NO LANE CAN CONTRADICT IS THE THING THIS PROJECT EXISTS TO DISTRUST**, and the session
+> proposing it had just demonstrated the failure mode on a smaller edit.
+
+### 4. Reversibility, and that nothing had been published
+
+`origin` was empty; neither history had ever been seen. Restoring cost one reset and re-cutting fifteen
+tags. Undoing a repaired-and-pushed rewrite would have cost another rewrite and another repair.
+
+### The sequencing that makes the rewrite available later
+
+Not "never". **In this order, and only in this order:**
+
+1. **Build the citation lane.** Every hex token in a tracked record that resolves as a commit object
+   must be an ancestor of `main`; a token that does not is a lane failure naming the file and the
+   token. Bundle `meta.json` `commit` fields are checked structurally in the same pass. It belongs in
+   `make ci` beside `bundle-seeds`, which is the same kind of claim about the same kind of pointer.
+2. **Then rewrite**, by whatever means, keeping the old-to-new map.
+3. **Then repair** the citations from the map, **with the lane green as the acceptance condition.**
+
+Step 1 turns an unchecked bulk edit into a checked operation and removes objection 3 entirely.
+Objections 1 and 2 remain and are the reason the answer is still probably no.
+
+**The lane is worth building whether or not the rewrite is ever redone.** It is a real gap today: 87
+citations across fifteen records and 24 bundle fields, and nothing checks any of them. `bundle-seeds`
+exists for exactly this reason one level down, and it caught a genuine drift the same day. Had the
+citation lane existed, it — and not a coincidence about a `plan.json` — would have been what noticed.

@@ -4158,6 +4158,12 @@ Both elements, against the cases that produced them: `PRECOND` fires on BUG-011'
 > project's whole life. Nothing enforced the ordering, and the first run that skipped it produced a
 > false written claim about a Raft fix within the hour.
 
+The general forms are **[GF-66]** (a criterion requiring a difference cannot be evaluated against a
+stale reference, and an ordering is not a precondition check), **[GF-67]** (the control that varied two
+things at once, and why half-correct output is the hardest kind to notice), and **[GF-68]** (the ruling
+that held both bundles back was right for a reason it did not have, and the refusal is what found the
+lane defect).
+
 #### After the fix, and one measurement artifact it exposed
 
 | | before | after |
@@ -9028,3 +9034,122 @@ kept because a collapse would still cross them, and are recorded as no longer di
 nobody reads 1000 per mille as a result.
 
 
+
+---
+
+### GF-66 — a criterion that requires a DIFFERENCE cannot be evaluated against a stale reference, and the lane printed a diagnosis where it owed a refusal
+
+The register's shape one more time, and the most expensive instance in it, because this one produced a
+false written claim in a signed record before anybody noticed.
+
+`corpus-reproduces` applies a bundle's mutant, replays, and requires **a finding the recording did not
+have**. The criterion is a *difference from the recording*. Run against a recording the **unmutated**
+tree no longer reproduces, that criterion cannot be evaluated at all: the mutated replay diverges
+whatever the mutant does, no finding is attributable to the mutation, and there is nothing to compare.
+
+**The lane did not say so. It said `WEAK — the bundle no longer carries its finding`,** which is a
+verdict about the bundle, and the remedy it prints is *re-record it at a seed where the finding
+returns, or retire it*. Both are wrong when the recording is the stale thing.
+
+**Induced, one plan, nothing else varied:**
+
+| plan | recording | verdict |
+|---|---|---|
+| BUG-011's, byte-identical | from `0d10fd7`, stale | **WEAK**, "produces NO FINDING" |
+| BUG-011's, byte-identical | taken at HEAD | **ok**, reproduces its finding |
+
+Same bundle, same code, same mutant. **Only the recording's freshness differed.**
+
+**The rule it broke was already written down**, in `docs/V1.md` §5, put there by four of this project's
+own directed tests:
+
+> **A directed test that arranges a precondition must assert that it arranged it.**
+
+This lane neither arranged its precondition nor asked about it. **And `make ci`'s ORDERING hid that for
+the project's entire life:** `corpus` runs before `corpus-reproduces` and establishes exactly the
+precondition, for every bundle, every time. Nothing enforced the ordering. **The first run that skipped
+it produced a false claim in `BUGS.md` within the hour** — that BUG-060's fix had made two recorded
+defects unreachable, when it had made one — and that claim was written, reviewed and reported twice
+before it was caught.
+
+> **AN ORDERING IS NOT A PRECONDITION CHECK.** It is a habit that happens to satisfy one, and it holds
+> exactly until somebody runs the lane on its own — which is the normal way to investigate a failure,
+> and therefore the moment the hole is guaranteed to be open.
+
+**The fix, and what it deliberately does not cost.** The clean replay runs on the **failing path
+only**: free for every bundle that reproduces, and on one that does not it separates the two causes
+instead of naming the wrong one. A stale recording now reports `PRECOND`, in words that say it is not a
+verdict about the bundle; `WEAK` now states that the recording was *checked, not assumed*. Both
+branches are induced against the cases that produced them — `PRECOND` on BUG-011's stale recording,
+`WEAK` still on BUG-019's current one, `ok` on a reproducing bundle.
+
+**What it would have caused in production:** nothing directly, and that is the point. It corrupts the
+RECORD rather than the system — a class of defect this project has no oracle for and finds only by
+reading, which is why the register exists and why it is the longest-lived list in the repository.
+
+**Mutant class:** none existed for a lane that reports a wrong verdict on a precondition it never
+checked. The three branches are now individually inducible, which is the covering test.
+
+---
+
+### GF-67 — a control that varies two things at once can be right about one and wrong about the other, and half-correct output is the hardest kind to notice
+
+The general form, recorded because the specific case was caught by luck.
+
+To separate *this fix did it* from *it was already so*, the session ran `corpus-reproduces` on HEAD
+with BUG-060's one line removed. Both bundles came back `ok` there and `WEAK` at HEAD, and that was
+read as the fix having cost both their findings.
+
+**Removing that line also restores every recorded trace.** It is the entire reason fourteen bundles
+diverged. So the control moved **the code** and **the recordings' freshness** together, in one step,
+and could not tell their effects apart. Nothing in the setup said so, because the second variable is
+not a thing anyone chose — it is a *consequence* of the first, which is precisely the kind that does
+not appear on a list of what the experiment varies.
+
+**It gave the right answer for BUG-019 and the wrong one for BUG-011.**
+
+> **HALF-CORRECT OUTPUT IS THE HARDEST KIND TO NOTICE.** A control that is wrong about everything looks
+> broken. A control that is wrong about one of two cases looks like a result. Every downstream sentence
+> about BUG-019 was true, which is what made the sentences about BUG-011 read as true.
+
+**What actually broke the tie was an accident**: BUG-011's regenerated `plan.json` came out
+**byte-identical** to the old one, which made the written claim that its schedule had moved false on its
+face. Had the regeneration produced any difference at all — a timestamp, a field order — the claim
+would have looked confirmed and would have shipped.
+
+**The rule.** A control that restores the precondition alongside the variable is not a control. Before
+running one, name what the intervention changes **downstream**, not only what it changes directly; if a
+downstream effect touches the instrument's own inputs, the control is measuring the instrument.
+
+The cheap discriminator existed here as it did in the three-rule chain (`ps`, `git diff`, `ps -o time=`):
+**hold the recording fresh in BOTH arms.** One extra re-record and the two arms differ by the code
+alone. It is the same lesson those three produced — *read the thing, not the proxy for the thing* —
+arriving as *vary the thing, not the thing plus whatever it drags*.
+
+---
+
+### GF-68 — a ruling that was right for a reason the decider did not have
+
+Recorded because the usual failure is the opposite one, and this is worth having an instance of.
+
+Ansh's ruling on the fourteen re-recorded bundles was: **hold back any bundle whose finding did not
+survive, and report it separately rather than re-recording it green.** The stated reason was that a fix
+costing a bundle its finding is a fact about the fix, and re-recording would bury it.
+
+**That reason was correct in general and, as it turned out, applied to only one of the two bundles.**
+BUG-011 had never lost anything; the verdict that held it back was `corpus-reproduces` reading a stale
+recording (GF-66).
+
+**And the ruling is what found that.** Holding both back kept them failing and kept somebody looking at
+why. Re-recording both — which the evidence at the time appeared to justify, since both had diverged
+and both were reported WEAK — would have produced a green lane, a closed question, and two facts
+buried: **the lane defect, and BUG-019's real loss underneath it.** The green would have been
+indistinguishable from a correct green.
+
+> **A RULING THAT REFUSES TO CLOSE SOMETHING CREATES THE PRESSURE THAT FINDS OUT WHY IT WAS OPEN.** The
+> value was not in the reason being right about both cases. It was in the refusal keeping the question
+> alive long enough for the reason to be checked.
+
+Filed beside the register rather than in it: this is not an instance of verification verifying nothing.
+It is the case where the standing bias toward *not closing on a null* paid, and it is recorded because
+the register's entries all describe that bias being absent.
