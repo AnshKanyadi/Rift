@@ -4160,9 +4160,10 @@ Both elements, against the cases that produced them: `PRECOND` fires on BUG-011'
 
 The general forms are **[GF-66]** (a criterion requiring a difference cannot be evaluated against a
 stale reference, and an ordering is not a precondition check), **[GF-67]** (the control that varied two
-things at once, and why half-correct output is the hardest kind to notice), and **[GF-68]** (the ruling
+things at once, and why half-correct output is the hardest kind to notice), **[GF-68]** (the ruling
 that held both bundles back was right for a reason it did not have, and the refusal is what found the
-lane defect).
+lane defect), and **[GF-69]** (a ref that resolves is not a ref that points at anything — GF-66's shape
+one level up, arriving in the same operation).
 
 #### After the fix, and one measurement artifact it exposed
 
@@ -9153,3 +9154,47 @@ indistinguishable from a correct green.
 Filed beside the register rather than in it: this is not an instance of verification verifying nothing.
 It is the case where the standing bias toward *not closing on a null* paid, and it is recorded because
 the register's entries all describe that bias being absent.
+
+---
+
+### GF-69 — a ref that resolves is not a ref that points at anything, and `filter-branch` backs up the branch but not the tags
+
+**[GF-66]'s shape one level up, arriving in the same operation as [GF-66] itself.** Recorded because the
+next person to run a history rewrite will make the same assumption, and because the test that would
+have missed it is the obvious one.
+
+`git filter-branch --tag-name-filter cat -- main` moved `a0.3-signed` and `a0.3b-signed` onto the
+rewritten history, correctly. When the rewrite was then **restored**, the branch came back from
+`refs/original/refs/heads/main` and the tags did not: **`filter-branch` writes `refs/original` for the
+branch it rewrites and, for tags, replaces them in place.** There was nothing to restore them from.
+
+**What made it dangerous is that nothing looked wrong.** Both tags resolved. `git rev-list -n1
+a0.3-signed` returned a commit; `git show` printed it; the sign-off messages were intact. The check the
+task actually named was *"confirm the two pre-existing tags still resolve"*, and they did — **into
+history that had just been discarded.**
+
+| test | verdict | correct? |
+|---|---|---|
+| does the tag resolve to a commit object? | **yes, both** | useless |
+| `git merge-base --is-ancestor <tag> HEAD` | **no, both orphaned** | the actual question |
+
+> **RESOLUTION IS NOT EXISTENCE.** An object stays readable as long as *anything* references it, and a
+> tag referencing it is exactly such a thing — so a stale tag is self-sustaining evidence for its own
+> validity. It answers every question you ask it except whether it is on the branch you ship.
+
+**This is the citation graph's failure mode one level up**, and the two arrived together: the same
+restore that dangled `d276962` and two bundle `commit` fields also orphaned both tags. The bundle
+fields were caught by an explicit ancestry check written for them; the tags were caught only because
+the same check was extended to `refs/tags` on suspicion. **The suspicion is not a mechanism.**
+
+**The recovery, since a rewrite's map may not survive it.** Each orphaned tag's pre-rewrite target was
+found by matching **tree hash and author date** against the restored history — both invariant under a
+message-only rewrite — and then cross-checked against the old-to-new map the rewrite had produced.
+Both methods agreed on both tags. Two independent derivations, because one of them was a file in a
+scratch directory and the other is derivable from the repository forever.
+
+**What would catch it:** the citation lane `docs/CARRY-FORWARD.md` names as the precondition for
+redoing the rewrite, extended by one line — **every ref under `refs/tags` must be an ancestor of
+`main`.** It is the same assertion as the one over cited hashes, over a different set of pointers, and
+neither exists today.
+

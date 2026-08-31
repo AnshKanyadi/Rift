@@ -1281,6 +1281,12 @@ Not "never". **In this order, and only in this order:**
 Step 1 turns an unchecked bulk edit into a checked operation and removes objection 3 entirely.
 Objections 1 and 2 remain and are the reason the answer is still probably no.
 
+**One artefact of the window, left as it is.** The five commits that span the rewrite and the restore
+carry no `Co-Authored-By` trailer, because they were written while the strip was pending; the 262
+around them do. Normalizing means a scoped rewrite of five commits, which is not a thing to do on the
+day the argument against rewrites was made, and the inconsistency is honest about when they were
+written. Left deliberately, recorded here so a reader who notices has the answer.
+
 **The lane is worth building whether or not the rewrite is ever redone.** It is a real gap today: 87
 citations across fifteen records and 24 bundle fields, and nothing checks any of them. `bundle-seeds`
 exists for exactly this reason one level down, and it caught a genuine drift the same day. Had the
